@@ -9,6 +9,7 @@ from ._checkpoint import (
 )
 from ._concurrent import ConcurrentBuilder
 from ._const import DEFAULT_MAX_ITERATIONS
+from ._conversation import ConversationHandle, ConversationSnapshot
 from ._edge import (
     Case,
     Default,
@@ -104,6 +105,8 @@ __all__ = [
     "Case",
     "CheckpointStorage",
     "ConcurrentBuilder",
+    "ConversationHandle",
+    "ConversationSnapshot",
     "Default",
     "Edge",
     "EdgeDuplicationError",

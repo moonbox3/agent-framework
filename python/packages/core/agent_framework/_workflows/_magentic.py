@@ -26,6 +26,7 @@ from agent_framework import (
 from agent_framework._agents import BaseAgent
 
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
+from ._conversation import ConversationHandle, ConversationManager, ConversationSnapshot
 from ._events import WorkflowEvent
 from ._executor import Executor, RequestInfoMessage, RequestResponse, handler
 from ._model_utils import DictConvertible, encode_value
@@ -149,6 +150,7 @@ class CallbackSink(Protocol):
 
 
 # endregion Unified callback API
+
 
 # region Magentic One Prompts
 
@@ -344,6 +346,55 @@ class MagenticStartMessage:
         """Create from a dict."""
         task = ChatMessage.from_dict(value["task"])
         return cls(task=task)
+
+
+class MagenticConversationEntryExecutor(Executor):
+    """Internal executor that seeds ConversationSession and produces MagenticStartMessage."""
+
+    def __init__(self) -> None:
+        super().__init__(id="conversation-entry")
+        self.metadata["visibility"] = "internal"
+
+    async def _send_start(
+        self,
+        start: MagenticStartMessage,
+        ctx: WorkflowContext[MagenticStartMessage],
+        *,
+        initial_messages: list[ChatMessage] | None = None,
+        handle: ConversationHandle | None = None,
+    ) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        if handle is not None:
+            session = await manager.ensure_session(handle=handle)
+            if not session.transcript:
+                raise RuntimeError("Conversation handle has no transcript to resume.")
+        else:
+            await manager.ensure_session(initial_messages=initial_messages or [start.task])
+        await ctx.send_message(start)
+
+    @handler
+    async def from_start(self, start: MagenticStartMessage, ctx: WorkflowContext[MagenticStartMessage]) -> None:
+        await self._send_start(start, ctx, initial_messages=[start.task])
+
+    @handler
+    async def from_str(self, task: str, ctx: WorkflowContext[MagenticStartMessage]) -> None:
+        start = MagenticStartMessage.from_string(task)
+        await self._send_start(start, ctx, initial_messages=[start.task])
+
+    @handler
+    async def from_message(self, message: ChatMessage, ctx: WorkflowContext[MagenticStartMessage]) -> None:  # type: ignore[name-defined]
+        start = MagenticStartMessage(task=message)
+        await self._send_start(start, ctx, initial_messages=[message])
+
+    @handler
+    async def from_handle(self, handle: ConversationHandle, ctx: WorkflowContext[MagenticStartMessage]) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        session = await manager.ensure_session(handle=handle)
+        transcript = list(session.transcript)
+        if not transcript:
+            raise RuntimeError("Cannot resume Magentic workflow: conversation transcript is empty.")
+        start = MagenticStartMessage(task=transcript[0])
+        await ctx.send_message(start)
 
 
 @dataclass
@@ -981,6 +1032,52 @@ class MagenticOrchestratorExecutor(Executor):
         """Register an agent executor for internal control (no messages)."""
         self._agent_executors[name] = executor
 
+    async def _initialize_chat_history(
+        self,
+        context: WorkflowContext[Any, ConversationSnapshot],
+        initial_task: ChatMessage,
+    ) -> None:
+        if self._context is None:
+            return
+        manager = await ConversationManager.ensure_on_shared_state(context.shared_state)
+        session = await manager.ensure_session()
+        transcript = list(session.transcript)
+        self._context.chat_history.clear()
+        if transcript:
+            self._context.chat_history.extend(transcript)
+            self._context.task = transcript[0]
+        else:
+            self._context.chat_history.append(initial_task)
+            await manager.replace_transcript(list(self._context.chat_history))
+        await self._sync_chat_history(context)
+
+    async def _sync_chat_history(self, context: WorkflowContext[Any, ConversationSnapshot]) -> None:
+        if self._context is None:
+            return
+        manager = await ConversationManager.ensure_on_shared_state(context.shared_state)
+        await manager.ensure_session()
+        await manager.replace_transcript(list(self._context.chat_history))
+
+    async def _yield_snapshot(
+        self,
+        context: WorkflowContext[Any, ConversationSnapshot],
+        *,
+        final_message: ChatMessage | None = None,
+    ) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(context.shared_state)
+        await manager.ensure_session()
+        if self._context is not None and final_message is not None:
+            if not self._context.chat_history or self._context.chat_history[-1] is not final_message:
+                self._context.chat_history.append(final_message)
+            await manager.replace_transcript(list(self._context.chat_history))
+        transcript = manager.snapshot_transcript()
+        handle = manager.handle
+        snapshot = ConversationSnapshot(
+            messages=transcript,
+            handle=ConversationHandle(handle.session_id, handle.revision),
+        )
+        await context.yield_output(snapshot)
+
     def snapshot_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {
             "plan_review_round": self._plan_review_round,
@@ -1083,13 +1180,18 @@ class MagenticOrchestratorExecutor(Executor):
             raise
         else:
             self._state_restored = True
+            if self._context is not None:
+                try:
+                    await self._sync_chat_history(cast(WorkflowContext[Any, ConversationSnapshot], context))
+                except Exception:
+                    logger.debug("Magentic Orchestrator: unable to sync chat history after restore", exc_info=True)
 
     @handler
     async def handle_start_message(
         self,
         message: MagenticStartMessage,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ConversationSnapshot
         ],
     ) -> None:
         """Handle the initial start message to begin orchestration."""
@@ -1101,8 +1203,7 @@ class MagenticOrchestratorExecutor(Executor):
             task=message.task,
             participant_descriptions=self._participants,
         )
-        # Record the original user task in orchestrator context (no broadcast)
-        self._context.chat_history.append(message.task)
+        await self._initialize_chat_history(context, message.task)
         self._state_restored = True
         # Non-streaming callback for the orchestrator receipt of the task
         if self._message_callback:
@@ -1115,10 +1216,12 @@ class MagenticOrchestratorExecutor(Executor):
         # If a human must sign off, ask now and return. The response handler will resume.
         if self._require_plan_signoff:
             await self._send_plan_review_request(context)
+            await self._sync_chat_history(context)
             return
 
         # Add task ledger to conversation history
         self._context.chat_history.append(self._task_ledger)
+        await self._sync_chat_history(context)
 
         logger.debug("Task ledger created.")
 
@@ -1128,7 +1231,7 @@ class MagenticOrchestratorExecutor(Executor):
 
         # Start the inner loop
         ctx2 = cast(
-            WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+            WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
             context,
         )
         await self._run_inner_loop(ctx2)
@@ -1137,7 +1240,7 @@ class MagenticOrchestratorExecutor(Executor):
     async def handle_response_message(
         self,
         message: MagenticResponseMessage,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Handle responses from agents."""
         if getattr(self, "_terminated", False):
@@ -1158,6 +1261,7 @@ class MagenticOrchestratorExecutor(Executor):
 
         # Add agent response to context
         self._context.chat_history.append(message.body)
+        await self._sync_chat_history(context)
 
         # Continue with inner loop
         await self._run_inner_loop(context)
@@ -1168,7 +1272,7 @@ class MagenticOrchestratorExecutor(Executor):
         response: RequestResponse[MagenticPlanReviewRequest, MagenticPlanReviewReply],
         context: WorkflowContext[
             # may broadcast ledger next, or ask for another round of review
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ConversationSnapshot
         ],
     ) -> None:
         if getattr(self, "_terminated", False):
@@ -1209,6 +1313,7 @@ class MagenticOrchestratorExecutor(Executor):
                 self._context.chat_history.append(
                     ChatMessage(role=Role.USER, text=f"Human plan feedback: {human.comments}")
                 )
+                await self._sync_chat_history(context)
                 # Ask the manager to replan based on comments; proceed immediately
                 self._task_ledger = await self._manager.replan(self._context.clone(deep=True))
 
@@ -1221,9 +1326,10 @@ class MagenticOrchestratorExecutor(Executor):
 
             # Enter the normal coordination loop
             ctx2 = cast(
-                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
                 context,
             )
+            await self._sync_chat_history(context)
             await self._run_inner_loop(ctx2)
             return
 
@@ -1250,9 +1356,10 @@ class MagenticOrchestratorExecutor(Executor):
                 self._context.chat_history.append(self._task_ledger)
                 # No further review requests; proceed directly into coordination
             ctx2 = cast(
-                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
                 context,
             )
+            await self._sync_chat_history(context)
             await self._run_inner_loop(ctx2)
             return
 
@@ -1278,6 +1385,7 @@ class MagenticOrchestratorExecutor(Executor):
             self._context.chat_history.append(
                 ChatMessage(role=Role.USER, text=f"Human plan feedback: {human.comments}")
             )
+            await self._sync_chat_history(context)
 
         # Ask the manager to replan; this only adjusts the plan stage, not a full reset
         self._task_ledger = await self._manager.replan(self._context.clone(deep=True))
@@ -1285,7 +1393,7 @@ class MagenticOrchestratorExecutor(Executor):
 
     async def _run_outer_loop(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Run the outer orchestration loop - planning phase."""
         if self._context is None:
@@ -1304,12 +1412,14 @@ class MagenticOrchestratorExecutor(Executor):
             with contextlib.suppress(Exception):
                 await self._message_callback(self.id, self._task_ledger, ORCH_MSG_KIND_TASK_LEDGER)
 
+        await self._sync_chat_history(context)
+
         # Start inner loop
         await self._run_inner_loop(context)
 
     async def _run_inner_loop(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Run the inner orchestration loop. Coordination phase. Serialized with a lock."""
         if self._context is None or self._task_ledger is None:
@@ -1319,7 +1429,7 @@ class MagenticOrchestratorExecutor(Executor):
 
     async def _run_inner_loop_locked(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Run inner loop with exclusive access."""
         # Narrow optional context for the remainder of this method
@@ -1386,6 +1496,7 @@ class MagenticOrchestratorExecutor(Executor):
             author_name=MAGENTIC_MANAGER_NAME,
         )
         ctx.chat_history.append(instruction_msg)
+        await self._sync_chat_history(context)
         # Surface instruction message to observers
         if self._message_callback:
             with contextlib.suppress(Exception):
@@ -1407,7 +1518,7 @@ class MagenticOrchestratorExecutor(Executor):
 
     async def _reset_and_replan(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Reset context and replan."""
         if self._context is None:
@@ -1417,6 +1528,8 @@ class MagenticOrchestratorExecutor(Executor):
 
         # Reset context
         self._context.reset()
+        self._context.chat_history.append(self._context.task)
+        await self._sync_chat_history(context)
 
         # Replan
         self._task_ledger = await self._manager.replan(self._context.clone(deep=True))
@@ -1431,7 +1544,7 @@ class MagenticOrchestratorExecutor(Executor):
 
     async def _prepare_final_answer(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> None:
         """Prepare the final answer using the manager."""
         if self._context is None:
@@ -1440,15 +1553,17 @@ class MagenticOrchestratorExecutor(Executor):
         logger.info("Magentic Orchestrator: Preparing final answer")
         final_answer = await self._manager.prepare_final_answer(self._context.clone(deep=True))
 
-        # Emit a completed event for the workflow
-        await context.yield_output(final_answer)
+        self._terminated = True
+
+        # Emit a completed event for the workflow using conversation snapshot
+        await self._yield_snapshot(context, final_message=final_answer)
 
         if self._result_callback:
             await self._result_callback(final_answer)
 
     async def _check_within_limits_or_complete(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ConversationSnapshot],
     ) -> bool:
         """Check if orchestrator is within operational limits."""
         if self._context is None:
@@ -1475,7 +1590,7 @@ class MagenticOrchestratorExecutor(Executor):
                     )
 
                 # Yield the partial result and signal completion
-                await context.yield_output(partial_result)
+                await self._yield_snapshot(context, final_message=partial_result)
 
                 if self._result_callback:
                     await self._result_callback(partial_result)
@@ -1486,7 +1601,7 @@ class MagenticOrchestratorExecutor(Executor):
     async def _send_plan_review_request(
         self,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ConversationSnapshot
         ],
     ) -> None:
         """Emit a PlanReviewRequest via RequestInfoExecutor."""
@@ -1933,8 +2048,11 @@ class MagenticBuilder:
             executor_id="magentic_orchestrator",
         )
 
-        # Create workflow builder and set orchestrator as start
-        workflow_builder = WorkflowBuilder().set_start_executor(orchestrator_executor)
+        entry_executor = MagenticConversationEntryExecutor()
+
+        # Create workflow builder and set entry as start
+        workflow_builder = WorkflowBuilder().set_start_executor(entry_executor)
+        workflow_builder = workflow_builder.add_edge(entry_executor, orchestrator_executor)
 
         if self._enable_plan_review:
             from ._executor import RequestInfoExecutor
@@ -2082,13 +2200,17 @@ class MagenticWorkflow:
         if message is None:
             if self._task_text is None:
                 raise ValueError("No message provided and no preset task text available")
-            message = MagenticStartMessage.from_string(self._task_text)
+            payload: Any = MagenticStartMessage.from_string(self._task_text)
         elif isinstance(message, str):
-            message = MagenticStartMessage.from_string(message)
+            payload = MagenticStartMessage.from_string(message)
         elif isinstance(message, ChatMessage):
-            message = MagenticStartMessage(task=message)
+            payload = MagenticStartMessage(task=message)
+        elif isinstance(message, ConversationSnapshot):
+            payload = message.handle
+        else:
+            payload = message
 
-        async for event in self._workflow.run_stream(message):
+        async for event in self._workflow.run_stream(payload):
             yield event
 
     async def _validate_checkpoint_participants(

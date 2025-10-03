@@ -17,6 +17,7 @@ from .._threads import AgentThread
 from .._types import AgentRunResponse, AgentRunResponseUpdate, ChatMessage
 from ..observability import create_processing_span
 from ._checkpoint import WorkflowCheckpoint
+from ._conversation import ConversationHandle, ConversationManager
 from ._events import (
     AgentRunEvent,
     AgentRunUpdateEvent,
@@ -226,6 +227,7 @@ class Executor(DictConvertible):
         self.id = id
         self.type = resolved_type
         self.type_ = resolved_type
+        self.metadata: dict[str, Any] = {}
 
         from builtins import type as builtin_type
 
@@ -1378,6 +1380,7 @@ class AgentExecutorResponse:
     executor_id: str
     agent_run_response: AgentRunResponse
     full_conversation: list[ChatMessage] | None = None
+    conversation_handle: ConversationHandle | None = None
 
 
 class AgentExecutor(Executor):
@@ -1411,24 +1414,28 @@ class AgentExecutor(Executor):
                 exec_id = "executor_unnamed"
         super().__init__(exec_id)
         self._agent = agent
-        self._agent_thread = agent_thread or self._agent.get_new_thread()
         self._streaming = streaming
+        self._prebound_thread = agent_thread
+        self._legacy_thread = agent_thread or self._agent.get_new_thread()
         self._cache: list[ChatMessage] = []
 
-    async def _run_agent_and_emit(self, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
-        """Execute the underlying agent, emit events, and enqueue response.
+    async def _maybe_get_manager(self, ctx: WorkflowContext[Any]) -> ConversationManager | None:
+        return await ConversationManager.maybe_get_from_shared_state(ctx.shared_state)
 
-        Terminal detection is handled centrally in Runner.
-        This method only produces AgentRunEvent/AgentRunUpdateEvent plus enqueues an
-        AgentExecutorResponse message for routing.
-        """
+    async def _run_agent_with_manager(
+        self,
+        ctx: WorkflowContext[AgentExecutorResponse],
+        manager: ConversationManager,
+    ) -> None:
+        view = await manager.prepare_invocation(
+            self.id,
+            agent=self._agent,
+            prebound_thread=self._prebound_thread,
+        )
+
         if self._streaming:
             updates: list[AgentRunResponseUpdate] = []
-            async for update in self._agent.run_stream(
-                self._cache,
-                thread=self._agent_thread,
-            ):
-                # Skip empty updates (no textual or structural content)
+            async for update in self._agent.run_stream(view.messages, thread=view.thread):
                 if not update:
                     continue
                 contents = getattr(update, "contents", None)
@@ -1445,17 +1452,45 @@ class AgentExecutor(Executor):
                 await ctx.add_event(AgentRunUpdateEvent(self.id, update))
             response = AgentRunResponse.from_agent_run_response_updates(updates)
         else:
-            response = await self._agent.run(
-                self._cache,
-                thread=self._agent_thread,
-            )
+            response = await self._agent.run(view.messages, thread=view.thread)
             await ctx.add_event(AgentRunEvent(self.id, response))
 
-        # Always construct a full conversation snapshot from inputs (cache)
-        # plus agent outputs (agent_run_response.messages). Do not mutate
-        # response.messages so AgentRunEvent remains faithful to the raw output.
-        full_conversation: list[ChatMessage] = list(self._cache) + list(response.messages)
+        await manager.commit_agent_response(view.binding, response.messages)
+        transcript = manager.snapshot_transcript()
+        handle = manager.handle
+        handle_copy = ConversationHandle(handle.session_id, revision=handle.revision)
+        agent_response = AgentExecutorResponse(
+            self.id,
+            response,
+            full_conversation=list(transcript),
+            conversation_handle=handle_copy,
+        )
+        await ctx.send_message(agent_response)
 
+    async def _run_agent_legacy(self, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+        if self._streaming:
+            updates: list[AgentRunResponseUpdate] = []
+            async for update in self._agent.run_stream(self._cache, thread=self._legacy_thread):
+                if not update:
+                    continue
+                contents = getattr(update, "contents", None)
+                text_val = getattr(update, "text", "")
+                has_text_content = False
+                if contents:
+                    for c in contents:
+                        if getattr(c, "text", None):
+                            has_text_content = True
+                            break
+                if not (text_val or has_text_content):
+                    continue
+                updates.append(update)
+                await ctx.add_event(AgentRunUpdateEvent(self.id, update))
+            response = AgentRunResponse.from_agent_run_response_updates(updates)
+        else:
+            response = await self._agent.run(self._cache, thread=self._legacy_thread)
+            await ctx.add_event(AgentRunEvent(self.id, response))
+
+        full_conversation: list[ChatMessage] = list(self._cache) + list(response.messages)
         agent_response = AgentExecutorResponse(self.id, response, full_conversation=full_conversation)
         await ctx.send_message(agent_response)
         self._cache.clear()
@@ -1467,9 +1502,17 @@ class AgentExecutor(Executor):
         This is the standard path: extend cache with provided messages; if should_respond
         run the agent and emit an AgentExecutorResponse downstream.
         """
+        manager = await self._maybe_get_manager(ctx)
+        if manager is not None:
+            await manager.ensure_session()
+            await manager.replace_transcript(request.messages)
+            if request.should_respond:
+                await self._run_agent_with_manager(ctx, manager)
+            return
+
         self._cache.extend(request.messages)
         if request.should_respond:
-            await self._run_agent_and_emit(ctx)
+            await self._run_agent_legacy(ctx)
 
     @handler
     async def from_response(self, prior: AgentExecutorResponse, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
@@ -1478,30 +1521,61 @@ class AgentExecutor(Executor):
         Strategy: treat the prior response's messages as the conversation state and
         immediately run the agent to produce a new response.
         """
-        # Replace cache with full conversation if available, else fall back to agent_run_response messages.
+        manager = await self._maybe_get_manager(ctx)
+        if manager is not None:
+            await manager.ensure_session()
+            if prior.full_conversation is not None:
+                await manager.replace_transcript(prior.full_conversation)
+            else:
+                await manager.replace_transcript(prior.agent_run_response.messages)
+            await self._run_agent_with_manager(ctx, manager)
+            return
+
         if prior.full_conversation is not None:
             self._cache = list(prior.full_conversation)
         else:
             self._cache = list(prior.agent_run_response.messages)
-        await self._run_agent_and_emit(ctx)
+        await self._run_agent_legacy(ctx)
 
     @handler
     async def from_str(self, text: str, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
         """Accept a raw user prompt string and run the agent (one-shot)."""
-        self._cache = [ChatMessage(role="user", text=text)]  # type: ignore[arg-type]
-        await self._run_agent_and_emit(ctx)
+        manager = await self._maybe_get_manager(ctx)
+        message = ChatMessage(role="user", text=text)  # type: ignore[arg-type]
+        if manager is not None:
+            await manager.ensure_session()
+            await manager.replace_transcript([message])
+            await self._run_agent_with_manager(ctx, manager)
+            return
+
+        self._cache = [message]
+        await self._run_agent_legacy(ctx)
 
     @handler
     async def from_message(self, message: ChatMessage, ctx: WorkflowContext[AgentExecutorResponse]) -> None:  # type: ignore[name-defined]
         """Accept a single ChatMessage as input."""
+        manager = await self._maybe_get_manager(ctx)
+        if manager is not None:
+            await manager.ensure_session()
+            await manager.replace_transcript([message])
+            await self._run_agent_with_manager(ctx, manager)
+            return
+
         self._cache = [message]
-        await self._run_agent_and_emit(ctx)
+        await self._run_agent_legacy(ctx)
 
     @handler
     async def from_messages(self, messages: list[ChatMessage], ctx: WorkflowContext[AgentExecutorResponse]) -> None:  # type: ignore[name-defined]
         """Accept a list of ChatMessage objects as conversation context."""
+        manager = await self._maybe_get_manager(ctx)
+        if manager is not None:
+            await manager.ensure_session()
+            await manager.replace_transcript(messages)
+            await self._run_agent_with_manager(ctx, manager)
+            return
+
         self._cache = list(messages)
-        await self._run_agent_and_emit(ctx)
+        await self._run_agent_legacy(ctx)
 
 
 # endregion: Agent Executor

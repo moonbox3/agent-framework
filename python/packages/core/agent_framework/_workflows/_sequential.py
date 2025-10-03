@@ -5,35 +5,18 @@
 This module provides a high-level, agent-focused API to assemble a sequential
 workflow where:
 - Participants are a sequence of AgentProtocol instances or Executors
-- A shared conversation context (list[ChatMessage]) is passed along the chain
-- Agents append their assistant messages to the context
-- Custom executors can transform or summarize and return a refined context
-- The workflow finishes with the final context produced by the last participant
+- A shared conversation context (list[ChatMessage]) is owned by ConversationSession
+- Internal adapters keep the session synchronized and expose resumable handles
 
-Typical wiring:
-    input -> _InputToConversation -> participant1 -> (agent? -> _ResponseToConversation) -> ... -> participantN -> _EndWithConversation
+Wiring pattern:
+    input -> ConversationEntryExecutor -> participant -> ConversationProjectionExecutor -> ... -> ConversationOutputExecutor
 
-Notes:
-- Participants can mix AgentProtocol and Executor objects
-- Agents are auto-wrapped by WorkflowBuilder as AgentExecutor
-- AgentExecutor produces AgentExecutorResponse; _ResponseToConversation converts this to list[ChatMessage]
-- Non-agent executors must define a handler that consumes `list[ChatMessage]` and sends back
-  the updated `list[ChatMessage]` via their workflow context
+Why include the internal adapters?
+- `ConversationEntryExecutor` normalizes initial input, seeds ConversationSession, and hides plumbing from visualization.
+- `ConversationProjectionExecutor` reconciles AgentExecutorResponse or custom list outputs with the session and forwards a list[ChatMessage].
+- `ConversationOutputExecutor` yields a `ConversationSnapshot` containing both transcript and ConversationHandle.
 
-Why include the small internal adapter executors?
-- Input normalization ("input-conversation"): ensures the workflow always starts with a
-  `list[ChatMessage]` regardless of whether callers pass a `str`, a single `ChatMessage`,
-  or a list. This keeps the first hop strongly typed and avoids boilerplate in participants.
-- Agent response adaptation ("to-conversation:<participant>"): agents (via AgentExecutor)
-  emit `AgentExecutorResponse`. The adapter converts that to a `list[ChatMessage]`
-  using `full_conversation` so original prompts aren't lost when chaining.
-- Result output ("end"): yields the final conversation list and the workflow becomes idle
-  giving a consistent terminal payload shape for both agents and custom executors.
-
-These adapters are first-class executors by design so they are type-checked at edges,
-observable (ExecutorInvoke/Completed events), and easily testable/reusable. Their IDs are
-deterministic and self-describing (for example, "to-conversation:writer") to reduce event-log
-confusion and to mirror how the concurrent builder uses explicit dispatcher/aggregator nodes.
+Adapters are tagged with `visibility=internal` so default visualization omits them while maintaining strong typing and observability hooks when diagnostics are enabled.
 """  # noqa: E501
 
 import logging
@@ -43,6 +26,7 @@ from typing import Any
 from agent_framework import AgentProtocol, ChatMessage, Role
 
 from ._checkpoint import CheckpointStorage
+from ._conversation import ConversationHandle, ConversationManager, ConversationSnapshot
 from ._executor import (
     AgentExecutor,
     AgentExecutorResponse,
@@ -55,40 +39,81 @@ from ._workflow_context import WorkflowContext
 logger = logging.getLogger(__name__)
 
 
-class _InputToConversation(Executor):
-    """Normalizes initial input into a list[ChatMessage] conversation."""
+class ConversationEntryExecutor(Executor):
+    """Normalizes workflow input and seeds the shared ConversationSession."""
+
+    def __init__(self, *, id: str = "conversation-entry") -> None:
+        super().__init__(id=id)
+        self.metadata["visibility"] = "internal"
+
+    async def _initialize(self, messages: list[ChatMessage], ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        await manager.ensure_session()
+        await manager.replace_transcript(messages)
+        await ctx.send_message(list(messages))
 
     @handler
     async def from_str(self, prompt: str, ctx: WorkflowContext[list[ChatMessage]]) -> None:
-        await ctx.send_message([ChatMessage(Role.USER, text=prompt)])
+        await self._initialize([ChatMessage(Role.USER, text=prompt)], ctx)
 
     @handler
     async def from_message(self, message: ChatMessage, ctx: WorkflowContext[list[ChatMessage]]) -> None:  # type: ignore[name-defined]
-        await ctx.send_message([message])
+        await self._initialize([message], ctx)
 
     @handler
     async def from_messages(self, messages: list[ChatMessage], ctx: WorkflowContext[list[ChatMessage]]) -> None:  # type: ignore[name-defined]
-        # Make a copy to avoid mutation downstream
-        await ctx.send_message(list(messages))
-
-
-class _ResponseToConversation(Executor):
-    """Converts AgentExecutorResponse to list[ChatMessage] conversation for chaining."""
+        await self._initialize(list(messages), ctx)
 
     @handler
-    async def convert(self, response: AgentExecutorResponse, ctx: WorkflowContext[list[ChatMessage]]) -> None:
-        # Always use full_conversation; AgentExecutor guarantees it is populated.
-        if response.full_conversation is None:  # Defensive: indicates a contract violation
-            raise RuntimeError("AgentExecutorResponse.full_conversation missing. AgentExecutor must populate it.")
-        await ctx.send_message(list(response.full_conversation))
+    async def from_handle(self, handle: ConversationHandle, ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        session = await manager.ensure_session(handle=handle)
+        await ctx.send_message(list(session.transcript))
 
 
-class _EndWithConversation(Executor):
-    """Terminates the workflow by emitting the final conversation context."""
+class ConversationProjectionExecutor(Executor):
+    """Reconciles downstream outputs with the active ConversationSession."""
+
+    def __init__(self, *, id: str) -> None:
+        super().__init__(id=id)
+        self.metadata["visibility"] = "internal"
 
     @handler
-    async def end(self, conversation: list[ChatMessage], ctx: WorkflowContext[Any, list[ChatMessage]]) -> None:
-        await ctx.yield_output(list(conversation))
+    async def from_agent_response(self, response: AgentExecutorResponse, ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        await manager.ensure_session()
+        if response.full_conversation is None:
+            transcript = list(response.agent_run_response.messages)
+        else:
+            transcript = list(response.full_conversation)
+        await manager.replace_transcript(transcript)
+        await ctx.send_message(transcript)
+
+    @handler
+    async def from_messages(self, messages: list[ChatMessage], ctx: WorkflowContext[list[ChatMessage]]) -> None:  # type: ignore[name-defined]
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        await manager.ensure_session()
+        transcript = list(messages)
+        await manager.replace_transcript(transcript)
+        await ctx.send_message(transcript)
+
+
+class ConversationOutputExecutor(Executor):
+    """Emits a ConversationSnapshot containing transcript and resumable handle."""
+
+    def __init__(self, *, id: str = "conversation-output") -> None:
+        super().__init__(id=id)
+        self.metadata["visibility"] = "internal"
+
+    @handler
+    async def end(self, conversation: list[ChatMessage], ctx: WorkflowContext[Any, ConversationSnapshot]) -> None:
+        manager = await ConversationManager.ensure_on_shared_state(ctx.shared_state)
+        await manager.ensure_session()
+        transcript = list(conversation)
+        await manager.replace_transcript(transcript)
+        handle = manager.handle
+        snapshot = ConversationSnapshot(messages=transcript, handle=ConversationHandle(handle.session_id, handle.revision))
+        await ctx.yield_output(snapshot)
 
 
 class SequentialBuilder:
@@ -152,46 +177,32 @@ class SequentialBuilder:
         """Build and validate the sequential workflow.
 
         Wiring pattern:
-        - _InputToConversation normalizes the initial input into list[ChatMessage]
-        - For each participant in order:
-            - If Agent (or AgentExecutor): pass conversation to the agent, then convert response
-              to conversation via _ResponseToConversation
-            - Else (custom Executor): pass conversation directly to the executor
-        - _EndWithConversation yields the final conversation and the workflow becomes idle
+        - ConversationEntryExecutor normalizes the initial input and initializes ConversationSession.
+        - For each participant: execute participant, then apply ConversationProjectionExecutor to sync session state.
+        - ConversationOutputExecutor emits the final ConversationSnapshot and the workflow becomes idle.
         """
         if not self._participants:
             raise ValueError("No participants provided. Call .participants([...]) first.")
 
         # Internal nodes
-        input_conv = _InputToConversation(id="input-conversation")
-        end = _EndWithConversation(id="end")
+        entry = ConversationEntryExecutor(id="conversation-entry")
+        output = ConversationOutputExecutor(id="conversation-output")
 
         builder = WorkflowBuilder()
-        builder.set_start_executor(input_conv)
+        builder.set_start_executor(entry)
 
         # Start of the chain is the input normalizer
-        prior: Executor | AgentProtocol = input_conv
+        prior: Executor | AgentProtocol = entry
 
         for p in self._participants:
-            # Agent-like branch: either explicitly an AgentExecutor or any non-AgentExecutor
-            if not (isinstance(p, Executor) and not isinstance(p, AgentExecutor)):
-                # input conversation -> (agent) -> response -> conversation
-                builder.add_edge(prior, p)
-                # Give the adapter a deterministic, self-describing id
-                label: str
-                label = p.id if isinstance(p, Executor) else getattr(p, "name", None) or p.__class__.__name__
-                resp_to_conv = _ResponseToConversation(id=f"to-conversation:{label}")
-                builder.add_edge(p, resp_to_conv)
-                prior = resp_to_conv
-            elif isinstance(p, Executor):
-                # Custom executor operates on list[ChatMessage]
-                builder.add_edge(prior, p)
-                prior = p
-            else:  # pragma: no cover - defensive
-                raise TypeError(f"Unsupported participant type: {type(p).__name__}")
+            builder.add_edge(prior, p)
+            label = p.id if isinstance(p, Executor) else getattr(p, "name", None) or p.__class__.__name__
+            projection = ConversationProjectionExecutor(id=f"conversation-view:{label}")
+            builder.add_edge(p, projection)
+            prior = projection
 
         # Terminate with the final conversation
-        builder.add_edge(prior, end)
+        builder.add_edge(prior, output)
 
         if self._checkpoint_storage is not None:
             builder = builder.with_checkpointing(self._checkpoint_storage)

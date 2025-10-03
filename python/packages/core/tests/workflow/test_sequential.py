@@ -11,6 +11,7 @@ from agent_framework import (
     AgentThread,
     BaseAgent,
     ChatMessage,
+    ConversationSnapshot,
     Executor,
     Role,
     SequentialBuilder,
@@ -63,6 +64,13 @@ def test_sequential_builder_rejects_empty_participants() -> None:
         SequentialBuilder().participants([])
 
 
+def _as_messages(data: Any) -> list[ChatMessage]:
+    if isinstance(data, ConversationSnapshot):
+        return list(data.messages)
+    assert isinstance(data, list)
+    return list(data)
+
+
 async def test_sequential_agents_append_to_context() -> None:
     a1 = _EchoAgent(id="agent1", name="A1")
     a2 = _EchoAgent(id="agent2", name="A2")
@@ -70,7 +78,7 @@ async def test_sequential_agents_append_to_context() -> None:
     wf = SequentialBuilder().participants([a1, a2]).build()
 
     completed = False
-    output: list[ChatMessage] | None = None
+    output: ConversationSnapshot | list[ChatMessage] | None = None
     async for ev in wf.run_stream("hello sequential"):
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
@@ -81,8 +89,7 @@ async def test_sequential_agents_append_to_context() -> None:
 
     assert completed
     assert output is not None
-    assert isinstance(output, list)
-    msgs: list[ChatMessage] = output
+    msgs = _as_messages(output)
     assert len(msgs) == 3
     assert msgs[0].role == Role.USER and "hello sequential" in msgs[0].text
     assert msgs[1].role == Role.ASSISTANT and (msgs[1].author_name == "A1" or True)
@@ -98,7 +105,7 @@ async def test_sequential_with_custom_executor_summary() -> None:
     wf = SequentialBuilder().participants([a1, summarizer]).build()
 
     completed = False
-    output: list[ChatMessage] | None = None
+    output: ConversationSnapshot | list[ChatMessage] | None = None
     async for ev in wf.run_stream("topic X"):
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
@@ -109,7 +116,7 @@ async def test_sequential_with_custom_executor_summary() -> None:
 
     assert completed
     assert output is not None
-    msgs: list[ChatMessage] = output
+    msgs = _as_messages(output)
     # Expect: [user, A1 reply, summary]
     assert len(msgs) == 3
     assert msgs[0].role == Role.USER
@@ -123,14 +130,15 @@ async def test_sequential_checkpoint_resume_round_trip() -> None:
     initial_agents = (_EchoAgent(id="agent1", name="A1"), _EchoAgent(id="agent2", name="A2"))
     wf = SequentialBuilder().participants(list(initial_agents)).with_checkpointing(storage).build()
 
-    baseline_output: list[ChatMessage] | None = None
+    baseline_snapshot: ConversationSnapshot | list[ChatMessage] | None = None
     async for ev in wf.run_stream("checkpoint sequential"):
         if isinstance(ev, WorkflowOutputEvent):
-            baseline_output = ev.data  # type: ignore[assignment]
+            baseline_snapshot = ev.data  # type: ignore[assignment]
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             break
 
-    assert baseline_output is not None
+    assert baseline_snapshot is not None
+    baseline_messages = _as_messages(baseline_snapshot)
 
     checkpoints = await storage.list_checkpoints()
     assert checkpoints
@@ -144,16 +152,17 @@ async def test_sequential_checkpoint_resume_round_trip() -> None:
     resumed_agents = (_EchoAgent(id="agent1", name="A1"), _EchoAgent(id="agent2", name="A2"))
     wf_resume = SequentialBuilder().participants(list(resumed_agents)).with_checkpointing(storage).build()
 
-    resumed_output: list[ChatMessage] | None = None
+    resumed_snapshot: ConversationSnapshot | list[ChatMessage] | None = None
     async for ev in wf_resume.run_stream_from_checkpoint(resume_checkpoint.checkpoint_id):
         if isinstance(ev, WorkflowOutputEvent):
-            resumed_output = ev.data  # type: ignore[assignment]
+            resumed_snapshot = ev.data  # type: ignore[assignment]
         if isinstance(ev, WorkflowStatusEvent) and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
         ):
             break
 
-    assert resumed_output is not None
-    assert [m.role for m in resumed_output] == [m.role for m in baseline_output]
-    assert [m.text for m in resumed_output] == [m.text for m in baseline_output]
+    assert resumed_snapshot is not None
+    resumed_messages = _as_messages(resumed_snapshot)
+    assert [m.role for m in resumed_messages] == [m.role for m in baseline_messages]
+    assert [m.text for m in resumed_messages] == [m.text for m in baseline_messages]

@@ -241,9 +241,12 @@ class _HandoffCoordinator(Executor):
     def _resolve_specialist(self, response: AgentExecutorResponse) -> str | None:
         try:
             resolved = self._resolver(response)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.exception("handoff resolver raised %s", exc)
+        except (ValueError, KeyError) as exc:
+            logger.exception("handoff resolver raised an expected error: %s", exc)
             return None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.exception("handoff resolver raised an unexpected error: %s", exc)
+            raise
 
         if resolved is None:
             return None

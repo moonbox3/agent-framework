@@ -151,11 +151,13 @@ def _render_message_text(message: ChatMessage, *, truncate: int | None = None) -
     """Render message text, unwrapping structured outputs when available."""
     text = message.text or ""
     if text:
-        payload: Any
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            payload = None
+        stripped = text.lstrip()
+        payload: Any = None
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = None
         if isinstance(payload, dict):
             payload_dict = cast(dict[str, Any], payload)
             response_value = payload_dict.get("response")

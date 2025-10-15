@@ -15,7 +15,8 @@ from agent_framework import (
     WorkflowRunState,
     WorkflowStatusEvent,
 )
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import AzureCliCredential
 
 """Sample: Handoff workflow orchestrating triage and specialist Azure OpenAI agents.
 
@@ -31,7 +32,7 @@ The HandoffBuilder automatically detects this and routes to the appropriate spec
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
-    - Environment variables configured for OpenAIChatClient (AZURE_OPENAI_ENDPOINT, etc.)
+    - Environment variables configured for AzureOpenAIChatClient (AZURE_OPENAI_ENDPOINT, etc.)
 
 Key Concepts:
     - HandoffBuilder: High-level API for triage + specialist workflows
@@ -40,7 +41,7 @@ Key Concepts:
 """
 
 
-def create_agents(chat_client: OpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent, ChatAgent]:
+def create_agents(chat_client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent, ChatAgent]:
     """Create and configure the triage and specialist agents.
 
     The triage agent is responsible for:
@@ -185,8 +186,8 @@ async def main() -> None:
     the demo reproducible and testable. In a production application, you would
     replace the scripted_responses with actual user input collection.
     """
-    # Initialize the OpenAI chat client (uses Azure OpenAI by default)
-    chat_client = OpenAIChatClient()
+    # Initialize the Azure OpenAI chat client
+    chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
 
     # Create all agents: triage + specialists
     triage, refund, order, support = create_agents(chat_client)

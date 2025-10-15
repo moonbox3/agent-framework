@@ -15,7 +15,8 @@ from agent_framework import (
     WorkflowRunState,
     WorkflowStatusEvent,
 )
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import AzureCliCredential
 
 """Sample: Handoff workflow with context window (rolling history).
 
@@ -30,11 +31,11 @@ are included. This creates a "rolling window" effect where older messages are dr
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
-    - Environment variables configured for OpenAIChatClient
+    - Environment variables configured for AzureOpenAIChatClient
 """
 
 
-def create_agents(chat_client: OpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent]:
+def create_agents(chat_client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent]:
     """Create triage and specialist agents for the demo.
 
     Returns:
@@ -129,7 +130,7 @@ async def main() -> None:
     We use a small context window (4 messages) to make the effect visible in the demo.
     In production, you might use 10-20 messages depending on your needs.
     """
-    chat_client = OpenAIChatClient()
+    chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
     triage, technical, billing = create_agents(chat_client)
 
     # Build workflow with a 4-message context window

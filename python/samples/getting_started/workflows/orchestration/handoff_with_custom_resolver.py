@@ -17,7 +17,8 @@ from agent_framework import (
     WorkflowStatusEvent,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorResponse
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import AzureCliCredential
 from pydantic import BaseModel, Field
 
 """Sample: Handoff workflow with custom resolver using structured outputs.
@@ -39,7 +40,7 @@ The pattern:
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
-    - Environment variables configured for OpenAIChatClient
+    - Environment variables configured for AzureOpenAIChatClient
     - Model must support structured outputs (e.g., gpt-4o, gpt-4o-mini)
 """
 
@@ -105,7 +106,7 @@ def structured_output_resolver(response: AgentExecutorResponse) -> str | None:
     return None
 
 
-def create_agents(chat_client: OpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent]:
+def create_agents(chat_client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent]:
     """Create triage and specialist agents with structured output configuration.
 
     The triage agent uses response_format=TriageResponse to guarantee structured output.
@@ -222,7 +223,7 @@ async def main() -> None:
     - No parsing errors or validation issues
     - Clean, maintainable code
     """
-    chat_client = OpenAIChatClient()
+    chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
     triage, refund, cancellation = create_agents(chat_client)
 
     # Build workflow with structured output resolver

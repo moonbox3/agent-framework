@@ -13,7 +13,6 @@ from agent_framework import (
     MagenticCallbackMode,
     MagenticFinalResultEvent,
     MagenticOrchestratorMessageEvent,
-    WorkflowOutputEvent,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
 
@@ -23,9 +22,9 @@ logger = logging.getLogger(__name__)
 """
 Sample: Build a Magentic orchestration and wrap it as an agent.
 
-The script configures a Magentic workflow with streaming callbacks, runs the orchestration
-to observe planner and agent activity, then converts the underlying workflow into an agent
-via `.as_agent()` so the entire Magentic loop can be invoked like any other agent.
+The script configures a Magentic workflow with streaming callbacks, then invokes the
+orchestration through `workflow.as_agent(...)` so the entire Magentic loop can be reused
+like any other agent while still emitting callback telemetry.
 
 Prerequisites:
 - OpenAI credentials configured for `OpenAIChatClient` and `OpenAIResponsesClient`.
@@ -119,23 +118,14 @@ async def main() -> None:
     print("\nStarting workflow execution...")
 
     try:
-        output: str | None = None
-        async for event in workflow.run_stream(task):
-            print(event)
-            if isinstance(event, WorkflowOutputEvent):
-                output = str(event.data)
-
-        if output is not None:
-            print(f"Workflow completed with result:\n\n{output}")
-
-        # Expose the orchestration as an agent for conversational reuse
-        workflow_agent = workflow.workflow.as_agent(name="MagenticWorkflowAgent")
+        workflow_agent = workflow.as_agent(name="MagenticWorkflowAgent")
         agent_result = await workflow_agent.run(task)
 
         if agent_result.messages:
             print("\n===== as_agent() Transcript =====")
             for i, msg in enumerate(agent_result.messages, start=1):
-                speaker = msg.author_name or msg.role.value
+                role_value = getattr(msg.role, "value", msg.role)
+                speaker = msg.author_name or role_value
                 print(f"{'-' * 50}\n{i:02d} [{speaker}]\n{msg.text}")
 
     except Exception as e:

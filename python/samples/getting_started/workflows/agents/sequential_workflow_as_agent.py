@@ -1,18 +1,17 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import asyncio
-from typing import cast
 
-from agent_framework import ChatMessage, Role, SequentialBuilder, WorkflowOutputEvent
+from agent_framework import Role, SequentialBuilder
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
 """
 Sample: Build a sequential workflow orchestration and wrap it as an agent.
 
-The script assembles a sequential conversation flow with `SequentialBuilder`, shows the
-conversation payload emitted by the workflow, and then turns that workflow into an agent
-via `.as_agent()` so other coordinators can reuse the entire chain as a single participant.
+The script assembles a sequential conversation flow with `SequentialBuilder`, then
+invokes the entire orchestration through the `workflow.as_agent(...)` interface so
+other coordinators can reuse the chain as a single participant.
 
 Note on internal adapters:
 - Sequential orchestration includes small adapter nodes for input normalization
@@ -43,26 +42,17 @@ async def main() -> None:
     # 2) Build sequential workflow: writer -> reviewer
     workflow = SequentialBuilder().participants([writer, reviewer]).build()
 
-    # 3) Run and collect outputs
-    outputs: list[list[ChatMessage]] = []
-    async for event in workflow.run_stream("Write a tagline for a budget-friendly eBike."):
-        if isinstance(event, WorkflowOutputEvent):
-            outputs.append(cast(list[ChatMessage], event.data))
-
-    if outputs:
-        print("===== Final Conversation =====")
-        for i, msg in enumerate(outputs[-1], start=1):
-            name = msg.author_name or ("assistant" if msg.role == Role.ASSISTANT else "user")
-            print(f"{'-' * 60}\n{i:02d} [{name}]\n{msg.text}")
-
-    # 4) Treat the workflow itself as an agent for follow-up invocations
+    # 3) Treat the workflow itself as an agent for follow-up invocations
     agent = workflow.as_agent(name="SequentialWorkflowAgent")
-    agent_response = await agent.run("Write a tagline for a budget-friendly eBike.")
+    prompt = "Write a tagline for a budget-friendly eBike."
+    agent_response = await agent.run(prompt)
 
     if agent_response.messages:
-        print("\n===== as_agent() Conversation =====")
+        print("\n===== Conversation =====")
         for i, msg in enumerate(agent_response.messages, start=1):
-            name = msg.author_name or ("assistant" if msg.role == Role.ASSISTANT else "user")
+            role_value = getattr(msg.role, "value", msg.role)
+            normalized_role = str(role_value).lower() if role_value is not None else "assistant"
+            name = msg.author_name or ("assistant" if normalized_role == Role.ASSISTANT.value else "user")
             print(f"{'-' * 60}\n{i:02d} [{name}]\n{msg.text}")
 
     """
@@ -80,6 +70,16 @@ async def main() -> None:
     This tagline clearly communicates affordability and the benefit of extended travel, making it
     appealing to budget-conscious consumers. It has a friendly and motivating tone, though it could
     be slightly shorter for more punch. Overall, a strong and effective suggestion!
+
+    ===== as_agent() Conversation =====
+    ------------------------------------------------------------
+    01 [writer]
+    Go electric, save big—your affordable ride awaits!
+    ------------------------------------------------------------
+    02 [reviewer]
+    Catchy and straightforward! The tagline clearly emphasizes both the electric aspect and the affordability of the
+    eBike. It's inviting and actionable. For even more impact, consider making it slightly shorter:
+    "Go electric, save big." Overall, this is an effective and appealing suggestion for a budget-friendly eBike.
     """
 
 

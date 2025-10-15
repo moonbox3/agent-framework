@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, Union, cast
 from uuid import uuid4
 
 from agent_framework import (
@@ -37,6 +37,9 @@ if sys.version_info >= (3, 11):
     from typing import Self  # pragma: no cover
 else:
     from typing_extensions import Self  # pragma: no cover
+
+if TYPE_CHECKING:
+    from ._agent import WorkflowAgent
 
 logger = logging.getLogger(__name__)
 
@@ -2042,6 +2045,10 @@ class MagenticWorkflow:
     def workflow(self) -> Workflow:
         """Access the underlying workflow."""
         return self._workflow
+
+    def as_agent(self, name: str | None = None) -> "WorkflowAgent":
+        """Expose the underlying workflow as a WorkflowAgent."""
+        return self._workflow.as_agent(name=name)
 
     async def run_streaming_with_string(self, task_text: str) -> AsyncIterable[WorkflowEvent]:
         """Run the workflow with a task string.

@@ -1,18 +1,17 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import asyncio
-from typing import Any
 
-from agent_framework import ChatMessage, ConcurrentBuilder
+from agent_framework import ConcurrentBuilder
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
 """
 Sample: Build a concurrent workflow orchestration and wrap it as an agent.
 
-This script wires up a fan-out/fan-in workflow using `ConcurrentBuilder`, runs it once
-to observe the aggregated conversation, and then converts that workflow into an agent
-via `.as_agent()` so downstream coordinators can reuse the orchestration as a single agent.
+This script wires up a fan-out/fan-in workflow using `ConcurrentBuilder`, and then
+invokes the entire orchestration through the `workflow.as_agent(...)` interface so
+downstream coordinators can reuse the orchestration as a single agent.
 
 Demonstrates:
 - Fan-out to multiple agents, fan-in aggregation of final ChatMessages.
@@ -54,35 +53,24 @@ async def main() -> None:
     )
 
     # 2) Build a concurrent workflow
-    # Participants are either Agents (type of AgentProtocol) or Executors
     workflow = ConcurrentBuilder().participants([researcher, marketer, legal]).build()
 
-    # 3) Run with a single prompt and pretty-print the final combined messages
-    events = await workflow.run("We are launching a new budget-friendly electric bike for urban commuters.")
-    outputs = events.get_outputs()
-
-    if outputs:
-        print("===== Final Aggregated Conversation (messages) =====")
-        for output in outputs:
-            messages: list[ChatMessage] | Any = output
-            for i, msg in enumerate(messages, start=1):
-                name = msg.author_name if msg.author_name else "user"
-                print(f"{'-' * 60}\n\n{i:02d} [{name}]:\n{msg.text}")
-
-    # 4) Expose the concurrent workflow as an agent for easy reuse
+    # 3) Expose the concurrent workflow as an agent for easy reuse
     agent = workflow.as_agent(name="ConcurrentWorkflowAgent")
-    agent_response = await agent.run("We are launching a new budget-friendly electric bike for urban commuters.")
+    prompt = "We are launching a new budget-friendly electric bike for urban commuters."
+    agent_response = await agent.run(prompt)
 
     if agent_response.messages:
-        print("\n===== as_agent() Aggregated Messages =====")
+        print("\n===== Aggregated Messages =====")
         for i, msg in enumerate(agent_response.messages, start=1):
-            name = msg.author_name if msg.author_name else msg.role.value
+            role = getattr(msg.role, "value", msg.role)
+            name = msg.author_name if msg.author_name else role
             print(f"{'-' * 60}\n\n{i:02d} [{name}]:\n{msg.text}")
 
     """
     Sample Output:
 
-    ===== Final Aggregated Conversation (messages) =====
+    ===== Aggregated Messages =====
     ------------------------------------------------------------
 
     01 [user]:

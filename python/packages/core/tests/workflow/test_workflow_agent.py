@@ -379,7 +379,7 @@ class TestWorkflowAgent:
             .build()
         )
 
-        agent = workflow_wrapper.workflow.as_agent(name="Magentic")
+        agent = workflow_wrapper.as_agent(name="Magentic")
 
         source_messages = [ChatMessage(role=Role.USER, text="Execute task")]
         payload = agent._start_payload_encoder(source_messages)

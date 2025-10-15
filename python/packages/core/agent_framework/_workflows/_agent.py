@@ -174,7 +174,7 @@ class WorkflowAgent(BaseAgent):
         try:
             from ._magentic import MagenticStartMessage
         except Exception:  # pragma: no cover - optional dependency
-            MagenticStartMessage = None  # type: ignore[assignment]
+            MagenticStartMessage = None  # type: ignore
 
         if MagenticStartMessage is not None and message_cls is MagenticStartMessage:
             return self._build_magentic_start_adapter(MagenticStartMessage)

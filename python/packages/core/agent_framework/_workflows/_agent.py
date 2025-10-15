@@ -2,11 +2,13 @@
 
 import json
 import logging
+import types
+import typing
 import uuid
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast, get_args, get_origin
 
 from agent_framework import (
     AgentRunResponse,
@@ -29,6 +31,7 @@ from ._events import (
 )
 
 if TYPE_CHECKING:
+    from ._executor import Executor
     from ._workflow import Workflow
 
 logger = logging.getLogger(__name__)
@@ -91,8 +94,7 @@ class WorkflowAgent(BaseAgent):
         except KeyError as exc:  # Defensive: workflow lacks a configured entry point
             raise ValueError("Workflow's start executor is not defined.") from exc
 
-        if list[ChatMessage] not in start_executor.input_types:
-            raise ValueError("Workflow's start executor cannot handle list[ChatMessage]")
+        self._start_payload_encoder = self._resolve_start_payload_encoder(start_executor)
 
         super().__init__(id=id, name=name, description=description, **kwargs)
         self._workflow: "Workflow" = workflow
@@ -105,6 +107,143 @@ class WorkflowAgent(BaseAgent):
     @property
     def pending_requests(self) -> dict[str, RequestInfoEvent]:
         return self._pending_requests
+
+    def _resolve_start_payload_encoder(self, start_executor: "Executor") -> Callable[[list[ChatMessage]], Any]:
+        """Determine how to map agent chat messages to the workflow's start executor input."""
+        probe_conversation = [ChatMessage(role=Role.USER, text="__agent_probe__")]
+        if start_executor.can_handle(probe_conversation):
+            return lambda messages: list(messages)
+
+        for adapter in self._candidate_adapters_from_input_types(start_executor.input_types):
+            try:
+                probe_payload = adapter(probe_conversation)
+            except ValueError:
+                continue
+            if start_executor.can_handle(probe_payload):
+                return adapter
+
+        raise ValueError("Workflow's start executor cannot be adapted to agent chat inputs.")
+
+    def _candidate_adapters_from_input_types(
+        self,
+        input_types: Sequence[type[Any]],
+    ) -> list[Callable[[list[ChatMessage]], Any]]:
+        adapters: list[Callable[[list[ChatMessage]], Any]] = []
+        for annotation in input_types:
+            for candidate in self._flatten_type_annotation(annotation):
+                adapter = self._adapter_for_concrete_type(candidate)
+                if adapter is not None and adapter not in adapters:
+                    adapters.append(adapter)
+        return adapters
+
+    def _flatten_type_annotation(self, annotation: Any) -> list[Any]:
+        origin = get_origin(annotation)
+        if origin is None:
+            return [annotation]
+
+        if origin in (types.UnionType, typing.Union):
+            flattened: list[Any] = []
+            for arg in get_args(annotation):
+                flattened.extend(self._flatten_type_annotation(arg))
+            return flattened
+
+        if origin is typing.Annotated:
+            args = get_args(annotation)
+            return self._flatten_type_annotation(args[0]) if args else []
+
+        return [annotation]
+
+    def _adapter_for_concrete_type(self, message_type: Any) -> Callable[[list[ChatMessage]], Any] | None:
+        if self._is_chat_message_list_type(message_type):
+            return lambda messages: list(messages)
+
+        if self._is_chat_message_type(message_type):
+            return self._messages_to_single_chat_message
+
+        if message_type is str:
+            return self._messages_to_text
+
+        if isinstance(message_type, type):
+            specialized = self._adapter_for_specialized_class(message_type)
+            if specialized is not None:
+                return specialized
+
+        return None
+
+    def _adapter_for_specialized_class(self, message_cls: type[Any]) -> Callable[[list[ChatMessage]], Any] | None:
+        try:
+            from ._magentic import MagenticStartMessage
+        except Exception:  # pragma: no cover - optional dependency
+            MagenticStartMessage = None  # type: ignore[assignment]
+
+        if MagenticStartMessage is not None and message_cls is MagenticStartMessage:
+            return self._build_magentic_start_adapter(MagenticStartMessage)
+
+        return None
+
+    def _build_magentic_start_adapter(
+        self,
+        message_cls: type[Any],
+    ) -> Callable[[list[ChatMessage]], Any]:
+        def adapter(messages: list[ChatMessage]) -> Any:
+            task_message = self._select_user_or_last_message(messages)
+            try:
+                return message_cls(task=task_message)
+            except TypeError as exc:
+                raise ValueError("Cannot construct MagenticStartMessage from provided chat messages.") from exc
+
+        return adapter
+
+    def _is_chat_message_list_type(self, annotation: Any) -> bool:
+        if annotation is list:
+            return True
+
+        origin = get_origin(annotation)
+        if origin in (list, Sequence):
+            args = get_args(annotation)
+            if not args:
+                return origin is list
+            return all(self._is_chat_message_type(arg) for arg in args)
+
+        return False
+
+    def _is_chat_message_type(self, annotation: Any) -> bool:
+        if annotation is ChatMessage:
+            return True
+        return isinstance(annotation, type) and issubclass(annotation, ChatMessage)
+
+    def _messages_to_single_chat_message(self, messages: list[ChatMessage]) -> ChatMessage:
+        return self._select_user_or_last_message(messages)
+
+    def _messages_to_text(self, messages: list[ChatMessage]) -> str:
+        message = self._select_user_or_last_message(messages)
+        text = message.text.strip()
+        if text:
+            return text
+
+        fallback_parts: list[str] = []
+        for content in message.contents:
+            candidate = getattr(content, "text", None)
+            if isinstance(candidate, str) and candidate:
+                fallback_parts.append(candidate)
+            else:
+                rendered = str(content)
+                if rendered:
+                    fallback_parts.append(rendered)
+
+        if fallback_parts:
+            return " ".join(fallback_parts)
+
+        raise ValueError("Cannot derive plain-text prompt from chat message contents.")
+
+    def _select_user_or_last_message(self, messages: list[ChatMessage]) -> ChatMessage:
+        if not messages:
+            raise ValueError("At least one ChatMessage is required to start the workflow.")
+
+        for message in reversed(messages):
+            if getattr(message, "role", None) == Role.USER:
+                return message
+        return messages[-1]
 
     async def run(
         self,
@@ -213,8 +352,8 @@ class WorkflowAgent(BaseAgent):
             event_stream = self.workflow.send_responses_streaming(function_responses)
         else:
             # Execute workflow with streaming (initial run or no function responses)
-            # Pass the new input messages directly to the workflow
-            event_stream = self.workflow.run_stream(input_messages)
+            start_payload = self._start_payload_encoder(input_messages)
+            event_stream = self.workflow.run_stream(start_payload)
 
         # Process events from the stream
         async for event in event_stream:

@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import uuid
+from collections.abc import AsyncIterable
 from typing import Any
 
 import pytest
@@ -9,13 +10,22 @@ from agent_framework import (
     AgentRunResponse,
     AgentRunResponseUpdate,
     AgentRunUpdateEvent,
+    AgentThread,
+    BaseAgent,
     ChatMessage,
+    ConcurrentBuilder,
     Executor,
     FunctionCallContent,
     FunctionResultContent,
+    MagenticBuilder,
+    MagenticContext,
+    MagenticManagerBase,
+    MagenticProgressLedger,
+    MagenticProgressLedgerItem,
     RequestInfoExecutor,
     RequestInfoMessage,
     Role,
+    SequentialBuilder,
     TextContent,
     UsageContent,
     UsageDetails,
@@ -24,6 +34,7 @@ from agent_framework import (
     WorkflowContext,
     handler,
 )
+from agent_framework._workflows._magentic import MagenticStartMessage
 
 
 class SimpleExecutor(Executor):
@@ -71,6 +82,88 @@ class RequestingExecutor(Executor):
             message_id=str(uuid.uuid4()),
         )
         await ctx.add_event(AgentRunUpdateEvent(executor_id=self.id, data=update))
+
+
+class _StubAgent(BaseAgent):
+    """Minimal agent that returns a fixed reply for testing orchestrators."""
+
+    def __init__(self, name: str, reply: str) -> None:
+        super().__init__(name=name)
+        self._reply = reply
+
+    async def run(
+        self,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: AgentThread | None = None,
+        **kwargs: Any,
+    ) -> AgentRunResponse:
+        response_message = ChatMessage(role=Role.ASSISTANT, contents=[TextContent(text=self._reply)])
+        response = AgentRunResponse(messages=[response_message], response_id=str(uuid.uuid4()))
+        thread = thread or self.get_new_thread()
+        normalized_messages: list[ChatMessage] = []
+        if isinstance(messages, ChatMessage):
+            normalized_messages = [messages]
+        elif isinstance(messages, list):
+            normalized_messages = [
+                m if isinstance(m, ChatMessage) else ChatMessage(role=Role.USER, text=str(m)) for m in messages
+            ]
+        elif isinstance(messages, str):
+            normalized_messages = [ChatMessage(role=Role.USER, text=messages)]
+        await self._notify_thread_of_new_messages(thread, normalized_messages, response.messages)
+        return response
+
+    def run_stream(
+        self,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: AgentThread | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterable[AgentRunResponseUpdate]:
+        async def _stream() -> AsyncIterable[AgentRunResponseUpdate]:
+            yield AgentRunResponseUpdate(
+                contents=[TextContent(text=self._reply)],
+                role=Role.ASSISTANT,
+                response_id=str(uuid.uuid4()),
+                message_id=str(uuid.uuid4()),
+            )
+
+        return _stream()
+
+
+class _MiniMagenticManager(MagenticManagerBase):
+    """Deterministic manager that drives a single agent to completion quickly."""
+
+    def __init__(self) -> None:
+        super().__init__(max_round_count=3, max_stall_count=1)
+        self._progress_calls = 0
+
+    async def plan(self, magentic_context: MagenticContext) -> ChatMessage:
+        return ChatMessage(role=Role.ASSISTANT, text="Plan: proceed")
+
+    async def replan(self, magentic_context: MagenticContext) -> ChatMessage:
+        return ChatMessage(role=Role.ASSISTANT, text="Plan: revise")
+
+    async def create_progress_ledger(self, magentic_context: MagenticContext) -> MagenticProgressLedger:
+        self._progress_calls += 1
+        agent_name = next(iter(magentic_context.participant_descriptions), "agent")
+        is_satisfied = self._progress_calls > 1 and any(
+            msg.role == Role.ASSISTANT for msg in magentic_context.chat_history
+        )
+
+        return MagenticProgressLedger(
+            is_request_satisfied=MagenticProgressLedgerItem(reason="status", answer=is_satisfied),
+            is_in_loop=MagenticProgressLedgerItem(reason="status", answer=False),
+            is_progress_being_made=MagenticProgressLedgerItem(reason="status", answer=True),
+            next_speaker=MagenticProgressLedgerItem(reason="status", answer=agent_name if not is_satisfied else ""),
+            instruction_or_question=MagenticProgressLedgerItem(
+                reason="status",
+                answer="Provide update" if not is_satisfied else "",
+            ),
+        )
+
+    async def prepare_final_answer(self, magentic_context: MagenticContext) -> ChatMessage:
+        return ChatMessage(role=Role.ASSISTANT, text="Final answer prepared.")
 
 
 class TestWorkflowAgent:
@@ -234,8 +327,70 @@ class TestWorkflowAgent:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # Try to create an agent with unsupported input types
-        with pytest.raises(ValueError, match="Workflow's start executor cannot handle list\\[ChatMessage\\]"):
+        with pytest.raises(ValueError, match="Workflow's start executor cannot be adapted to agent chat inputs"):
             workflow.as_agent()
+
+    async def test_sequential_builder_as_agent_roundtrip(self) -> None:
+        """Ensure SequentialBuilder workflows can be invoked through WorkflowAgent."""
+        workflow = SequentialBuilder().participants([SimpleExecutor(id="seq", response_text="SeqStep")]).build()
+        agent = workflow.as_agent(name="Sequential")
+
+        result = await agent.run("Sequential input")
+        assert isinstance(result, AgentRunResponse)
+
+        texts = [
+            content.text
+            for message in result.messages or []
+            for content in message.contents
+            if isinstance(content, TextContent)
+        ]
+        assert any("SeqStep" in text for text in texts)
+
+    async def test_concurrent_builder_as_agent_roundtrip(self) -> None:
+        """Ensure ConcurrentBuilder workflows can be invoked through WorkflowAgent."""
+        workflow = (
+            ConcurrentBuilder()
+            .participants([
+                _StubAgent(name="agent-1", reply="Reply One"),
+                _StubAgent(name="agent-2", reply="Reply Two"),
+            ])
+            .build()
+        )
+
+        agent = workflow.as_agent(name="Concurrent")
+        result = await agent.run("Concurrent input")
+        assert isinstance(result, AgentRunResponse)
+
+        texts = [
+            content.text
+            for message in result.messages or []
+            for content in message.contents
+            if isinstance(content, TextContent)
+        ]
+        assert any("Reply One" in text for text in texts)
+        assert any("Reply Two" in text for text in texts)
+
+    async def test_magentic_builder_as_agent_payload(self) -> None:
+        """Ensure MagenticBuilder workflows expose valid agents and payload adapters."""
+        workflow_wrapper = (
+            MagenticBuilder()
+            .participants(coordinator=_StubAgent(name="coordinator", reply="Agent completed."))
+            .with_standard_manager(_MiniMagenticManager())
+            .build()
+        )
+
+        agent = workflow_wrapper.workflow.as_agent(name="Magentic")
+
+        source_messages = [ChatMessage(role=Role.USER, text="Execute task")]
+        payload = agent._start_payload_encoder(source_messages)
+        assert isinstance(payload, MagenticStartMessage)
+        assert payload.task.text == "Execute task"
+
+        result = await agent.run("Execute task")
+        assert isinstance(result, AgentRunResponse)
+
+        assert isinstance(result.messages, list)
+        assert result.response_id is not None
 
 
 class TestWorkflowAgentMergeUpdates:

@@ -89,6 +89,9 @@ Once comfortable with these, explore the rest of the samples below.
 | Concurrent Orchestration (Default Aggregator) | [orchestration/concurrent_agents.py](./orchestration/concurrent_agents.py) | Fan-out to multiple agents; fan-in with default aggregator returning combined ChatMessages |
 | Concurrent Orchestration (Custom Aggregator) | [orchestration/concurrent_custom_aggregator.py](./orchestration/concurrent_custom_aggregator.py) | Override aggregator via callback; summarize results with an LLM |
 | Concurrent Orchestration (Custom Agent Executors) | [orchestration/concurrent_custom_agent_executors.py](./orchestration/concurrent_custom_agent_executors.py) | Child executors own ChatAgents; concurrent fan-out/fan-in via ConcurrentBuilder |
+| Handoff Orchestration | [orchestration/handoff_agents.py](./orchestration/handoff_agents.py) | Triage agent routes to specialists then requests new user input; cyclical workflow pattern |
+| Handoff with Context Window | [orchestration/handoff_with_context_window.py](./orchestration/handoff_with_context_window.py) | Limit conversation history to rolling window for token efficiency |
+| Handoff with Custom Resolver | [orchestration/handoff_with_custom_resolver.py](./orchestration/handoff_with_custom_resolver.py) | Use structured outputs (Pydantic) for deterministic routing decisions |
 | Magentic Workflow (Multi-Agent) | [orchestration/magentic.py](./orchestration/magentic.py) | Orchestrate multiple agents with Magentic manager and streaming |
 | Magentic + Human Plan Review | [orchestration/magentic_human_plan_update.py](./orchestration/magentic_human_plan_update.py) | Human reviews/updates the plan before execution |
 | Magentic + Checkpoint Resume | [orchestration/magentic_checkpoint.py](./orchestration/magentic_checkpoint.py) | Resume Magentic orchestration from saved checkpoints |
@@ -96,6 +99,11 @@ Once comfortable with these, explore the rest of the samples below.
 | Sequential Orchestration (Custom Executor) | [orchestration/sequential_custom_executors.py](./orchestration/sequential_custom_executors.py) | Mix agents with a summarizer that appends a compact summary |
 
 **Magentic checkpointing tip**: Treat `MagenticBuilder.participants` keys as stable identifiers. When resuming from a checkpoint, the rebuilt workflow must reuse the same participant names; otherwise the checkpoint cannot be applied and the run will fail fast.
+
+**Handoff workflow tip**: The default handoff loop retains the full conversation, including any
+`ChatMessage.additional_properties` emitted by your agents. Opt into `.with_context_window(N)` when
+you want a rolling window for token savings; otherwise every specialist and the triage agent receive
+the entire conversation so routing metadata remains intact.
 
 ### parallelism
 

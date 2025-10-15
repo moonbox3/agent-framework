@@ -21,14 +21,17 @@ from azure.identity import AzureCliCredential
 """Sample: Handoff workflow orchestrating triage and specialist Azure OpenAI agents.
 
 This sample demonstrates the handoff pattern where a triage agent receives user input,
-decides whether to handle it directly or route to a specialist, and maintains a
+decides whether to handle it directly or route to a specialist via a handoff tool call,
+and maintains a
 conversational loop until a termination condition is met.
 
 Flow:
     user input -> triage agent -> [optional specialist] -> user input -> ...
 
-The triage agent signals handoff by including "HANDOFF_TO: <agent_name>" in its response.
-The HandoffBuilder automatically detects this and routes to the appropriate specialist.
+The triage agent signals handoff by invoking an approval-gated tool (for example,
+``handoff_to_refund_agent``). The HandoffBuilder auto-registers these tools for the
+starting agent, intercepts the tool call, and routes
+control to the requested specialist.
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
@@ -47,7 +50,7 @@ def create_agents(chat_client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAg
     The triage agent is responsible for:
     - Receiving all user input first
     - Deciding whether to handle the request directly or hand off to a specialist
-    - Signaling handoff by including 'HANDOFF_TO: <specialist_name>' in its response
+    - Signaling handoff by calling one of the explicit handoff tools exposed to it
 
     Specialist agents are invoked only when the triage agent explicitly hands off to them.
     After a specialist responds, control returns to the triage agent.
@@ -56,15 +59,14 @@ def create_agents(chat_client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAg
         Tuple of (triage_agent, refund_agent, order_agent, support_agent)
     """
     # Triage agent: Acts as the frontline dispatcher
-    # NOTE: The instructions explicitly tell it to output "HANDOFF_TO: <target>" when routing.
-    # The HandoffBuilder's default resolver parses this pattern automatically.
+    # NOTE: The instructions explicitly tell it to call the correct handoff tool when routing.
+    # The HandoffBuilder intercepts these tool calls and routes to the matching specialist.
     triage = chat_client.create_agent(
         instructions=(
             "You are frontline support triage. Read the latest user message and decide whether "
             "to hand off to refund_agent, order_agent, or support_agent. Provide a brief natural-language "
-            "response for the user. If you need to hand off to a specialist, include a final line exactly "
-            "formatted as 'HANDOFF_TO: <target>' where <target> is one of refund_agent, order_agent, or "
-            "support_agent. If you can handle the conversation yourself, do NOT include any HANDOFF_TO line."
+            "response for the user. When delegation is required, call the matching handoff tool "
+            "(`handoff_to_refund_agent`, `handoff_to_order_agent`, or `handoff_to_support_agent`)."
         ),
         name="triage_agent",
     )
@@ -266,7 +268,7 @@ async def main() -> None:
     - user: My order 1234 arrived damaged and the packaging was destroyed.
     - triage_agent: I'm sorry to hear that your order arrived damaged and the packaging was destroyed. I will connect you with a specialist who can assist you further with this issue.
 
-    HANDOFF_TO: support_agent
+    Tool Call: handoff_to_support_agent (awaiting approval)
     - support_agent: I'm so sorry to hear that your order arrived in such poor condition. I'll help you get this sorted out.
 
     To assist you better, could you please let me know:
@@ -286,7 +288,7 @@ async def main() -> None:
     - user: My order 1234 arrived damaged and the packaging was destroyed.
     - triage_agent: I'm sorry to hear that your order arrived damaged and the packaging was destroyed. I will connect you with a specialist who can assist you further with this issue.
 
-    HANDOFF_TO: support_agent
+    Tool Call: handoff_to_support_agent (awaiting approval)
     - support_agent: I'm so sorry to hear that your order arrived in such poor condition. I'll help you get this sorted out.
 
     To assist you better, could you please let me know:
@@ -298,14 +300,14 @@ async def main() -> None:
     - user: Yes, I'd like a refund if that's possible.
     - triage_agent: Thank you for letting me know you'd prefer a refund. I'll connect you with a specialist who can process your refund request.
 
-    HANDOFF_TO: refund_agent
+    Tool Call: handoff_to_refund_agent (awaiting approval)
     - refund_agent: Thank you for confirming that you'd like a refund for order 1234.
 
     Here's what will happen next:
 
     ...
 
-    HANDOFF_TO: refund_agent
+    Tool Call: handoff_to_refund_agent (awaiting approval)
     - refund_agent: Thank you for confirming that you'd like a refund for order 1234.
 
     Here's what will happen next:

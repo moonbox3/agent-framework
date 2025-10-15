@@ -11,18 +11,30 @@ The flow is intentionally cyclical:
 Key properties:
 - The entire conversation is maintained by default and reused on every hop
 - Developers can opt into a rolling context window (last N messages)
-- The starting agent determines whether to hand off by emitting metadata
+- The starting agent signals a handoff by invoking an approval-gated tool call that names the specialist
 - After a specialist responds, the workflow immediately requests new user input
 """
 
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_framework import AgentProtocol, AgentRunResponse, ChatMessage, Role
+from agent_framework import (
+    AgentProtocol,
+    AgentRunResponse,
+    AIFunction,
+    ChatMessage,
+    FunctionApprovalRequestContent,
+    FunctionCallContent,
+    FunctionResultContent,
+    Role,
+    ai_function,
+)
 
+from .._agents import ChatAgent
+from .._middleware import FunctionInvocationContext, FunctionMiddleware
 from ._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from ._checkpoint import CheckpointStorage
 from ._conversation_state import decode_chat_messages, encode_chat_messages
@@ -35,14 +47,72 @@ logger = logging.getLogger(__name__)
 
 
 _HANDOFF_HINT_KEYS = ("handoff_to", "handoff", "transfer_to", "agent_id", "agent")
-_HANDOFF_TEXT_PATTERN = re.compile(r"handoff[_\s-]*to\s*:?\s*(?P<target>[\w-]+)", re.IGNORECASE)
+_HANDOFF_TOOL_PATTERN = re.compile(r"(?:handoff|transfer)[_\s-]*to[_\s-]*(?P<target>[\w-]+)", re.IGNORECASE)
+
+
+def _sanitize_alias(value: str) -> str:
+    cleaned = re.sub(r"[^0-9a-zA-Z]+", "_", value).strip("_")
+    if not cleaned:
+        cleaned = "agent"
+    if cleaned[0].isdigit():
+        cleaned = f"agent_{cleaned}"
+    return cleaned.lower()
+
+
+def _create_handoff_tool(alias: str, description: str | None = None) -> AIFunction[Any, Any]:
+    sanitized = _sanitize_alias(alias)
+    tool_name = f"handoff_to_{sanitized}"
+    doc = description or f"Handoff to the {alias} agent."
+
+    # Note: approval_mode is intentionally NOT set for handoff tools.
+    # Handoff tools are framework-internal signals that trigger routing logic,
+    # not actual function executions. They are automatically intercepted and
+    # never actually execute, so approval is unnecessary and causes issues
+    # with tool_calls/responses pairing when cleaning conversations.
+    @ai_function(name=tool_name, description=doc)
+    def _handoff_tool(context: str | None = None) -> str:
+        return f"Handoff to {alias}"
+
+    return _handoff_tool
+
+
+def _clone_chat_agent(agent: ChatAgent) -> ChatAgent:
+    options = agent.chat_options
+    middleware = list(agent.middleware or [])
+
+    return ChatAgent(
+        chat_client=agent.chat_client,
+        instructions=options.instructions,
+        id=agent.id,
+        name=agent.name,
+        description=agent.description,
+        chat_message_store_factory=agent.chat_message_store_factory,
+        context_providers=agent.context_provider,
+        middleware=middleware,
+        frequency_penalty=options.frequency_penalty,
+        logit_bias=dict(options.logit_bias) if options.logit_bias else None,
+        max_tokens=options.max_tokens,
+        metadata=dict(options.metadata) if options.metadata else None,
+        model_id=options.model_id,
+        presence_penalty=options.presence_penalty,
+        response_format=options.response_format,
+        seed=options.seed,
+        stop=options.stop,
+        store=options.store,
+        temperature=options.temperature,
+        tool_choice=options.tool_choice,  # type: ignore[arg-type]
+        tools=list(options.tools) if options.tools else None,
+        top_p=options.top_p,
+        user=options.user,
+        additional_chat_options=dict(options.additional_properties),
+    )
 
 
 @dataclass
 class HandoffUserInputRequest(RequestInfoMessage):
     """Request message emitted when the workflow needs fresh user input."""
 
-    conversation: list[ChatMessage] = field(default_factory=list)
+    conversation: list[ChatMessage] = field(default_factory=lambda: [])  # type: ignore[misc]
     awaiting_agent_id: str | None = None
     prompt: str | None = None
 
@@ -51,7 +121,30 @@ class HandoffUserInputRequest(RequestInfoMessage):
 class _ConversationWithUserInput:
     """Internal message carrying full conversation + new user messages from gateway to coordinator."""
 
-    full_conversation: list[ChatMessage] = field(default_factory=list)
+    full_conversation: list[ChatMessage] = field(default_factory=lambda: [])  # type: ignore[misc]
+
+
+class _AutoHandoffMiddleware(FunctionMiddleware):
+    """Intercept handoff tool invocations and short-circuit execution with synthetic results."""
+
+    def __init__(self, handoff_targets: Mapping[str, str]) -> None:
+        self._targets = {name.lower(): target for name, target in handoff_targets.items()}
+
+    async def process(
+        self,
+        context: FunctionInvocationContext,
+        next: Callable[[FunctionInvocationContext], Awaitable[None]],
+    ) -> None:
+        name = getattr(context.function, "name", "")
+        normalized = name.lower() if name else ""
+        target = self._targets.get(normalized)
+        if target is None:
+            await next(context)
+            return
+
+        # Short-circuit execution and provide deterministic response payload for the tool call.
+        context.result = {"handoff_to": target}
+        context.terminate = True
 
 
 class _InputToConversation(Executor):
@@ -74,59 +167,148 @@ class _InputToConversation(Executor):
         await ctx.send_message(list(messages))
 
 
-def _default_handoff_resolver(response: AgentExecutorResponse) -> str | None:
-    """Extract a target specialist identifier from an agent response."""
-    agent_response = response.agent_run_response
-
-    # Structured value
-    value = agent_response.value
-    candidate = _extract_handoff_candidate(value)
-    if candidate:
-        return candidate
-
-    # Additional properties on the response payload
-    props = agent_response.additional_properties or {}
-    candidate = _extract_from_mapping(props)
-    if candidate:
-        return candidate
-
-    # Inspect most recent assistant message metadata
-    for msg in reversed(agent_response.messages):
-        props = getattr(msg, "additional_properties", {}) or {}
-        candidate = _extract_from_mapping(props)
-        if candidate:
-            return candidate
-        text = msg.text or ""
-        match = _HANDOFF_TEXT_PATTERN.search(text)
-        if match:
-            parsed = match.group("target").strip()
-            if parsed:
-                return parsed
-
-    return None
-
-
-def _extract_handoff_candidate(candidate: Any) -> str | None:
-    if candidate is None:
-        return None
-    if isinstance(candidate, str):
-        return candidate.strip() or None
-    if isinstance(candidate, Mapping):
-        return _extract_from_mapping(candidate)
-    attr = getattr(candidate, "handoff_to", None)
-    if isinstance(attr, str) and attr.strip():
-        return attr.strip()
-    attr = getattr(candidate, "agent_id", None)
-    if isinstance(attr, str) and attr.strip():
-        return attr.strip()
-    return None
-
-
 def _extract_from_mapping(mapping: Mapping[str, Any]) -> str | None:
     for key in _HANDOFF_HINT_KEYS:
         value = mapping.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+@dataclass
+class _HandoffResolution:
+    target: str
+    function_call: FunctionCallContent | None = None
+
+
+def _resolve_handoff_target(agent_response: AgentRunResponse) -> _HandoffResolution | None:
+    """Detect handoff intent from tool invocation metadata (approval-gated or raw calls)."""
+    # Check agent_response.value for handoff target
+    if agent_response.value:
+        if isinstance(agent_response.value, Mapping):
+            candidate = _extract_from_mapping(agent_response.value)  # type: ignore[arg-type]
+            if candidate:
+                return _HandoffResolution(target=candidate)
+        elif isinstance(agent_response.value, str) and agent_response.value.strip():
+            return _HandoffResolution(target=agent_response.value.strip())
+
+    # Check agent_response.additional_properties for handoff target
+    if agent_response.additional_properties:
+        candidate = _extract_from_mapping(agent_response.additional_properties)
+        if candidate:
+            return _HandoffResolution(target=candidate)
+
+    for request in agent_response.user_input_requests:
+        if isinstance(request, FunctionApprovalRequestContent):
+            candidate = _candidate_from_approval_request(request)
+            if candidate:
+                return _HandoffResolution(target=candidate, function_call=request.function_call)
+
+    for message in agent_response.messages:
+        # Check message additional_properties for handoff target
+        if message.additional_properties:
+            candidate = _extract_from_mapping(message.additional_properties)
+            if candidate:
+                return _HandoffResolution(target=candidate)
+
+        # Check message text for handoff hint patterns (e.g., "HANDOFF_TO: specialist")
+        if message.text:
+            text_candidate = _candidate_from_text(message.text)
+            if text_candidate:
+                return _HandoffResolution(target=text_candidate)
+
+        for content in getattr(message, "contents", ()):
+            if isinstance(content, FunctionApprovalRequestContent):
+                candidate = _candidate_from_approval_request(content)
+                if candidate:
+                    return _HandoffResolution(target=candidate, function_call=content.function_call)
+            elif isinstance(content, FunctionCallContent):
+                candidate = _candidate_from_function_call(content)
+                if candidate:
+                    return _HandoffResolution(target=candidate, function_call=content)
+            elif isinstance(content, FunctionResultContent):
+                candidate = _candidate_from_function_result(content)
+                if candidate:
+                    return _HandoffResolution(target=candidate)
+
+    return None
+
+
+def _candidate_from_approval_request(request: FunctionApprovalRequestContent) -> str | None:
+    candidate = _candidate_from_function_call(request.function_call)
+    if candidate:
+        return candidate
+
+    if request.additional_properties:
+        return _extract_from_mapping(request.additional_properties)
+    return None
+
+
+def _candidate_from_function_call(function_call: FunctionCallContent) -> str | None:
+    arguments = function_call.parse_arguments()
+    if isinstance(arguments, Mapping):
+        candidate = _extract_from_mapping(arguments)
+        if candidate:
+            return candidate
+    elif isinstance(arguments, str) and arguments.strip():
+        return arguments.strip()
+
+    if function_call.additional_properties:
+        candidate = _extract_from_mapping(function_call.additional_properties)
+        if candidate:
+            return candidate
+
+    name_candidate = _candidate_from_tool_name(function_call.name)
+    if name_candidate:
+        return name_candidate
+
+    if isinstance(function_call.name, str) and function_call.name.strip():
+        return function_call.name.strip()
+    return None
+
+
+def _candidate_from_function_result(result: FunctionResultContent) -> str | None:
+    payload = result.result
+    if isinstance(payload, Mapping):
+        candidate = _extract_from_mapping(payload)  # type: ignore[arg-type]
+        if candidate:
+            return candidate
+    elif isinstance(payload, str) and payload.strip():
+        return payload.strip()
+    return None
+
+
+def _candidate_from_tool_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    match = _HANDOFF_TOOL_PATTERN.search(name)
+    if match:
+        parsed = match.group("target").strip()
+        if parsed:
+            return parsed
+    return None
+
+
+def _candidate_from_text(text: str) -> str | None:
+    """Extract handoff target from message text (e.g., 'HANDOFF_TO: specialist')."""
+    if not text:
+        return None
+
+    # Pattern 1: HANDOFF_TO: target or TRANSFER_TO: target (with colon)
+    colon_pattern = re.compile(r"(?:handoff|transfer)[_\s-]*to\s*:\s*(?P<target>[\w-]+)", re.IGNORECASE | re.MULTILINE)
+    match = colon_pattern.search(text)
+    if match:
+        parsed = match.group("target").strip()
+        if parsed:
+            return parsed
+
+    # Pattern 2: handoff_to target or transfer_to target (tool-style naming)
+    match = _HANDOFF_TOOL_PATTERN.search(text)
+    if match:
+        parsed = match.group("target").strip()
+        if parsed:
+            return parsed
+
     return None
 
 
@@ -140,9 +322,9 @@ class _HandoffCoordinator(Executor):
         specialist_ids: Mapping[str, str],
         input_gateway_id: str,
         context_window: int | None,
-        resolver: Callable[[AgentExecutorResponse], str | AgentProtocol | Executor | None],
         termination_condition: Callable[[list[ChatMessage]], bool],
         id: str,
+        handoff_tool_targets: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(id)
         self._starting_agent_id = starting_agent_id
@@ -150,9 +332,9 @@ class _HandoffCoordinator(Executor):
         self._specialist_ids = set(specialist_ids.values())
         self._input_gateway_id = input_gateway_id
         self._context_window = context_window
-        self._resolver = resolver
         self._termination_condition = termination_condition
         self._full_conversation: list[ChatMessage] = []
+        self._handoff_tool_targets = {k.lower(): v for k, v in (handoff_tool_targets or {}).items()}
 
     @handler
     async def handle_agent_response(
@@ -177,43 +359,55 @@ class _HandoffCoordinator(Executor):
         # Solution: Track new messages only, build authoritative history incrementally
         if not self._full_conversation:
             # First response from starting agent - initialize with authoritative conversation snapshot
-            self._full_conversation = self._conversation_from_response(response)
+            # Keep the FULL conversation including tool calls (OpenAI SDK default behavior)
+            full_conv = self._conversation_from_response(response)
+            self._full_conversation = list(full_conv)
         else:
             # Subsequent responses - append only new messages from this agent
+            # Keep ALL messages including tool calls to maintain complete history
             new_messages = list(response.agent_run_response.messages)
             self._full_conversation.extend(new_messages)
 
         self._apply_response_metadata(self._full_conversation, response.agent_run_response)
 
         conversation = list(self._full_conversation)
-        await self._persist_state(ctx)
 
+        # Check for handoff from ANY agent (starting agent or specialist)
+        target = self._resolve_specialist(response.agent_run_response, conversation)
+        if target is not None:
+            await self._persist_state(ctx)
+            trimmed = self._trim(conversation)
+            # Clean tool-related content before sending to next agent
+            cleaned = self._get_cleaned_conversation(trimmed)
+            request = AgentExecutorRequest(messages=cleaned, should_respond=True)
+            await ctx.send_message(request, target_id=target)
+            return
+
+        # No handoff detected - route based on where the response came from
         if is_starting_agent:
-            target = self._resolve_specialist(response)
-            if target is not None:
-                trimmed = self._trim(conversation)
-                request = AgentExecutorRequest(messages=trimmed, should_respond=True)
-                await ctx.send_message(request, target_id=target)
-                return
-
-            # Check termination condition before requesting more user input
+            # Starting agent responded without handoff - check termination then request user input
             if self._termination_condition(conversation):
+                await self._persist_state(ctx)
                 logger.info("Handoff workflow termination condition met. Ending conversation.")
                 await ctx.yield_output(list(conversation))
                 return
 
+            await self._persist_state(ctx)
             await ctx.send_message(list(conversation), target_id=self._input_gateway_id)
             return
 
+        # Specialist responded without handoff - return to user for input
         if source not in self._specialist_ids:
             raise RuntimeError(f"HandoffCoordinator received response from unknown executor '{source}'.")
 
         # Check termination condition after specialist response
         if self._termination_condition(conversation):
+            await self._persist_state(ctx)
             logger.info("Handoff workflow termination condition met. Ending conversation.")
             await ctx.yield_output(list(conversation))
             return
 
+        await self._persist_state(ctx)
         await ctx.send_message(list(conversation), target_id=self._input_gateway_id)
 
     @handler
@@ -233,51 +427,60 @@ class _HandoffCoordinator(Executor):
             await ctx.yield_output(list(self._full_conversation))
             return
 
-        # Trim and send to starting agent
+        # Trim and clean before sending to starting agent
         trimmed = self._trim(self._full_conversation)
-        request = AgentExecutorRequest(messages=trimmed, should_respond=True)
+        cleaned = self._get_cleaned_conversation(trimmed)
+        request = AgentExecutorRequest(messages=cleaned, should_respond=True)
         await ctx.send_message(request, target_id=self._starting_agent_id)
 
-    def _resolve_specialist(self, response: AgentExecutorResponse) -> str | None:
-        try:
-            resolved = self._resolver(response)
-        except (ValueError, KeyError) as exc:
-            logger.exception("handoff resolver raised an expected error: %s", exc)
-            return None
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.exception("handoff resolver raised an unexpected error: %s", exc)
-            raise
-
-        if resolved is None:
+    def _resolve_specialist(self, agent_response: AgentRunResponse, conversation: list[ChatMessage]) -> str | None:
+        resolution = _resolve_handoff_target(agent_response)
+        if not resolution:
             return None
 
+        candidate = resolution.target
+        normalized = candidate.lower()
         resolved_id: str | None
-        if isinstance(resolved, Executor):
-            resolved_id = resolved.id
-        elif isinstance(resolved, AgentProtocol):
-            name = getattr(resolved, "name", None)
-            if name is None:
-                raise ValueError("Resolver returned AgentProtocol without a name; cannot map to executor id.")
-            resolved_id = self._specialist_by_alias.get(name) or name
-        elif isinstance(resolved, str):
-            resolved_id = self._specialist_by_alias.get(resolved)
-            if resolved_id is None:
-                lowered = resolved.lower()
-                for alias, exec_id in self._specialist_by_alias.items():
-                    if alias.lower() == lowered:
-                        resolved_id = exec_id
-                        break
-            if resolved_id is None:
-                resolved_id = resolved
+        if normalized in self._handoff_tool_targets:
+            resolved_id = self._handoff_tool_targets[normalized]
         else:
-            raise TypeError(
-                f"Resolver must return Executor, AgentProtocol, str, or None. Got {type(resolved).__name__}."
-            )
+            resolved_id = self._specialist_by_alias.get(candidate)
 
-        if resolved_id not in self._specialist_ids:
-            logger.warning("Resolver selected '%s' which is not a registered specialist.", resolved_id)
-            return None
-        return resolved_id
+        if resolved_id:
+            if resolution.function_call:
+                self._append_tool_acknowledgement(conversation, resolution.function_call, resolved_id)
+            return resolved_id
+
+        lowered = candidate.lower()
+        for alias, exec_id in self._specialist_by_alias.items():
+            if alias.lower() == lowered:
+                if resolution.function_call:
+                    self._append_tool_acknowledgement(conversation, resolution.function_call, exec_id)
+                return exec_id
+
+        logger.warning("Handoff requested unknown specialist '%s'.", candidate)
+        return None
+
+    def _append_tool_acknowledgement(
+        self,
+        conversation: list[ChatMessage],
+        function_call: FunctionCallContent,
+        resolved_id: str,
+    ) -> None:
+        call_id = getattr(function_call, "call_id", None)
+        if not call_id:
+            return
+
+        result_payload: Any = {"handoff_to": resolved_id}
+        result_content = FunctionResultContent(call_id=call_id, result=result_payload)
+        tool_message = ChatMessage(
+            role=Role.TOOL,
+            contents=[result_content],
+            author_name=function_call.name,
+        )
+        # Add tool acknowledgement to both the conversation being sent and the full history
+        conversation.append(tool_message)
+        self._full_conversation.append(tool_message)
 
     def _conversation_from_response(self, response: AgentExecutorResponse) -> list[ChatMessage]:
         conversation = response.full_conversation
@@ -292,6 +495,69 @@ class _HandoffCoordinator(Executor):
             return list(conversation)
         return list(conversation[-self._context_window :])
 
+    def _get_cleaned_conversation(self, conversation: list[ChatMessage]) -> list[ChatMessage]:
+        """Create a cleaned copy of conversation with tool-related content removed.
+
+        This method creates a copy of the conversation and removes tool-related content
+        before passing it to agents. The original conversation is preserved for handoff
+        detection and state management.
+
+        During handoffs, tool calls (including handoff tools) cause OpenAI API errors. The OpenAI
+        API requires that:
+        1. Assistant messages with tool_calls must be followed by corresponding tool responses
+        2. Tool response messages must follow an assistant message with tool_calls
+
+        To avoid these errors, we remove ALL tool-related content from the conversation:
+        - FunctionApprovalRequestContent and FunctionCallContent from assistant messages
+        - Tool response messages (Role.TOOL)
+
+        This follows the pattern from OpenAI Agents SDK's `remove_all_tools` filter, which strips
+        all tool-related content from conversation history during handoffs.
+
+        Removes:
+        - FunctionApprovalRequestContent: Approval requests for tools
+        - FunctionCallContent: Tool calls made by the agent
+        - Tool response messages (Role.TOOL with FunctionResultContent)
+        - Messages with only tool calls and no text content
+
+        Preserves:
+        - User messages
+        - Assistant messages with text content (tool calls are stripped out)
+        """
+        from agent_framework import FunctionApprovalRequestContent, FunctionCallContent
+
+        # Create a copy to avoid modifying the original
+        cleaned: list[ChatMessage] = []
+        for msg in conversation:
+            # Skip tool response messages - they must be paired with tool calls which we're removing
+            if msg.role == Role.TOOL:
+                continue
+
+            # Check if message has tool-related content
+            has_tool_content = False
+            if hasattr(msg, "contents") and msg.contents:
+                has_tool_content = any(
+                    isinstance(content, (FunctionApprovalRequestContent, FunctionCallContent))
+                    for content in msg.contents
+                )
+
+            # If no tool content, keep the original message
+            if not has_tool_content:
+                cleaned.append(msg)
+                continue
+
+            # Message has tool content - only keep if it also has text
+            if msg.text and msg.text.strip():
+                # Create fresh text-only message to avoid tool_calls being regenerated
+                msg_copy = ChatMessage(
+                    role=msg.role,
+                    text=msg.text,
+                    author_name=msg.author_name,
+                )
+                cleaned.append(msg_copy)
+
+        return cleaned
+
     async def _persist_state(self, ctx: WorkflowContext[Any, Any]) -> None:
         """Store authoritative conversation snapshot without losing rich metadata."""
         state_payload = {"full_conversation": encode_chat_messages(self._full_conversation)}
@@ -301,7 +567,7 @@ class _HandoffCoordinator(Executor):
         raw_conv = state.get("full_conversation")
         if not isinstance(raw_conv, list):
             return []
-        return decode_chat_messages(raw_conv)
+        return decode_chat_messages(raw_conv)  # type: ignore[arg-type]
 
     def _apply_response_metadata(self, conversation: list[ChatMessage], agent_response: AgentRunResponse) -> None:
         if not agent_response.additional_properties:
@@ -377,13 +643,17 @@ def _as_user_messages(payload: Any) -> list[ChatMessage]:
         if payload.role == Role.USER:
             return [payload]
         return [ChatMessage(Role.USER, text=payload.text)]
-    if isinstance(payload, list) and all(isinstance(msg, ChatMessage) for msg in payload):
-        return [msg if msg.role == Role.USER else ChatMessage(Role.USER, text=msg.text) for msg in payload]
+    if isinstance(payload, list):
+        # Check if all items are ChatMessage instances
+        all_chat_messages = all(isinstance(msg, ChatMessage) for msg in payload)  # type: ignore[arg-type]
+        if all_chat_messages:
+            messages: list[ChatMessage] = payload  # type: ignore[assignment]
+            return [msg if msg.role == Role.USER else ChatMessage(Role.USER, text=msg.text) for msg in messages]
     if isinstance(payload, Mapping):  # User supplied structured data
-        text = payload.get("text") or payload.get("content")
+        text = payload.get("text") or payload.get("content")  # type: ignore[union-attr]
         if isinstance(text, str) and text.strip():
             return [ChatMessage(Role.USER, text=text.strip())]
-    return [ChatMessage(Role.USER, text=str(payload))]
+    return [ChatMessage(Role.USER, text=str(payload))]  # type: ignore[arg-type]
 
 
 def _default_termination_condition(conversation: list[ChatMessage]) -> bool:
@@ -404,8 +674,10 @@ class HandoffBuilder:
     - A **termination condition** determines when the workflow should stop requesting input and complete.
 
     Key Features:
-    - **Automatic handoff detection**: The triage agent includes "HANDOFF_TO: <specialist_name>" in its response
-      to trigger a handoff. Custom resolvers can parse different formats.
+    - **Automatic handoff detection**: The triage agent invokes an approval-gated handoff tool whose
+      arguments (for example ``{"handoff_to": "shipping_agent"}``) identify the specialist to receive control.
+    - **Auto-generated tools**: By default the builder synthesizes `handoff_to_<agent>` tools for the starting agent,
+      so you don't manually define placeholder functions.
     - **Full conversation history**: By default, the entire conversation (including any
       `ChatMessage.additional_properties`) is preserved and passed to each agent. Use
       `.with_context_window(N)` to limit the history to the last N messages when you want a rolling window.
@@ -426,8 +698,8 @@ class HandoffBuilder:
         triage = chat_client.create_agent(
             instructions=(
                 "You are a frontline support agent. Assess the user's issue and decide "
-                "whether to hand off to 'refund_agent' or 'shipping_agent'. If handing off, "
-                "include 'HANDOFF_TO: <agent_name>' in your response."
+                "whether to hand off to 'refund_agent' or 'shipping_agent'. When delegation is "
+                "required, call the matching handoff tool (for example `handoff_to_refund_agent`)."
             ),
             name="triage_agent",
         )
@@ -487,24 +759,6 @@ class HandoffBuilder:
             .build()
         )
 
-    **Custom Handoff Resolver:**
-
-    .. code-block:: python
-
-        # Parse handoff from structured agent response
-        def custom_resolver(response):
-            # Check additional_properties for handoff metadata
-            props = response.agent_run_response.additional_properties or {}
-            return props.get("route_to")
-
-
-        workflow = (
-            HandoffBuilder(participants=[triage, refund, shipping])
-            .starting_agent("triage_agent")
-            .handoff_resolver(custom_resolver)
-            .build()
-        )
-
     **Checkpointing:**
 
     .. code-block:: python
@@ -537,15 +791,15 @@ class HandoffBuilder:
         participants: Sequence[AgentProtocol | Executor] | None = None,
         description: str | None = None,
     ) -> None:
-        """Initialize a HandoffBuilder for creating conversational handoff workflows.
+        r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
         The builder starts in an unconfigured state and requires you to call:
         1. `.participants([...])` - Register agents
         2. `.starting_agent(...)` - Designate which agent receives initial user input
         3. `.build()` - Construct the final Workflow
 
-        Optional configuration methods allow you to customize handoff detection,
-        context management, termination logic, and persistence.
+        Optional configuration methods allow you to customize context management,
+        termination logic, and persistence.
 
         Args:
             name: Optional workflow identifier used in logging and debugging.
@@ -558,10 +812,10 @@ class HandoffBuilder:
                         purpose. Useful for documentation and observability.
 
         Note:
-            Participants must have stable names/ids because the handoff resolver
-            uses these identifiers to route control between agents. Agent names
-            should match the handoff target strings (e.g., "HANDOFF_TO: billing"
-            requires an agent named "billing").
+            Participants must have stable names/ids because the workflow maps the
+            handoff tool arguments to these identifiers. Agent names should match
+            the strings emitted by the triage agent's handoff tool (e.g., a tool that
+            outputs ``{\"handoff_to\": \"billing\"}`` requires an agent named ``billing``).
         """
         self._name = name
         self._description = description
@@ -569,10 +823,11 @@ class HandoffBuilder:
         self._aliases: dict[str, str] = {}
         self._starting_agent_id: str | None = None
         self._context_window: int | None = None
-        self._resolver: Callable[[AgentExecutorResponse], Any] = _default_handoff_resolver
         self._checkpoint_storage: CheckpointStorage | None = None
         self._request_prompt: str | None = None
         self._termination_condition: Callable[[list[ChatMessage]], bool] = _default_termination_condition
+        self._auto_register_handoff_tools: bool = True
+        self._handoff_map: dict[str, list[str]] | None = None  # Maps agent_id -> [target_agent_ids]
 
         if participants:
             self.participants(participants)
@@ -622,6 +877,14 @@ class HandoffBuilder:
         seen_ids: set[str] = set()
         alias_map: dict[str, str] = {}
 
+        def _register_alias(alias: str | None, exec_id: str) -> None:
+            if not alias:
+                return
+            alias_map[alias] = exec_id
+            sanitized = _sanitize_alias(alias)
+            if sanitized and sanitized not in alias_map:
+                alias_map[sanitized] = exec_id
+
         for p in participants:
             executor = self._wrap_participant(p)
             if executor.id in seen_ids:
@@ -629,14 +892,13 @@ class HandoffBuilder:
             seen_ids.add(executor.id)
             wrapped.append(executor)
 
-            alias_map[executor.id] = executor.id
+            _register_alias(executor.id, executor.id)
             if isinstance(p, AgentProtocol):
                 name = getattr(p, "name", None)
-                if name:
-                    alias_map[name] = executor.id
+                _register_alias(name, executor.id)
             display = getattr(p, "display_name", None)
             if isinstance(display, str) and display:
-                alias_map[display] = executor.id
+                _register_alias(display, executor.id)
 
         self._executors = {executor.id: executor for executor in wrapped}
         self._aliases = alias_map
@@ -644,7 +906,7 @@ class HandoffBuilder:
         return self
 
     def starting_agent(self, agent: str | AgentProtocol | Executor) -> "HandoffBuilder":
-        """Designate which agent receives initial user input and acts as the triage/dispatcher.
+        r"""Designate which agent receives initial user input and acts as the triage/dispatcher.
 
         The starting agent is responsible for analyzing user requests and deciding whether to:
         1. Handle the request directly and respond to the user, OR
@@ -680,9 +942,10 @@ class HandoffBuilder:
             )
 
         Note:
-            The starting agent determines routing by including "HANDOFF_TO: <agent_name>"
-            in its response, or by setting structured metadata that the handoff resolver
-            can parse. Use `.handoff_resolver(...)` to customize detection logic.
+            The starting agent determines routing by invoking a handoff tool call whose
+            arguments identify the target specialist (for example ``{\"handoff_to\": \"billing\"}``).
+            Decorate the tool with ``approval_mode="always_require"`` to ensure the workflow
+            intercepts the call before execution and can make the transition.
         """
         if not self._executors:
             raise ValueError("Call participants(...) before starting_agent(...)")
@@ -744,95 +1007,139 @@ class HandoffBuilder:
         self._context_window = message_count
         return self
 
-    def handoff_resolver(
-        self,
-        resolver: Callable[[AgentExecutorResponse], str | AgentProtocol | Executor | None],
-    ) -> "HandoffBuilder":
-        r"""Customize how the workflow detects handoff requests from the starting agent.
+    def with_handoffs(self, handoff_map: dict[str, list[str]]) -> "HandoffBuilder":
+        """Configure which agents can hand off to which other agents.
 
-        By default, the workflow looks for "HANDOFF_TO: <agent_name>" in the starting agent's
-        response text. Use this method to implement custom detection logic that reads structured
-        metadata, function call results, or parses different text patterns.
+        By default, only the starting agent can hand off to all other participants.
+        Use this method to enable specialist-to-specialist handoffs, where any agent
+        can delegate to specific other agents.
 
-        The resolver is called after each starting agent response to determine if a handoff
-        should occur and which specialist to route to.
+        The handoff map keys can be agent names, display names, or executor IDs.
+        The values are lists of target agent identifiers that the source agent can hand off to.
 
         Args:
-            resolver: Function that receives an AgentExecutorResponse and returns:
-                     - str: Name or ID of the specialist agent to hand off to
-                     - AgentProtocol: The specialist agent instance
-                     - Executor: A custom executor to route to
-                     - None: No handoff, starting agent continues handling the conversation
+            handoff_map: Dictionary mapping source agent identifiers to lists of target
+                        agent identifiers. For example:
+                        {
+                            "triage_agent": ["billing_agent", "support_agent"],
+                            "support_agent": ["escalation_agent"],
+                        }
 
         Returns:
             Self for method chaining.
 
-        Example (Structured Metadata):
-
-        .. code-block:: python
-
-            def custom_resolver(response: AgentExecutorResponse) -> str | None:
-                # Read handoff from response metadata
-                props = response.agent_run_response.additional_properties or {}
-                return props.get("route_to")
-
-
-            workflow = (
-                HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
-                .handoff_resolver(custom_resolver)
-                .build()
-            )
-
-        Example (Function Call Result):
-
-        .. code-block:: python
-
-            def function_call_resolver(response: AgentExecutorResponse) -> str | None:
-                # Check if agent used a function call to specify routing
-                value = response.agent_run_response.value
-                if isinstance(value, dict):
-                    return value.get("handoff_to")
-                return None
-
-
-            workflow = (
-                HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
-                .handoff_resolver(function_call_resolver)
-                .build()
-            )
-
-        Example (Custom Text Pattern):
-
-        .. code-block:: python
-
-            import re
-
-
-            def regex_resolver(response: AgentExecutorResponse) -> str | None:
-                # Look for "ROUTE: agent_name" instead of "HANDOFF_TO: agent_name"
-                for msg in response.agent_run_response.messages:
-                    match = re.search(r"ROUTE:\s*(\w+)", msg.text or "")
-                    if match:
-                        return match.group(1)
-                return None
-
-
-            workflow = (
-                HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
-                .handoff_resolver(regex_resolver)
-                .build()
-            )
+        Example:
+            >>> workflow = (
+            ...     HandoffBuilder(participants=[triage, billing, support, escalation])
+            ...     .starting_agent("triage_agent")
+            ...     .with_handoffs({
+            ...         "triage_agent": ["billing_agent", "support_agent"],
+            ...         "support_agent": ["escalation_agent"],
+            ...     })
+            ...     .build()
+            ... )
 
         Note:
-            If the resolver returns an agent name that doesn't match any specialist,
-            a warning is logged and no handoff occurs. Make sure resolver returns
-            match the names of agents in participants.
+            - Handoff tools will be automatically registered for each agent based on this map
+            - If not specified, only the starting agent gets handoff tools to all other agents
+            - Agents not in the map cannot hand off to anyone (except the starting agent by default)
         """
-        self._resolver = resolver
+        self._handoff_map = dict(handoff_map)
         return self
+
+    def auto_register_handoff_tools(self, enabled: bool) -> "HandoffBuilder":
+        """Configure whether the builder should synthesize handoff tools for the starting agent."""
+        self._auto_register_handoff_tools = enabled
+        return self
+
+    def _apply_auto_tools(self, agent: ChatAgent, specialists: Mapping[str, Executor]) -> dict[str, str]:
+        chat_options = agent.chat_options
+        existing_tools = list(chat_options.tools or [])
+        existing_names = {getattr(tool, "name", "") for tool in existing_tools if hasattr(tool, "name")}
+
+        tool_targets: dict[str, str] = {}
+        new_tools: list[Any] = []
+        for exec_id in specialists:
+            alias = exec_id
+            sanitized = _sanitize_alias(alias)
+            tool = _create_handoff_tool(alias)
+            if tool.name not in existing_names:
+                new_tools.append(tool)
+            tool_targets[tool.name.lower()] = exec_id
+            tool_targets[sanitized] = exec_id
+            tool_targets[alias.lower()] = exec_id
+
+        if new_tools:
+            chat_options.tools = existing_tools + new_tools
+        else:
+            chat_options.tools = existing_tools
+
+        return tool_targets
+
+    def _resolve_agent_id(self, agent_identifier: str) -> str:
+        """Resolve an agent identifier to an executor ID.
+
+        Args:
+            agent_identifier: Can be agent name, display name, or executor ID
+
+        Returns:
+            The executor ID
+
+        Raises:
+            ValueError: If the identifier cannot be resolved
+        """
+        # Check if it's already an executor ID
+        if agent_identifier in self._executors:
+            return agent_identifier
+
+        # Check if it's an alias
+        if agent_identifier in self._aliases:
+            return self._aliases[agent_identifier]
+
+        # Not found
+        raise ValueError(f"Agent identifier '{agent_identifier}' not found in participants")
+
+    def _prepare_agent_with_handoffs(
+        self,
+        executor: AgentExecutor,
+        target_agents: Mapping[str, Executor],
+    ) -> tuple[AgentExecutor, dict[str, str]]:
+        """Prepare an agent by adding handoff tools for the specified target agents.
+
+        Args:
+            executor: The agent executor to prepare
+            target_agents: Map of executor IDs to target executors this agent can hand off to
+
+        Returns:
+            Tuple of (updated executor, tool_targets map)
+        """
+        agent = getattr(executor, "_agent", None)
+        if not isinstance(agent, ChatAgent):
+            return executor, {}
+
+        cloned_agent = _clone_chat_agent(agent)
+        tool_targets = self._apply_auto_tools(cloned_agent, target_agents)
+        if tool_targets:
+            middleware = _AutoHandoffMiddleware(tool_targets)
+            existing_middleware = list(cloned_agent.middleware or [])
+            existing_middleware.append(middleware)
+            cloned_agent.middleware = existing_middleware
+
+        new_executor = AgentExecutor(
+            cloned_agent,
+            agent_thread=getattr(executor, "_agent_thread", None),
+            output_response=getattr(executor, "_output_response", False),
+            id=executor.id,
+        )
+        return new_executor, tool_targets
+
+    def _prepare_starting_agent(
+        self,
+        executor: AgentExecutor,
+        specialists: Mapping[str, Executor],
+    ) -> tuple[AgentExecutor, dict[str, str]]:
+        """Legacy method - delegates to _prepare_agent_with_handoffs."""
+        return self._prepare_agent_with_handoffs(executor, specialists)
 
     def request_prompt(self, prompt: str | None) -> "HandoffBuilder":
         """Set a custom prompt message displayed when requesting user input.
@@ -989,7 +1296,6 @@ class HandoffBuilder:
                 .starting_agent("triage")
                 .with_context_window(10)
                 .with_termination_condition(lambda conv: len(conv) > 20)
-                .handoff_resolver(custom_resolver)
                 .request_prompt("How can we help?")
                 .with_checkpointing(storage)
                 .build()
@@ -1004,6 +1310,45 @@ class HandoffBuilder:
         if self._starting_agent_id is None:
             raise ValueError("starting_agent must be defined before build().")
 
+        starting_executor = self._executors[self._starting_agent_id]
+        specialists = {
+            exec_id: executor for exec_id, executor in self._executors.items() if exec_id != self._starting_agent_id
+        }
+
+        # Build handoff tool registry for all agents that need them
+        handoff_tool_targets: dict[str, str] = {}
+        if self._auto_register_handoff_tools:
+            # Determine which agents should have handoff tools
+            if self._handoff_map:
+                # Use explicit handoff map
+                for source_agent_id, target_agent_ids in self._handoff_map.items():
+                    # Resolve source agent ID
+                    source_exec_id = self._resolve_agent_id(source_agent_id)
+                    if source_exec_id not in self._executors:
+                        raise ValueError(f"Handoff source agent '{source_agent_id}' not found in participants")
+
+                    executor = self._executors[source_exec_id]
+                    if isinstance(executor, AgentExecutor):
+                        # Resolve target agent IDs and prepare this agent
+                        targets_map: dict[str, Executor] = {}
+                        for target_id in target_agent_ids:
+                            target_exec_id = self._resolve_agent_id(target_id)
+                            if target_exec_id not in self._executors:
+                                raise ValueError(f"Handoff target agent '{target_id}' not found in participants")
+                            targets_map[target_exec_id] = self._executors[target_exec_id]
+
+                        # Register handoff tools for this agent
+                        updated_executor, tool_targets = self._prepare_agent_with_handoffs(executor, targets_map)
+                        self._executors[source_exec_id] = updated_executor
+                        handoff_tool_targets.update(tool_targets)
+            else:
+                # Default behavior: only starting agent gets handoff tools to all specialists
+                if isinstance(starting_executor, AgentExecutor) and specialists:
+                    starting_executor, tool_targets = self._prepare_agent_with_handoffs(starting_executor, specialists)
+                    self._executors[self._starting_agent_id] = starting_executor
+                    handoff_tool_targets.update(tool_targets)
+
+        # Update references after potential agent modifications
         starting_executor = self._executors[self._starting_agent_id]
         specialists = {
             exec_id: executor for exec_id, executor in self._executors.items() if exec_id != self._starting_agent_id
@@ -1025,9 +1370,9 @@ class HandoffBuilder:
             specialist_ids={alias: exec_id for alias, exec_id in self._aliases.items() if exec_id in specialists},
             input_gateway_id=user_gateway.id,
             context_window=self._context_window,
-            resolver=self._resolver,
             termination_condition=self._termination_condition,
             id="handoff-coordinator",
+            handoff_tool_targets=handoff_tool_targets,
         )
 
         builder = WorkflowBuilder(name=self._name, description=self._description)

@@ -215,7 +215,7 @@ async def main() -> None:
     )
 
     # Scripted user responses for reproducible demo
-    # In a real application, replace this with:
+    # In a console application, replace this with:
     #   user_input = input("Your response: ")
     # or integrate with a UI/chat interface
     scripted_responses = [
@@ -234,11 +234,9 @@ async def main() -> None:
     # The workflow will continue requesting input until:
     # 1. The termination condition is met (4 user messages in this case), OR
     # 2. We run out of scripted responses
-    response_index = 0
-
-    while pending_requests and response_index < len(scripted_responses):
+    while pending_requests and scripted_responses:
         # Get the next scripted response
-        user_response = scripted_responses[response_index]
+        user_response = scripted_responses.pop(0)
         print(f"\n[User responding: {user_response}]")
 
         # Send response(s) to all pending requests
@@ -248,7 +246,6 @@ async def main() -> None:
         # Send responses and get new events
         events = await _drain(workflow.send_responses_streaming(responses))
         pending_requests = _handle_events(events)
-        response_index += 1
 
     """
     Sample Output:

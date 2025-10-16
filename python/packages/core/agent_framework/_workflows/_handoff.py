@@ -513,8 +513,6 @@ class _HandoffCoordinator(Executor):
         - User messages
         - Assistant messages with text content (tool calls are stripped out)
         """
-        from agent_framework import FunctionApprovalRequestContent, FunctionCallContent
-
         # Create a copy to avoid modifying the original
         cleaned: list[ChatMessage] = []
         for msg in conversation:

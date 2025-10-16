@@ -130,7 +130,7 @@ async def test_handoff_routes_to_specialist_and_requests_user_input():
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
     specialist = _RecordingAgent(name="specialist")
 
-    workflow = HandoffBuilder(participants=[triage, specialist]).starting_agent("triage").build()
+    workflow = HandoffBuilder(participants=[triage, specialist]).coordinator("triage").build()
 
     events = await _drain(workflow.run_stream("Need help with a refund"))
 
@@ -149,18 +149,16 @@ async def test_handoff_routes_to_specialist_and_requests_user_input():
 
 
 async def test_specialist_to_specialist_handoff():
-    """Test that specialists can hand off to other specialists via .with_handoffs() configuration."""
+    """Test that specialists can hand off to other specialists via .add_handoff() configuration."""
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
     specialist = _RecordingAgent(name="specialist", handoff_to="escalation")
     escalation = _RecordingAgent(name="escalation")
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist, escalation])
-        .starting_agent("triage")
-        .with_handoffs({
-            "triage": ["specialist", "escalation"],
-            "specialist": ["escalation"],
-        })
+        .coordinator(triage)
+        .add_handoff(triage, [specialist, escalation])
+        .add_handoff(specialist, escalation)
         .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 2)
         .build()
     )
@@ -193,7 +191,7 @@ async def test_handoff_preserves_complex_additional_properties(complex_metadata:
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist])
-        .starting_agent("triage")
+        .coordinator("triage")
         .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role == Role.USER) >= 2)
         .build()
     )
@@ -256,7 +254,7 @@ async def test_text_based_handoff_detection():
     triage = _RecordingAgent(name="triage", handoff_to="specialist", text_handoff=True)
     specialist = _RecordingAgent(name="specialist")
 
-    workflow = HandoffBuilder(participants=[triage, specialist]).starting_agent("triage").build()
+    workflow = HandoffBuilder(participants=[triage, specialist]).coordinator("triage").build()
 
     _ = await _drain(workflow.run_stream("Package arrived broken"))
 
@@ -271,7 +269,7 @@ async def test_multiple_runs_dont_leak_conversation():
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist])
-        .starting_agent("triage")
+        .coordinator("triage")
         .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 2)
         .build()
     )

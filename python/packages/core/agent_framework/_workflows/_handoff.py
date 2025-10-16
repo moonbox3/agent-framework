@@ -2,15 +2,15 @@
 
 """High-level builder for conversational handoff workflows.
 
-The handoff pattern models a triage/dispatcher agent that optionally routes
+The handoff pattern models a coordinator agent that optionally routes
 control to specialist agents before handing the conversation back to the user.
 The flow is intentionally cyclical:
 
-    user input -> starting agent -> optional specialist -> request user input -> ...
+    user input -> coordinator -> optional specialist -> request user input -> ...
 
 Key properties:
 - The entire conversation is maintained and reused on every hop
-- The starting agent signals a handoff by invoking a tool call that names the specialist
+- The coordinator signals a handoff by invoking a tool call that names the specialist
 - After a specialist responds, the workflow immediately requests new user input
 """
 
@@ -652,43 +652,28 @@ def _default_termination_condition(conversation: list[ChatMessage]) -> bool:
 
 
 class HandoffBuilder:
-    r"""Fluent builder for conversational handoff workflows with triage and specialist agents.
+    r"""Fluent builder for conversational handoff workflows with coordinator and specialist agents.
 
-    The handoff pattern models a customer support or multi-agent conversation where:
-    - A **triage/dispatcher agent** receives user input and decides whether to handle it directly
-      or hand off to a **specialist agent**.
-    - After a specialist responds, control returns to the user for more input, creating a cyclical flow:
-      user -> triage -> [optional specialist] -> user -> triage -> ...
-    - The workflow automatically requests user input after each agent response, maintaining conversation continuity.
-    - A **termination condition** determines when the workflow should stop requesting input and complete.
+    The handoff pattern enables a coordinator agent to route requests to specialist agents.
+    A termination condition determines when the workflow should stop requesting input and complete.
 
     Routing Patterns:
 
-    **Single-Tier (Default):** Only the triage agent can hand off to specialists. After any specialist
-    responds, control returns to the user. This is the recommended pattern for most scenarios because:
+    **Single-Tier (Default):** Only the coordinator can hand off to specialists. After any specialist
+    responds, control returns to the user for more input. This creates a cyclical flow:
+    user -> coordinator -> [optional specialist] -> user -> coordinator -> ...
 
-    - **User stays in the loop**: Provides visibility and control after each specialist interaction
-    - **Simpler mental model**: Star topology with triage as hub, specialists as spokes
-    - **Prevents scope creep**: Specialists focus on domain expertise, not routing logic
-    - **Easier debugging**: All routing decisions flow through one central agent
-    - **Better error handling**: User can intervene immediately if a specialist fails
+    **Multi-Tier (Advanced):** Specialists can hand off to other specialists using `.add_handoff()`.
+    This provides more flexibility for complex workflows but is less controllable than the single-tier
+    pattern. Users lose real-time visibility into intermediate steps during specialist-to-specialist
+    handoffs (though the full conversation history including all handoffs is preserved and can be
+    inspected afterward).
 
-    **Multi-Tier (Advanced):** Specialists can hand off to other specialists using `.with_handoffs()`.
-    Use this pattern only when you have genuine business requirements for specialist collaboration:
-
-    - **Linear multi-step processes**: Sequential workflows requiring multiple specialists
-    - **Escalation patterns**: Level 1 → Level 2 → Engineering team
-    - **Information gathering chains**: One specialist needs data from another before responding
-    - **Reducing user interruptions**: Async channels (email) where roundtrips are expensive
-
-    Warning: Multi-tier routing adds complexity. Specialists can create unexpected delegation chains,
-    and users lose visibility into intermediate steps. Only use when the workflow genuinely requires
-    specialists to collaborate directly without user involvement.
 
     Key Features:
-    - **Automatic handoff detection**: The triage agent invokes a handoff tool whose
+    - **Automatic handoff detection**: The coordinator invokes a handoff tool whose
       arguments (for example ``{"handoff_to": "shipping_agent"}``) identify the specialist to receive control.
-    - **Auto-generated tools**: By default the builder synthesizes `handoff_to_<agent>` tools for the starting agent,
+    - **Auto-generated tools**: By default the builder synthesizes `handoff_to_<agent>` tools for the coordinator,
       so you don't manually define placeholder functions.
     - **Full conversation history**: The entire conversation (including any
       `ChatMessage.additional_properties`) is preserved and passed to each agent.
@@ -705,14 +690,14 @@ class HandoffBuilder:
 
         chat_client = OpenAIChatClient()
 
-        # Create triage and specialist agents
-        triage = chat_client.create_agent(
+        # Create coordinator and specialist agents
+        coordinator = chat_client.create_agent(
             instructions=(
                 "You are a frontline support agent. Assess the user's issue and decide "
                 "whether to hand off to 'refund_agent' or 'shipping_agent'. When delegation is "
                 "required, call the matching handoff tool (for example `handoff_to_refund_agent`)."
             ),
-            name="triage_agent",
+            name="coordinator_agent",
         )
 
         refund = chat_client.create_agent(
@@ -729,9 +714,9 @@ class HandoffBuilder:
         workflow = (
             HandoffBuilder(
                 name="customer_support",
-                participants=[triage, refund, shipping],
+                participants=[coordinator, refund, shipping],
             )
-            .starting_agent("triage_agent")
+            .coordinator("coordinator_agent")
             .build()
         )
 
@@ -743,26 +728,21 @@ class HandoffBuilder:
                 user_response = input("You: ")
                 await workflow.send_response(event.data.request_id, user_response)
 
-    **Multi-Tier Routing with .with_handoffs():**
+    **Multi-Tier Routing with .add_handoff():**
 
     .. code-block:: python
 
-        # Enable specialist-to-specialist handoffs
+        # Enable specialist-to-specialist handoffs with fluent API
         workflow = (
-            HandoffBuilder(participants=[triage, replacement, delivery, billing])
-            .starting_agent("triage_agent")
-            .with_handoffs({
-                # Triage can route to any specialist
-                "triage_agent": ["replacement_agent", "delivery_agent", "billing_agent"],
-                # Replacement can delegate to delivery or billing
-                "replacement_agent": ["delivery_agent", "billing_agent"],
-                # Delivery can escalate to billing if needed
-                "delivery_agent": ["billing_agent"],
-            })
+            HandoffBuilder(participants=[coordinator, replacement, delivery, billing])
+            .coordinator("coordinator_agent")
+            .add_handoff(coordinator, [replacement, delivery, billing])  # Coordinator routes to all
+            .add_handoff(replacement, [delivery, billing])  # Replacement delegates to delivery/billing
+            .add_handoff(delivery, billing)  # Delivery escalates to billing
             .build()
         )
 
-        # Flow: User → Triage → Replacement → Delivery → Back to User
+        # Flow: User → Coordinator → Replacement → Delivery → Back to User
         # (Replacement hands off to Delivery without returning to user)
 
     **Custom Termination Condition:**
@@ -771,8 +751,8 @@ class HandoffBuilder:
 
         # Terminate when user says goodbye or after 5 exchanges
         workflow = (
-            HandoffBuilder(participants=[triage, refund, shipping])
-            .starting_agent("triage_agent")
+            HandoffBuilder(participants=[coordinator, refund, shipping])
+            .coordinator("coordinator_agent")
             .with_termination_condition(
                 lambda conv: sum(1 for msg in conv if msg.role.value == "user") >= 5
                 or any("goodbye" in msg.text.lower() for msg in conv[-2:])
@@ -788,8 +768,8 @@ class HandoffBuilder:
 
         storage = InMemoryCheckpointStorage()
         workflow = (
-            HandoffBuilder(participants=[triage, refund, shipping])
-            .starting_agent("triage_agent")
+            HandoffBuilder(participants=[coordinator, refund, shipping])
+            .coordinator("coordinator_agent")
             .with_checkpointing(storage)
             .build()
         )
@@ -797,11 +777,11 @@ class HandoffBuilder:
     Args:
         name: Optional workflow name for identification and logging.
         participants: List of agents (AgentProtocol) or executors to participate in the handoff.
-                     The first agent you specify as starting_agent becomes the triage agent.
+                     The first agent you specify as coordinator becomes the orchestrating agent.
         description: Optional human-readable description of the workflow.
 
     Raises:
-        ValueError: If participants list is empty, contains duplicates, or starting_agent not specified.
+        ValueError: If participants list is empty, contains duplicates, or coordinator not specified.
         TypeError: If participants are not AgentProtocol or Executor instances.
     """
 
@@ -816,7 +796,7 @@ class HandoffBuilder:
 
         The builder starts in an unconfigured state and requires you to call:
         1. `.participants([...])` - Register agents
-        2. `.starting_agent(...)` - Designate which agent receives initial user input
+        2. `.coordinator(...)` - Designate which agent receives initial user input
         3. `.build()` - Construct the final Workflow
 
         Optional configuration methods allow you to customize context management,
@@ -835,7 +815,7 @@ class HandoffBuilder:
         Note:
             Participants must have stable names/ids because the workflow maps the
             handoff tool arguments to these identifiers. Agent names should match
-            the strings emitted by the triage agent's handoff tool (e.g., a tool that
+            the strings emitted by the coordinator's handoff tool (e.g., a tool that
             outputs ``{\"handoff_to\": \"billing\"}`` requires an agent named ``billing``).
         """
         self._name = name
@@ -847,7 +827,7 @@ class HandoffBuilder:
         self._request_prompt: str | None = None
         self._termination_condition: Callable[[list[ChatMessage]], bool] = _default_termination_condition
         self._auto_register_handoff_tools: bool = True
-        self._handoff_map: dict[str, list[str]] | None = None  # Maps agent_id -> [target_agent_ids]
+        self._handoff_config: dict[str, list[str]] = {}  # Maps agent_id -> [target_agent_ids]
 
         if participants:
             self.participants(participants)
@@ -879,16 +859,16 @@ class HandoffBuilder:
             from agent_framework.openai import OpenAIChatClient
 
             client = OpenAIChatClient()
-            triage = client.create_agent(instructions="...", name="triage")
+            coordinator = client.create_agent(instructions="...", name="coordinator")
             refund = client.create_agent(instructions="...", name="refund_agent")
             billing = client.create_agent(instructions="...", name="billing_agent")
 
-            builder = HandoffBuilder().participants([triage, refund, billing])
-            # Now you can call .starting_agent() to designate the entry point
+            builder = HandoffBuilder().participants([coordinator, refund, billing])
+            # Now you can call .coordinator() to designate the entry point
 
         Note:
-            This method resets any previously configured starting_agent, so you must call
-            `.starting_agent(...)` again after changing participants.
+            This method resets any previously configured coordinator, so you must call
+            `.coordinator(...)` again after changing participants.
         """
         if not participants:
             raise ValueError("participants cannot be empty")
@@ -925,19 +905,19 @@ class HandoffBuilder:
         self._starting_agent_id = None
         return self
 
-    def starting_agent(self, agent: str | AgentProtocol | Executor) -> "HandoffBuilder":
-        r"""Designate which agent receives initial user input and acts as the triage/dispatcher.
+    def coordinator(self, agent: str | AgentProtocol | Executor) -> "HandoffBuilder":
+        r"""Designate which agent receives initial user input and orchestrates specialist routing.
 
-        The starting agent is responsible for analyzing user requests and deciding whether to:
+        The coordinator agent is responsible for analyzing user requests and deciding whether to:
         1. Handle the request directly and respond to the user, OR
         2. Hand off to a specialist agent by including handoff metadata in the response
 
         After a specialist responds, the workflow automatically returns control to the user,
-        creating a cyclical flow: user -> starting_agent -> [specialist] -> user -> ...
+        creating a cyclical flow: user -> coordinator -> [specialist] -> user -> ...
 
         Args:
-            agent: The agent to use as the entry point. Can be:
-                  - Agent name (str): e.g., "triage_agent"
+            agent: The agent to use as the coordinator. Can be:
+                  - Agent name (str): e.g., "coordinator_agent"
                   - AgentProtocol instance: The actual agent object
                   - Executor instance: A custom executor wrapping an agent
 
@@ -952,67 +932,142 @@ class HandoffBuilder:
 
         .. code-block:: python
 
-            builder = (
-                HandoffBuilder().participants([triage, refund, billing]).starting_agent("triage")  # Use agent name
-            )
+            # Use agent name
+            builder = HandoffBuilder().participants([coordinator, refund, billing]).coordinator("coordinator")
 
-            # Or pass the agent object directly:
-            builder = (
-                HandoffBuilder().participants([triage, refund, billing]).starting_agent(triage)  # Use agent instance
-            )
+            # Or pass the agent object directly
+            builder = HandoffBuilder().participants([coordinator, refund, billing]).coordinator(coordinator)
 
         Note:
-            The starting agent determines routing by invoking a handoff tool call whose
+            The coordinator determines routing by invoking a handoff tool call whose
             arguments identify the target specialist (for example ``{\"handoff_to\": \"billing\"}``).
             Decorate the tool with ``approval_mode="always_require"`` to ensure the workflow
             intercepts the call before execution and can make the transition.
         """
         if not self._executors:
-            raise ValueError("Call participants(...) before starting_agent(...)")
+            raise ValueError("Call participants(...) before coordinator(...)")
         resolved = self._resolve_to_id(agent)
         if resolved not in self._executors:
-            raise ValueError(f"starting_agent '{resolved}' is not part of the participants list")
+            raise ValueError(f"coordinator '{resolved}' is not part of the participants list")
         self._starting_agent_id = resolved
         return self
 
-    def with_handoffs(self, handoff_map: dict[str, list[str]]) -> "HandoffBuilder":
-        """Configure which agents can hand off to which other agents.
+    def add_handoff(
+        self,
+        source: str | AgentProtocol | Executor,
+        targets: str | AgentProtocol | Executor | Sequence[str | AgentProtocol | Executor],
+        *,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+    ) -> "HandoffBuilder":
+        """Add handoff routing from a source agent to one or more target agents.
 
-        By default, only the starting agent can hand off to all other participants.
-        Use this method to enable specialist-to-specialist handoffs, where any agent
-        can delegate to specific other agents.
-
-        The handoff map keys can be agent names, display names, or executor IDs.
-        The values are lists of target agent identifiers that the source agent can hand off to.
+        This method enables specialist-to-specialist handoffs by configuring which agents
+        can hand off to which others. Call this method multiple times to build a complete
+        routing graph. By default, only the starting agent can hand off to all other participants;
+        use this method to enable additional routing paths.
 
         Args:
-            handoff_map: Dictionary mapping source agent identifiers to lists of target
-                        agent identifiers. For example:
-                        {
-                            "triage_agent": ["billing_agent", "support_agent"],
-                            "support_agent": ["escalation_agent"],
-                        }
+            source: The agent that can initiate the handoff. Can be:
+                   - Agent name (str): e.g., "triage_agent"
+                   - AgentProtocol instance: The actual agent object
+                   - Executor instance: A custom executor wrapping an agent
+            targets: One or more target agents that the source can hand off to. Can be:
+                    - Single agent: "billing_agent" or agent_instance
+                    - Multiple agents: ["billing_agent", "support_agent"] or [agent1, agent2]
+            tool_name: Optional custom name for the handoff tool. If not provided, generates
+                      "handoff_to_<target>" for single targets or "handoff_to_<target>_agent"
+                      for multiple targets based on target names.
+            tool_description: Optional custom description for the handoff tool. If not provided,
+                             generates "Handoff to the <target> agent."
 
         Returns:
             Self for method chaining.
 
-        Example:
-            >>> workflow = (
-            ...     HandoffBuilder(participants=[triage, billing, support, escalation])
-            ...     .starting_agent("triage_agent")
-            ...     .with_handoffs({
-            ...         "triage_agent": ["billing_agent", "support_agent"],
-            ...         "support_agent": ["escalation_agent"],
-            ...     })
-            ...     .build()
-            ... )
+        Raises:
+            ValueError: If source or targets are not in the participants list, or if
+                       participants(...) hasn't been called yet.
+
+        Examples:
+            Single target:
+
+            .. code-block:: python
+
+                builder.add_handoff("triage_agent", "billing_agent")
+
+            Multiple targets (using agent names):
+
+            .. code-block:: python
+
+                builder.add_handoff("triage_agent", ["billing_agent", "support_agent", "escalation_agent"])
+
+            Multiple targets (using agent instances):
+
+            .. code-block:: python
+
+                builder.add_handoff(triage, [billing, support, escalation])
+
+            Chain multiple configurations:
+
+            .. code-block:: python
+
+                workflow = (
+                    HandoffBuilder(participants=[triage, replacement, delivery, billing])
+                    .coordinator(triage)
+                    .add_handoff(triage, [replacement, delivery, billing])
+                    .add_handoff(replacement, [delivery, billing])
+                    .add_handoff(delivery, billing)
+                    .build()
+                )
+
+            Custom tool names and descriptions:
+
+            .. code-block:: python
+
+                builder.add_handoff(
+                    "support_agent",
+                    "escalation_agent",
+                    tool_name="escalate_to_l2",
+                    tool_description="Escalate this issue to Level 2 support",
+                )
 
         Note:
-            - Handoff tools will be automatically registered for each agent based on this map
-            - If not specified, only the starting agent gets handoff tools to all other agents
-            - Agents not in the map cannot hand off to anyone (except the starting agent by default)
+            - Handoff tools are automatically registered for each source agent
+            - If a source agent is configured multiple times via add_handoff, targets are merged
+            - Custom tool_name and tool_description only apply when targets is a single agent
         """
-        self._handoff_map = dict(handoff_map)
+        if not self._executors:
+            raise ValueError("Call participants(...) before add_handoff(...)")
+
+        # Resolve source agent ID
+        source_id = self._resolve_to_id(source)
+        if source_id not in self._executors:
+            raise ValueError(f"Source agent '{source}' is not in the participants list")
+
+        # Normalize targets to list
+        target_list = [targets] if isinstance(targets, (str, AgentProtocol, Executor)) else list(targets)
+
+        # Resolve all target IDs
+        target_ids: list[str] = []
+        for target in target_list:
+            target_id = self._resolve_to_id(target)
+            if target_id not in self._executors:
+                raise ValueError(f"Target agent '{target}' is not in the participants list")
+            target_ids.append(target_id)
+
+        # Merge with existing handoff configuration for this source
+        if source_id in self._handoff_config:
+            # Add new targets to existing list, avoiding duplicates
+            existing = self._handoff_config[source_id]
+            for target_id in target_ids:
+                if target_id not in existing:
+                    existing.append(target_id)
+        else:
+            self._handoff_config[source_id] = target_ids
+
+        # NOTE: custom tool_name and tool_description parameters are reserved for future use
+        # They will be implemented when we refactor _create_handoff_tool to support customization
+
         return self
 
     def auto_register_handoff_tools(self, enabled: bool) -> "HandoffBuilder":
@@ -1101,14 +1156,6 @@ class HandoffBuilder:
         )
         return new_executor, tool_targets
 
-    def _prepare_starting_agent(
-        self,
-        executor: AgentExecutor,
-        specialists: Mapping[str, Executor],
-    ) -> tuple[AgentExecutor, dict[str, str]]:
-        """Legacy method - delegates to _prepare_agent_with_handoffs."""
-        return self._prepare_agent_with_handoffs(executor, specialists)
-
     def request_prompt(self, prompt: str | None) -> "HandoffBuilder":
         """Set a custom prompt message displayed when requesting user input.
 
@@ -1128,7 +1175,7 @@ class HandoffBuilder:
 
             workflow = (
                 HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
+                .coordinator("triage")
                 .request_prompt("How can we help you today?")
                 .build()
             )
@@ -1170,7 +1217,7 @@ class HandoffBuilder:
             storage = InMemoryCheckpointStorage()
             workflow = (
                 HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
+                .coordinator("triage")
                 .with_checkpointing(storage)
                 .build()
             )
@@ -1234,14 +1281,14 @@ class HandoffBuilder:
             A fully configured Workflow ready to execute via `.run()` or `.run_stream()`.
 
         Raises:
-            ValueError: If participants or starting_agent were not configured, or if
+            ValueError: If participants or coordinator were not configured, or if
                        required configuration is invalid.
 
         Example (Minimal):
 
         .. code-block:: python
 
-            workflow = HandoffBuilder(participants=[triage, refund, billing]).starting_agent("triage").build()
+            workflow = HandoffBuilder(participants=[coordinator, refund, billing]).coordinator("coordinator").build()
 
             # Run the workflow
             async for event in workflow.run_stream("I need help"):
@@ -1258,10 +1305,10 @@ class HandoffBuilder:
             workflow = (
                 HandoffBuilder(
                     name="support_workflow",
-                    participants=[triage, refund, billing],
+                    participants=[coordinator, refund, billing],
                     description="Customer support with specialist routing",
                 )
-                .starting_agent("triage")
+                .coordinator("coordinator")
                 .with_termination_condition(lambda conv: len(conv) > 20)
                 .request_prompt("How can we help?")
                 .with_checkpointing(storage)
@@ -1275,7 +1322,7 @@ class HandoffBuilder:
         if not self._executors:
             raise ValueError("No participants provided. Call participants([...]) first.")
         if self._starting_agent_id is None:
-            raise ValueError("starting_agent must be defined before build().")
+            raise ValueError("coordinator must be defined before build().")
 
         starting_executor = self._executors[self._starting_agent_id]
         specialists = {
@@ -1286,43 +1333,39 @@ class HandoffBuilder:
         handoff_tool_targets: dict[str, str] = {}
         if self._auto_register_handoff_tools:
             # Determine which agents should have handoff tools
-            if self._handoff_map:
-                # Use explicit handoff map
-                for source_agent_id, target_agent_ids in self._handoff_map.items():
-                    # Resolve source agent ID
-                    source_exec_id = self._resolve_agent_id(source_agent_id)
-                    if source_exec_id not in self._executors:
-                        raise ValueError(f"Handoff source agent '{source_agent_id}' not found in participants")
+            if self._handoff_config:
+                # Use explicit handoff configuration from add_handoff() calls
+                for source_exec_id, target_exec_ids in self._handoff_config.items():
+                    executor = self._executors.get(source_exec_id)
+                    if not executor:
+                        raise ValueError(f"Handoff source agent '{source_exec_id}' not found in participants")
 
-                    executor = self._executors[source_exec_id]
                     if isinstance(executor, AgentExecutor):
-                        # Resolve target agent IDs and prepare this agent
+                        # Build targets map for this source agent
                         targets_map: dict[str, Executor] = {}
-                        for target_id in target_agent_ids:
-                            target_exec_id = self._resolve_agent_id(target_id)
-                            if target_exec_id not in self._executors:
-                                raise ValueError(f"Handoff target agent '{target_id}' not found in participants")
-                            targets_map[target_exec_id] = self._executors[target_exec_id]
+                        for target_exec_id in target_exec_ids:
+                            target_executor = self._executors.get(target_exec_id)
+                            if not target_executor:
+                                raise ValueError(f"Handoff target agent '{target_exec_id}' not found in participants")
+                            targets_map[target_exec_id] = target_executor
 
                         # Register handoff tools for this agent
                         updated_executor, tool_targets = self._prepare_agent_with_handoffs(executor, targets_map)
                         self._executors[source_exec_id] = updated_executor
                         handoff_tool_targets.update(tool_targets)
-            else:
-                # Default behavior: only starting agent gets handoff tools to all specialists
-                if isinstance(starting_executor, AgentExecutor) and specialists:
-                    starting_executor, tool_targets = self._prepare_agent_with_handoffs(starting_executor, specialists)
-                    self._executors[self._starting_agent_id] = starting_executor
-                    handoff_tool_targets.update(tool_targets)
-
-        # Update references after potential agent modifications
+        else:
+            # Default behavior: only coordinator gets handoff tools to all specialists
+            if isinstance(starting_executor, AgentExecutor) and specialists:
+                starting_executor, tool_targets = self._prepare_agent_with_handoffs(starting_executor, specialists)
+                self._executors[self._starting_agent_id] = starting_executor
+                handoff_tool_targets.update(tool_targets)  # Update references after potential agent modifications
         starting_executor = self._executors[self._starting_agent_id]
         specialists = {
             exec_id: executor for exec_id, executor in self._executors.items() if exec_id != self._starting_agent_id
         }
 
         if not specialists:
-            logger.warning("Handoff workflow has no specialist agents; the starting agent will loop with the user.")
+            logger.warning("Handoff workflow has no specialist agents; the coordinator will loop with the user.")
 
         input_node = _InputToConversation(id="input-conversation")
         request_info = RequestInfoExecutor(id=f"{starting_executor.id}_handoff_requests")

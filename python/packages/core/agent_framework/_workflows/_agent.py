@@ -318,9 +318,7 @@ class WorkflowAgent(BaseAgent):
 
                     request_id = parsed_args.request_id or content.id
                     if not content.approved:
-                        raise AgentExecutionException(
-                            f"Request '{request_id}' was not approved by the caller."
-                        )
+                        raise AgentExecutionException(f"Request '{request_id}' was not approved by the caller.")
 
                     if request_id in self.pending_requests:
                         function_responses[request_id] = parsed_args.data
@@ -339,9 +337,7 @@ class WorkflowAgent(BaseAgent):
                         )
                 else:
                     if bool(self.pending_requests):
-                        raise AgentExecutionException(
-                            "Unexpected content type while awaiting request info responses."
-                        )
+                        raise AgentExecutionException("Unexpected content type while awaiting request info responses.")
         return function_responses
 
     class _ResponseState(TypedDict):

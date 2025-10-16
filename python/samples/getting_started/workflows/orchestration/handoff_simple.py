@@ -18,27 +18,28 @@ from agent_framework import (
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
-"""Sample: Handoff workflow orchestrating triage and specialist Azure OpenAI agents.
+"""Sample: Simple handoff workflow with single-tier triage-to-specialist routing.
 
-This sample demonstrates the handoff pattern where a triage agent receives user input,
-decides whether to handle it directly or route to a specialist via a handoff tool call,
-and maintains a
-conversational loop until a termination condition is met.
+This sample demonstrates the basic handoff pattern where only the triage agent can
+route to specialists. Specialists cannot hand off to other specialists - after any
+specialist responds, control returns to the user for the next input.
 
-Flow:
-    user input -> triage agent -> [optional specialist] -> user input -> ...
+Routing Pattern:
+    User → Triage Agent → Specialist → Back to User → Triage Agent → ...
 
-The triage agent signals handoff by invoking an approval-gated tool (for example,
-``handoff_to_refund_agent``). The HandoffBuilder auto-registers these tools for the
-starting agent, intercepts the tool call, and routes
-control to the requested specialist.
+This is the simplest handoff configuration, suitable for straightforward support
+scenarios where a triage agent dispatches to domain specialists, and each specialist
+works independently.
+
+For multi-tier specialist-to-specialist handoffs, see handoff_specialist_to_specialist.py.
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
     - Environment variables configured for AzureOpenAIChatClient (AZURE_OPENAI_ENDPOINT, etc.)
 
 Key Concepts:
-    - HandoffBuilder: High-level API for triage + specialist workflows
+    - Single-tier routing: Only triage agent has handoff capabilities
+    - Auto-registered handoff tools: HandoffBuilder creates tools automatically
     - Termination condition: Controls when the workflow stops requesting user input
     - Request/response cycle: Workflow requests input, user responds, cycle continues
 """

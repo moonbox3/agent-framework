@@ -9,9 +9,8 @@ The flow is intentionally cyclical:
     user input -> starting agent -> optional specialist -> request user input -> ...
 
 Key properties:
-- The entire conversation is maintained by default and reused on every hop
-- Developers can opt into a rolling context window (last N messages)
-- The starting agent signals a handoff by invoking an approval-gated tool call that names the specialist
+- The entire conversation is maintained and reused on every hop
+- The starting agent signals a handoff by invoking a tool call that names the specialist
 - After a specialist responds, the workflow immediately requests new user input
 """
 
@@ -321,7 +320,6 @@ class _HandoffCoordinator(Executor):
         starting_agent_id: str,
         specialist_ids: Mapping[str, str],
         input_gateway_id: str,
-        context_window: int | None,
         termination_condition: Callable[[list[ChatMessage]], bool],
         id: str,
         handoff_tool_targets: Mapping[str, str] | None = None,
@@ -331,7 +329,6 @@ class _HandoffCoordinator(Executor):
         self._specialist_by_alias = dict(specialist_ids)
         self._specialist_ids = set(specialist_ids.values())
         self._input_gateway_id = input_gateway_id
-        self._context_window = context_window
         self._termination_condition = termination_condition
         self._full_conversation: list[ChatMessage] = []
         self._handoff_tool_targets = {k.lower(): v for k, v in (handoff_tool_targets or {}).items()}
@@ -355,8 +352,7 @@ class _HandoffCoordinator(Executor):
         is_starting_agent = source == self._starting_agent_id
 
         # On first turn of a run, full_conversation is empty
-        # On subsequent turns with context window, response.full_conversation may be trimmed
-        # Solution: Track new messages only, build authoritative history incrementally
+        # Track new messages only, build authoritative history incrementally
         if not self._full_conversation:
             # First response from starting agent - initialize with authoritative conversation snapshot
             # Keep the FULL conversation including tool calls (OpenAI SDK default behavior)
@@ -376,9 +372,8 @@ class _HandoffCoordinator(Executor):
         target = self._resolve_specialist(response.agent_run_response, conversation)
         if target is not None:
             await self._persist_state(ctx)
-            trimmed = self._trim(conversation)
             # Clean tool-related content before sending to next agent
-            cleaned = self._get_cleaned_conversation(trimmed)
+            cleaned = self._get_cleaned_conversation(conversation)
             request = AgentExecutorRequest(messages=cleaned, should_respond=True)
             await ctx.send_message(request, target_id=target)
             return
@@ -427,9 +422,8 @@ class _HandoffCoordinator(Executor):
             await ctx.yield_output(list(self._full_conversation))
             return
 
-        # Trim and clean before sending to starting agent
-        trimmed = self._trim(self._full_conversation)
-        cleaned = self._get_cleaned_conversation(trimmed)
+        # Clean before sending to starting agent
+        cleaned = self._get_cleaned_conversation(self._full_conversation)
         request = AgentExecutorRequest(messages=cleaned, should_respond=True)
         await ctx.send_message(request, target_id=self._starting_agent_id)
 
@@ -489,11 +483,6 @@ class _HandoffCoordinator(Executor):
                 "AgentExecutorResponse.full_conversation missing; AgentExecutor must populate it in handoff workflows."
             )
         return list(conversation)
-
-    def _trim(self, conversation: list[ChatMessage]) -> list[ChatMessage]:
-        if self._context_window is None:
-            return list(conversation)
-        return list(conversation[-self._context_window :])
 
     def _get_cleaned_conversation(self, conversation: list[ChatMessage]) -> list[ChatMessage]:
         """Create a cleaned copy of conversation with tool-related content removed.
@@ -673,19 +662,41 @@ class HandoffBuilder:
     - The workflow automatically requests user input after each agent response, maintaining conversation continuity.
     - A **termination condition** determines when the workflow should stop requesting input and complete.
 
+    Routing Patterns:
+
+    **Single-Tier (Default):** Only the triage agent can hand off to specialists. After any specialist
+    responds, control returns to the user. This is the recommended pattern for most scenarios because:
+
+    - **User stays in the loop**: Provides visibility and control after each specialist interaction
+    - **Simpler mental model**: Star topology with triage as hub, specialists as spokes
+    - **Prevents scope creep**: Specialists focus on domain expertise, not routing logic
+    - **Easier debugging**: All routing decisions flow through one central agent
+    - **Better error handling**: User can intervene immediately if a specialist fails
+
+    **Multi-Tier (Advanced):** Specialists can hand off to other specialists using `.with_handoffs()`.
+    Use this pattern only when you have genuine business requirements for specialist collaboration:
+
+    - **Linear multi-step processes**: Sequential workflows requiring multiple specialists
+    - **Escalation patterns**: Level 1 → Level 2 → Engineering team
+    - **Information gathering chains**: One specialist needs data from another before responding
+    - **Reducing user interruptions**: Async channels (email) where roundtrips are expensive
+
+    Warning: Multi-tier routing adds complexity. Specialists can create unexpected delegation chains,
+    and users lose visibility into intermediate steps. Only use when the workflow genuinely requires
+    specialists to collaborate directly without user involvement.
+
     Key Features:
-    - **Automatic handoff detection**: The triage agent invokes an approval-gated handoff tool whose
+    - **Automatic handoff detection**: The triage agent invokes a handoff tool whose
       arguments (for example ``{"handoff_to": "shipping_agent"}``) identify the specialist to receive control.
     - **Auto-generated tools**: By default the builder synthesizes `handoff_to_<agent>` tools for the starting agent,
       so you don't manually define placeholder functions.
-    - **Full conversation history**: By default, the entire conversation (including any
-      `ChatMessage.additional_properties`) is preserved and passed to each agent. Use
-      `.with_context_window(N)` to limit the history to the last N messages when you want a rolling window.
+    - **Full conversation history**: The entire conversation (including any
+      `ChatMessage.additional_properties`) is preserved and passed to each agent.
     - **Termination control**: By default, terminates after 10 user messages. Override with
       `.with_termination_condition(lambda conv: ...)` for custom logic (e.g., detect "goodbye").
     - **Checkpointing**: Optional persistence for resumable workflows.
 
-    Usage:
+    Usage (Single-Tier):
 
     .. code-block:: python
 
@@ -714,7 +725,7 @@ class HandoffBuilder:
             name="shipping_agent",
         )
 
-        # Build the handoff workflow with default termination (10 user messages)
+        # Build the handoff workflow - default single-tier routing
         workflow = (
             HandoffBuilder(
                 name="customer_support",
@@ -732,6 +743,28 @@ class HandoffBuilder:
                 user_response = input("You: ")
                 await workflow.send_response(event.data.request_id, user_response)
 
+    **Multi-Tier Routing with .with_handoffs():**
+
+    .. code-block:: python
+
+        # Enable specialist-to-specialist handoffs
+        workflow = (
+            HandoffBuilder(participants=[triage, replacement, delivery, billing])
+            .starting_agent("triage_agent")
+            .with_handoffs({
+                # Triage can route to any specialist
+                "triage_agent": ["replacement_agent", "delivery_agent", "billing_agent"],
+                # Replacement can delegate to delivery or billing
+                "replacement_agent": ["delivery_agent", "billing_agent"],
+                # Delivery can escalate to billing if needed
+                "delivery_agent": ["billing_agent"],
+            })
+            .build()
+        )
+
+        # Flow: User → Triage → Replacement → Delivery → Back to User
+        # (Replacement hands off to Delivery without returning to user)
+
     **Custom Termination Condition:**
 
     .. code-block:: python
@@ -744,18 +777,6 @@ class HandoffBuilder:
                 lambda conv: sum(1 for msg in conv if msg.role.value == "user") >= 5
                 or any("goodbye" in msg.text.lower() for msg in conv[-2:])
             )
-            .build()
-        )
-
-    **Context Window (Rolling History):**
-
-    .. code-block:: python
-
-        # Only keep last 10 messages in conversation for each agent
-        workflow = (
-            HandoffBuilder(participants=[triage, refund, shipping])
-            .starting_agent("triage_agent")
-            .with_context_window(10)
             .build()
         )
 
@@ -822,7 +843,6 @@ class HandoffBuilder:
         self._executors: dict[str, Executor] = {}
         self._aliases: dict[str, str] = {}
         self._starting_agent_id: str | None = None
-        self._context_window: int | None = None
         self._checkpoint_storage: CheckpointStorage | None = None
         self._request_prompt: str | None = None
         self._termination_condition: Callable[[list[ChatMessage]], bool] = _default_termination_condition
@@ -953,58 +973,6 @@ class HandoffBuilder:
         if resolved not in self._executors:
             raise ValueError(f"starting_agent '{resolved}' is not part of the participants list")
         self._starting_agent_id = resolved
-        return self
-
-    def with_context_window(self, message_count: int | None) -> "HandoffBuilder":
-        """Limit conversation history to a rolling window of recent messages.
-
-        By default, the handoff workflow passes the entire conversation history to each agent.
-        This can lead to excessive token usage in long conversations. Use a context window to
-        send only the most recent N messages to agents, reducing costs while maintaining focus
-        on recent context.
-
-        Args:
-            message_count: Maximum number of recent messages to include when calling agents.
-                          If None, uses the full conversation history (default behavior).
-                          Must be positive if specified.
-
-        Returns:
-            Self for method chaining.
-
-        Raises:
-            ValueError: If message_count is not positive (when provided).
-
-        Example:
-
-        .. code-block:: python
-
-            # Keep only last 10 messages for each agent call
-            workflow = (
-                HandoffBuilder(participants=[triage, refund, billing])
-                .starting_agent("triage")
-                .with_context_window(10)
-                .build()
-            )
-
-            # After 15 messages in the conversation:
-            # - Full conversation: 15 messages stored
-            # - Agent sees: Only messages 6-15 (last 10)
-            # - User sees: All 15 messages in output
-
-        Use Cases:
-            - Long support conversations where early context becomes irrelevant
-            - Cost optimization by reducing tokens sent to LLM
-            - Forcing agents to focus on recent exchanges rather than full history
-            - Conversations with repetitive patterns where distant history adds noise
-
-        Note:
-            The context window applies to messages sent TO agents, not the conversation
-            stored by the workflow. The full conversation is maintained internally and
-            returned in the final output. This is purely for token efficiency.
-        """
-        if message_count is not None and message_count <= 0:
-            raise ValueError("message_count must be positive when provided")
-        self._context_window = message_count
         return self
 
     def with_handoffs(self, handoff_map: dict[str, list[str]]) -> "HandoffBuilder":
@@ -1294,7 +1262,6 @@ class HandoffBuilder:
                     description="Customer support with specialist routing",
                 )
                 .starting_agent("triage")
-                .with_context_window(10)
                 .with_termination_condition(lambda conv: len(conv) > 20)
                 .request_prompt("How can we help?")
                 .with_checkpointing(storage)
@@ -1369,7 +1336,6 @@ class HandoffBuilder:
             starting_agent_id=starting_executor.id,
             specialist_ids={alias: exec_id for alias, exec_id in self._aliases.items() if exec_id in specialists},
             input_gateway_id=user_gateway.id,
-            context_window=self._context_window,
             termination_condition=self._termination_condition,
             id="handoff-coordinator",
             handoff_tool_targets=handoff_tool_targets,

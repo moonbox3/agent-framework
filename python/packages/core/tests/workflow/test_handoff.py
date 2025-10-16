@@ -148,55 +148,38 @@ async def test_handoff_routes_to_specialist_and_requests_user_input():
     assert any(isinstance(ev, RequestInfoEvent) for ev in follow_up)
 
 
-async def test_context_window_limits_agent_history():
+async def test_specialist_to_specialist_handoff():
+    """Test that specialists can hand off to other specialists via .with_handoffs() configuration."""
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
-    specialist = _RecordingAgent(name="specialist")
+    specialist = _RecordingAgent(name="specialist", handoff_to="escalation")
+    escalation = _RecordingAgent(name="escalation")
 
     workflow = (
-        HandoffBuilder(participants=[triage, specialist])
+        HandoffBuilder(participants=[triage, specialist, escalation])
         .starting_agent("triage")
-        .with_context_window(2)
-        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 4)
+        .with_handoffs({
+            "triage": ["specialist", "escalation"],
+            "specialist": ["escalation"],
+        })
+        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 2)
         .build()
     )
 
-    # Start conversation
-    events = await _drain(workflow.run_stream("Damaged shipment, need replacement"))
+    # Start conversation - triage hands off to specialist
+    events = await _drain(workflow.run_stream("Need technical support"))
     requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
     assert requests
 
-    # Second user message
-    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Order 1234"}))
-    requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
-    assert requests
+    # Specialist should have been called
+    assert len(specialist.calls) > 0
 
-    # Third user message
-    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "It's urgent"}))
-    requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
-    assert requests
-
-    # Fourth user message - triggers termination
-    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Thanks"}))
+    # Second user message - specialist hands off to escalation
+    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "This is complex"}))
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
-    assert outputs, "Workflow should emit WorkflowOutputEvent with full conversation"
+    assert outputs
 
-    # Verify agents saw limited history (context window = 2)
-    assert len(triage.calls) >= 2
-    assert all(len(call) <= 2 for call in triage.calls)
-
-    assert specialist.calls
-    assert all(len(call) <= 2 for call in specialist.calls)
-
-    # CRITICAL: Verify final output contains FULL conversation, not just last 2 messages
-    final_conversation = outputs[-1].data
-    assert isinstance(final_conversation, list)
-    final_conversation_list = cast(list[ChatMessage], final_conversation)
-    user_messages = [msg for msg in final_conversation_list if msg.role == Role.USER]
-    assert len(user_messages) == 4, "Full conversation should contain all 4 user messages"
-    assert any("Damaged shipment" in msg.text for msg in user_messages if msg.text)
-    assert any("Order 1234" in msg.text for msg in user_messages if msg.text)
-    assert any("urgent" in msg.text for msg in user_messages if msg.text)
-    assert any("Thanks" in msg.text for msg in user_messages if msg.text)
+    # Escalation should have been called
+    assert len(escalation.calls) > 0
 
 
 async def test_handoff_preserves_complex_additional_properties(complex_metadata: _ComplexMetadata):

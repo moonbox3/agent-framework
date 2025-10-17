@@ -151,7 +151,7 @@ async def main() -> None:
                         print(f"\n=== PLAN REVIEW REQUEST ===\n{review_req.plan_text}\n")
                 elif isinstance(event, WorkflowOutputEvent):
                     # Capture workflow output during streaming
-                    workflow_output = str(event.data) if event.data is not None else None
+                    workflow_output = str(event.data) if event.data else None
                     completed = True
 
             if stream_line_open:

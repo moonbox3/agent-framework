@@ -150,14 +150,14 @@ class GroupChatWiring:
     """Configuration passed to factories during workflow assembly.
 
     Attributes:
-        manager: Manager instance responsible for orchestration decisions
+        manager: Manager instance responsible for orchestration decisions (None when custom factory handles it)
         manager_name: Display name for the manager in conversation history
         participants: Mapping of participant names to their specifications
         max_rounds: Optional limit on manager selection rounds to prevent infinite loops
         orchestrator: Orchestrator executor instance (populated during build)
     """
 
-    manager: GroupChatManagerProtocol
+    manager: GroupChatManagerProtocol | None
     manager_name: str
     participants: Mapping[str, GroupChatParticipantSpec]
     max_rounds: int | None = None
@@ -815,7 +815,13 @@ def _default_orchestrator_factory(wiring: GroupChatWiring) -> Executor:
         The manager needs participant descriptions (not full specs) to make informed
         selection decisions. The orchestrator doesn't need participant instances directly
         since routing is handled by the workflow graph.
+
+    Raises:
+        RuntimeError: If manager is None (should not happen when using default factory)
     """
+    if wiring.manager is None:
+        raise RuntimeError("Default orchestrator factory requires a manager to be set")
+
     return GroupChatOrchestratorExecutor(
         manager=wiring.manager,
         participants={name: spec.description for name, spec in wiring.participants.items()},
@@ -1119,7 +1125,7 @@ class GroupChatBuilder:
             Validated Workflow instance ready for execution
 
         Raises:
-            ValueError: If manager or participants are not configured
+            ValueError: If manager or participants are not configured (when using default factory)
 
         Wiring pattern:
         - Orchestrator receives initial input (str, ChatMessage, or list[ChatMessage])
@@ -1143,8 +1149,10 @@ class GroupChatBuilder:
             async for message in workflow.run("Solve this problem collaboratively"):
                 print(message.text)
         """
-        if self._manager is None:
-            raise ValueError("manager must be configured before build()")
+        # Manager is only required when using the default orchestrator factory
+        # Custom factories (e.g., MagenticBuilder) provide their own orchestrator with embedded manager
+        if self._manager is None and self._orchestrator_factory == _default_orchestrator_factory:
+            raise ValueError("manager must be configured before build() when using default orchestrator")
         if not self._participants:
             raise ValueError("participants must be configured before build()")
 

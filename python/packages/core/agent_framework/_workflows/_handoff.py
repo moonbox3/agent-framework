@@ -714,7 +714,7 @@ class HandoffBuilder:
                 name="customer_support",
                 participants=[coordinator, refund, shipping],
             )
-            .coordinator("coordinator_agent")
+            .set_coordinator("coordinator_agent")
             .build()
         )
 
@@ -733,7 +733,7 @@ class HandoffBuilder:
         # Enable specialist-to-specialist handoffs with fluent API
         workflow = (
             HandoffBuilder(participants=[coordinator, replacement, delivery, billing])
-            .coordinator("coordinator_agent")
+            .set_coordinator("coordinator_agent")
             .add_handoff(coordinator, [replacement, delivery, billing])  # Coordinator routes to all
             .add_handoff(replacement, [delivery, billing])  # Replacement delegates to delivery/billing
             .add_handoff(delivery, billing)  # Delivery escalates to billing
@@ -750,7 +750,7 @@ class HandoffBuilder:
         # Terminate when user says goodbye or after 5 exchanges
         workflow = (
             HandoffBuilder(participants=[coordinator, refund, shipping])
-            .coordinator("coordinator_agent")
+            .set_coordinator("coordinator_agent")
             .with_termination_condition(
                 lambda conv: sum(1 for msg in conv if msg.role.value == "user") >= 5
                 or any("goodbye" in msg.text.lower() for msg in conv[-2:])
@@ -767,7 +767,7 @@ class HandoffBuilder:
         storage = InMemoryCheckpointStorage()
         workflow = (
             HandoffBuilder(participants=[coordinator, refund, shipping])
-            .coordinator("coordinator_agent")
+            .set_coordinator("coordinator_agent")
             .with_checkpointing(storage)
             .build()
         )
@@ -794,7 +794,7 @@ class HandoffBuilder:
 
         The builder starts in an unconfigured state and requires you to call:
         1. `.participants([...])` - Register agents
-        2. `.coordinator(...)` - Designate which agent receives initial user input
+        2. `.set_coordinator(...)` - Designate which agent receives initial user input
         3. `.build()` - Construct the final Workflow
 
         Optional configuration methods allow you to customize context management,
@@ -862,11 +862,11 @@ class HandoffBuilder:
             billing = client.create_agent(instructions="...", name="billing_agent")
 
             builder = HandoffBuilder().participants([coordinator, refund, billing])
-            # Now you can call .coordinator() to designate the entry point
+            # Now you can call .set_coordinator() to designate the entry point
 
         Note:
             This method resets any previously configured coordinator, so you must call
-            `.coordinator(...)` again after changing participants.
+            `.set_coordinator(...)` again after changing participants.
         """
         if not participants:
             raise ValueError("participants cannot be empty")
@@ -903,7 +903,7 @@ class HandoffBuilder:
         self._starting_agent_id = None
         return self
 
-    def coordinator(self, agent: str | AgentProtocol | Executor) -> "HandoffBuilder":
+    def set_coordinator(self, agent: str | AgentProtocol | Executor) -> "HandoffBuilder":
         r"""Designate which agent receives initial user input and orchestrates specialist routing.
 
         The coordinator agent is responsible for analyzing user requests and deciding whether to:
@@ -931,10 +931,10 @@ class HandoffBuilder:
         .. code-block:: python
 
             # Use agent name
-            builder = HandoffBuilder().participants([coordinator, refund, billing]).coordinator("coordinator")
+            builder = HandoffBuilder().participants([coordinator, refund, billing]).set_coordinator("coordinator")
 
             # Or pass the agent object directly
-            builder = HandoffBuilder().participants([coordinator, refund, billing]).coordinator(coordinator)
+            builder = HandoffBuilder().participants([coordinator, refund, billing]).set_coordinator(coordinator)
 
         Note:
             The coordinator determines routing by invoking a handoff tool call whose
@@ -1011,7 +1011,7 @@ class HandoffBuilder:
 
                 workflow = (
                     HandoffBuilder(participants=[triage, replacement, delivery, billing])
-                    .coordinator(triage)
+                    .set_coordinator(triage)
                     .add_handoff(triage, [replacement, delivery, billing])
                     .add_handoff(replacement, [delivery, billing])
                     .add_handoff(delivery, billing)
@@ -1173,7 +1173,7 @@ class HandoffBuilder:
 
             workflow = (
                 HandoffBuilder(participants=[triage, refund, billing])
-                .coordinator("triage")
+                .set_coordinator("triage")
                 .request_prompt("How can we help you today?")
                 .build()
             )
@@ -1215,7 +1215,7 @@ class HandoffBuilder:
             storage = InMemoryCheckpointStorage()
             workflow = (
                 HandoffBuilder(participants=[triage, refund, billing])
-                .coordinator("triage")
+                .set_coordinator("triage")
                 .with_checkpointing(storage)
                 .build()
             )
@@ -1286,7 +1286,9 @@ class HandoffBuilder:
 
         .. code-block:: python
 
-            workflow = HandoffBuilder(participants=[coordinator, refund, billing]).coordinator("coordinator").build()
+            workflow = (
+                HandoffBuilder(participants=[coordinator, refund, billing]).set_coordinator("coordinator").build()
+            )
 
             # Run the workflow
             async for event in workflow.run_stream("I need help"):
@@ -1306,7 +1308,7 @@ class HandoffBuilder:
                     participants=[coordinator, refund, billing],
                     description="Customer support with specialist routing",
                 )
-                .coordinator("coordinator")
+                .set_coordinator("coordinator")
                 .with_termination_condition(lambda conv: len(conv) > 20)
                 .request_prompt("How can we help?")
                 .with_checkpointing(storage)

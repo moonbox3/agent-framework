@@ -16,7 +16,7 @@ to collaborate or escalate to each other before returning to the user. For examp
     - Technical support needs billing info → hands off to billing agent
     - Level 1 support escalates to Level 2 → hands off to escalation agent
 
-Configuration uses `.with_handoffs()` to explicitly define the routing graph.
+Configuration uses `.add_handoff()` to explicitly define the routing graph.
 
 Prerequisites:
     - `az login` (Azure CLI authentication)
@@ -162,7 +162,7 @@ async def main() -> None:
             name="multi_tier_support",
             participants=[triage, replacement, delivery, billing],
         )
-        .coordinator(triage)
+        .set_coordinator(triage)
         .add_handoff(triage, [replacement, delivery, billing])  # Triage can route to any specialist
         .add_handoff(replacement, [delivery, billing])  # Replacement can delegate to delivery or billing
         .add_handoff(delivery, billing)  # Delivery can escalate to billing

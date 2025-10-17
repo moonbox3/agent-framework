@@ -196,8 +196,8 @@ async def main() -> None:
     triage, refund, order, support = create_agents(chat_client)
 
     # Build the handoff workflow
-    # - participants: All agents that can participate (triage MUST be first or explicitly set as starting_agent)
-    # - starting_agent: The triage agent receives all user input first
+    # - participants: All agents that can participate (triage MUST be first or explicitly set as set_coordinator)
+    # - set_coordinator: The triage agent receives all user input first
     # - with_termination_condition: Custom logic to stop the request/response loop
     #   Default is 10 user messages; here we terminate after 4 to match our scripted demo
     workflow = (
@@ -205,7 +205,7 @@ async def main() -> None:
             name="customer_support_handoff",
             participants=[triage, refund, order, support],
         )
-        .coordinator("triage_agent")
+        .set_coordinator("triage_agent")
         .with_termination_condition(
             # Terminate after 4 user messages (initial + 3 scripted responses)
             # Count only USER role messages to avoid counting agent responses

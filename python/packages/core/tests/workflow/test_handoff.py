@@ -130,7 +130,7 @@ async def test_handoff_routes_to_specialist_and_requests_user_input():
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
     specialist = _RecordingAgent(name="specialist")
 
-    workflow = HandoffBuilder(participants=[triage, specialist]).coordinator("triage").build()
+    workflow = HandoffBuilder(participants=[triage, specialist]).set_coordinator("triage").build()
 
     events = await _drain(workflow.run_stream("Need help with a refund"))
 
@@ -156,7 +156,7 @@ async def test_specialist_to_specialist_handoff():
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist, escalation])
-        .coordinator(triage)
+        .set_coordinator(triage)
         .add_handoff(triage, [specialist, escalation])
         .add_handoff(specialist, escalation)
         .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 2)
@@ -191,7 +191,7 @@ async def test_handoff_preserves_complex_additional_properties(complex_metadata:
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist])
-        .coordinator("triage")
+        .set_coordinator("triage")
         .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role == Role.USER) >= 2)
         .build()
     )
@@ -254,12 +254,27 @@ async def test_text_based_handoff_detection():
     triage = _RecordingAgent(name="triage", handoff_to="specialist", text_handoff=True)
     specialist = _RecordingAgent(name="specialist")
 
-    workflow = HandoffBuilder(participants=[triage, specialist]).coordinator("triage").build()
+    workflow = HandoffBuilder(participants=[triage, specialist]).set_coordinator("triage").build()
 
     _ = await _drain(workflow.run_stream("Package arrived broken"))
 
     assert specialist.calls, "Specialist should be invoked using text handoff hint"
     assert len(specialist.calls[0]) >= 2
+
+
+def test_build_fails_without_coordinator():
+    """Verify that build() raises ValueError when set_coordinator() was not called."""
+    triage = _RecordingAgent(name="triage")
+    specialist = _RecordingAgent(name="specialist")
+
+    with pytest.raises(ValueError, match="coordinator must be defined before build"):
+        HandoffBuilder(participants=[triage, specialist]).build()
+
+
+def test_build_fails_without_participants():
+    """Verify that build() raises ValueError when no participants are provided."""
+    with pytest.raises(ValueError, match="No participants provided"):
+        HandoffBuilder().build()
 
 
 async def test_multiple_runs_dont_leak_conversation():
@@ -269,7 +284,7 @@ async def test_multiple_runs_dont_leak_conversation():
 
     workflow = (
         HandoffBuilder(participants=[triage, specialist])
-        .coordinator("triage")
+        .set_coordinator("triage")
         .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == Role.USER) >= 2)
         .build()
     )

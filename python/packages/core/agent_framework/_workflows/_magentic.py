@@ -36,6 +36,7 @@ from ._group_chat import (
     GroupChatResponseMessage,
     GroupChatWiring,
 )
+from ._message_utils import normalize_messages_input
 from ._model_utils import DictConvertible, encode_value
 from ._request_info_executor import RequestInfoExecutor, RequestInfoMessage, RequestResponse
 from ._workflow import Workflow, WorkflowRunResult
@@ -324,34 +325,54 @@ def _new_participant_descriptions() -> dict[str, str]:
 
 
 @dataclass
-class MagenticStartMessage:
+class MagenticStartMessage(DictConvertible):
     """A message to start a magentic workflow."""
 
-    def __init__(self, task: ChatMessage) -> None:
-        """Create the start message."""
-        self.task = task
+    messages: list[ChatMessage] = field(default_factory=list)
+
+    def __init__(
+        self,
+        messages: str | ChatMessage | Sequence[str] | Sequence[ChatMessage] | None = None,
+        *,
+        task: ChatMessage | None = None,
+    ) -> None:
+        normalized = normalize_messages_input(messages)
+        if task is not None:
+            normalized += normalize_messages_input(task)
+        if not normalized:
+            raise ValueError("MagenticStartMessage requires at least one message input.")
+        self.messages = normalized
+
+    @property
+    def task(self) -> ChatMessage:
+        """Final user message for the task."""
+        return self.messages[-1]
 
     @classmethod
     def from_string(cls, task_text: str) -> "MagenticStartMessage":
-        """Create a MagenticStartMessage from a simple string.
-
-        Args:
-            task_text: The task description as a string.
-
-        Returns:
-            A MagenticStartMessage with the string converted to a ChatMessage.
-        """
-        return cls(task=ChatMessage(role=Role.USER, text=task_text))
+        """Create a MagenticStartMessage from a simple string."""
+        return cls(task_text)
 
     def to_dict(self) -> dict[str, Any]:
         """Create a dict representation of the message."""
-        return {"task": self.task.to_dict()}
+        return {
+            "messages": [message.to_dict() for message in self.messages],
+            "task": self.task.to_dict(),
+        }
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "MagenticStartMessage":
+    def from_dict(cls, data: dict[str, Any]) -> "MagenticStartMessage":
         """Create from a dict."""
-        task = ChatMessage.from_dict(value["task"])
-        return cls(task=task)
+        if "messages" in data:
+            raw_messages = data["messages"]
+            if not isinstance(raw_messages, Sequence) or isinstance(raw_messages, (str, bytes)):
+                raise TypeError("MagenticStartMessage 'messages' must be a sequence.")
+            messages = [ChatMessage.from_dict(raw) for raw in raw_messages]
+            return cls(messages)
+        if "task" in data:
+            task = ChatMessage.from_dict(data["task"])
+            return cls(task)
+        raise KeyError("Expected 'messages' or 'task' in MagenticStartMessage payload.")
 
 
 @dataclass
@@ -975,15 +996,6 @@ class MagenticOrchestratorExecutor(Executor):
         self._terminated = False
         # Tracks whether checkpoint state has been applied for this run
         self._state_restored = False
-        self._initial_history: list[ChatMessage] | None = None
-
-    @staticmethod
-    def _select_task_message(conversation: Sequence[ChatMessage]) -> ChatMessage:
-        for msg in reversed(conversation):
-            role_value = getattr(msg.role, "value", None) or str(msg.role)
-            if str(role_value).lower() == Role.USER.value:
-                return msg
-        return conversation[-1]
 
     def register_agent_executor(self, name: str, executor: "MagenticAgentExecutor") -> None:
         """Register an agent executor for internal control (no messages)."""
@@ -1138,10 +1150,8 @@ class MagenticOrchestratorExecutor(Executor):
             task=message.task,
             participant_descriptions=self._participants,
         )
-        initial_history = self._initial_history
-        self._initial_history = None
-        if initial_history:
-            self._context.chat_history.extend(list(initial_history))
+        if message.messages:
+            self._context.chat_history.extend(message.messages)
         self._state_restored = True
         # Non-streaming callback for the orchestrator receipt of the task
         await self._emit_orchestrator_message(context, message.task, ORCH_MSG_KIND_USER_TASK)
@@ -1176,44 +1186,7 @@ class MagenticOrchestratorExecutor(Executor):
             MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        message = MagenticStartMessage.from_string(task_text)
-        if getattr(self, "_terminated", False):
-            return
-        logger.info("Magentic Orchestrator: Received start message")
-
-        self._context = MagenticContext(
-            task=message.task,
-            participant_descriptions=self._participants,
-        )
-        initial_history = self._initial_history
-        self._initial_history = None
-        if initial_history:
-            self._context.chat_history.extend(list(initial_history))
-        self._state_restored = True
-        # Non-streaming callback for the orchestrator receipt of the task
-        await self._emit_orchestrator_message(context, message.task, ORCH_MSG_KIND_USER_TASK)
-
-        # Initial planning using the manager with real model calls
-        self._task_ledger = await self._manager.plan(self._context.clone(deep=True))
-        self._context.chat_history.append(self._task_ledger)
-        await self._emit_orchestrator_message(context, self._task_ledger, ORCH_MSG_KIND_TASK_LEDGER)
-
-        # If plan review is required, send plan review request
-        if self._require_plan_signoff:
-            plan_text = getattr(self._task_ledger, "text", "")
-            request = MagenticPlanReviewRequest(
-                task_text=message.task.text,
-                plan_text=plan_text,
-                round_index=self._plan_review_round,
-            )
-            await context.send_message(request)
-            return
-
-        # Otherwise start inner loop immediately
-        ctx2: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage] = cast(
-            WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage], context
-        )
-        await self._run_inner_loop(ctx2)
+        await self.handle_start_message(MagenticStartMessage.from_string(task_text), context)
 
     @handler
     async def handle_task_message(
@@ -1223,7 +1196,7 @@ class MagenticOrchestratorExecutor(Executor):
             MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        await self.handle_start_message(MagenticStartMessage(task=task_message), context)
+        await self.handle_start_message(MagenticStartMessage(task_message), context)
 
     @handler
     async def handle_task_messages(
@@ -1233,11 +1206,7 @@ class MagenticOrchestratorExecutor(Executor):
             MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        if not conversation:
-            raise ValueError("Magentic workflow requires at least one chat message.")
-        self._initial_history = list(conversation)
-        task_message = self._select_task_message(conversation)
-        await self.handle_task_message(task_message, context)
+        await self.handle_start_message(MagenticStartMessage(conversation), context)
 
     @handler
     async def handle_response_message(
@@ -2322,7 +2291,7 @@ class MagenticWorkflow:
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
         """
-        start_message = MagenticStartMessage(task=task_message)
+        start_message = MagenticStartMessage(task_message)
         async for event in self._workflow.run_stream(start_message):
             yield event
 
@@ -2342,8 +2311,8 @@ class MagenticWorkflow:
             message = MagenticStartMessage.from_string(self._task_text)
         elif isinstance(message, str):
             message = MagenticStartMessage.from_string(message)
-        elif isinstance(message, ChatMessage):
-            message = MagenticStartMessage(task=message)
+        elif isinstance(message, (ChatMessage, list)):
+            message = MagenticStartMessage(message)
 
         async for event in self._workflow.run_stream(message):
             yield event

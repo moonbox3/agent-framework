@@ -12,6 +12,7 @@ from ._events import (
     AgentRunUpdateEvent,  # type: ignore[reportPrivateUsage]
 )
 from ._executor import Executor, handler
+from ._message_utils import normalize_messages_input
 from ._workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ class AgentExecutor(Executor):
     @handler
     async def from_str(self, text: str, ctx: WorkflowContext[AgentExecutorResponse, AgentRunResponse]) -> None:
         """Accept a raw user prompt string and run the agent (one-shot)."""
-        self._cache = [ChatMessage(role="user", text=text)]  # type: ignore[arg-type]
+        self._cache = normalize_messages_input(text)
         await self._run_agent_and_emit(ctx)
 
     @handler
@@ -177,15 +178,15 @@ class AgentExecutor(Executor):
         ctx: WorkflowContext[AgentExecutorResponse, AgentRunResponse],
     ) -> None:
         """Accept a single ChatMessage as input."""
-        self._cache = [message]
+        self._cache = normalize_messages_input(message)
         await self._run_agent_and_emit(ctx)
 
     @handler
     async def from_messages(
         self,
-        messages: list[ChatMessage],
+        messages: list[str | ChatMessage],
         ctx: WorkflowContext[AgentExecutorResponse, AgentRunResponse],
     ) -> None:
-        """Accept a list of ChatMessage objects as conversation context."""
-        self._cache = list(messages)
+        """Accept a list of chat inputs (strings or ChatMessage) as conversation context."""
+        self._cache = normalize_messages_input(messages)
         await self._run_agent_and_emit(ctx)

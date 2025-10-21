@@ -11,6 +11,7 @@ from agent_framework import (
     AgentRunResponseUpdate,
     BaseAgent,
     ChatMessage,
+    FunctionCallContent,
     HandoffBuilder,
     HandoffUserInputRequest,
     RequestInfoEvent,
@@ -57,6 +58,7 @@ class _RecordingAgent(BaseAgent):
         self.calls: list[list[ChatMessage]] = []
         self._text_handoff = text_handoff
         self._extra_properties = dict(extra_properties or {})
+        self._call_index = 0
 
     async def run(  # type: ignore[override]
         self,
@@ -67,22 +69,17 @@ class _RecordingAgent(BaseAgent):
     ) -> AgentRunResponse:
         conversation = _normalise(messages)
         self.calls.append(conversation)
-        suffix = f"\nHANDOFF_TO: {self.handoff_to}" if self._text_handoff and self.handoff_to else ""
-        additional_properties: dict[str, object] = {}
-        if self.handoff_to and not self._text_handoff:
-            additional_properties["handoff_to"] = self.handoff_to
-        additional_properties.update(self._extra_properties)
-
+        additional_properties = _merge_additional_properties(
+            self.handoff_to, self._text_handoff, self._extra_properties
+        )
+        contents = _build_reply_contents(self.name, self.handoff_to, self._text_handoff, self._next_call_id())
         reply = ChatMessage(
             role=Role.ASSISTANT,
-            text=f"{self.name} reply{suffix}",
+            contents=contents,
             author_name=self.display_name,
             additional_properties=additional_properties,
         )
-        value = None
-        if not self._text_handoff and self.handoff_to:
-            value = {"handoff_to": self.handoff_to, **self._extra_properties}
-        return AgentRunResponse(messages=[reply], value=value)
+        return AgentRunResponse(messages=[reply])
 
     async def run_stream(  # type: ignore[override]
         self,
@@ -93,17 +90,48 @@ class _RecordingAgent(BaseAgent):
     ) -> AsyncIterator[AgentRunResponseUpdate]:
         conversation = _normalise(messages)
         self.calls.append(conversation)
-        text = f"{self.name} reply"
-        if self._text_handoff and self.handoff_to:
-            text += f"\nHANDOFF_TO: {self.handoff_to}"
+        additional_props = _merge_additional_properties(self.handoff_to, self._text_handoff, self._extra_properties)
+        contents = _build_reply_contents(self.name, self.handoff_to, self._text_handoff, self._next_call_id())
+        yield AgentRunResponseUpdate(
+            contents=contents,
+            role=Role.ASSISTANT,
+            additional_properties=additional_props,
+        )
 
-        # In streaming mode, additional_properties must be set on the update
-        # so they're preserved in the final ChatMessage
-        additional_props: dict[str, Any] = {}
-        if self.handoff_to and not self._text_handoff:
-            additional_props["handoff_to"] = self.handoff_to
-        additional_props.update(self._extra_properties)
-        yield AgentRunResponseUpdate(contents=[TextContent(text=text)], additional_properties=additional_props)
+    def _next_call_id(self) -> str | None:
+        if not self.handoff_to:
+            return None
+        call_id = f"{self.id}-handoff-{self._call_index}"
+        self._call_index += 1
+        return call_id
+
+
+def _merge_additional_properties(
+    handoff_to: str | None, use_text_hint: bool, extras: dict[str, object]
+) -> dict[str, object]:
+    additional_properties: dict[str, object] = {}
+    if handoff_to and not use_text_hint:
+        additional_properties["handoff_to"] = handoff_to
+    additional_properties.update(extras)
+    return additional_properties
+
+
+def _build_reply_contents(
+    agent_name: str,
+    handoff_to: str | None,
+    use_text_hint: bool,
+    call_id: str | None,
+) -> list[TextContent | FunctionCallContent]:
+    contents: list[TextContent | FunctionCallContent] = []
+    if handoff_to and call_id:
+        contents.append(
+            FunctionCallContent(call_id=call_id, name=f"handoff_to_{handoff_to}", arguments={"handoff_to": handoff_to})
+        )
+    text = f"{agent_name} reply"
+    if use_text_hint and handoff_to:
+        text += f"\nHANDOFF_TO: {handoff_to}"
+    contents.append(TextContent(text=text))
+    return contents
 
 
 def _normalise(messages: str | ChatMessage | list[str] | list[ChatMessage] | None) -> list[ChatMessage]:
@@ -142,7 +170,10 @@ async def test_handoff_routes_to_specialist_and_requests_user_input():
     assert requests, "Workflow should request additional user input"
     request_payload = requests[-1].data
     assert isinstance(request_payload, HandoffUserInputRequest)
-    assert len(request_payload.conversation) == 3  # user, triage, specialist
+    assert len(request_payload.conversation) == 4  # user, triage tool call, tool ack, specialist
+    assert request_payload.conversation[2].role == Role.TOOL
+    assert request_payload.conversation[3].role == Role.ASSISTANT
+    assert "specialist reply" in request_payload.conversation[3].text
 
     follow_up = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Thanks"}))
     assert any(isinstance(ev, RequestInfoEvent) for ev in follow_up)
@@ -250,15 +281,15 @@ async def test_handoff_preserves_complex_additional_properties(complex_metadata:
     assert restored_meta_after.payload["code"] == "X1"
 
 
-async def test_text_based_handoff_detection():
+async def test_tool_call_handoff_detection_with_text_hint():
     triage = _RecordingAgent(name="triage", handoff_to="specialist", text_handoff=True)
     specialist = _RecordingAgent(name="specialist")
 
     workflow = HandoffBuilder(participants=[triage, specialist]).set_coordinator("triage").build()
 
-    _ = await _drain(workflow.run_stream("Package arrived broken"))
+    await _drain(workflow.run_stream("Package arrived broken"))
 
-    assert specialist.calls, "Specialist should be invoked using text handoff hint"
+    assert specialist.calls, "Specialist should be invoked using handoff tool call"
     assert len(specialist.calls[0]) >= 2
 
 

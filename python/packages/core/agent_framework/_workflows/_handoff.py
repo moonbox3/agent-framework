@@ -39,17 +39,18 @@ from ._checkpoint import CheckpointStorage
 from ._conversation_state import decode_chat_messages, encode_chat_messages
 from ._executor import Executor, handler
 from ._request_info_executor import RequestInfoExecutor, RequestInfoMessage, RequestResponse
-from ._workflow import Workflow, WorkflowBuilder
+from ._workflow import Workflow
+from ._workflow_builder import WorkflowBuilder
 from ._workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
 
-_HANDOFF_HINT_KEYS = ("handoff_to", "handoff", "transfer_to", "agent_id", "agent")
 _HANDOFF_TOOL_PATTERN = re.compile(r"(?:handoff|transfer)[_\s-]*to[_\s-]*(?P<target>[\w-]+)", re.IGNORECASE)
 
 
 def _sanitize_alias(value: str) -> str:
+    """Normalise an agent alias into a lowercase identifier-safe string."""
     cleaned = re.sub(r"[^0-9a-zA-Z]+", "_", value).strip("_")
     if not cleaned:
         cleaned = "agent"
@@ -59,6 +60,7 @@ def _sanitize_alias(value: str) -> str:
 
 
 def _create_handoff_tool(alias: str, description: str | None = None) -> AIFunction[Any, Any]:
+    """Construct the synthetic handoff tool that signals routing to `alias`."""
     sanitized = _sanitize_alias(alias)
     tool_name = f"handoff_to_{sanitized}"
     doc = description or f"Handoff to the {alias} agent."
@@ -70,12 +72,14 @@ def _create_handoff_tool(alias: str, description: str | None = None) -> AIFuncti
     # with tool_calls/responses pairing when cleaning conversations.
     @ai_function(name=tool_name, description=doc)
     def _handoff_tool(context: str | None = None) -> str:
+        """Return a deterministic acknowledgement that encodes the target alias."""
         return f"Handoff to {alias}"
 
     return _handoff_tool
 
 
 def _clone_chat_agent(agent: ChatAgent) -> ChatAgent:
+    """Produce a deep copy of the ChatAgent while preserving runtime configuration."""
     options = agent.chat_options
     middleware = list(agent.middleware or [])
 
@@ -127,6 +131,7 @@ class _AutoHandoffMiddleware(FunctionMiddleware):
     """Intercept handoff tool invocations and short-circuit execution with synthetic results."""
 
     def __init__(self, handoff_targets: Mapping[str, str]) -> None:
+        """Initialise middleware with the mapping from tool name to specialist id."""
         self._targets = {name.lower(): target for name, target in handoff_targets.items()}
 
     async def process(
@@ -134,6 +139,7 @@ class _AutoHandoffMiddleware(FunctionMiddleware):
         context: FunctionInvocationContext,
         next: Callable[[FunctionInvocationContext], Awaitable[None]],
     ) -> None:
+        """Intercept matching handoff tool calls and inject synthetic results."""
         name = getattr(context.function, "name", "")
         normalized = name.lower() if name else ""
         target = self._targets.get(normalized)
@@ -151,10 +157,12 @@ class _InputToConversation(Executor):
 
     @handler
     async def from_str(self, prompt: str, ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        """Convert a raw user prompt into a conversation containing a single user message."""
         await ctx.send_message([ChatMessage(Role.USER, text=prompt)])
 
     @handler
     async def from_message(self, message: ChatMessage, ctx: WorkflowContext[list[ChatMessage]]) -> None:  # type: ignore[name-defined]
+        """Pass through an existing chat message as the initial conversation."""
         await ctx.send_message([message])
 
     @handler
@@ -163,121 +171,82 @@ class _InputToConversation(Executor):
         messages: list[ChatMessage],
         ctx: WorkflowContext[list[ChatMessage]],
     ) -> None:  # type: ignore[name-defined]
+        """Forward a list of chat messages as the starting conversation history."""
         await ctx.send_message(list(messages))
-
-
-def _extract_from_mapping(mapping: Mapping[str, Any]) -> str | None:
-    for key in _HANDOFF_HINT_KEYS:
-        value = mapping.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
 
 
 @dataclass
 class _HandoffResolution:
+    """Result of handoff detection containing the target alias and originating call."""
+
     target: str
     function_call: FunctionCallContent | None = None
 
 
 def _resolve_handoff_target(agent_response: AgentRunResponse) -> _HandoffResolution | None:
-    """Detect handoff intent from tool invocation metadata (approval-gated or raw calls)."""
-    # Check agent_response.value for handoff target
-    if agent_response.value:
-        if isinstance(agent_response.value, Mapping):
-            candidate = _extract_from_mapping(agent_response.value)  # type: ignore[arg-type]
-            if candidate:
-                return _HandoffResolution(target=candidate)
-        elif isinstance(agent_response.value, str) and agent_response.value.strip():
-            return _HandoffResolution(target=agent_response.value.strip())
-
-    # Check agent_response.additional_properties for handoff target
-    if agent_response.additional_properties:
-        candidate = _extract_from_mapping(agent_response.additional_properties)
-        if candidate:
-            return _HandoffResolution(target=candidate)
+    """Detect handoff intent from tool call metadata."""
+    for message in agent_response.messages:
+        resolution = _resolution_from_message(message)
+        if resolution:
+            return resolution
 
     for request in agent_response.user_input_requests:
         if isinstance(request, FunctionApprovalRequestContent):
-            candidate = _candidate_from_approval_request(request)
-            if candidate:
-                return _HandoffResolution(target=candidate, function_call=request.function_call)
-
-    for message in agent_response.messages:
-        # Check message additional_properties for handoff target
-        if message.additional_properties:
-            candidate = _extract_from_mapping(message.additional_properties)
-            if candidate:
-                return _HandoffResolution(target=candidate)
-
-        # Check message text for handoff hint patterns (e.g., "HANDOFF_TO: specialist")
-        if message.text:
-            text_candidate = _candidate_from_text(message.text)
-            if text_candidate:
-                return _HandoffResolution(target=text_candidate)
-
-        for content in getattr(message, "contents", ()):
-            if isinstance(content, FunctionApprovalRequestContent):
-                candidate = _candidate_from_approval_request(content)
-                if candidate:
-                    return _HandoffResolution(target=candidate, function_call=content.function_call)
-            elif isinstance(content, FunctionCallContent):
-                candidate = _candidate_from_function_call(content)
-                if candidate:
-                    return _HandoffResolution(target=candidate, function_call=content)
-            elif isinstance(content, FunctionResultContent):
-                candidate = _candidate_from_function_result(content)
-                if candidate:
-                    return _HandoffResolution(target=candidate)
+            resolution = _resolution_from_function_call(request.function_call)
+            if resolution:
+                return resolution
 
     return None
 
 
-def _candidate_from_approval_request(request: FunctionApprovalRequestContent) -> str | None:
-    candidate = _candidate_from_function_call(request.function_call)
-    if candidate:
-        return candidate
-
-    if request.additional_properties:
-        return _extract_from_mapping(request.additional_properties)
+def _resolution_from_message(message: ChatMessage) -> _HandoffResolution | None:
+    """Inspect an assistant message for embedded handoff tool metadata."""
+    for content in getattr(message, "contents", ()):
+        if isinstance(content, FunctionApprovalRequestContent):
+            resolution = _resolution_from_function_call(content.function_call)
+            if resolution:
+                return resolution
+        elif isinstance(content, FunctionCallContent):
+            resolution = _resolution_from_function_call(content)
+            if resolution:
+                return resolution
     return None
 
 
-def _candidate_from_function_call(function_call: FunctionCallContent) -> str | None:
-    arguments = function_call.parse_arguments()
-    if isinstance(arguments, Mapping):
-        candidate = _extract_from_mapping(arguments)
-        if candidate:
-            return candidate
-    elif isinstance(arguments, str) and arguments.strip():
-        return arguments.strip()
+def _resolution_from_function_call(function_call: FunctionCallContent | None) -> _HandoffResolution | None:
+    """Wrap the target resolved from a function call in a `_HandoffResolution`."""
+    if function_call is None:
+        return None
+    target = _target_from_function_call(function_call)
+    if not target:
+        return None
+    return _HandoffResolution(target=target, function_call=function_call)
 
-    if function_call.additional_properties:
-        candidate = _extract_from_mapping(function_call.additional_properties)
-        if candidate:
-            return candidate
 
-    name_candidate = _candidate_from_tool_name(function_call.name)
+def _target_from_function_call(function_call: FunctionCallContent) -> str | None:
+    """Extract the handoff target from the tool name or structured arguments."""
+    name_candidate = _target_from_tool_name(function_call.name)
     if name_candidate:
         return name_candidate
 
-    if isinstance(function_call.name, str) and function_call.name.strip():
-        return function_call.name.strip()
+    arguments = function_call.parse_arguments()
+    if isinstance(arguments, Mapping):
+        value = arguments.get("handoff_to")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    elif isinstance(arguments, str):
+        stripped = arguments.strip()
+        if stripped:
+            name_candidate = _target_from_tool_name(stripped)
+            if name_candidate:
+                return name_candidate
+            return stripped
+
     return None
 
 
-def _candidate_from_function_result(result: FunctionResultContent) -> str | None:
-    payload = result.result
-    if isinstance(payload, Mapping):
-        candidate = _extract_from_mapping(payload)  # type: ignore[arg-type]
-        if candidate:
-            return candidate
-    elif isinstance(payload, str) and payload.strip():
-        return payload.strip()
-    return None
-
-
-def _candidate_from_tool_name(name: str | None) -> str | None:
+def _target_from_tool_name(name: str | None) -> str | None:
+    """Parse the specialist alias encoded in a handoff tool's name."""
     if not name:
         return None
     match = _HANDOFF_TOOL_PATTERN.search(name)
@@ -285,29 +254,6 @@ def _candidate_from_tool_name(name: str | None) -> str | None:
         parsed = match.group("target").strip()
         if parsed:
             return parsed
-    return None
-
-
-def _candidate_from_text(text: str) -> str | None:
-    """Extract handoff target from message text (e.g., 'HANDOFF_TO: specialist')."""
-    if not text:
-        return None
-
-    # Pattern 1: HANDOFF_TO: target or TRANSFER_TO: target (with colon)
-    colon_pattern = re.compile(r"(?:handoff|transfer)[_\s-]*to\s*:\s*(?P<target>[\w-]+)", re.IGNORECASE | re.MULTILINE)
-    match = colon_pattern.search(text)
-    if match:
-        parsed = match.group("target").strip()
-        if parsed:
-            return parsed
-
-    # Pattern 2: handoff_to target or transfer_to target (tool-style naming)
-    match = _HANDOFF_TOOL_PATTERN.search(text)
-    if match:
-        parsed = match.group("target").strip()
-        if parsed:
-            return parsed
-
     return None
 
 
@@ -324,6 +270,7 @@ class _HandoffCoordinator(Executor):
         id: str,
         handoff_tool_targets: Mapping[str, str] | None = None,
     ) -> None:
+        """Create a coordinator that manages routing between specialists and the user."""
         super().__init__(id)
         self._starting_agent_id = starting_agent_id
         self._specialist_by_alias = dict(specialist_ids)
@@ -339,8 +286,9 @@ class _HandoffCoordinator(Executor):
         response: AgentExecutorResponse,
         ctx: WorkflowContext[AgentExecutorRequest | list[ChatMessage], list[ChatMessage]],
     ) -> None:
+        """Process an agent's response and determine whether to route, request input, or terminate."""
         # Hydrate coordinator state (and detect new run) using checkpointable executor state
-        state = await ctx.get_state()
+        state = await ctx.get_executor_state()
         if not state:
             self._full_conversation = []
         elif not self._full_conversation:
@@ -378,31 +326,17 @@ class _HandoffCoordinator(Executor):
             await ctx.send_message(request, target_id=target)
             return
 
-        # No handoff detected - route based on where the response came from
-        if is_starting_agent:
-            # Starting agent responded without handoff - check termination then request user input
-            if self._termination_condition(conversation):
-                await self._persist_state(ctx)
-                logger.info("Handoff workflow termination condition met. Ending conversation.")
-                await ctx.yield_output(list(conversation))
-                return
-
-            await self._persist_state(ctx)
-            await ctx.send_message(list(conversation), target_id=self._input_gateway_id)
-            return
-
-        # Specialist responded without handoff - return to user for input
-        if source not in self._specialist_ids:
+        # No handoff detected - response must come from starting agent or known specialist
+        if not is_starting_agent and source not in self._specialist_ids:
             raise RuntimeError(f"HandoffCoordinator received response from unknown executor '{source}'.")
 
-        # Check termination condition after specialist response
+        await self._persist_state(ctx)
+
         if self._termination_condition(conversation):
-            await self._persist_state(ctx)
             logger.info("Handoff workflow termination condition met. Ending conversation.")
             await ctx.yield_output(list(conversation))
             return
 
-        await self._persist_state(ctx)
         await ctx.send_message(list(conversation), target_id=self._input_gateway_id)
 
     @handler
@@ -428,6 +362,7 @@ class _HandoffCoordinator(Executor):
         await ctx.send_message(request, target_id=self._starting_agent_id)
 
     def _resolve_specialist(self, agent_response: AgentRunResponse, conversation: list[ChatMessage]) -> str | None:
+        """Resolve the specialist executor id requested by the agent response, if any."""
         resolution = _resolve_handoff_target(agent_response)
         if not resolution:
             return None
@@ -461,6 +396,7 @@ class _HandoffCoordinator(Executor):
         function_call: FunctionCallContent,
         resolved_id: str,
     ) -> None:
+        """Append a synthetic tool result acknowledging the resolved specialist id."""
         call_id = getattr(function_call, "call_id", None)
         if not call_id:
             return
@@ -477,6 +413,7 @@ class _HandoffCoordinator(Executor):
         self._full_conversation.append(tool_message)
 
     def _conversation_from_response(self, response: AgentExecutorResponse) -> list[ChatMessage]:
+        """Return the authoritative conversation snapshot from an executor response."""
         conversation = response.full_conversation
         if conversation is None:
             raise RuntimeError(
@@ -522,7 +459,7 @@ class _HandoffCoordinator(Executor):
 
             # Check if message has tool-related content
             has_tool_content = False
-            if hasattr(msg, "contents") and msg.contents:
+            if msg.contents:
                 has_tool_content = any(
                     isinstance(content, (FunctionApprovalRequestContent, FunctionCallContent))
                     for content in msg.contents
@@ -548,15 +485,17 @@ class _HandoffCoordinator(Executor):
     async def _persist_state(self, ctx: WorkflowContext[Any, Any]) -> None:
         """Store authoritative conversation snapshot without losing rich metadata."""
         state_payload = {"full_conversation": encode_chat_messages(self._full_conversation)}
-        await ctx.set_state(state_payload)
+        await ctx.set_executor_state(state_payload)
 
     def _restore_conversation_from_state(self, state: Mapping[str, Any]) -> list[ChatMessage]:
+        """Rehydrate the coordinator's conversation history from checkpointed state."""
         raw_conv = state.get("full_conversation")
         if not isinstance(raw_conv, list):
             return []
         return decode_chat_messages(raw_conv)  # type: ignore[arg-type]
 
     def _apply_response_metadata(self, conversation: list[ChatMessage], agent_response: AgentRunResponse) -> None:
+        """Merge top-level response metadata into the latest assistant message."""
         if not agent_response.additional_properties:
             return
 
@@ -585,6 +524,7 @@ class _UserInputGateway(Executor):
         prompt: str | None,
         id: str,
     ) -> None:
+        """Initialise the gateway that requests user input and forwards responses."""
         super().__init__(id)
         self._request_executor_id = request_executor_id
         self._starting_agent_id = starting_agent_id
@@ -596,6 +536,7 @@ class _UserInputGateway(Executor):
         conversation: list[ChatMessage],
         ctx: WorkflowContext[HandoffUserInputRequest],
     ) -> None:
+        """Emit a `HandoffUserInputRequest` capturing the conversation snapshot."""
         if not conversation:
             raise ValueError("Handoff workflow requires non-empty conversation before requesting user input.")
         request = HandoffUserInputRequest(
@@ -612,6 +553,7 @@ class _UserInputGateway(Executor):
         response: RequestResponse[HandoffUserInputRequest, Any],
         ctx: WorkflowContext[_ConversationWithUserInput],
     ) -> None:
+        """Convert user input responses back into chat messages and resume the workflow."""
         # Reconstruct full conversation with new user input
         conversation = list(response.original_request.conversation)
         user_messages = _as_user_messages(response.data)
@@ -626,6 +568,7 @@ class _UserInputGateway(Executor):
 
 
 def _as_user_messages(payload: Any) -> list[ChatMessage]:
+    """Normalise arbitrary payloads into user-authored chat messages."""
     if isinstance(payload, ChatMessage):
         if payload.role == Role.USER:
             return [payload]
@@ -876,6 +819,7 @@ class HandoffBuilder:
         alias_map: dict[str, str] = {}
 
         def _register_alias(alias: str | None, exec_id: str) -> None:
+            """Record canonical and sanitised aliases that resolve to the executor id."""
             if not alias:
                 return
             alias_map[alias] = exec_id
@@ -1074,6 +1018,7 @@ class HandoffBuilder:
         return self
 
     def _apply_auto_tools(self, agent: ChatAgent, specialists: Mapping[str, Executor]) -> dict[str, str]:
+        """Attach synthetic handoff tools to a chat agent and return the target lookup table."""
         chat_options = agent.chat_options
         existing_tools = list(chat_options.tools or [])
         existing_names = {getattr(tool, "name", "") for tool in existing_tools if hasattr(tool, "name")}
@@ -1405,6 +1350,7 @@ class HandoffBuilder:
         return builder.build()
 
     def _wrap_participant(self, participant: AgentProtocol | Executor) -> Executor:
+        """Ensure every participant is represented as an Executor instance."""
         if isinstance(participant, Executor):
             return participant
         if isinstance(participant, AgentProtocol):
@@ -1417,6 +1363,7 @@ class HandoffBuilder:
         raise TypeError(f"Participants must be AgentProtocol or Executor instances. Got {type(participant).__name__}.")
 
     def _resolve_to_id(self, candidate: str | AgentProtocol | Executor) -> str:
+        """Resolve a participant reference into a concrete executor identifier."""
         if isinstance(candidate, Executor):
             return candidate.id
         if isinstance(candidate, AgentProtocol):

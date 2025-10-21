@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from agent_framework import ChatMessage, Role
 
-from ._runner_context import _decode_checkpoint_value, _encode_checkpoint_value  # type: ignore
+from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value  # type: ignore
 
 """Utilities for serializing and deserializing chat conversations for persistence.
 
@@ -21,12 +21,12 @@ def encode_chat_messages(messages: Iterable[ChatMessage]) -> list[dict[str, Any]
     encoded: list[dict[str, Any]] = []
     for message in messages:
         encoded.append({
-            "role": _encode_checkpoint_value(message.role),
-            "contents": [_encode_checkpoint_value(content) for content in message.contents],
+            "role": encode_checkpoint_value(message.role),
+            "contents": [encode_checkpoint_value(content) for content in message.contents],
             "author_name": message.author_name,
             "message_id": message.message_id,
             "additional_properties": {
-                key: _encode_checkpoint_value(value) for key, value in message.additional_properties.items()
+                key: encode_checkpoint_value(value) for key, value in message.additional_properties.items()
             },
         })
     return encoded
@@ -39,7 +39,7 @@ def decode_chat_messages(payload: Iterable[dict[str, Any]]) -> list[ChatMessage]
         if not isinstance(item, dict):
             continue
 
-        role_value = _decode_checkpoint_value(item.get("role"))
+        role_value = decode_checkpoint_value(item.get("role"))
         if isinstance(role_value, Role):
             role = role_value
         elif isinstance(role_value, dict):
@@ -55,7 +55,7 @@ def decode_chat_messages(payload: Iterable[dict[str, Any]]) -> list[ChatMessage]
         if isinstance(contents_field, list):
             contents_iter: list[Any] = contents_field  # type: ignore[assignment]
             for entry in contents_iter:
-                decoded_entry: Any = _decode_checkpoint_value(entry)
+                decoded_entry: Any = decode_checkpoint_value(entry)
                 contents.append(decoded_entry)
 
         additional_field = item.get("additional_properties", {})
@@ -63,7 +63,7 @@ def decode_chat_messages(payload: Iterable[dict[str, Any]]) -> list[ChatMessage]
         if isinstance(additional_field, dict):
             additional_dict = cast(dict[str, Any], additional_field)
             for key, value in additional_dict.items():
-                additional[key] = _decode_checkpoint_value(value)
+                additional[key] = decode_checkpoint_value(value)
 
         restored.append(
             ChatMessage(

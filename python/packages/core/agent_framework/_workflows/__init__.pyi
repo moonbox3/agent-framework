@@ -51,13 +51,18 @@ from ._executor import (
 )
 from ._function_executor import FunctionExecutor, executor
 from ._group_chat import (
+    DEFAULT_MANAGER_INSTRUCTIONS,
     GroupChatBuilder,
     GroupChatDirective,
-    GroupChatManagerProtocol,
+    GroupChatManagerFn,
     GroupChatOrchestratorExecutor,
+    GroupChatParticipantPipeline,
+    GroupChatParticipantSpec,
     GroupChatRequestMessage,
     GroupChatResponseMessage,
-    GroupChatState,
+    GroupChatStateSnapshot,
+    GroupChatTurn,
+    GroupChatWiring,
     StandardGroupChatManager,
 )
 from ._magentic import (
@@ -110,6 +115,7 @@ from ._workflow_context import WorkflowContext
 from ._workflow_executor import WorkflowExecutor
 
 __all__ = [
+    "DEFAULT_MANAGER_INSTRUCTIONS",
     "DEFAULT_MAX_ITERATIONS",
     "AgentExecutor",
     "AgentExecutorRequest",
@@ -135,11 +141,15 @@ __all__ = [
     "GraphConnectivityError",
     "GroupChatBuilder",
     "GroupChatDirective",
-    "GroupChatManagerProtocol",
+    "GroupChatManagerFn",
     "GroupChatOrchestratorExecutor",
+    "GroupChatParticipantPipeline",
+    "GroupChatParticipantSpec",
     "GroupChatRequestMessage",
     "GroupChatResponseMessage",
-    "GroupChatState",
+    "GroupChatStateSnapshot",
+    "GroupChatTurn",
+    "GroupChatWiring",
     "InMemoryCheckpointStorage",
     "InProcRunnerContext",
     "MagenticAgentDeltaEvent",

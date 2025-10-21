@@ -11,8 +11,7 @@ from agent_framework import (
     ChatMessage,
     GroupChatBuilder,
     GroupChatDirective,
-    GroupChatManagerProtocol,
-    GroupChatState,
+    GroupChatStateSnapshot,
     MagenticAgentMessageEvent,
     MagenticBuilder,
     MagenticContext,
@@ -58,7 +57,7 @@ class StubAgent(BaseAgent):
         return _stream()
 
 
-class SequenceManager(GroupChatManagerProtocol):
+class SequenceManager:
     def __init__(self) -> None:
         self._step = 0
 
@@ -66,8 +65,9 @@ class SequenceManager(GroupChatManagerProtocol):
     def name(self) -> str:
         return "manager"
 
-    async def next_action(self, state: GroupChatState) -> GroupChatDirective:
-        participant_names = list(state.participants.keys())
+    async def __call__(self, state: GroupChatStateSnapshot) -> GroupChatDirective:
+        participants = state["participants"]
+        participant_names = list(participants.keys())
         if self._step == 0:
             self._step += 1
             return GroupChatDirective(agent_name=participant_names[0], instruction="start")

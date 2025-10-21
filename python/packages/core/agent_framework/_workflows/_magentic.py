@@ -30,7 +30,7 @@ from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._group_chat import (
     GroupChatBuilder,
-    GroupChatParticipantNodes,
+    GroupChatParticipantPipeline,
     GroupChatParticipantSpec,
     GroupChatRequestMessage,
     GroupChatResponseMessage,
@@ -2187,7 +2187,7 @@ class MagenticBuilder:
         def _participant_factory(
             spec: GroupChatParticipantSpec,
             wiring: GroupChatWiring,
-        ) -> GroupChatParticipantNodes:
+        ) -> GroupChatParticipantPipeline:
             agent_executor = MagenticAgentExecutor(
                 spec.participant,
                 spec.name,
@@ -2195,7 +2195,7 @@ class MagenticBuilder:
             orchestrator = wiring.orchestrator
             if isinstance(orchestrator, MagenticOrchestratorExecutor):
                 orchestrator.register_agent_executor(spec.name, agent_executor)
-            return GroupChatParticipantNodes(entry=agent_executor, exit=agent_executor)
+            return (agent_executor,)
 
         # Magentic provides its own orchestrator via custom factory, so no manager is needed
         group_builder = GroupChatBuilder(

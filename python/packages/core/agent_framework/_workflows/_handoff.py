@@ -976,7 +976,6 @@ class HandoffBuilder:
         Note:
             - Handoff tools are automatically registered for each source agent
             - If a source agent is configured multiple times via add_handoff, targets are merged
-            - Custom tool_name and tool_description only apply when targets is a single agent
         """
         if not self._executors:
             raise ValueError("Call participants(...) before add_handoff(...)")
@@ -1006,9 +1005,6 @@ class HandoffBuilder:
                     existing.append(target_id)
         else:
             self._handoff_config[source_id] = target_ids
-
-        # NOTE: custom tool_name and tool_description parameters are reserved for future use
-        # They will be implemented when we refactor _create_handoff_tool to support customization
 
         return self
 

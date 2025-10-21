@@ -1118,7 +1118,7 @@ class MagenticOrchestratorExecutor(Executor):
     ) -> None:
         if self._state_restored and self._context is not None:
             return
-        state = await context.get_state()
+        state = await context.get_executor_state()
         if not state:
             self._state_restored = True
             return
@@ -1613,7 +1613,7 @@ class MagenticAgentExecutor(Executor):
     async def _ensure_state_restored(self, context: WorkflowContext[Any, Any]) -> None:
         if self._state_restored and self._chat_history:
             return
-        state = await context.get_state()
+        state = await context.get_executor_state()
         if not state:
             self._state_restored = True
             return

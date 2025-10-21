@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Protocol, TypeVar, Union, cast
+from typing import Any, Protocol, TypeVar, Union, cast
 from uuid import uuid4
 
 from agent_framework import (
@@ -104,7 +104,6 @@ class MagenticOrchestratorMessageEvent(WorkflowEvent):
     orchestrator_id: str = ""
     message: ChatMessage | None = None
     kind: str = ""
-    source: Literal["orchestrator"] = field(init=False, default="orchestrator")
 
     def __post_init__(self) -> None:
         super().__init__(data=self.message)
@@ -120,7 +119,6 @@ class MagenticAgentDeltaEvent(WorkflowEvent):
     function_result_id: str | None = None
     function_result: Any | None = None
     role: Role | None = None
-    source: Literal["agent"] = field(init=False, default="agent")
 
     def __post_init__(self) -> None:
         super().__init__(data=self.text)
@@ -130,7 +128,6 @@ class MagenticAgentDeltaEvent(WorkflowEvent):
 class MagenticAgentMessageEvent(WorkflowEvent):
     agent_id: str = ""
     message: ChatMessage | None = None
-    source: Literal["agent"] = field(init=False, default="agent")
 
     def __post_init__(self) -> None:
         super().__init__(data=self.message)
@@ -139,7 +136,6 @@ class MagenticAgentMessageEvent(WorkflowEvent):
 @dataclass
 class MagenticFinalResultEvent(WorkflowEvent):
     message: ChatMessage | None = None
-    source: Literal["workflow"] = field(init=False, default="workflow")
 
     def __post_init__(self) -> None:
         super().__init__(data=self.message)

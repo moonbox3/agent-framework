@@ -242,35 +242,12 @@ class GroupChatOrchestratorExecutor(Executor):
         self._pending_agent: str | None = None
         self._round_index = 0
         self._max_rounds = max_rounds
+        # Stashes the initial conversation list until _handle_task_message normalizes it into _conversation.
         self._pending_initial_conversation: list[ChatMessage] | None = None
         self._participant_entry_ids: dict[str, str] = {}
         self._agent_executor_ids: dict[str, str] = {}
         self._executor_id_to_participant: dict[str, str] = {}
         self._non_agent_participants: set[str] = set()
-
-    @staticmethod
-    def _select_task_message(conversation: Sequence[ChatMessage]) -> ChatMessage:
-        """Extract the primary user task message from a conversation history.
-
-        Scans backwards through the conversation to find the most recent USER role message,
-        which is treated as the main task description. Falls back to the last message if
-        no user message is found.
-
-        Args:
-            conversation: Sequence of chat messages (may include system, user, assistant)
-
-        Returns:
-            The task message to provide to the manager for context
-
-        Usage:
-            Called when workflow receives a list[ChatMessage] as initial input to identify
-            which message represents the user's task request.
-        """
-        for msg in reversed(conversation):
-            role_value = getattr(msg.role, "value", None) or str(msg.role)
-            if str(role_value).lower() == Role.USER.value:
-                return msg
-        return conversation[-1]
 
     @staticmethod
     def _role_value(message: ChatMessage) -> str:
@@ -532,9 +509,9 @@ class GroupChatOrchestratorExecutor(Executor):
             - _round_index: 0 (first manager query)
 
         Why pending_initial_conversation exists:
-            The handle_conversation handler receives a list[ChatMessage] and needs to
-            extract the task message before calling this method. The full list is stashed
-            in _pending_initial_conversation to preserve all context when initializing state.
+            The handle_conversation handler supplies an explicit task (the first message in
+            the list) but still forwards the entire conversation for context. The full list is
+            stashed in _pending_initial_conversation to preserve all context when initializing state.
         """
         self._task_message = task_message
         if self._pending_initial_conversation:
@@ -603,7 +580,7 @@ class GroupChatOrchestratorExecutor(Executor):
     ) -> None:
         """Handler for conversation history as workflow entry point.
 
-        Accepts a pre-existing conversation and extracts the primary task message.
+        Accepts a pre-existing conversation and uses the first message in the list as the task.
         Preserves the full conversation for state initialization.
 
         Args:
@@ -630,7 +607,7 @@ class GroupChatOrchestratorExecutor(Executor):
         if not conversation:
             raise ValueError("GroupChat workflow requires at least one chat message.")
         self._pending_initial_conversation = list(conversation)
-        task_message = self._select_task_message(conversation)
+        task_message = conversation[0]
         await self._handle_task_message(task_message, ctx)
 
     @handler
@@ -835,18 +812,24 @@ class GroupChatBuilder:
             )
         """
         combined: dict[str, AgentProtocol | Executor] = {}
+
+        def _add(name: str, participant: AgentProtocol | Executor) -> None:
+            if not name:
+                raise ValueError("participant names must be non-empty strings")
+            if name in combined or name in self._participants:
+                raise ValueError(f"Duplicate participant name '{name}' supplied.")
+            combined[name] = participant
+
         if participants:
-            combined.update(participants)
-        combined.update(named_participants)
+            for name, participant in participants.items():
+                _add(name, participant)
+        for name, participant in named_participants.items():
+            _add(name, participant)
 
         if not combined:
             raise ValueError("participants cannot be empty")
 
         for name, participant in combined.items():
-            if not name:
-                raise ValueError("participant names must be non-empty strings")
-            if name in self._participants:
-                raise ValueError(f"Duplicate participant name '{name}' supplied.")
             self._participants[name] = participant
             description = ""
             if isinstance(participant, Executor):

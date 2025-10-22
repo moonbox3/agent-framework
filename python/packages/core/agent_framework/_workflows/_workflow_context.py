@@ -20,7 +20,7 @@ from ._events import (
     WorkflowStartedEvent,
     WorkflowStatusEvent,
     WorkflowWarningEvent,
-    _framework_event_origin,
+    _framework_event_origin,  # type: ignore
 )
 from ._runner_context import Message, RunnerContext
 from ._shared_state import SharedState

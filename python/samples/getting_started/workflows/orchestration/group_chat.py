@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from agent_framework import ChatAgent, GroupChatBuilder, WorkflowOutputEvent
+from agent_framework import AgentRunUpdateEvent, ChatAgent, GroupChatBuilder, WorkflowOutputEvent
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
 
 logging.basicConfig(level=logging.INFO)
@@ -49,8 +49,18 @@ async def main() -> None:
     print(f"TASK: {task}\n")
 
     final_response = None
+    last_executor_id: str | None = None
     async for event in workflow.run_stream(task):
-        if isinstance(event, WorkflowOutputEvent):
+        if isinstance(event, AgentRunUpdateEvent):
+            # Handle the streaming agent update as it's produced
+            eid = event.executor_id
+            if eid != last_executor_id:
+                if last_executor_id is not None:
+                    print()
+                print(f"{eid}:", end=" ", flush=True)
+                last_executor_id = eid
+            print(event.data, end="", flush=True)
+        elif isinstance(event, WorkflowOutputEvent):
             final_response = getattr(event.data, "text", str(event.data))
 
     if final_response:

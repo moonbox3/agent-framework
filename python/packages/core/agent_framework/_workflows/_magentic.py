@@ -23,8 +23,8 @@ from agent_framework import (
     FunctionResultContent,
     Role,
 )
-from agent_framework._agents import BaseAgent
 
+from ._base_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
 from ._events import WorkflowEvent
 from ._executor import Executor, handler
@@ -35,9 +35,11 @@ from ._group_chat import (
     GroupChatRequestMessage,
     GroupChatResponseMessage,
     GroupChatWiring,
+    group_chat_orchestrator,
 )
 from ._message_utils import normalize_messages_input
 from ._model_utils import DictConvertible, encode_value
+from ._participant_utils import participant_description
 from ._request_info_executor import RequestInfoExecutor, RequestInfoMessage, RequestResponse
 from ._workflow import Workflow, WorkflowRunResult
 from ._workflow_context import WorkflowContext
@@ -320,11 +322,16 @@ def _new_participant_descriptions() -> dict[str, str]:
     return {}
 
 
+def _new_chat_message_list() -> list[ChatMessage]:
+    """Typed default factory for ChatMessage list to satisfy type checkers."""
+    return []
+
+
 @dataclass
 class MagenticStartMessage(DictConvertible):
     """A message to start a magentic workflow."""
 
-    messages: list[ChatMessage] = field(default_factory=list)
+    messages: list[ChatMessage] = field(default_factory=_new_chat_message_list)
 
     def __init__(
         self,
@@ -337,7 +344,7 @@ class MagenticStartMessage(DictConvertible):
             normalized += normalize_messages_input(task)
         if not normalized:
             raise ValueError("MagenticStartMessage requires at least one message input.")
-        self.messages = normalized
+        self.messages: list[ChatMessage] = normalized
 
     @property
     def task(self) -> ChatMessage:
@@ -363,7 +370,7 @@ class MagenticStartMessage(DictConvertible):
             raw_messages = data["messages"]
             if not isinstance(raw_messages, Sequence) or isinstance(raw_messages, (str, bytes)):
                 raise TypeError("MagenticStartMessage 'messages' must be a sequence.")
-            messages = [ChatMessage.from_dict(raw) for raw in raw_messages]
+            messages: list[ChatMessage] = [ChatMessage.from_dict(raw) for raw in raw_messages]  # type: ignore[arg-type]
             return cls(messages)
         if "task" in data:
             task = ChatMessage.from_dict(data["task"])
@@ -940,7 +947,7 @@ class StandardMagenticManager(MagenticManagerBase):
 # region Magentic Executors
 
 
-class MagenticOrchestratorExecutor(Executor):
+class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
     """Magentic orchestrator executor that handles all orchestration logic.
 
     This executor manages the entire Magentic One workflow including:
@@ -1027,6 +1034,14 @@ class MagenticOrchestratorExecutor(Executor):
         await ctx.add_event(event)
 
     def snapshot_state(self) -> dict[str, Any]:
+        """Capture current orchestrator state for checkpointing.
+
+        Uses OrchestrationState for structure but maintains Magentic's complex metadata
+        at the top level for backward compatibility with existing checkpoints.
+
+        Returns:
+            Dict ready for checkpoint persistence
+        """
         state: dict[str, Any] = {
             "plan_review_round": self._plan_review_round,
             "max_plan_review_rounds": self._max_plan_review_rounds,
@@ -1045,6 +1060,22 @@ class MagenticOrchestratorExecutor(Executor):
         return state
 
     def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore orchestrator state from checkpoint.
+
+        Maintains backward compatibility with existing Magentic checkpoints
+        while supporting OrchestrationState structure.
+
+        Args:
+            state: Checkpoint data dict
+        """
+        # Support both old format (direct keys) and new format (wrapped in OrchestrationState)
+        if "metadata" in state and isinstance(state.get("metadata"), dict):
+            # New OrchestrationState format - extract metadata
+            from ._orchestration_state import OrchestrationState
+
+            orch_state = OrchestrationState.from_dict(state)
+            state = orch_state.metadata
+
         ctx_payload = state.get("magentic_context")
         if ctx_payload is not None:
             try:
@@ -1568,10 +1599,13 @@ class MagenticOrchestratorExecutor(Executor):
         await context.send_message(req)
 
 
+# region Magentic Executors
+
+
 class MagenticAgentExecutor(Executor):
     """Magentic agent executor that wraps an agent for participation in workflows.
 
-    This executor handles:
+    Leverages enhanced AgentExecutor with conversation injection hooks for:
     - Receiving task ledger broadcasts
     - Responding to specific agent requests
     - Resetting agent state when needed
@@ -1589,22 +1623,34 @@ class MagenticAgentExecutor(Executor):
         self._state_restored = False
 
     def snapshot_state(self) -> dict[str, Any]:
+        """Capture current executor state for checkpointing.
+
+        Returns:
+            Dict containing serialized chat history
+        """
+        from ._conversation_state import encode_chat_messages
+
         return {
-            "chat_history": [_message_to_payload(msg) for msg in self._chat_history],
+            "chat_history": encode_chat_messages(self._chat_history),
         }
 
     def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore executor state from checkpoint.
+
+        Args:
+            state: Checkpoint data dict
+        """
+        from ._conversation_state import decode_chat_messages
+
         history_payload = state.get("chat_history")
-        if not history_payload:
-            self._chat_history = []
-            return
-        restored: list[ChatMessage] = []
-        for item in history_payload:
+        if history_payload:
             try:
-                restored.append(_message_from_payload(item))
+                self._chat_history = decode_chat_messages(history_payload)
             except Exception as exc:  # pragma: no cover
-                logger.debug("Agent %s: Skipping invalid chat history item during restore: %s", self._agent_id, exc)
-        self._chat_history = restored
+                logger.warning("Agent %s: Failed to restore chat history: %s", self._agent_id, exc)
+                self._chat_history = []
+        else:
+            self._chat_history = []
 
     async def _ensure_state_restored(self, context: WorkflowContext[Any, Any]) -> None:
         if self._state_restored and self._chat_history:
@@ -2163,11 +2209,8 @@ class MagenticBuilder:
         # Create participant descriptions
         participant_descriptions: dict[str, str] = {}
         for name, participant in self._participants.items():
-            if isinstance(participant, BaseAgent):
-                description = getattr(participant, "description", None) or f"Agent {name}"
-            else:
-                description = f"Executor {name}"
-            participant_descriptions[name] = description
+            fallback = f"Executor {name}" if isinstance(participant, Executor) else f"Agent {name}"
+            participant_descriptions[name] = participant_description(participant, fallback)
 
         # Type narrowing: we already checked self._manager is not None above
         manager: MagenticManagerBase = self._manager  # type: ignore[assignment]
@@ -2195,7 +2238,7 @@ class MagenticBuilder:
 
         # Magentic provides its own orchestrator via custom factory, so no manager is needed
         group_builder = GroupChatBuilder(
-            _orchestrator_factory=_orchestrator_factory,
+            _orchestrator_factory=group_chat_orchestrator(_orchestrator_factory),
             _participant_factory=_participant_factory,
         ).participants(self._participants)
 
@@ -2203,9 +2246,8 @@ class MagenticBuilder:
             group_builder = group_builder.with_checkpointing(self._checkpoint_storage)
 
         if self._enable_plan_review:
-            request_info = RequestInfoExecutor(id="magentic_plan_review")
             group_builder = group_builder.with_request_handler(
-                request_info,
+                lambda _wiring: RequestInfoExecutor(id="magentic_plan_review"),
                 condition=lambda msg: isinstance(msg, MagenticPlanReviewRequest),
             )
 
@@ -2308,7 +2350,7 @@ class MagenticWorkflow:
         elif isinstance(message, str):
             message = MagenticStartMessage.from_string(message)
         elif isinstance(message, (ChatMessage, list)):
-            message = MagenticStartMessage(message)
+            message = MagenticStartMessage(message)  # type: ignore[arg-type]
 
         async for event in self._workflow.run_stream(message):
             yield event

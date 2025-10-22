@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,6 +58,11 @@ class AgentExecutor(Executor):
     - run(): Emits a single AgentRunEvent containing the complete response
 
     The executor automatically detects the mode via WorkflowContext.is_streaming().
+
+    Supports conversation injection hooks for advanced orchestration patterns:
+    - inject_conversation: Optional callback to inject/modify conversation before agent invocation
+    - on_message_event: Optional callback to emit custom events for each response message
+    - on_delta_event: Optional callback to emit custom events for streaming updates
     """
 
     def __init__(
@@ -66,6 +72,9 @@ class AgentExecutor(Executor):
         agent_thread: AgentThread | None = None,
         output_response: bool = False,
         id: str | None = None,
+        inject_conversation: Callable[[list[ChatMessage]], list[ChatMessage]] | None = None,
+        on_message_event: Callable[[WorkflowContext[Any, Any], ChatMessage], Any] | None = None,
+        on_delta_event: Callable[[WorkflowContext[Any, Any], AgentRunResponseUpdate], Any] | None = None,
     ):
         """Initialize the executor with a unique identifier.
 
@@ -74,6 +83,12 @@ class AgentExecutor(Executor):
             agent_thread: The thread to use for running the agent. If None, a new thread will be created.
             output_response: Whether to yield an AgentRunResponse as a workflow output when the agent completes.
             id: A unique identifier for the executor. If None, the agent's name will be used if available.
+            inject_conversation: Optional callback to inject or modify conversation before agent invocation.
+                Takes the current cache and returns the conversation to pass to the agent.
+            on_message_event: Optional async callback to emit custom events for each response message.
+                Called with (context, message) for each message in the agent's response.
+            on_delta_event: Optional async callback to emit custom events for streaming updates.
+                Called with (context, update) for each streaming update.
         """
         # Prefer provided id; else use agent.name if present; else generate deterministic prefix
         exec_id = id or agent.name
@@ -84,6 +99,9 @@ class AgentExecutor(Executor):
         self._agent_thread = agent_thread or self._agent.get_new_thread()
         self._output_response = output_response
         self._cache: list[ChatMessage] = []
+        self._inject_conversation = inject_conversation
+        self._on_message_event = on_message_event
+        self._on_delta_event = on_delta_event
 
     @property
     def workflow_output_types(self) -> list[type[Any]]:
@@ -97,15 +115,24 @@ class AgentExecutor(Executor):
 
         Checks ctx.is_streaming() to determine whether to emit incremental AgentRunUpdateEvent
         events (streaming mode) or a single AgentRunEvent (non-streaming mode).
+
+        Supports conversation injection and custom event callbacks for advanced orchestration.
         """
+        # Apply conversation injection if provided
+        conversation = self._inject_conversation(self._cache) if self._inject_conversation else self._cache
+
         if ctx.is_streaming():
             # Streaming mode: emit incremental updates
             updates: list[AgentRunResponseUpdate] = []
             async for update in self._agent.run_stream(
-                self._cache,
+                conversation,
                 thread=self._agent_thread,
             ):
                 updates.append(update)
+                # Emit custom delta event if callback provided
+                if self._on_delta_event:
+                    await self._on_delta_event(ctx, update)
+                # Always emit standard update event
                 await ctx.add_event(AgentRunUpdateEvent(self.id, update))
 
             if isinstance(self._agent, ChatAgent):
@@ -119,10 +146,15 @@ class AgentExecutor(Executor):
         else:
             # Non-streaming mode: use run() and emit single event
             response = await self._agent.run(
-                self._cache,
+                conversation,
                 thread=self._agent_thread,
             )
             await ctx.add_event(AgentRunEvent(self.id, response))
+
+        # Emit custom message events if callback provided
+        if self._on_message_event:
+            for message in response.messages:
+                await self._on_message_event(ctx, message)
 
         if self._output_response:
             await ctx.yield_output(response)
@@ -190,3 +222,38 @@ class AgentExecutor(Executor):
         """Accept a list of chat inputs (strings or ChatMessage) as conversation context."""
         self._cache = normalize_messages_input(messages)
         await self._run_agent_and_emit(ctx)
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Capture current executor state for checkpointing.
+
+        Returns:
+            Dict containing serialized cache state
+        """
+        from ._conversation_state import encode_chat_messages
+
+        return {
+            "cache": encode_chat_messages(self._cache),
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore executor state from checkpoint.
+
+        Args:
+            state: Checkpoint data dict
+        """
+        from ._conversation_state import decode_chat_messages
+
+        cache_payload = state.get("cache")
+        if cache_payload:
+            try:
+                self._cache = decode_chat_messages(cache_payload)
+            except Exception as exc:
+                logger.warning("Failed to restore cache: %s", exc)
+                self._cache = []
+        else:
+            self._cache = []
+
+    def reset(self) -> None:
+        """Reset the internal cache of the executor."""
+        logger.debug("AgentExecutor %s: Resetting cache", self.id)
+        self._cache.clear()

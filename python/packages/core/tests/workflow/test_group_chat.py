@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from typing import Any
 
 from agent_framework import (
@@ -10,7 +10,6 @@ from agent_framework import (
     BaseAgent,
     ChatMessage,
     GroupChatBuilder,
-    GroupChatDirective,
     GroupChatStateSnapshot,
     MagenticAgentMessageEvent,
     MagenticBuilder,
@@ -57,27 +56,22 @@ class StubAgent(BaseAgent):
         return _stream()
 
 
-class SequenceManager:
-    def __init__(self) -> None:
-        self._step = 0
+def make_sequence_selector() -> Callable[[GroupChatStateSnapshot], Any]:
+    state_counter = {"value": 0}
 
-    @property
-    def name(self) -> str:
-        return "manager"
+    async def _selector(state: GroupChatStateSnapshot) -> str | None:
+        participants = list(state["participants"].keys())
+        step = state_counter["value"]
+        if step == 0:
+            state_counter["value"] = step + 1
+            return participants[0]
+        if step == 1 and len(participants) > 1:
+            state_counter["value"] = step + 1
+            return participants[1]
+        return None
 
-    async def __call__(self, state: GroupChatStateSnapshot) -> GroupChatDirective:
-        participants = state["participants"]
-        participant_names = list(participants.keys())
-        if self._step == 0:
-            self._step += 1
-            return GroupChatDirective(agent_name=participant_names[0], instruction="start")
-        if self._step == 1 and len(participant_names) > 1:
-            self._step += 1
-            return GroupChatDirective(agent_name=participant_names[1], instruction="continue")
-        return GroupChatDirective(
-            finish=True,
-            final_message=ChatMessage(role=Role.ASSISTANT, text="done", author_name=self.name),
-        )
+    _selector.name = "manager"  # type: ignore[attr-defined]
+    return _selector
 
 
 class StubMagenticManager(MagenticManagerBase):
@@ -116,12 +110,15 @@ class StubMagenticManager(MagenticManagerBase):
 
 
 async def test_group_chat_builder_basic_flow() -> None:
-    manager = SequenceManager()
+    selector = make_sequence_selector()
     alpha = StubAgent("alpha", "ack from alpha")
     beta = StubAgent("beta", "ack from beta")
 
     workflow = (
-        GroupChatBuilder().set_manager(manager, display_name="manager").participants(alpha=alpha, beta=beta).build()
+        GroupChatBuilder()
+        .set_speaker_selector(selector, display_name="manager", final_message="done")
+        .participants(alpha=alpha, beta=beta)
+        .build()
     )
 
     outputs: list[ChatMessage] = []
@@ -167,12 +164,15 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
 
 
 async def test_group_chat_as_agent_accepts_conversation() -> None:
-    manager = SequenceManager()
+    selector = make_sequence_selector()
     alpha = StubAgent("alpha", "ack from alpha")
     beta = StubAgent("beta", "ack from beta")
 
     workflow = (
-        GroupChatBuilder().set_manager(manager, display_name="manager").participants(alpha=alpha, beta=beta).build()
+        GroupChatBuilder()
+        .set_speaker_selector(selector, display_name="manager", final_message="done")
+        .participants(alpha=alpha, beta=beta)
+        .build()
     )
 
     agent = workflow.as_agent(name="group-chat-agent")

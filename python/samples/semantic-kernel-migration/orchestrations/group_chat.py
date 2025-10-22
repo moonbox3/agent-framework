@@ -9,13 +9,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any, cast
 
-from agent_framework import (
-    ChatAgent,
-    ChatMessage,
-    GroupChatBuilder,
-    StandardGroupChatManager,
-    WorkflowOutputEvent,
-)
+from agent_framework import ChatAgent, ChatMessage, GroupChatBuilder, WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient, AzureOpenAIResponsesClient
 from azure.identity import AzureCliCredential
 from semantic_kernel.agents import Agent, ChatCompletionAgent, GroupChatOrchestration
@@ -239,14 +233,12 @@ async def run_agent_framework_example(task: str) -> str:
         chat_client=AzureOpenAIResponsesClient(credential=credential),
     )
 
-    manager = StandardGroupChatManager(
-        chat_client=AzureOpenAIChatClient(credential=credential),
-        name="Coordinator",
-    )
-
     workflow = (
         GroupChatBuilder()
-        .set_manager(manager, display_name="Coordinator")
+        .set_prompt_based_manager(
+            chat_client=AzureOpenAIChatClient(credential=credential),
+            display_name="Coordinator",
+        )
         .participants(researcher=researcher, planner=planner)
         .build()
     )

@@ -7,7 +7,7 @@ multi-agent conversations. The key components are:
 
 - GroupChatRequestMessage / GroupChatResponseMessage: canonical envelopes used
   between the orchestrator and participants.
-- GroupChatManagerFn: minimal asynchronous callable contract for pluggable coordination logic.
+- Group chat managers: minimal asynchronous callables for pluggable coordination logic.
 - GroupChatOrchestratorExecutor: runtime state machine that delegates to a
   manager to select the next participant or complete the task.
 - GroupChatBuilder: high-level builder that wires managers and participants
@@ -18,6 +18,7 @@ The default wiring uses AgentExecutor under the hood for agent participants so
 existing observability and streaming semantics continue to apply.
 """
 
+import inspect
 import itertools
 import json
 import logging
@@ -78,7 +79,7 @@ class GroupChatTurn:
 
 @dataclass
 class GroupChatDirective:
-    """Instruction emitted by a GroupChatManagerFn implementation."""
+    """Instruction emitted by a group chat manager implementation."""
 
     agent_name: str | None = None
     instruction: str | None = None
@@ -94,7 +95,14 @@ class GroupChatDirective:
 
 
 GroupChatStateSnapshot = Mapping[str, Any]
-GroupChatManagerFn = Callable[[GroupChatStateSnapshot], Awaitable[GroupChatDirective]]
+_GroupChatManagerFn = Callable[[GroupChatStateSnapshot], Awaitable[GroupChatDirective]]
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Await value if it is awaitable; otherwise return as-is."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 @dataclass
@@ -127,7 +135,7 @@ class GroupChatWiring:
         orchestrator: Orchestrator executor instance (populated during build)
     """
 
-    manager: GroupChatManagerFn | None
+    manager: _GroupChatManagerFn | None
     manager_name: str
     participants: Mapping[str, GroupChatParticipantSpec]
     max_rounds: int | None = None
@@ -225,7 +233,7 @@ class GroupChatOrchestratorExecutor(Executor):
 
     def __init__(
         self,
-        manager: GroupChatManagerFn,
+        manager: _GroupChatManagerFn,
         *,
         participants: Mapping[str, str],
         manager_name: str,
@@ -683,38 +691,33 @@ def _default_orchestrator_factory(wiring: GroupChatWiring) -> Executor:
 class GroupChatBuilder:
     r"""High-level builder for manager-directed group chat workflows with dynamic orchestration.
 
-    - `set_manager(...)` configures the orchestration manager (required)
-    - `participants({...})` accepts a mapping of named AgentProtocol or Executor instances
-    - The workflow wires an orchestrator that delegates speaker selection to the manager
+    - Call exactly one of `set_prompt_based_manager(...)` or `set_speaker_selector(...)` to configure coordination
+    - `participants({...})` accepts a mapping (or list) of AgentProtocol/Executor instances
+    - The workflow delegates speaker selection to the manager and requests completion when finished
     - Agents are automatically wrapped as AgentExecutor for consistent observability
-    - The manager receives conversation state and returns directives (next speaker or finish)
-    - The final output is the manager's completion message when the task is finished
 
     Usage:
 
     .. code-block:: python
 
-        from agent_framework import GroupChatBuilder, StandardGroupChatManager
+        from agent_framework.azure import AzureOpenAIChatClient, AzureOpenAIResponsesClient
+        from agent_framework import ChatAgent, GroupChatBuilder
 
-        manager = StandardGroupChatManager(chat_client)
-        workflow = (
-            GroupChatBuilder().set_manager(manager).participants(writer=writer_agent, reviewer=reviewer_agent).build()
+        researcher = ChatAgent(
+            name="Researcher",
+            chat_client=AzureOpenAIChatClient(),
+            instructions="Collect useful notes.",
+        )
+        writer = ChatAgent(
+            name="Writer",
+            chat_client=AzureOpenAIResponsesClient(),
+            instructions="Draft a polished answer.",
         )
 
-        # Enable checkpoint persistence
         workflow = (
             GroupChatBuilder()
-            .set_manager(manager)
-            .participants({"analyst": analyst_agent, "coder": coder_agent})
-            .with_checkpointing(storage)
-            .build()
-        )
-
-        # Limit conversation rounds
-        workflow = (
-            GroupChatBuilder()
-            .set_manager(manager)
-            .participants(agent1=agent1, agent2=agent2)
+            .set_prompt_based_manager(chat_client=AzureOpenAIChatClient(), display_name="Coordinator")
+            .participants(researcher=researcher, writer=writer)
             .with_max_rounds(10)
             .build()
         )
@@ -737,7 +740,7 @@ class GroupChatBuilder:
         """
         self._participants: dict[str, AgentProtocol | Executor] = {}
         self._participant_descriptions: dict[str, str] = {}
-        self._manager: GroupChatManagerFn | None = None
+        self._manager: _GroupChatManagerFn | None = None
         self._manager_name: str = "manager"
         self._checkpoint_storage: CheckpointStorage | None = None
         self._max_rounds: int | None = None
@@ -745,38 +748,103 @@ class GroupChatBuilder:
         self._orchestrator_factory = _orchestrator_factory or _default_orchestrator_factory
         self._participant_factory = _participant_factory or _default_participant_factory
 
-    def set_manager(self, manager: GroupChatManagerFn, *, display_name: str | None = None) -> "GroupChatBuilder":
-        """Configure the orchestration manager callable that selects participants and completes tasks.
-
-        The callable receives an immutable conversation snapshot and returns directives indicating which
-        participant should speak next or whether the task is complete.
-
-        Args:
-            manager: Awaitable callable accepting the state snapshot and returning a GroupChatDirective
-            display_name: Optional custom name for the manager in conversation history
-
-        Returns:
-            Self for fluent chaining
-        """
-        self._manager = manager
+    def _set_manager_function(
+        self,
+        manager: _GroupChatManagerFn,
+        display_name: str | None,
+    ) -> "GroupChatBuilder":
+        if self._manager is not None:
+            raise ValueError(
+                "GroupChatBuilder already has a manager configured. "
+                "Call set_prompt_based_manager(...) or set_speaker_selector(...) at most once."
+            )
         resolved_name = display_name or getattr(manager, "name", None) or "manager"
+        self._manager = manager
         self._manager_name = resolved_name
         return self
 
+    def set_prompt_based_manager(
+        self,
+        chat_client: ChatClientProtocol,
+        *,
+        instructions: str | None = None,
+        display_name: str | None = None,
+    ) -> "GroupChatBuilder":
+        """Configure the default prompt-based manager driven by an LLM chat client.
+
+        Args:
+            chat_client: Chat completion client used to run the coordinator LLM.
+            instructions: Optional system instructions to steer the coordinator prompt.
+            display_name: Optional conversational display name for manager messages.
+
+        Returns:
+            Self for fluent chaining.
+
+        Note:
+            Calling this method and :meth:`set_speaker_selector` together is not allowed; choose one.
+
+        Example:
+
+        .. code-block:: python
+
+            workflow = (
+                GroupChatBuilder()
+                .set_prompt_based_manager(chat_client, display_name="Coordinator")
+                .participants(researcher=researcher, writer=writer)
+                .build()
+            )
+        """
+        manager = _PromptBasedGroupChatManager(
+            chat_client,
+            instructions=instructions,
+            name=display_name,
+        )
+        return self._set_manager_function(manager, display_name)
+
+    def set_speaker_selector(
+        self,
+        selector: Callable[[GroupChatStateSnapshot], Awaitable[Any]] | Callable[[GroupChatStateSnapshot], Any],
+        *,
+        display_name: str | None = None,
+        final_message: ChatMessage | str | Callable[[GroupChatStateSnapshot], Any] | None = None,
+    ) -> "GroupChatBuilder":
+        """Configure a lightweight selector function that picks the next speaker.
+
+        Args:
+            selector: Callable receiving the conversation snapshot. Return a participant name to
+                continue the conversation or None to finish. The callable may be sync or async.
+            display_name: Optional name shown in conversation history for manager messages.
+            final_message: Optional final message (or factory) emitted when the selector returns None
+                (defaults to ``"Conversation completed."`` authored by the manager).
+
+        Returns:
+            Self for fluent chaining.
+
+        Note:
+            Calling this method and :meth:`set_prompt_based_manager` together is not allowed; choose one.
+        """
+        manager_name = display_name or "manager"
+        adapter = _SpeakerSelectorAdapter(
+            selector,
+            manager_name=manager_name,
+            final_message=final_message,
+        )
+        return self._set_manager_function(adapter, display_name)
+
     def participants(
         self,
-        participants: Mapping[str, AgentProtocol | Executor] | None = None,
+        participants: Mapping[str, AgentProtocol | Executor] | Sequence[AgentProtocol | Executor] | None = None,
         /,
         **named_participants: AgentProtocol | Executor,
     ) -> "GroupChatBuilder":
-        """Define the named participants for this group chat workflow.
+        """Define participants for this group chat workflow.
 
         Accepts AgentProtocol instances (auto-wrapped as AgentExecutor) or Executor instances.
-        Participant names must be unique and non-empty. The manager uses these names when
-        selecting the next speaker.
+        Provide a mapping of name → participant for explicit control, or pass a sequence and
+        names will be inferred from the agent's ``name`` attribute (or executor ``id``).
 
         Args:
-            participants: Optional mapping of participant names to agent/executor instances
+            participants: Optional mapping or sequence of participant definitions
             **named_participants: Keyword arguments mapping names to agent/executor instances
 
         Returns:
@@ -791,23 +859,10 @@ class GroupChatBuilder:
 
             from agent_framework import GroupChatBuilder
 
-            # Using keyword arguments
             workflow = (
                 GroupChatBuilder()
-                .set_manager(manager)
-                .participants(writer=writer_agent, editor=editor_agent, reviewer=reviewer_agent)
-                .build()
-            )
-
-            # Using dictionary
-            participants_dict = {"analyst": analyst_agent, "coder": coder_agent}
-            workflow = GroupChatBuilder().set_manager(manager).participants(participants_dict).build()
-
-            # Combining both approaches
-            workflow = (
-                GroupChatBuilder()
-                .set_manager(manager)
-                .participants({"agent1": agent1}, agent2=agent2, agent3=agent3)
+                .set_prompt_based_manager(chat_client)
+                .participants([writer_agent, reviewer_agent])
                 .build()
             )
         """
@@ -821,8 +876,21 @@ class GroupChatBuilder:
             combined[name] = participant
 
         if participants:
-            for name, participant in participants.items():
-                _add(name, participant)
+            if isinstance(participants, Mapping):
+                for name, participant in participants.items():
+                    _add(name, participant)
+            else:
+                for participant in participants:
+                    if isinstance(participant, Executor):
+                        inferred_name = participant.id
+                    else:
+                        inferred_name = getattr(participant, "name", None)
+                    if not inferred_name:
+                        raise ValueError(
+                            "Agent participants supplied via sequence must define a non-empty 'name' attribute."
+                        )
+                    _add(str(inferred_name), participant)
+
         for name, participant in named_participants.items():
             _add(name, participant)
 
@@ -860,7 +928,7 @@ class GroupChatBuilder:
             storage = MemoryCheckpointStorage()
             workflow = (
                 GroupChatBuilder()
-                .set_manager(manager)
+                .set_prompt_based_manager(chat_client)
                 .participants(agent1=agent1, agent2=agent2)
                 .with_checkpointing(storage)
                 .build()
@@ -902,7 +970,7 @@ class GroupChatBuilder:
             review_executor = PlanReviewExecutor()
             workflow = (
                 GroupChatBuilder()
-                .set_manager(manager)
+                .set_prompt_based_manager(chat_client)
                 .participants(agent1=agent1)
                 .with_request_handler(review_executor, condition=is_plan_review)
                 .build()
@@ -932,14 +1000,20 @@ class GroupChatBuilder:
             # Limit to 15 rounds
             workflow = (
                 GroupChatBuilder()
-                .set_manager(manager)
+                .set_prompt_based_manager(chat_client)
                 .participants(agent1=agent1, agent2=agent2)
                 .with_max_rounds(15)
                 .build()
             )
 
             # Unlimited rounds
-            workflow = GroupChatBuilder().set_manager(manager).participants(agent1=agent1).with_max_rounds(None).build()
+            workflow = (
+                GroupChatBuilder()
+                .set_prompt_based_manager(chat_client)
+                .participants(agent1=agent1)
+                .with_max_rounds(None)
+                .build()
+            )
         """
         self._max_rounds = max_rounds
         return self
@@ -981,12 +1055,15 @@ class GroupChatBuilder:
 
         .. code-block:: python
 
-            from agent_framework import GroupChatBuilder, StandardGroupChatManager
-
-            manager = StandardGroupChatManager(chat_client)
-            workflow = GroupChatBuilder().set_manager(manager).participants(agent1=agent1, agent2=agent2).build()
+            from agent_framework import GroupChatBuilder
 
             # Execute the workflow
+            workflow = (
+                GroupChatBuilder()
+                .set_prompt_based_manager(chat_client)
+                .participants(agent1=agent1, agent2=agent2)
+                .build()
+            )
             async for message in workflow.run("Solve this problem collaboratively"):
                 print(message.text)
         """
@@ -1053,7 +1130,7 @@ class GroupChatBuilder:
 class _ManagerDirectiveModel(BaseModel):
     """Pydantic model for structured output from LLM manager decisions.
 
-    Defines the JSON schema that StandardGroupChatManager expects from the LLM's
+    Defines the JSON schema that the prompt-based manager expects from the LLM's
     response_format output. This ensures type-safe parsing and validation of manager
     directives.
 
@@ -1084,7 +1161,7 @@ the JSON fields:
 """
 
 
-class StandardGroupChatManager:
+class _PromptBasedGroupChatManager:
     """LLM-backed manager that produces directives via structured output.
 
     This is the default manager implementation for group chat workflows. It uses an LLM
@@ -1195,6 +1272,69 @@ class StandardGroupChatManager:
             agent_name=next_agent,
             instruction=directive_obj.message or "",
         )
+
+
+class _SpeakerSelectorAdapter:
+    """Adapter that turns a simple speaker selector into a full manager directive."""
+
+    def __init__(
+        self,
+        selector: Callable[[GroupChatStateSnapshot], Awaitable[Any]] | Callable[[GroupChatStateSnapshot], Any],
+        *,
+        manager_name: str,
+        final_message: ChatMessage | str | Callable[[GroupChatStateSnapshot], Any] | None = None,
+    ) -> None:
+        self._selector = selector
+        self._manager_name = manager_name
+        self._final_message = final_message
+        self.name = manager_name
+
+    async def __call__(self, state: GroupChatStateSnapshot) -> GroupChatDirective:
+        result = await _maybe_await(self._selector(state))
+        if result is None:
+            message = await self._resolve_final_message(state)
+            return GroupChatDirective(finish=True, final_message=message)
+
+        if isinstance(result, Sequence) and not isinstance(result, (str, bytes, bytearray)):
+            if not result:
+                message = await self._resolve_final_message(state)
+                return GroupChatDirective(finish=True, final_message=message)
+            if len(result) != 1:
+                raise ValueError("Speaker selector must return a single participant name or None.")
+            result = result[0]
+
+        if not isinstance(result, str):
+            raise TypeError("Speaker selector must return a participant name (str) or None.")
+
+        return GroupChatDirective(agent_name=result)
+
+    async def _resolve_final_message(self, state: GroupChatStateSnapshot) -> ChatMessage:
+        final_message = self._final_message
+        if callable(final_message):
+            value = await _maybe_await(final_message(state))
+        else:
+            value = final_message
+
+        if value is None:
+            message = ChatMessage(
+                role=Role.ASSISTANT,
+                text="Conversation completed.",
+                author_name=self._manager_name,
+            )
+        elif isinstance(value, ChatMessage):
+            message = value
+        else:
+            message = ChatMessage(
+                role=Role.ASSISTANT,
+                text=str(value),
+                author_name=self._manager_name,
+            )
+
+        if not message.author_name:
+            patch = message.to_dict()
+            patch["author_name"] = self._manager_name
+            message = ChatMessage.from_dict(patch)
+        return message
 
 
 # endregion

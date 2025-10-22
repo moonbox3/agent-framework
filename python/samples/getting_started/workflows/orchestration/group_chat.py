@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from agent_framework import ChatAgent, GroupChatBuilder, StandardGroupChatManager, WorkflowOutputEvent
+from agent_framework import ChatAgent, GroupChatBuilder, WorkflowOutputEvent
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
 
 logging.basicConfig(level=logging.INFO)
@@ -36,14 +36,9 @@ async def main() -> None:
         chat_client=OpenAIResponsesClient(),
     )
 
-    manager = StandardGroupChatManager(
-        chat_client=OpenAIChatClient(),
-        name="Coordinator",
-    )
-
     workflow = (
         GroupChatBuilder()
-        .set_manager(manager, display_name="Coordinator")
+        .set_prompt_based_manager(chat_client=OpenAIChatClient(), display_name="Coordinator")
         .participants(researcher=researcher, writer=writer)
         .build()
     )

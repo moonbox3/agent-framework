@@ -36,7 +36,6 @@ from ._base_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage
 from ._conversation_history import append_messages, clone_conversation, ensure_author, latest_user_message
 from ._executor import Executor, handler
-from ._orchestrator_helpers import ParticipantRegistry, create_completion_message
 from ._participant_utils import prepare_participant_metadata, wrap_participant
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -49,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class GroupChatRequestMessage:
-    """Request envelope sent from the orchestrator to a participant."""
+class _GroupChatRequestMessage:
+    """Internal: Request envelope sent from the orchestrator to a participant."""
 
     agent_name: str
     conversation: list[ChatMessage] = field(default_factory=list)  # type: ignore
@@ -60,8 +59,8 @@ class GroupChatRequestMessage:
 
 
 @dataclass
-class GroupChatResponseMessage:
-    """Response envelope emitted by participants back to the orchestrator."""
+class _GroupChatResponseMessage:
+    """Internal: Response envelope emitted by participants back to the orchestrator."""
 
     agent_name: str
     message: ChatMessage
@@ -71,8 +70,8 @@ class GroupChatResponseMessage:
 
 
 @dataclass
-class GroupChatTurn:
-    """Represents a single turn in the manager-participant conversation."""
+class _GroupChatTurn:
+    """Internal: Represents a single turn in the manager-participant conversation."""
 
     speaker: str
     role: str
@@ -108,8 +107,8 @@ async def _maybe_await(value: Any) -> Any:
 
 
 @dataclass
-class GroupChatParticipantSpec:
-    """Metadata describing a single participant in the orchestration.
+class _GroupChatParticipantSpec:
+    """Internal: Metadata describing a single participant in the orchestration.
 
     Attributes:
         name: Unique identifier for the participant used by the manager for selection
@@ -122,12 +121,12 @@ class GroupChatParticipantSpec:
     description: str
 
 
-GroupChatParticipantPipeline: TypeAlias = Sequence[Executor]
+_GroupChatParticipantPipeline: TypeAlias = Sequence[Executor]
 
 
 @dataclass
-class GroupChatWiring:
-    """Configuration passed to factories during workflow assembly.
+class _GroupChatWiring:
+    """Internal: Configuration passed to factories during workflow assembly.
 
     Attributes:
         manager: Manager instance responsible for orchestration decisions (None when custom factory handles it)
@@ -139,7 +138,7 @@ class GroupChatWiring:
 
     manager: _GroupChatManagerFn | None
     manager_name: str
-    participants: Mapping[str, GroupChatParticipantSpec]
+    participants: Mapping[str, _GroupChatParticipantSpec]
     max_rounds: int | None = None
     orchestrator: Executor | None = None
     participant_aliases: dict[str, str] = field(default_factory=dict)  # type: ignore[type-arg]
@@ -151,14 +150,14 @@ class GroupChatWiring:
 
 # region Default participant factory
 
-GroupChatOrchestratorFactory: TypeAlias = Callable[[GroupChatWiring], Executor]
-InterceptorSpec: TypeAlias = tuple[Callable[[GroupChatWiring], Executor], Callable[[Any], bool]]
+_GroupChatOrchestratorFactory: TypeAlias = Callable[[_GroupChatWiring], Executor]
+_InterceptorSpec: TypeAlias = tuple[Callable[[_GroupChatWiring], Executor], Callable[[Any], bool]]
 
 
 def _default_participant_factory(
-    spec: GroupChatParticipantSpec,
-    wiring: GroupChatWiring,
-) -> GroupChatParticipantPipeline:
+    spec: _GroupChatParticipantSpec,
+    wiring: _GroupChatWiring,
+) -> _GroupChatParticipantPipeline:
     """Default factory for constructing participant pipeline nodes in the workflow graph.
 
     Creates a single AgentExecutor node for AgentProtocol participants or a passthrough executor
@@ -254,16 +253,12 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         self._manager = manager
         self._participants = dict(participants)
         self._manager_name = manager_name
-        self._conversation: list[ChatMessage] = []
-        self._history: list[GroupChatTurn] = []
+        self._max_rounds = max_rounds
+        self._history: list[_GroupChatTurn] = []
         self._task_message: ChatMessage | None = None
         self._pending_agent: str | None = None
-        self._round_index = 0
-        self._max_rounds = max_rounds
         # Stashes the initial conversation list until _handle_task_message normalizes it into _conversation.
         self._pending_initial_conversation: list[ChatMessage] | None = None
-        # Use the simple registry helper instead of tracking separately
-        self._registry = ParticipantRegistry()
 
     @staticmethod
     def _role_value(message: ChatMessage) -> str:
@@ -310,70 +305,52 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         }
         return MappingProxyType(snapshot)
 
-    def snapshot_state(self) -> dict[str, Any]:
-        """Capture current orchestrator state for checkpointing.
-
-        Serializes conversation history, task, round index, and pattern-specific
-        metadata into a dict using the unified OrchestrationState structure.
+    def _snapshot_pattern_metadata(self) -> dict[str, Any]:
+        """Serialize GroupChat-specific state for checkpointing.
 
         Returns:
-            Dict ready for checkpoint persistence
+            Dict with participants, manager name, history, and pending agent
         """
-        from ._orchestration_state import OrchestrationState
+        return {
+            "participants": dict(self._participants),
+            "manager_name": self._manager_name,
+            "pending_agent": self._pending_agent,
+            "task_message": self._task_message.to_dict() if self._task_message else None,
+            "history": [
+                {"speaker": turn.speaker, "role": turn.role, "message": turn.message.to_dict()}
+                for turn in self._history
+            ],
+        }
 
-        state = OrchestrationState(
-            conversation=list(self._conversation),
-            round_index=self._round_index,
-            task=self._task_message,
-            metadata={
-                "participants": dict(self._participants),
-                "manager_name": self._manager_name,
-                "pending_agent": self._pending_agent,
-                "history": [
-                    {"speaker": turn.speaker, "role": turn.role, "message": turn.message.to_dict()}
-                    for turn in self._history
-                ],
-            },
-        )
-        return state.to_dict()
-
-    def restore_state(self, state: dict[str, Any]) -> None:
-        """Restore orchestrator state from checkpoint.
-
-        Deserializes checkpointed state using OrchestrationState and restores
-        internal conversation history, task, and round tracking.
+    def _restore_pattern_metadata(self, metadata: dict[str, Any]) -> None:
+        """Restore GroupChat-specific state from checkpoint.
 
         Args:
-            state: Checkpoint data dict
+            metadata: Pattern-specific state dict
         """
-        from ._orchestration_state import OrchestrationState
-
-        orch_state = OrchestrationState.from_dict(state)
-        self._conversation = list(orch_state.conversation)
-        self._round_index = orch_state.round_index
-        self._task_message = orch_state.task
-
-        # Restore pattern-specific metadata
-        if "participants" in orch_state.metadata:
-            self._participants = dict(orch_state.metadata["participants"])
-        if "manager_name" in orch_state.metadata:
-            self._manager_name = orch_state.metadata["manager_name"]
-        if "pending_agent" in orch_state.metadata:
-            self._pending_agent = orch_state.metadata["pending_agent"]
-        if "history" in orch_state.metadata:
+        if "participants" in metadata:
+            self._participants = dict(metadata["participants"])
+        if "manager_name" in metadata:
+            self._manager_name = metadata["manager_name"]
+        if "pending_agent" in metadata:
+            self._pending_agent = metadata["pending_agent"]
+        task_msg = metadata.get("task_message")
+        if task_msg:
+            self._task_message = ChatMessage.from_dict(task_msg)
+        if "history" in metadata:
             self._history = [
-                GroupChatTurn(
+                _GroupChatTurn(
                     speaker=turn["speaker"],
                     role=turn["role"],
                     message=ChatMessage.from_dict(turn["message"]),
                 )
-                for turn in orch_state.metadata["history"]
+                for turn in metadata["history"]
             ]
 
     async def _apply_directive(
         self,
         directive: GroupChatDirective,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Execute a manager directive by either finishing the workflow or routing to a participant.
 
@@ -410,15 +387,14 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         if directive.finish:
             final_message = directive.final_message
             if final_message is None:
-                final_message = create_completion_message(
+                final_message = self._create_completion_message(
                     text="Completed without final summary.",
-                    author_name=self._manager_name,
                     reason="no summary provided",
                 )
             final_message = ensure_author(final_message, self._manager_name)
 
             append_messages(self._conversation, (final_message,))
-            self._history.append(GroupChatTurn(self._manager_name, "manager", final_message))
+            self._history.append(_GroupChatTurn(self._manager_name, "manager", final_message))
             self._pending_agent = None
             await ctx.yield_output(final_message)
             return
@@ -437,15 +413,15 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         conversation = clone_conversation(self._conversation)
         if instruction:
             manager_message = ensure_author(
-                create_completion_message(text=instruction, author_name=self._manager_name),
+                self._create_completion_message(text=instruction, reason="instruction"),
                 self._manager_name,
             )
             append_messages(conversation, (manager_message,))
             append_messages(self._conversation, (manager_message,))
-            self._history.append(GroupChatTurn(self._manager_name, "manager", manager_message))
+            self._history.append(_GroupChatTurn(self._manager_name, "manager", manager_message))
 
         self._pending_agent = agent_name
-        self._round_index += 1
+        self._increment_round()
 
         # Use inherited routing method from BaseGroupChatOrchestrator
         await self._route_to_participant(
@@ -457,13 +433,12 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             metadata=directive.metadata,
         )
 
-        if self._check_round_limit(self._round_index, self._max_rounds, pattern_name="GroupChat"):
+        if self._check_round_limit():
             await self._apply_directive(
                 GroupChatDirective(
                     finish=True,
-                    final_message=create_completion_message(
+                    final_message=self._create_completion_message(
                         text="Conversation halted after reaching manager round limit.",
-                        author_name=self._manager_name,
                         reason="max_rounds reached",
                     ),
                 ),
@@ -474,7 +449,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         participant_name: str,
         message: ChatMessage,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Common response ingestion logic shared by agent and custom participants."""
         if participant_name not in self._participants:
@@ -483,7 +458,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
 
         message = ensure_author(message, participant_name)
         append_messages(self._conversation, (message,))
-        self._history.append(GroupChatTurn(participant_name, "agent", message))
+        self._history.append(_GroupChatTurn(participant_name, "agent", message))
         self._pending_agent = None
 
         if self._max_rounds is not None and self._round_index >= self._max_rounds:
@@ -492,9 +467,8 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
                 self._max_rounds,
             )
             await ctx.yield_output(
-                create_completion_message(
+                self._create_completion_message(
                     text="Conversation halted after reaching manager round limit.",
-                    author_name=self._manager_name,
                     reason="max_rounds reached after response",
                 )
             )
@@ -506,6 +480,8 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     @staticmethod
     def _extract_agent_message(response: AgentExecutorResponse, participant_name: str) -> ChatMessage:
         """Select the final assistant message from an AgentExecutor response."""
+        from ._orchestrator_helpers import create_completion_message
+
         final_message: ChatMessage | None = None
         candidate_sequences: tuple[Sequence[ChatMessage] | None, ...] = (
             response.agent_run_response.messages,
@@ -522,13 +498,17 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
                 break
 
         if final_message is None:
-            final_message = create_completion_message(text="", author_name=participant_name)
+            final_message = create_completion_message(
+                text="",
+                author_name=participant_name,
+                reason="empty response",
+            )
         return ensure_author(final_message, participant_name)
 
     async def _handle_task_message(
         self,
         task_message: ChatMessage,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Initialize orchestrator state and start the manager-directed conversation loop.
 
@@ -566,7 +546,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             self._pending_initial_conversation = None
             self._conversation = initial_conversation
             self._history = [
-                GroupChatTurn(
+                _GroupChatTurn(
                     msg.author_name or self._role_value(msg),
                     self._role_value(msg),
                     msg,
@@ -575,7 +555,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             ]
         else:
             self._conversation = [task_message]
-            self._history = [GroupChatTurn("user", "user", task_message)]
+            self._history = [_GroupChatTurn("user", "user", task_message)]
         self._pending_agent = None
         self._round_index = 0
         directive = await self._manager(self._build_state())
@@ -585,7 +565,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     async def handle_str(
         self,
         task: str,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Handler for string input as workflow entry point.
 
@@ -604,7 +584,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     async def handle_chat_message(
         self,
         task_message: ChatMessage,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Handler for ChatMessage input as workflow entry point.
 
@@ -623,7 +603,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     async def handle_conversation(
         self,
         conversation: list[ChatMessage],
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Handler for conversation history as workflow entry point.
 
@@ -660,8 +640,8 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     @handler
     async def handle_agent_response(
         self,
-        response: GroupChatResponseMessage,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        response: _GroupChatResponseMessage,
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Handle responses from custom participant executors."""
         await self._ingest_participant_message(response.agent_name, response.message, ctx)
@@ -670,7 +650,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
     async def handle_agent_executor_response(
         self,
         response: AgentExecutorResponse,
-        ctx: WorkflowContext[AgentExecutorRequest | GroupChatRequestMessage, ChatMessage],
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, ChatMessage],
     ) -> None:
         """Handle direct AgentExecutor responses."""
         participant_name = self._registry.get_participant_name(response.executor_id)
@@ -684,7 +664,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         await self._ingest_participant_message(participant_name, message, ctx)
 
 
-def _default_orchestrator_factory(wiring: GroupChatWiring) -> Executor:
+def _default_orchestrator_factory(wiring: _GroupChatWiring) -> Executor:
     """Default factory for creating the GroupChatOrchestratorExecutor instance.
 
     This is the internal implementation used by GroupChatBuilder to instantiate the
@@ -721,17 +701,17 @@ def _default_orchestrator_factory(wiring: GroupChatWiring) -> Executor:
     )
 
 
-def group_chat_orchestrator(factory: GroupChatOrchestratorFactory | None = None) -> GroupChatOrchestratorFactory:
+def group_chat_orchestrator(factory: _GroupChatOrchestratorFactory | None = None) -> _GroupChatOrchestratorFactory:
     """Return a callable orchestrator factory, defaulting to the built-in implementation."""
     return factory or _default_orchestrator_factory
 
 
 def assemble_group_chat_workflow(
     *,
-    wiring: GroupChatWiring,
-    participant_factory: Callable[[GroupChatParticipantSpec, GroupChatWiring], GroupChatParticipantPipeline],
-    orchestrator_factory: GroupChatOrchestratorFactory = _default_orchestrator_factory,
-    interceptors: Sequence[InterceptorSpec] | None = None,
+    wiring: _GroupChatWiring,
+    participant_factory: Callable[[_GroupChatParticipantSpec, _GroupChatWiring], _GroupChatParticipantPipeline],
+    orchestrator_factory: _GroupChatOrchestratorFactory = _default_orchestrator_factory,
+    interceptors: Sequence[_InterceptorSpec] | None = None,
     checkpoint_storage: CheckpointStorage | None = None,
     builder: WorkflowBuilder | None = None,
     return_builder: bool = False,
@@ -826,8 +806,8 @@ class GroupChatBuilder:
     def __init__(
         self,
         *,
-        _orchestrator_factory: GroupChatOrchestratorFactory | None = None,
-        _participant_factory: Callable[[GroupChatParticipantSpec, GroupChatWiring], GroupChatParticipantPipeline]
+        _orchestrator_factory: _GroupChatOrchestratorFactory | None = None,
+        _participant_factory: Callable[[_GroupChatParticipantSpec, _GroupChatWiring], _GroupChatParticipantPipeline]
         | None = None,
     ) -> None:
         """Initialize the GroupChatBuilder.
@@ -844,7 +824,7 @@ class GroupChatBuilder:
         self._manager_name: str = "manager"
         self._checkpoint_storage: CheckpointStorage | None = None
         self._max_rounds: int | None = None
-        self._interceptors: list[InterceptorSpec] = []
+        self._interceptors: list[_InterceptorSpec] = []
         self._orchestrator_factory = group_chat_orchestrator(_orchestrator_factory)
         self._participant_factory = _participant_factory or _default_participant_factory
 
@@ -1036,7 +1016,7 @@ class GroupChatBuilder:
 
     def with_request_handler(
         self,
-        handler: Callable[[GroupChatWiring], Executor] | Executor,
+        handler: Callable[[_GroupChatWiring], Executor] | Executor,
         *,
         condition: Callable[[Any], bool],
     ) -> "GroupChatBuilder":
@@ -1049,11 +1029,11 @@ class GroupChatBuilder:
         Returns:
             Self for fluent chaining
         """
-        factory: Callable[[GroupChatWiring], Executor]
+        factory: Callable[[_GroupChatWiring], Executor]
         if isinstance(handler, Executor):
             executor = handler
 
-            def _factory(_: GroupChatWiring) -> Executor:
+            def _factory(_: _GroupChatWiring) -> Executor:
                 return executor
 
             factory = _factory
@@ -1115,12 +1095,12 @@ class GroupChatBuilder:
             )
         return self._participant_metadata
 
-    def _build_participant_specs(self) -> dict[str, GroupChatParticipantSpec]:
+    def _build_participant_specs(self) -> dict[str, _GroupChatParticipantSpec]:
         metadata = self._get_participant_metadata()
         descriptions: Mapping[str, str] = metadata["descriptions"]
-        specs: dict[str, GroupChatParticipantSpec] = {}
+        specs: dict[str, _GroupChatParticipantSpec] = {}
         for name, participant in self._participants.items():
-            specs[name] = GroupChatParticipantSpec(
+            specs[name] = _GroupChatParticipantSpec(
                 name=name,
                 participant=participant,
                 description=descriptions[name],
@@ -1175,7 +1155,7 @@ class GroupChatBuilder:
 
         metadata = self._get_participant_metadata()
         participant_specs = self._build_participant_specs()
-        wiring = GroupChatWiring(
+        wiring = _GroupChatWiring(
             manager=self._manager,
             manager_name=self._manager_name,
             participants=participant_specs,

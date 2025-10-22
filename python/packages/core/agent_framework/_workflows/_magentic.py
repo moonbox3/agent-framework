@@ -30,11 +30,11 @@ from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._group_chat import (
     GroupChatBuilder,
-    GroupChatParticipantPipeline,
-    GroupChatParticipantSpec,
-    GroupChatRequestMessage,
-    GroupChatResponseMessage,
-    GroupChatWiring,
+    _GroupChatParticipantPipeline,  # type: ignore[reportPrivateUsage]
+    _GroupChatParticipantSpec,  # type: ignore[reportPrivateUsage]
+    _GroupChatRequestMessage,  # type: ignore[reportPrivateUsage]
+    _GroupChatResponseMessage,  # type: ignore[reportPrivateUsage]
+    _GroupChatWiring,  # type: ignore[reportPrivateUsage]
     group_chat_orchestrator,
 )
 from ._message_utils import normalize_messages_input
@@ -328,8 +328,8 @@ def _new_chat_message_list() -> list[ChatMessage]:
 
 
 @dataclass
-class MagenticStartMessage(DictConvertible):
-    """A message to start a magentic workflow."""
+class _MagenticStartMessage(DictConvertible):
+    """Internal: A message to start a magentic workflow."""
 
     messages: list[ChatMessage] = field(default_factory=_new_chat_message_list)
 
@@ -352,7 +352,7 @@ class MagenticStartMessage(DictConvertible):
         return self.messages[-1]
 
     @classmethod
-    def from_string(cls, task_text: str) -> "MagenticStartMessage":
+    def from_string(cls, task_text: str) -> "_MagenticStartMessage":
         """Create a MagenticStartMessage from a simple string."""
         return cls(task_text)
 
@@ -364,7 +364,7 @@ class MagenticStartMessage(DictConvertible):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MagenticStartMessage":
+    def from_dict(cls, data: dict[str, Any]) -> "_MagenticStartMessage":
         """Create from a dict."""
         if "messages" in data:
             raw_messages = data["messages"]
@@ -379,14 +379,14 @@ class MagenticStartMessage(DictConvertible):
 
 
 @dataclass
-class MagenticRequestMessage(GroupChatRequestMessage):
-    """A request message type for agents in a magentic workflow."""
+class _MagenticRequestMessage(_GroupChatRequestMessage):
+    """Internal: A request message type for agents in a magentic workflow."""
 
     task_context: str = ""
 
 
-class MagenticResponseMessage(GroupChatResponseMessage):
-    """A response message type.
+class _MagenticResponseMessage(_GroupChatResponseMessage):
+    """Internal: A response message type.
 
     When emitted by the orchestrator you can mark it as a broadcast to all agents,
     or target a specific agent by name.
@@ -412,7 +412,7 @@ class MagenticResponseMessage(GroupChatResponseMessage):
         return {"body": self.body.to_dict(), "target_agent": self.target_agent, "broadcast": self.broadcast}
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "MagenticResponseMessage":
+    def from_dict(cls, value: dict[str, Any]) -> "_MagenticResponseMessage":
         """Create from a dict."""
         body = ChatMessage.from_dict(value["body"])
         target_agent = value.get("target_agent")
@@ -421,8 +421,8 @@ class MagenticResponseMessage(GroupChatResponseMessage):
 
 
 @dataclass
-class MagenticPlanReviewRequest(RequestInfoMessage):
-    """Human-in-the-loop request to review and optionally edit the plan before execution."""
+class _MagenticPlanReviewRequest(RequestInfoMessage):
+    """Internal: Human-in-the-loop request to review and optionally edit the plan before execution."""
 
     # Because RequestInfoMessage defines a default field (request_id),
     # subclass fields must also have defaults to satisfy dataclass rules.
@@ -438,8 +438,8 @@ class MagenticPlanReviewDecision(str, Enum):
 
 
 @dataclass
-class MagenticPlanReviewReply:
-    """Human reply to a plan review request."""
+class _MagenticPlanReviewReply:
+    """Internal: Human reply to a plan review request."""
 
     decision: MagenticPlanReviewDecision
     edited_plan_text: str | None = None  # if supplied, becomes the new plan text verbatim
@@ -447,8 +447,8 @@ class MagenticPlanReviewReply:
 
 
 @dataclass
-class MagenticTaskLedger(DictConvertible):
-    """Task ledger for the Standard Magentic manager."""
+class _MagenticTaskLedger(DictConvertible):
+    """Internal: Task ledger for the Standard Magentic manager."""
 
     facts: ChatMessage
     plan: ChatMessage
@@ -457,7 +457,7 @@ class MagenticTaskLedger(DictConvertible):
         return {"facts": _message_to_payload(self.facts), "plan": _message_to_payload(self.plan)}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MagenticTaskLedger":
+    def from_dict(cls, data: dict[str, Any]) -> "_MagenticTaskLedger":
         return cls(
             facts=_message_from_payload(data.get("facts")),
             plan=_message_from_payload(data.get("plan")),
@@ -465,8 +465,8 @@ class MagenticTaskLedger(DictConvertible):
 
 
 @dataclass
-class MagenticProgressLedgerItem(DictConvertible):
-    """A progress ledger item."""
+class _MagenticProgressLedgerItem(DictConvertible):
+    """Internal: A progress ledger item."""
 
     reason: str
     answer: str | bool
@@ -475,7 +475,7 @@ class MagenticProgressLedgerItem(DictConvertible):
         return {"reason": self.reason, "answer": self.answer}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MagenticProgressLedgerItem":
+    def from_dict(cls, data: dict[str, Any]) -> "_MagenticProgressLedgerItem":
         answer_value = data.get("answer")
         if not isinstance(answer_value, (str, bool)):
             answer_value = ""  # Default to empty string if not str or bool
@@ -483,14 +483,14 @@ class MagenticProgressLedgerItem(DictConvertible):
 
 
 @dataclass
-class MagenticProgressLedger(DictConvertible):
-    """A progress ledger for tracking workflow progress."""
+class _MagenticProgressLedger(DictConvertible):
+    """Internal: A progress ledger for tracking workflow progress."""
 
-    is_request_satisfied: MagenticProgressLedgerItem
-    is_in_loop: MagenticProgressLedgerItem
-    is_progress_being_made: MagenticProgressLedgerItem
-    next_speaker: MagenticProgressLedgerItem
-    instruction_or_question: MagenticProgressLedgerItem
+    is_request_satisfied: _MagenticProgressLedgerItem
+    is_in_loop: _MagenticProgressLedgerItem
+    is_progress_being_made: _MagenticProgressLedgerItem
+    next_speaker: _MagenticProgressLedgerItem
+    instruction_or_question: _MagenticProgressLedgerItem
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -502,13 +502,13 @@ class MagenticProgressLedger(DictConvertible):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MagenticProgressLedger":
+    def from_dict(cls, data: dict[str, Any]) -> "_MagenticProgressLedger":
         return cls(
-            is_request_satisfied=MagenticProgressLedgerItem.from_dict(data.get("is_request_satisfied", {})),
-            is_in_loop=MagenticProgressLedgerItem.from_dict(data.get("is_in_loop", {})),
-            is_progress_being_made=MagenticProgressLedgerItem.from_dict(data.get("is_progress_being_made", {})),
-            next_speaker=MagenticProgressLedgerItem.from_dict(data.get("next_speaker", {})),
-            instruction_or_question=MagenticProgressLedgerItem.from_dict(data.get("instruction_or_question", {})),
+            is_request_satisfied=_MagenticProgressLedgerItem.from_dict(data.get("is_request_satisfied", {})),
+            is_in_loop=_MagenticProgressLedgerItem.from_dict(data.get("is_in_loop", {})),
+            is_progress_being_made=_MagenticProgressLedgerItem.from_dict(data.get("is_progress_being_made", {})),
+            next_speaker=_MagenticProgressLedgerItem.from_dict(data.get("next_speaker", {})),
+            instruction_or_question=_MagenticProgressLedgerItem.from_dict(data.get("instruction_or_question", {})),
         )
 
 
@@ -665,7 +665,7 @@ class MagenticManagerBase(ABC):
         ...
 
     @abstractmethod
-    async def create_progress_ledger(self, magentic_context: MagenticContext) -> MagenticProgressLedger:
+    async def create_progress_ledger(self, magentic_context: MagenticContext) -> _MagenticProgressLedger:
         """Create a progress ledger."""
         ...
 
@@ -694,7 +694,7 @@ class StandardMagenticManager(MagenticManagerBase):
     - Final answer synthesis
     """
 
-    task_ledger: MagenticTaskLedger | None
+    task_ledger: _MagenticTaskLedger | None
 
     def snapshot_state(self) -> dict[str, Any]:
         state = super().snapshot_state()
@@ -708,14 +708,14 @@ class StandardMagenticManager(MagenticManagerBase):
         ledger = state.get("task_ledger")
         if ledger is not None:
             try:
-                self.task_ledger = MagenticTaskLedger.from_dict(ledger)
+                self.task_ledger = _MagenticTaskLedger.from_dict(ledger)
             except Exception:  # pragma: no cover - defensive
                 logger.warning("Failed to restore manager task ledger from checkpoint state")
 
     def __init__(
         self,
         chat_client: ChatClientProtocol,
-        task_ledger: MagenticTaskLedger | None = None,
+        task_ledger: _MagenticTaskLedger | None = None,
         *,
         instructions: str | None = None,
         task_ledger_facts_prompt: str | None = None,
@@ -758,7 +758,7 @@ class StandardMagenticManager(MagenticManagerBase):
 
         self.chat_client: ChatClientProtocol = chat_client
         self.instructions: str | None = instructions
-        self.task_ledger: MagenticTaskLedger | None = task_ledger
+        self.task_ledger: _MagenticTaskLedger | None = task_ledger
 
         # Prompts may be overridden if needed
         self.task_ledger_facts_prompt: str = task_ledger_facts_prompt or ORCHESTRATOR_TASK_LEDGER_FACTS_PROMPT
@@ -831,7 +831,7 @@ class StandardMagenticManager(MagenticManagerBase):
         plan_msg = await self._complete([*magentic_context.chat_history, facts_user, facts_msg, plan_user])
 
         # Store ledger and render full combined view
-        self.task_ledger = MagenticTaskLedger(facts=facts_msg, plan=plan_msg)
+        self.task_ledger = _MagenticTaskLedger(facts=facts_msg, plan=plan_msg)
 
         # Also store individual messages in chat_history for better grounding
         # This gives the progress ledger model access to the detailed reasoning
@@ -873,7 +873,7 @@ class StandardMagenticManager(MagenticManagerBase):
         ])
 
         # Store and render
-        self.task_ledger = MagenticTaskLedger(facts=updated_facts, plan=updated_plan)
+        self.task_ledger = _MagenticTaskLedger(facts=updated_facts, plan=updated_plan)
 
         # Also store individual messages in chat_history for better grounding
         # This gives the progress ledger model access to the detailed reasoning
@@ -887,7 +887,7 @@ class StandardMagenticManager(MagenticManagerBase):
         )
         return ChatMessage(role=Role.ASSISTANT, text=combined, author_name=MAGENTIC_MANAGER_NAME)
 
-    async def create_progress_ledger(self, magentic_context: MagenticContext) -> MagenticProgressLedger:
+    async def create_progress_ledger(self, magentic_context: MagenticContext) -> _MagenticProgressLedger:
         """Use the model to produce a JSON progress ledger based on the conversation so far.
 
         Adds lightweight retries with backoff for transient parse issues and avoids selecting a
@@ -914,7 +914,7 @@ class StandardMagenticManager(MagenticManagerBase):
             raw = await self._complete([*magentic_context.chat_history, user_message])
             try:
                 ledger_dict = _extract_json(raw.text)
-                return _coerce_model(MagenticProgressLedger, ledger_dict)
+                return _coerce_model(_MagenticProgressLedger, ledger_dict)
             except Exception as ex:
                 last_error = ex
                 attempts += 1
@@ -1139,6 +1139,28 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         for name, description in expected.items():
             restored[name] = description
 
+    def _snapshot_pattern_metadata(self) -> dict[str, Any]:
+        """Serialize pattern-specific state.
+
+        Magentic uses custom snapshot_state() instead of base class hooks.
+        This method exists to satisfy the base class contract.
+
+        Returns:
+            Empty dict (Magentic manages its own state)
+        """
+        return {}
+
+    def _restore_pattern_metadata(self, metadata: dict[str, Any]) -> None:
+        """Restore pattern-specific state.
+
+        Magentic uses custom restore_state() instead of base class hooks.
+        This method exists to satisfy the base class contract.
+
+        Args:
+            metadata: Pattern-specific state dict (ignored)
+        """
+        pass
+
     async def _ensure_state_restored(
         self,
         context: WorkflowContext[Any, Any],
@@ -1163,9 +1185,9 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
     @handler
     async def handle_start_message(
         self,
-        message: MagenticStartMessage,
+        message: _MagenticStartMessage,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
         """Handle the initial start message to begin orchestration."""
@@ -1200,7 +1222,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
         # Start the inner loop
         ctx2 = cast(
-            WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+            WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
             context,
         )
         await self._run_inner_loop(ctx2)
@@ -1210,36 +1232,36 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         task_text: str,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        await self.handle_start_message(MagenticStartMessage.from_string(task_text), context)
+        await self.handle_start_message(_MagenticStartMessage.from_string(task_text), context)
 
     @handler
     async def handle_task_message(
         self,
         task_message: ChatMessage,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        await self.handle_start_message(MagenticStartMessage(task_message), context)
+        await self.handle_start_message(_MagenticStartMessage(task_message), context)
 
     @handler
     async def handle_task_messages(
         self,
         conversation: list[ChatMessage],
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
-        await self.handle_start_message(MagenticStartMessage(conversation), context)
+        await self.handle_start_message(_MagenticStartMessage(conversation), context)
 
     @handler
     async def handle_response_message(
         self,
-        message: MagenticResponseMessage,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        message: _MagenticResponseMessage,
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Handle responses from agents."""
         if getattr(self, "_terminated", False):
@@ -1267,10 +1289,10 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
     @handler
     async def handle_plan_review_response(
         self,
-        response: RequestResponse[MagenticPlanReviewRequest, MagenticPlanReviewReply],
+        response: RequestResponse[_MagenticPlanReviewRequest, _MagenticPlanReviewReply],
         context: WorkflowContext[
             # may broadcast ledger next, or ask for another round of review
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
         if getattr(self, "_terminated", False):
@@ -1282,7 +1304,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         human = response.data
         if human is None:  # type: ignore[unreachable]
             # Defensive fallback: treat as revise with empty comments
-            human = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.REVISE, comments="")
+            human = _MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.REVISE, comments="")
 
         if human.decision == MagenticPlanReviewDecision.APPROVE:
             # Close the review loop on approval (no further plan review requests this run)
@@ -1321,7 +1343,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
             # Enter the normal coordination loop
             ctx2 = cast(
-                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+                WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
                 context,
             )
             await self._run_inner_loop(ctx2)
@@ -1348,7 +1370,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
                 self._context.chat_history.append(self._task_ledger)
                 # No further review requests; proceed directly into coordination
             ctx2 = cast(
-                WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+                WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
                 context,
             )
             await self._run_inner_loop(ctx2)
@@ -1383,7 +1405,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _run_outer_loop(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Run the outer orchestration loop - planning phase."""
         if self._context is None:
@@ -1406,7 +1428,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _run_inner_loop(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Run the inner orchestration loop. Coordination phase. Serialized with a lock."""
         if self._context is None or self._task_ledger is None:
@@ -1416,7 +1438,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _run_inner_loop_helper(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Run inner loop with exclusive access."""
         # Narrow optional context for the remainder of this method
@@ -1491,7 +1513,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         # Request specific agent to respond
         logger.debug("Magentic Orchestrator: Requesting %s to respond", next_speaker_value)
         await context.send_message(
-            MagenticRequestMessage(
+            _MagenticRequestMessage(
                 agent_name=next_speaker_value,
                 instruction=str(instruction),
                 task_context=ctx.task.text,
@@ -1501,7 +1523,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _reset_and_replan(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Reset context and replan."""
         if self._context is None:
@@ -1527,7 +1549,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _prepare_final_answer(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> None:
         """Prepare the final answer using the manager."""
         if self._context is None:
@@ -1542,7 +1564,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
     async def _check_within_limits_or_complete(
         self,
-        context: WorkflowContext[MagenticResponseMessage | MagenticRequestMessage, ChatMessage],
+        context: WorkflowContext[_MagenticResponseMessage | _MagenticRequestMessage, ChatMessage],
     ) -> bool:
         """Check if orchestrator is within operational limits."""
         if self._context is None:
@@ -1578,7 +1600,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
     async def _send_plan_review_request(
         self,
         context: WorkflowContext[
-            MagenticResponseMessage | MagenticRequestMessage | MagenticPlanReviewRequest, ChatMessage
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, ChatMessage
         ],
     ) -> None:
         """Emit a PlanReviewRequest via RequestInfoExecutor."""
@@ -1590,7 +1612,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         plan_text = ledger.plan.text if ledger else ""
         task_text = self._context.task.text if self._context else ""
 
-        req = MagenticPlanReviewRequest(
+        req = _MagenticPlanReviewRequest(
             task_text=task_text,
             facts_text=facts_text,
             plan_text=plan_text,
@@ -1672,7 +1694,7 @@ class MagenticAgentExecutor(Executor):
 
     @handler
     async def handle_response_message(
-        self, message: MagenticResponseMessage, context: WorkflowContext[MagenticResponseMessage]
+        self, message: _MagenticResponseMessage, context: WorkflowContext[_MagenticResponseMessage]
     ) -> None:
         """Handle response message (task ledger broadcast)."""
         logger.debug("Agent %s: Received response message", self._agent_id)
@@ -1711,7 +1733,7 @@ class MagenticAgentExecutor(Executor):
 
     @handler
     async def handle_request_message(
-        self, message: MagenticRequestMessage, context: WorkflowContext[MagenticResponseMessage, AgentRunResponse]
+        self, message: _MagenticRequestMessage, context: WorkflowContext[_MagenticResponseMessage, AgentRunResponse]
     ) -> None:
         """Handle request to respond."""
         if message.agent_name != self._agent_id:
@@ -1750,7 +1772,7 @@ class MagenticAgentExecutor(Executor):
                 self._chat_history.append(response)
 
             # Send response back to orchestrator
-            await context.send_message(MagenticResponseMessage(body=response))
+            await context.send_message(_MagenticResponseMessage(body=response))
 
         except Exception as e:
             logger.warning("Agent %s invoke failed: %s", self._agent_id, e)
@@ -1761,7 +1783,7 @@ class MagenticAgentExecutor(Executor):
             )
             self._chat_history.append(response)
             await self._emit_agent_message_event(context, response)
-            await context.send_message(MagenticResponseMessage(body=response))
+            await context.send_message(_MagenticResponseMessage(body=response))
 
     def reset(self) -> None:
         """Reset the internal chat history of the agent (internal operation)."""
@@ -1816,7 +1838,7 @@ class MagenticAgentExecutor(Executor):
 
     async def _invoke_agent(
         self,
-        ctx: WorkflowContext[MagenticResponseMessage, AgentRunResponse],
+        ctx: WorkflowContext[_MagenticResponseMessage, AgentRunResponse],
     ) -> ChatMessage:
         """Invoke the wrapped agent and return a response."""
         logger.debug(f"Agent {self._agent_id}: Running with {len(self._chat_history)} messages")
@@ -1959,7 +1981,7 @@ class MagenticBuilder:
         """Enable or disable human-in-the-loop plan review before task execution.
 
         When enabled, the workflow will pause after the manager generates the initial
-        plan and emit a MagenticPlanReviewRequest event. A human reviewer can then
+        plan and emit a _MagenticPlanReviewRequest event. A human reviewer can then
         approve, request revisions, or reject the plan. The workflow continues only
         after approval.
 
@@ -1989,14 +2011,14 @@ class MagenticBuilder:
 
             # During execution, handle plan review
             async for event in workflow.run_stream("task"):
-                if isinstance(event, MagenticPlanReviewRequest):
+                if isinstance(event, _MagenticPlanReviewRequest):
                     # Review plan and respond
-                    reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
+                    reply = _MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
                     await workflow.send(reply)
 
         See Also:
-            - :class:`MagenticPlanReviewRequest`: Event emitted for review
-            - :class:`MagenticPlanReviewReply`: Response to send back
+            - :class:`_MagenticPlanReviewRequest`: Event emitted for review
+            - :class:`_MagenticPlanReviewReply`: Response to send back
             - :class:`MagenticPlanReviewDecision`: Approve/Revise/Reject options
         """
         self._enable_plan_review = enable
@@ -2054,7 +2076,7 @@ class MagenticBuilder:
         *,
         # Constructor args for StandardMagenticManager when manager is not provided
         chat_client: ChatClientProtocol | None = None,
-        task_ledger: MagenticTaskLedger | None = None,
+        task_ledger: _MagenticTaskLedger | None = None,
         instructions: str | None = None,
         # Prompt overrides
         task_ledger_facts_prompt: str | None = None,
@@ -2215,7 +2237,7 @@ class MagenticBuilder:
         # Type narrowing: we already checked self._manager is not None above
         manager: MagenticManagerBase = self._manager  # type: ignore[assignment]
 
-        def _orchestrator_factory(wiring: GroupChatWiring) -> Executor:
+        def _orchestrator_factory(wiring: _GroupChatWiring) -> Executor:
             return MagenticOrchestratorExecutor(
                 manager=manager,
                 participants=participant_descriptions,
@@ -2224,9 +2246,9 @@ class MagenticBuilder:
             )
 
         def _participant_factory(
-            spec: GroupChatParticipantSpec,
-            wiring: GroupChatWiring,
-        ) -> GroupChatParticipantPipeline:
+            spec: _GroupChatParticipantSpec,
+            wiring: _GroupChatWiring,
+        ) -> _GroupChatParticipantPipeline:
             agent_executor = MagenticAgentExecutor(
                 spec.participant,
                 spec.name,
@@ -2248,7 +2270,7 @@ class MagenticBuilder:
         if self._enable_plan_review:
             group_builder = group_builder.with_request_handler(
                 lambda _wiring: RequestInfoExecutor(id="magentic_plan_review"),
-                condition=lambda msg: isinstance(msg, MagenticPlanReviewRequest),
+                condition=lambda msg: isinstance(msg, _MagenticPlanReviewRequest),
             )
 
         return group_builder.build()
@@ -2316,7 +2338,7 @@ class MagenticWorkflow:
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
         """
-        start_message = MagenticStartMessage.from_string(task_text)
+        start_message = _MagenticStartMessage.from_string(task_text)
         async for event in self._workflow.run_stream(start_message):
             yield event
 
@@ -2329,7 +2351,7 @@ class MagenticWorkflow:
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
         """
-        start_message = MagenticStartMessage(task_message)
+        start_message = _MagenticStartMessage(task_message)
         async for event in self._workflow.run_stream(start_message):
             yield event
 
@@ -2346,11 +2368,11 @@ class MagenticWorkflow:
         if message is None:
             if self._task_text is None:
                 raise ValueError("No message provided and no preset task text available")
-            message = MagenticStartMessage.from_string(self._task_text)
+            message = _MagenticStartMessage.from_string(self._task_text)
         elif isinstance(message, str):
-            message = MagenticStartMessage.from_string(message)
+            message = _MagenticStartMessage.from_string(message)
         elif isinstance(message, (ChatMessage, list)):
-            message = MagenticStartMessage(message)  # type: ignore[arg-type]
+            message = _MagenticStartMessage(message)  # type: ignore[arg-type]
 
         async for event in self._workflow.run_stream(message):
             yield event
@@ -2519,3 +2541,7 @@ class MagenticWorkflow:
 
 
 # endregion Magentic Workflow
+
+# Public aliases for types needed by users implementing custom plan review handlers
+MagenticPlanReviewRequest = _MagenticPlanReviewRequest
+MagenticPlanReviewReply = _MagenticPlanReviewReply

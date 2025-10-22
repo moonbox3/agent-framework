@@ -13,7 +13,7 @@ from .._types import ChatMessage, Role
 from ._conversation_history import clone_conversation
 
 if TYPE_CHECKING:
-    from ._group_chat import GroupChatRequestMessage
+    from ._group_chat import _GroupChatRequestMessage  # type: ignore[reportPrivateUsage]
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def prepare_participant_request(
     instruction: str | None = None,
     task: ChatMessage | None = None,
     metadata: dict[str, Any] | None = None,
-) -> "GroupChatRequestMessage":
+) -> "_GroupChatRequestMessage":
     """Create a standardized participant request message.
 
     Simple helper to avoid duplicating request construction.
@@ -156,9 +156,9 @@ def prepare_participant_request(
         GroupChatRequestMessage ready to send
     """
     # Import here to avoid circular dependency
-    from ._group_chat import GroupChatRequestMessage
+    from ._group_chat import _GroupChatRequestMessage  # type: ignore[reportPrivateUsage]
 
-    return GroupChatRequestMessage(
+    return _GroupChatRequestMessage(
         agent_name=participant_name,
         conversation=clone_conversation(conversation),
         instruction=instruction or "",

@@ -8,11 +8,13 @@ consolidates shared orchestration logic across GroupChat, Handoff, and Magentic 
 
 import logging
 from abc import ABC
+from collections.abc import Sequence
 from typing import Any
 
 from .._types import ChatMessage
+from ._conversation_history import append_messages, clone_conversation
 from ._executor import Executor
-from ._orchestrator_helpers import ParticipantRegistry
+from ._orchestrator_helpers import ParticipantRegistry, create_completion_message
 from ._workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,11 @@ class BaseGroupChatOrchestrator(Executor, ABC):
         """
         super().__init__(executor_id)
         self._registry = ParticipantRegistry()
+        # Shared conversation state management
+        self._conversation: list[ChatMessage] = []
+        self._round_index: int = 0
+        self._max_rounds: int | None = None
+        self._termination_condition: Any = None  # Callable[[list[ChatMessage]], bool] | None
 
     def register_participant_entry(self, name: str, *, entry_id: str, is_agent: bool) -> None:
         """Record routing details for a participant's entry executor.
@@ -49,6 +56,67 @@ class BaseGroupChatOrchestrator(Executor, ABC):
             is_agent: Whether this is an AgentExecutor (True) or custom Executor (False)
         """
         self._registry.register(name, entry_id=entry_id, is_agent=is_agent)
+
+    # Conversation state management (shared across all patterns)
+
+    def _append_messages(self, messages: Sequence[ChatMessage]) -> None:
+        """Append messages to the conversation history.
+
+        Args:
+            messages: Messages to append
+        """
+        append_messages(self._conversation, messages)
+
+    def _get_conversation(self) -> list[ChatMessage]:
+        """Get a copy of the current conversation.
+
+        Returns:
+            Cloned conversation list
+        """
+        return clone_conversation(self._conversation)
+
+    def _clear_conversation(self) -> None:
+        """Clear the conversation history."""
+        self._conversation.clear()
+
+    def _increment_round(self) -> None:
+        """Increment the round counter."""
+        self._round_index += 1
+
+    def _check_termination(self) -> bool:
+        """Check if conversation should terminate based on termination condition.
+
+        Returns:
+            True if termination condition met, False otherwise
+        """
+        if self._termination_condition is None:
+            return False
+        result = self._termination_condition(self._get_conversation())
+        return bool(result)
+
+    def _create_completion_message(
+        self,
+        text: str | None = None,
+        reason: str = "completed",
+    ) -> ChatMessage:
+        """Create a standardized completion message.
+
+        Args:
+            text: Optional message text (auto-generated if None)
+            reason: Completion reason for default text
+
+        Returns:
+            ChatMessage with completion content
+        """
+        # Try to get manager/orchestrator name from subclass
+        author_name = getattr(self, "_manager_name", self.id)
+        return create_completion_message(
+            text=text,
+            author_name=author_name,
+            reason=reason,
+        )
+
+    # Participant routing (shared across all patterns)
 
     async def _route_to_participant(
         self,
@@ -101,48 +169,83 @@ class BaseGroupChatOrchestrator(Executor, ABC):
             )
             await ctx.send_message(request, target_id=entry_id)
 
-    def _check_round_limit(
-        self,
-        current_round: int,
-        max_rounds: int | None,
-        *,
-        pattern_name: str = "orchestrator",
-    ) -> bool:
+    # Round limit enforcement (shared across all patterns)
+
+    def _check_round_limit(self) -> bool:
         """Check if round limit has been reached.
 
-        Args:
-            current_round: Current round index
-            max_rounds: Maximum allowed rounds (None = no limit)
-            pattern_name: Name for logging (e.g., "GroupChat", "Handoff")
+        Uses instance variables _round_index and _max_rounds.
 
         Returns:
             True if limit reached, False otherwise
         """
-        if max_rounds is None:
+        if self._max_rounds is None:
             return False
 
-        if current_round >= max_rounds:
+        if self._round_index >= self._max_rounds:
             logger.warning(
                 "%s reached max_rounds=%s; forcing completion.",
-                pattern_name,
-                max_rounds,
+                self.__class__.__name__,
+                self._max_rounds,
             )
             return True
 
         return False
 
+    # State persistence (shared across all patterns)
+
+    # State persistence (shared across all patterns)
+
     def snapshot_state(self) -> dict[str, Any]:
         """Capture current orchestrator state for checkpointing.
 
-        Subclasses should override this to serialize pattern-specific state.
-        Default implementation returns empty dict.
+        Default implementation uses OrchestrationState to serialize common state.
+        Subclasses should override _snapshot_pattern_metadata() to add pattern-specific data.
+
+        Returns:
+            Serialized state dict
+        """
+        from ._orchestration_state import OrchestrationState
+
+        state = OrchestrationState(
+            conversation=list(self._conversation),
+            round_index=self._round_index,
+            metadata=self._snapshot_pattern_metadata(),
+        )
+        return state.to_dict()
+
+    def _snapshot_pattern_metadata(self) -> dict[str, Any]:
+        """Serialize pattern-specific state.
+
+        Override this method to add pattern-specific checkpoint data.
+
+        Returns:
+            Dict with pattern-specific state (empty by default)
         """
         return {}
 
     def restore_state(self, state: dict[str, Any]) -> None:
         """Restore orchestrator state from checkpoint.
 
-        Subclasses should override this to deserialize pattern-specific state.
-        Default implementation does nothing.
+        Default implementation uses OrchestrationState to deserialize common state.
+        Subclasses should override _restore_pattern_metadata() to restore pattern-specific data.
+
+        Args:
+            state: Serialized state dict
+        """
+        from ._orchestration_state import OrchestrationState
+
+        orch_state = OrchestrationState.from_dict(state)
+        self._conversation = list(orch_state.conversation)
+        self._round_index = orch_state.round_index
+        self._restore_pattern_metadata(orch_state.metadata)
+
+    def _restore_pattern_metadata(self, metadata: dict[str, Any]) -> None:
+        """Restore pattern-specific state.
+
+        Override this method to restore pattern-specific checkpoint data.
+
+        Args:
+            metadata: Pattern-specific state dict
         """
         pass

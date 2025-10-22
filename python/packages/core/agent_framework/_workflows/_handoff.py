@@ -40,9 +40,9 @@ from ._checkpoint import CheckpointStorage
 from ._conversation_history import append_messages, clone_conversation
 from ._executor import Executor, handler
 from ._group_chat import (
-    GroupChatParticipantSpec,
-    GroupChatWiring,
-    _default_participant_factory,  # type: ignore
+    _default_participant_factory,  # type: ignore[reportPrivateUsage]
+    _GroupChatParticipantSpec,  # type: ignore[reportPrivateUsage]
+    _GroupChatWiring,  # type: ignore[reportPrivateUsage]
     assemble_group_chat_workflow,
 )
 from ._orchestrator_helpers import clean_conversation_for_handoff
@@ -276,7 +276,6 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         self._specialist_ids = set(specialist_ids.values())
         self._input_gateway_id = input_gateway_id
         self._termination_condition = termination_condition
-        self._full_conversation: list[ChatMessage] = []
         self._handoff_tool_targets = {k.lower(): v for k, v in (handoff_tool_targets or {}).items()}
 
     @handler
@@ -289,31 +288,32 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         # Hydrate coordinator state (and detect new run) using checkpointable executor state
         state = await ctx.get_executor_state()
         if not state:
-            self._full_conversation = []
-        elif not self._full_conversation:
+            self._clear_conversation()
+        elif not self._get_conversation():
             restored = self._restore_conversation_from_state(state)
             if restored:
-                self._full_conversation = clone_conversation(restored)
+                self._conversation = clone_conversation(restored)
 
         source = ctx.get_source_executor_id()
         is_starting_agent = source == self._starting_agent_id
 
-        # On first turn of a run, full_conversation is empty
+        # On first turn of a run, conversation is empty
         # Track new messages only, build authoritative history incrementally
-        if not self._full_conversation:
+        conversation_msgs = self._get_conversation()
+        if not conversation_msgs:
             # First response from starting agent - initialize with authoritative conversation snapshot
             # Keep the FULL conversation including tool calls (OpenAI SDK default behavior)
             full_conv = self._conversation_from_response(response)
-            self._full_conversation = clone_conversation(full_conv)
+            self._conversation = clone_conversation(full_conv)
         else:
             # Subsequent responses - append only new messages from this agent
             # Keep ALL messages including tool calls to maintain complete history
             new_messages = response.agent_run_response.messages or []
-            append_messages(self._full_conversation, new_messages)
+            append_messages(self._conversation, new_messages)
 
-        self._apply_response_metadata(self._full_conversation, response.agent_run_response)
+        self._apply_response_metadata(self._conversation, response.agent_run_response)
 
-        conversation = clone_conversation(self._full_conversation)
+        conversation = clone_conversation(self._conversation)
 
         # Check for handoff from ANY agent (starting agent or specialist)
         target = self._resolve_specialist(response.agent_run_response, conversation)
@@ -331,7 +331,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
 
         await self._persist_state(ctx)
 
-        if self._termination_condition(conversation):
+        if self._check_termination():
             logger.info("Handoff workflow termination condition met. Ending conversation.")
             await ctx.yield_output(list(conversation))
             return
@@ -345,18 +345,18 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         ctx: WorkflowContext[AgentExecutorRequest, list[ChatMessage]],
     ) -> None:
         """Receive full conversation with new user input from gateway, update history, trim for agent."""
-        # Update authoritative full conversation
-        self._full_conversation = clone_conversation(message.full_conversation)
+        # Update authoritative conversation
+        self._conversation = clone_conversation(message.full_conversation)
         await self._persist_state(ctx)
 
         # Check termination before sending to agent
-        if self._termination_condition(self._full_conversation):
+        if self._check_termination():
             logger.info("Handoff workflow termination condition met. Ending conversation.")
-            await ctx.yield_output(list(self._full_conversation))
+            await ctx.yield_output(list(self._conversation))
             return
 
         # Clean before sending to starting agent
-        cleaned = clean_conversation_for_handoff(self._full_conversation)
+        cleaned = clean_conversation_for_handoff(self._conversation)
         request = AgentExecutorRequest(messages=cleaned, should_respond=True)
         await ctx.send_message(request, target_id=self._starting_agent_id)
 
@@ -409,7 +409,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         )
         # Add tool acknowledgement to both the conversation being sent and the full history
         append_messages(conversation, (tool_message,))
-        append_messages(self._full_conversation, (tool_message,))
+        self._append_messages((tool_message,))
 
     def _conversation_from_response(self, response: AgentExecutorResponse) -> list[ChatMessage]:
         """Return the authoritative conversation snapshot from an executor response."""
@@ -425,34 +425,25 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         state_payload = self.snapshot_state()
         await ctx.set_executor_state(state_payload)
 
-    def snapshot_state(self) -> dict[str, Any]:
-        """Capture current coordinator state for checkpointing.
+    def _snapshot_pattern_metadata(self) -> dict[str, Any]:
+        """Serialize pattern-specific state.
 
-        Serializes conversation history using unified OrchestrationState structure.
+        Handoff has no additional metadata beyond base conversation state.
 
         Returns:
-            Dict ready for checkpoint persistence
+            Empty dict (no pattern-specific state)
         """
-        from ._orchestration_state import OrchestrationState
+        return {}
 
-        state = OrchestrationState(
-            conversation=list(self._full_conversation),
-            metadata={},  # Handoff has no additional metadata to checkpoint
-        )
-        return state.to_dict()
+    def _restore_pattern_metadata(self, metadata: dict[str, Any]) -> None:
+        """Restore pattern-specific state.
 
-    def restore_state(self, state: dict[str, Any]) -> None:
-        """Restore coordinator state from checkpoint.
-
-        Deserializes checkpointed state using OrchestrationState.
+        Handoff has no additional metadata beyond base conversation state.
 
         Args:
-            state: Checkpoint data dict
+            metadata: Pattern-specific state dict (ignored)
         """
-        from ._orchestration_state import OrchestrationState
-
-        orch_state = OrchestrationState.from_dict(state)
-        self._full_conversation = list(orch_state.conversation)
+        pass
 
     def _restore_conversation_from_state(self, state: Mapping[str, Any]) -> list[ChatMessage]:
         """Rehydrate the coordinator's conversation history from checkpointed state.
@@ -1288,7 +1279,7 @@ class HandoffBuilder:
             exec_id: getattr(executor, "description", None) or exec_id for exec_id, executor in self._executors.items()
         }
         participant_specs = {
-            exec_id: GroupChatParticipantSpec(name=exec_id, participant=executor, description=descriptions[exec_id])
+            exec_id: _GroupChatParticipantSpec(name=exec_id, participant=executor, description=descriptions[exec_id])
             for exec_id, executor in self._executors.items()
         }
 
@@ -1303,7 +1294,7 @@ class HandoffBuilder:
 
         specialist_aliases = {alias: exec_id for alias, exec_id in self._aliases.items() if exec_id in specialists}
 
-        def _handoff_orchestrator_factory(_: GroupChatWiring) -> Executor:
+        def _handoff_orchestrator_factory(_: _GroupChatWiring) -> Executor:
             return _HandoffCoordinator(
                 starting_agent_id=starting_executor.id,
                 specialist_ids=specialist_aliases,
@@ -1313,7 +1304,7 @@ class HandoffBuilder:
                 handoff_tool_targets=handoff_tool_targets,
             )
 
-        wiring = GroupChatWiring(
+        wiring = _GroupChatWiring(
             manager=None,
             manager_name=self._starting_agent_id,
             participants=participant_specs,

@@ -32,7 +32,6 @@ This gallery helps Semantic Kernel (SK) developers move to the Microsoft Agent F
 ### Orchestrations
 - [sequential.py](orchestrations/sequential.py) — Step-by-step SK Team → AF `SequentialBuilder` migration.
 - [concurrent_basic.py](orchestrations/concurrent_basic.py) — Concurrent orchestration parity.
-- [group_chat.py](orchestrations/group_chat.py) — Group chat coordination with an LLM-backed manager in both SDKs.
 - [handoff.py](orchestrations/handoff.py) — Support triage handoff migration with specialist routing.
 - [magentic.py](orchestrations/magentic.py) — Magentic Team orchestration vs. AF builder wiring.
 

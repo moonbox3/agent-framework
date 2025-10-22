@@ -8,7 +8,7 @@ consolidates shared orchestration logic across GroupChat, Handoff, and Magentic 
 
 import logging
 from abc import ABC
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from .._types import ChatMessage
@@ -42,7 +42,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
         self._conversation: list[ChatMessage] = []
         self._round_index: int = 0
         self._max_rounds: int | None = None
-        self._termination_condition: Any = None  # Callable[[list[ChatMessage]], bool] | None
+        self._termination_condition: Callable[[list[ChatMessage]], bool] | None = None
 
     def register_participant_entry(self, name: str, *, entry_id: str, is_agent: bool) -> None:
         """Record routing details for a participant's entry executor.

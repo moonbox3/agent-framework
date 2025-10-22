@@ -2,8 +2,6 @@
 
 """Side-by-side group chat orchestrations for Agent Framework and Semantic Kernel."""
 
-from __future__ import annotations
-
 import asyncio
 import sys
 from collections.abc import Sequence

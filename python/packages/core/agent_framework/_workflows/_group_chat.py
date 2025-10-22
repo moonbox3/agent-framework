@@ -771,36 +771,74 @@ def assemble_group_chat_workflow(
 class GroupChatBuilder:
     r"""High-level builder for manager-directed group chat workflows with dynamic orchestration.
 
-    - Call exactly one of `set_prompt_based_manager(...)` or `set_speaker_selector(...)` to configure coordination
-    - `participants({...})` accepts a mapping (or list) of AgentProtocol/Executor instances
-    - The workflow delegates speaker selection to the manager and requests completion when finished
-    - Agents are automatically wrapped as AgentExecutor for consistent observability
+    GroupChat coordinates multi-agent conversations using a manager that selects which participant
+    speaks next. The manager can be a simple Python function (select_speakers) or an LLM-based
+    selector (set_prompt_based_manager). These two approaches are mutually exclusive.
 
-    Usage:
+    **Core Workflow:**
+    1. Define participants: list of agents (uses their .name) or dict mapping names to agents
+    2. Configure speaker selection: select_speakers() OR set_prompt_based_manager() (not both)
+    3. Optional: set round limits, checkpointing, termination conditions
+    4. Build and run the workflow
+
+    **Speaker Selection Patterns:**
+
+    *Pattern 1: Simple function-based selection (recommended)*
 
     .. code-block:: python
 
-        from agent_framework.azure import AzureOpenAIChatClient, AzureOpenAIResponsesClient
-        from agent_framework import ChatAgent, GroupChatBuilder
+        def select_next_speaker(state: GroupChatStateSnapshot) -> str | None:
+            # state contains: task, participants, conversation, history, round_index
+            if state["round_index"] >= 5:
+                return None  # Finish
+            last_speaker = state["history"][-1].speaker if state["history"] else None
+            if last_speaker == "researcher":
+                return "writer"
+            return "researcher"
 
-        researcher = ChatAgent(
-            name="Researcher",
-            chat_client=AzureOpenAIChatClient(),
-            instructions="Collect useful notes.",
+
+        workflow = (
+            GroupChatBuilder()
+            .select_speakers(select_next_speaker)
+            .participants([researcher_agent, writer_agent])  # Uses agent.name
+            .build()
         )
-        writer = ChatAgent(
-            name="Writer",
-            chat_client=AzureOpenAIResponsesClient(),
-            instructions="Draft a polished answer.",
-        )
+
+    *Pattern 2: LLM-based selection*
+
+    .. code-block:: python
+
+        from agent_framework.azure import AzureOpenAIChatClient
 
         workflow = (
             GroupChatBuilder()
             .set_prompt_based_manager(chat_client=AzureOpenAIChatClient(), display_name="Coordinator")
-            .participants(researcher=researcher, writer=writer)
+            .participants([researcher, writer])  # Or use dict: researcher=r, writer=w
             .with_max_rounds(10)
             .build()
         )
+
+    **Participant Specification:**
+
+    Two ways to specify participants:
+    - List form: ``[agent1, agent2]`` - uses ``agent.name`` attribute for participant names
+    - Dict form: ``{name1: agent1, name2: agent2}`` - explicit name control
+    - Keyword form: ``participants(name1=agent1, name2=agent2)`` - explicit name control
+
+    **State Snapshot Structure:**
+
+    The GroupChatStateSnapshot passed to select_speakers contains:
+    - ``task``: ChatMessage - Original user task
+    - ``participants``: dict[str, str] - Mapping of participant names to descriptions
+    - ``conversation``: tuple[ChatMessage, ...] - Full conversation history
+    - ``history``: tuple[GroupChatTurn, ...] - Turn-by-turn record with speaker attribution
+    - ``round_index``: int - Number of manager selection rounds so far
+    - ``pending_agent``: str | None - Name of agent currently processing (if any)
+
+    **Important Constraints:**
+    - Cannot combine select_speakers() and set_prompt_based_manager() - choose one
+    - Participant names must be unique
+    - When using list form, agents must have a non-empty ``name`` attribute
     """
 
     def __init__(
@@ -836,7 +874,7 @@ class GroupChatBuilder:
         if self._manager is not None:
             raise ValueError(
                 "GroupChatBuilder already has a manager configured. "
-                "Call set_prompt_based_manager(...) or set_speaker_selector(...) at most once."
+                "Call select_speakers(...) or set_prompt_based_manager(...) at most once."
             )
         resolved_name = display_name or getattr(manager, "name", None) or "manager"
         self._manager = manager
@@ -881,27 +919,60 @@ class GroupChatBuilder:
         )
         return self._set_manager_function(manager, display_name)
 
-    def set_speaker_selector(
+    def select_speakers(
         self,
-        selector: Callable[[GroupChatStateSnapshot], Awaitable[Any]] | Callable[[GroupChatStateSnapshot], Any],
+        selector: (
+            Callable[[GroupChatStateSnapshot], Awaitable[str | None]] | Callable[[GroupChatStateSnapshot], str | None]
+        ),
         *,
         display_name: str | None = None,
         final_message: ChatMessage | str | Callable[[GroupChatStateSnapshot], Any] | None = None,
     ) -> "GroupChatBuilder":
-        """Configure a lightweight selector function that picks the next speaker.
+        """Configure speaker selection using a pure function that examines group chat state.
+
+        This is the primary way to control orchestration flow in a GroupChat. Your selector
+        function receives an immutable snapshot of the current conversation state and returns
+        the name of the next participant to speak, or None to finish the conversation.
+
+        The selector function signature:
+            def select_next_speaker(state: GroupChatStateSnapshot) -> str | None:
+                # state contains: task, participants, conversation, history, round_index
+                # Return participant name to continue, or None to finish
+                ...
 
         Args:
-            selector: Callable receiving the conversation snapshot. Return a participant name to
-                continue the conversation or None to finish. The callable may be sync or async.
-            display_name: Optional name shown in conversation history for manager messages.
-            final_message: Optional final message (or factory) emitted when the selector returns None
-                (defaults to ``"Conversation completed."`` authored by the manager).
+            selector: Function that takes GroupChatStateSnapshot and returns the next speaker's
+                name (str) to continue the conversation, or None to finish. May be sync or async.
+            display_name: Optional name shown in conversation history for orchestrator messages
+                (defaults to "manager").
+            final_message: Optional final message (or factory) emitted when selector returns None
+                (defaults to "Conversation completed." authored by the manager).
 
         Returns:
             Self for fluent chaining.
 
+        Example:
+
+        .. code-block:: python
+
+            def select_next_speaker(state: GroupChatStateSnapshot) -> str | None:
+                if state["round_index"] >= 3:
+                    return None  # Finish after 3 rounds
+                last_speaker = state["history"][-1].speaker if state["history"] else None
+                if last_speaker == "researcher":
+                    return "writer"
+                return "researcher"
+
+
+            workflow = (
+                GroupChatBuilder()
+                .select_speakers(select_next_speaker)
+                .participants(researcher=researcher_agent, writer=writer_agent)
+                .build()
+            )
+
         Note:
-            Calling this method and :meth:`set_prompt_based_manager` together is not allowed; choose one.
+            Cannot be combined with set_prompt_based_manager(). Choose one orchestration strategy.
         """
         manager_name = display_name or "manager"
         adapter = _SpeakerSelectorAdapter(
@@ -921,7 +992,7 @@ class GroupChatBuilder:
 
         Accepts AgentProtocol instances (auto-wrapped as AgentExecutor) or Executor instances.
         Provide a mapping of name → participant for explicit control, or pass a sequence and
-        names will be inferred from the agent's ``name`` attribute (or executor ``id``).
+        names will be inferred from the agent's name attribute (or executor id).
 
         Args:
             participants: Optional mapping or sequence of participant definitions
@@ -1213,7 +1284,7 @@ def _coerce_directive_source(value: Any) -> dict[str, Any]:
 
 
 def _parse_manager_payload(raw: Any) -> ManagerDirectivePayload:
-    """Validate raw manager output into ``ManagerDirectivePayload``."""
+    """Validate raw manager output into ManagerDirectivePayload."""
     data = _coerce_directive_source(raw)
     if not isinstance(data, dict):
         raise RuntimeError("Unable to parse manager directive from chat client response.")

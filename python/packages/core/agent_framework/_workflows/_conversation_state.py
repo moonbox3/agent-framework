@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from agent_framework import ChatMessage, Role
 
-from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value  # type: ignore
+from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
 
 """Utilities for serializing and deserializing chat conversations for persistence.
 

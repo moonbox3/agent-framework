@@ -64,6 +64,7 @@ from ._group_chat import (
     GroupChatTurn,
     GroupChatWiring,
 )
+from ._handoff import HandoffBuilder, HandoffUserInputRequest
 from ._magentic import (
     MagenticAgentDeltaEvent,
     MagenticAgentExecutor,
@@ -147,6 +148,8 @@ __all__ = [
     "GroupChatStateSnapshot",
     "GroupChatTurn",
     "GroupChatWiring",
+    "HandoffBuilder",
+    "HandoffUserInputRequest",
     "InMemoryCheckpointStorage",
     "InProcRunnerContext",
     "MagenticAgentDeltaEvent",

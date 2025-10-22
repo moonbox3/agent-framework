@@ -16,13 +16,15 @@ from agent_framework import (
     MagenticContext,
     MagenticManagerBase,
     MagenticOrchestratorMessageEvent,
-    MagenticProgressLedger,
-    MagenticProgressLedgerItem,
-    MagenticStartMessage,
     Role,
     TextContent,
     Workflow,
     WorkflowOutputEvent,
+)
+from agent_framework._workflows._magentic import (
+    _MagenticProgressLedger,  # type: ignore
+    _MagenticProgressLedgerItem,  # type: ignore
+    _MagenticStartMessage,  # type: ignore
 )
 
 
@@ -85,24 +87,24 @@ class StubMagenticManager(MagenticManagerBase):
     async def replan(self, magentic_context: MagenticContext) -> ChatMessage:
         return await self.plan(magentic_context)
 
-    async def create_progress_ledger(self, magentic_context: MagenticContext) -> MagenticProgressLedger:
+    async def create_progress_ledger(self, magentic_context: MagenticContext) -> _MagenticProgressLedger:
         participants = list(magentic_context.participant_descriptions.keys())
         target = participants[0] if participants else "agent"
         if self._round == 0:
             self._round += 1
-            return MagenticProgressLedger(
-                is_request_satisfied=MagenticProgressLedgerItem(reason="", answer=False),
-                is_in_loop=MagenticProgressLedgerItem(reason="", answer=False),
-                is_progress_being_made=MagenticProgressLedgerItem(reason="", answer=True),
-                next_speaker=MagenticProgressLedgerItem(reason="", answer=target),
-                instruction_or_question=MagenticProgressLedgerItem(reason="", answer="respond"),
+            return _MagenticProgressLedger(
+                is_request_satisfied=_MagenticProgressLedgerItem(reason="", answer=False),
+                is_in_loop=_MagenticProgressLedgerItem(reason="", answer=False),
+                is_progress_being_made=_MagenticProgressLedgerItem(reason="", answer=True),
+                next_speaker=_MagenticProgressLedgerItem(reason="", answer=target),
+                instruction_or_question=_MagenticProgressLedgerItem(reason="", answer="respond"),
             )
-        return MagenticProgressLedger(
-            is_request_satisfied=MagenticProgressLedgerItem(reason="", answer=True),
-            is_in_loop=MagenticProgressLedgerItem(reason="", answer=False),
-            is_progress_being_made=MagenticProgressLedgerItem(reason="", answer=True),
-            next_speaker=MagenticProgressLedgerItem(reason="", answer=target),
-            instruction_or_question=MagenticProgressLedgerItem(reason="", answer=""),
+        return _MagenticProgressLedger(
+            is_request_satisfied=_MagenticProgressLedgerItem(reason="", answer=True),
+            is_in_loop=_MagenticProgressLedgerItem(reason="", answer=False),
+            is_progress_being_made=_MagenticProgressLedgerItem(reason="", answer=True),
+            next_speaker=_MagenticProgressLedgerItem(reason="", answer=target),
+            instruction_or_question=_MagenticProgressLedgerItem(reason="", answer=""),
         )
 
     async def prepare_final_answer(self, magentic_context: MagenticContext) -> ChatMessage:
@@ -116,7 +118,7 @@ async def test_group_chat_builder_basic_flow() -> None:
 
     workflow = (
         GroupChatBuilder()
-        .set_speaker_selector(selector, display_name="manager", final_message="done")
+        .select_speakers(selector, display_name="manager", final_message="done")
         .participants(alpha=alpha, beta=beta)
         .build()
     )
@@ -144,7 +146,7 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
     outputs: list[ChatMessage] = []
     orchestrator_events: list[MagenticOrchestratorMessageEvent] = []
     agent_events: list[MagenticAgentMessageEvent] = []
-    start_message = MagenticStartMessage.from_string("compose summary")
+    start_message = _MagenticStartMessage.from_string("compose summary")
     async for event in workflow.run_stream(start_message):
         if isinstance(event, MagenticOrchestratorMessageEvent):
             orchestrator_events.append(event)
@@ -170,7 +172,7 @@ async def test_group_chat_as_agent_accepts_conversation() -> None:
 
     workflow = (
         GroupChatBuilder()
-        .set_speaker_selector(selector, display_name="manager", final_message="done")
+        .select_speakers(selector, display_name="manager", final_message="done")
         .participants(alpha=alpha, beta=beta)
         .build()
     )

@@ -26,6 +26,7 @@ from agent_framework import (
 
 from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
+from ._const import EXECUTOR_STATE_KEY
 from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._group_chat import (
@@ -2424,7 +2425,7 @@ class MagenticWorkflow:
             return
 
         # At this point, checkpoint is guaranteed to be WorkflowCheckpoint
-        executor_states = checkpoint.executor_states
+        executor_states: dict[str, Any] = checkpoint.shared_state.get(EXECUTOR_STATE_KEY, {})
         orchestrator_id = getattr(orchestrator, "id", "")
         orchestrator_state = executor_states.get(orchestrator_id)
         if orchestrator_state is None:

@@ -52,6 +52,7 @@ from ._executor import (
 from ._function_executor import FunctionExecutor, executor
 from ._group_chat import (
     DEFAULT_MANAGER_INSTRUCTIONS,
+    DEFAULT_MANAGER_STRUCTURED_OUTPUT_PROMPT,
     GroupChatBuilder,
     GroupChatDirective,
     GroupChatStateSnapshot,
@@ -102,6 +103,7 @@ from ._workflow_executor import WorkflowExecutor
 
 __all__ = [
     "DEFAULT_MANAGER_INSTRUCTIONS",
+    "DEFAULT_MANAGER_STRUCTURED_OUTPUT_PROMPT",
     "DEFAULT_MAX_ITERATIONS",
     "AgentExecutor",
     "AgentExecutorRequest",

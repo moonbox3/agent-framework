@@ -10,7 +10,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .._types import ChatMessage, Role
-from ._conversation_history import clone_conversation
 
 if TYPE_CHECKING:
     from ._group_chat import _GroupChatRequestMessage  # type: ignore[reportPrivateUsage]
@@ -75,38 +74,6 @@ def clean_conversation_for_handoff(conversation: list[ChatMessage]) -> list[Chat
     return cleaned
 
 
-def check_round_limit(
-    current_round: int,
-    max_rounds: int | None,
-    *,
-    pattern_name: str = "orchestrator",
-) -> bool:
-    """Check if round limit has been reached.
-
-    Simple utility to avoid duplicating limit checking logic.
-
-    Args:
-        current_round: Current round index
-        max_rounds: Maximum allowed rounds, or None for unlimited
-        pattern_name: Name for logging (e.g., "group_chat", "handoff")
-
-    Returns:
-        True if within limits, False if limit reached
-    """
-    if max_rounds is None:
-        return True
-
-    if current_round >= max_rounds:
-        logger.warning(
-            "%s reached max_rounds=%s; stopping coordination.",
-            pattern_name,
-            max_rounds,
-        )
-        return False
-
-    return True
-
-
 def create_completion_message(
     *,
     text: str | None = None,
@@ -160,7 +127,7 @@ def prepare_participant_request(
 
     return _GroupChatRequestMessage(
         agent_name=participant_name,
-        conversation=clone_conversation(conversation),
+        conversation=list(conversation),
         instruction=instruction or "",
         task=task,
         metadata=metadata,

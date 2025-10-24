@@ -35,18 +35,16 @@ from agent_framework import (
 from .._agents import ChatAgent
 from .._middleware import FunctionInvocationContext, FunctionMiddleware
 from ._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
-from ._base_orchestrator import BaseGroupChatOrchestrator
+from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage
-from ._conversation_history import append_messages, clone_conversation
 from ._executor import Executor, handler
 from ._group_chat import (
     _default_participant_factory,  # type: ignore[reportPrivateUsage]
-    _GroupChatParticipantSpec,  # type: ignore[reportPrivateUsage]
-    _GroupChatWiring,  # type: ignore[reportPrivateUsage]
+    _GroupChatConfig,  # type: ignore[reportPrivateUsage]
     assemble_group_chat_workflow,
 )
 from ._orchestrator_helpers import clean_conversation_for_handoff
-from ._participant_utils import prepare_participant_metadata, sanitize_identifier
+from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, sanitize_identifier
 from ._request_info_executor import RequestInfoExecutor, RequestInfoMessage, RequestResponse
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -265,7 +263,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         starting_agent_id: str,
         specialist_ids: Mapping[str, str],
         input_gateway_id: str,
-        termination_condition: Callable[[list[ChatMessage]], bool],
+        termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]],
         id: str,
         handoff_tool_targets: Mapping[str, str] | None = None,
     ) -> None:
@@ -277,6 +275,10 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         self._input_gateway_id = input_gateway_id
         self._termination_condition = termination_condition
         self._handoff_tool_targets = {k.lower(): v for k, v in (handoff_tool_targets or {}).items()}
+
+    def _get_author_name(self) -> str:
+        """Get the coordinator name for orchestrator-generated messages."""
+        return "handoff_coordinator"
 
     @handler
     async def handle_agent_response(
@@ -292,7 +294,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         elif not self._get_conversation():
             restored = self._restore_conversation_from_state(state)
             if restored:
-                self._conversation = clone_conversation(restored)
+                self._conversation = list(restored)
 
         source = ctx.get_source_executor_id()
         is_starting_agent = source == self._starting_agent_id
@@ -304,16 +306,16 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
             # First response from starting agent - initialize with authoritative conversation snapshot
             # Keep the FULL conversation including tool calls (OpenAI SDK default behavior)
             full_conv = self._conversation_from_response(response)
-            self._conversation = clone_conversation(full_conv)
+            self._conversation = list(full_conv)
         else:
             # Subsequent responses - append only new messages from this agent
             # Keep ALL messages including tool calls to maintain complete history
             new_messages = response.agent_run_response.messages or []
-            append_messages(self._conversation, new_messages)
+            self._conversation.extend(new_messages)
 
         self._apply_response_metadata(self._conversation, response.agent_run_response)
 
-        conversation = clone_conversation(self._conversation)
+        conversation = list(self._conversation)
 
         # Check for handoff from ANY agent (starting agent or specialist)
         target = self._resolve_specialist(response.agent_run_response, conversation)
@@ -331,7 +333,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
 
         await self._persist_state(ctx)
 
-        if self._check_termination():
+        if await self._check_termination():
             logger.info("Handoff workflow termination condition met. Ending conversation.")
             await ctx.yield_output(list(conversation))
             return
@@ -346,11 +348,11 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
     ) -> None:
         """Receive full conversation with new user input from gateway, update history, trim for agent."""
         # Update authoritative conversation
-        self._conversation = clone_conversation(message.full_conversation)
+        self._conversation = list(message.full_conversation)
         await self._persist_state(ctx)
 
         # Check termination before sending to agent
-        if self._check_termination():
+        if await self._check_termination():
             logger.info("Handoff workflow termination condition met. Ending conversation.")
             await ctx.yield_output(list(self._conversation))
             return
@@ -408,7 +410,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
             author_name=function_call.name,
         )
         # Add tool acknowledgement to both the conversation being sent and the full history
-        append_messages(conversation, (tool_message,))
+        conversation.extend((tool_message,))
         self._append_messages((tool_message,))
 
     def _conversation_from_response(self, response: AgentExecutorResponse) -> list[ChatMessage]:
@@ -728,7 +730,10 @@ class HandoffBuilder:
         self._starting_agent_id: str | None = None
         self._checkpoint_storage: CheckpointStorage | None = None
         self._request_prompt: str | None = None
-        self._termination_condition: Callable[[list[ChatMessage]], bool] = _default_termination_condition
+        # Termination condition
+        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] = (
+            _default_termination_condition
+        )
         self._auto_register_handoff_tools: bool = True
         self._handoff_config: dict[str, list[str]] = {}  # Maps agent_id -> [target_agent_ids]
 
@@ -1151,12 +1156,16 @@ class HandoffBuilder:
         self._checkpoint_storage = checkpoint_storage
         return self
 
-    def with_termination_condition(self, condition: Callable[[list[ChatMessage]], bool]) -> "HandoffBuilder":
+    def with_termination_condition(
+        self, condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]]
+    ) -> "HandoffBuilder":
         """Set a custom termination condition for the handoff workflow.
+
+        The condition can be either synchronous or asynchronous.
 
         Args:
             condition: Function that receives the full conversation and returns True
-                      if the workflow should terminate (not request further user input).
+                      (or awaitable True) if the workflow should terminate (not request further user input).
 
         Returns:
             Self for chaining.
@@ -1165,9 +1174,19 @@ class HandoffBuilder:
 
         .. code-block:: python
 
+            # Synchronous condition
             builder.with_termination_condition(
                 lambda conv: len(conv) > 20 or any("goodbye" in msg.text.lower() for msg in conv[-2:])
             )
+
+
+            # Asynchronous condition
+            async def check_termination(conv: list[ChatMessage]) -> bool:
+                # Can perform async operations
+                return len(conv) > 20
+
+
+            builder.with_termination_condition(check_termination)
         """
         self._termination_condition = condition
         return self
@@ -1279,7 +1298,7 @@ class HandoffBuilder:
             exec_id: getattr(executor, "description", None) or exec_id for exec_id, executor in self._executors.items()
         }
         participant_specs = {
-            exec_id: _GroupChatParticipantSpec(name=exec_id, participant=executor, description=descriptions[exec_id])
+            exec_id: GroupChatParticipantSpec(name=exec_id, participant=executor, description=descriptions[exec_id])
             for exec_id, executor in self._executors.items()
         }
 
@@ -1294,7 +1313,7 @@ class HandoffBuilder:
 
         specialist_aliases = {alias: exec_id for alias, exec_id in self._aliases.items() if exec_id in specialists}
 
-        def _handoff_orchestrator_factory(_: _GroupChatWiring) -> Executor:
+        def _handoff_orchestrator_factory(_: _GroupChatConfig) -> Executor:
             return _HandoffCoordinator(
                 starting_agent_id=starting_executor.id,
                 specialist_ids=specialist_aliases,
@@ -1304,7 +1323,7 @@ class HandoffBuilder:
                 handoff_tool_targets=handoff_tool_targets,
             )
 
-        wiring = _GroupChatWiring(
+        wiring = _GroupChatConfig(
             manager=None,
             manager_name=self._starting_agent_id,
             participants=participant_specs,

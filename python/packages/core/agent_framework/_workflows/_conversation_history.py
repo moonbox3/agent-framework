@@ -7,20 +7,10 @@ dictionary snapshots so orchestrators can share logic without new mixins.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .._types import ChatMessage, Role
-
-
-def clone_conversation(messages: Iterable[ChatMessage]) -> list[ChatMessage]:
-    """Return a shallow copy of `messages` as a list."""
-    return list(messages)
-
-
-def append_messages(conversation: list[ChatMessage], messages: Iterable[ChatMessage]) -> None:
-    """Extend `conversation` with `messages` in order."""
-    conversation.extend(messages)
+from .._types import ChatMessage
 
 
 def latest_user_message(conversation: Sequence[ChatMessage]) -> ChatMessage:
@@ -29,26 +19,13 @@ def latest_user_message(conversation: Sequence[ChatMessage]) -> ChatMessage:
         role_value = getattr(message.role, "value", message.role)
         if str(role_value).lower() == "user":
             return message
-    if not conversation:
-        raise ValueError("Conversation is empty; cannot determine user message.")
-    return conversation[-1]
+    raise ValueError("No user message in conversation")
 
 
 def ensure_author(message: ChatMessage, fallback: str) -> ChatMessage:
     """Attach `fallback` author if message is missing `author_name`."""
-    author = getattr(message, "author_name", None)
-    if author:
-        return message
-    if hasattr(message, "to_dict") and callable(message.to_dict):  # type: ignore[attr-defined]
-        payload = message.to_dict()  # type: ignore[attr-defined]
-    else:
-        payload = getattr(message, "__dict__", {}).copy()
-    payload["author_name"] = fallback
-    if hasattr(ChatMessage, "from_dict") and callable(getattr(ChatMessage, "from_dict", None)):
-        return ChatMessage.from_dict(payload)  # type: ignore[attr-defined,return-value]
-    return ChatMessage(
-        role=getattr(message, "role", Role.ASSISTANT), text=payload.get("text", ""), author_name=fallback
-    )
+    message.author_name = message.author_name or fallback
+    return message
 
 
 def snapshot_state(conversation: Sequence[ChatMessage]) -> dict[str, Any]:

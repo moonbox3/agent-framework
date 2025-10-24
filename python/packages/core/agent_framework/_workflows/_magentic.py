@@ -24,22 +24,21 @@ from agent_framework import (
     Role,
 )
 
-from ._base_orchestrator import BaseGroupChatOrchestrator
+from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
 from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._group_chat import (
     GroupChatBuilder,
+    _GroupChatConfig,  # type: ignore[reportPrivateUsage]
     _GroupChatParticipantPipeline,  # type: ignore[reportPrivateUsage]
-    _GroupChatParticipantSpec,  # type: ignore[reportPrivateUsage]
     _GroupChatRequestMessage,  # type: ignore[reportPrivateUsage]
     _GroupChatResponseMessage,  # type: ignore[reportPrivateUsage]
-    _GroupChatWiring,  # type: ignore[reportPrivateUsage]
     group_chat_orchestrator,
 )
 from ._message_utils import normalize_messages_input
 from ._model_utils import DictConvertible, encode_value
-from ._participant_utils import participant_description
+from ._participant_utils import GroupChatParticipantSpec, participant_description
 from ._request_info_executor import RequestInfoExecutor, RequestInfoMessage, RequestResponse
 from ._workflow import Workflow, WorkflowRunResult
 from ._workflow_context import WorkflowContext
@@ -402,10 +401,10 @@ class _MagenticResponseMessage(_GroupChatResponseMessage):
         super().__init__(
             agent_name=agent_name,
             message=body,
-            target_agent=target_agent,
-            broadcast=broadcast,
         )
         self.body = body
+        self.target_agent = target_agent
+        self.broadcast = broadcast
 
     def to_dict(self) -> dict[str, Any]:
         """Create a dict representation of the message."""
@@ -999,6 +998,10 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self._terminated = False
         # Tracks whether checkpoint state has been applied for this run
         self._state_restored = False
+
+    def _get_author_name(self) -> str:
+        """Get the magentic manager name for orchestrator-generated messages."""
+        return MAGENTIC_MANAGER_NAME
 
     def register_agent_executor(self, name: str, executor: "MagenticAgentExecutor") -> None:
         """Register an agent executor for internal control (no messages)."""
@@ -2237,7 +2240,7 @@ class MagenticBuilder:
         # Type narrowing: we already checked self._manager is not None above
         manager: MagenticManagerBase = self._manager  # type: ignore[assignment]
 
-        def _orchestrator_factory(wiring: _GroupChatWiring) -> Executor:
+        def _orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
             return MagenticOrchestratorExecutor(
                 manager=manager,
                 participants=participant_descriptions,
@@ -2246,8 +2249,8 @@ class MagenticBuilder:
             )
 
         def _participant_factory(
-            spec: _GroupChatParticipantSpec,
-            wiring: _GroupChatWiring,
+            spec: GroupChatParticipantSpec,
+            wiring: _GroupChatConfig,
         ) -> _GroupChatParticipantPipeline:
             agent_executor = MagenticAgentExecutor(
                 spec.participant,

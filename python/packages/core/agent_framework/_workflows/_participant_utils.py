@@ -4,11 +4,31 @@
 
 import re
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from .._agents import AgentProtocol
 from ._agent_executor import AgentExecutor
 from ._executor import Executor
+
+
+@dataclass
+class GroupChatParticipantSpec:
+    """Metadata describing a single participant in group chat orchestrations.
+
+    Used by multiple orchestration patterns (GroupChat, Handoff, Magentic) to describe
+    participants with consistent structure across different workflow types.
+
+    Attributes:
+        name: Unique identifier for the participant used by managers for selection
+        participant: AgentProtocol or Executor instance representing the participant
+        description: Human-readable description provided to managers for selection context
+    """
+
+    name: str
+    participant: AgentProtocol | Executor
+    description: str
+
 
 _SANITIZE_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 

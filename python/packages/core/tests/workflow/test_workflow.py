@@ -933,3 +933,92 @@ async def test_agent_streaming_vs_non_streaming() -> None:
         e.data.contents[0].text for e in stream_agent_update_events if e.data.contents and e.data.contents[0].text
     )
     assert accumulated_text == "Hello World", f"Expected 'Hello World', got '{accumulated_text}'"
+
+
+async def test_workflow_run_parameter_validation(simple_executor: Executor) -> None:
+    """Test that run() and run_stream() properly validate parameter combinations."""
+    workflow = WorkflowBuilder().add_edge(simple_executor, simple_executor).set_start_executor(simple_executor).build()
+
+    test_message = Message(data="test", source_id="test", target_id=None)
+
+    # Valid: message only (new run)
+    result = await workflow.run(test_message)
+    assert result.get_final_state() == WorkflowRunState.IDLE
+
+    # Valid: responses only (HIL continuation) - requires RequestInfoExecutor
+    # This test validates that the parameter is accepted, not full HIL flow
+    # Actual HIL flow is tested in dedicated HIL tests
+
+    # Invalid: both message and checkpoint_id
+    with pytest.raises(ValueError, match="Cannot provide both 'message' and 'checkpoint_id'"):
+        await workflow.run(test_message, checkpoint_id="fake_id")
+
+    # Invalid: both message and checkpoint_id (streaming)
+    with pytest.raises(ValueError, match="Cannot provide both 'message' and 'checkpoint_id'"):
+        async for _ in workflow.run_stream(test_message, checkpoint_id="fake_id"):
+            pass
+
+    # Invalid: both message and responses
+    with pytest.raises(ValueError, match="Cannot provide both 'message' and 'responses'"):
+        await workflow.run(test_message, responses={"req_id": "response"})
+
+    # Invalid: both message and responses (streaming)
+    with pytest.raises(ValueError, match="Cannot provide both 'message' and 'responses'"):
+        async for _ in workflow.run_stream(test_message, responses={"req_id": "response"}):
+            pass
+
+    # Invalid: none of message, checkpoint_id, or responses
+    with pytest.raises(ValueError, match="Must provide at least one of"):
+        await workflow.run()
+
+    # Invalid: none of message, checkpoint_id, or responses (streaming)
+    with pytest.raises(ValueError, match="Must provide at least one of"):
+        async for _ in workflow.run_stream():
+            pass
+
+
+async def test_workflow_run_stream_parameter_validation(simple_executor: Executor) -> None:
+    """Test run_stream() specific parameter validation scenarios."""
+    workflow = WorkflowBuilder().add_edge(simple_executor, simple_executor).set_start_executor(simple_executor).build()
+
+    test_message = Message(data="test", source_id="test", target_id=None)
+
+    # Valid: message only (new run)
+    events = []
+    async for event in workflow.run_stream(test_message):
+        events.append(event)
+    assert any(isinstance(e, WorkflowStatusEvent) and e.state == WorkflowRunState.IDLE for e in events)
+
+    # Invalid combinations already tested in test_workflow_run_parameter_validation
+    # This test ensures streaming works correctly for valid parameters
+
+
+async def test_workflow_checkpoint_and_responses_combination(simple_executor: Executor) -> None:
+    """Test that checkpoint_id + responses is a valid combination (checkpoint resume with HIL)."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from agent_framework import RequestInfoExecutor
+
+        storage = FileCheckpointStorage(temp_dir)
+
+        # Build workflow with RequestInfoExecutor for HIL testing
+        request_info = RequestInfoExecutor(id="request_info")
+        workflow = (
+            WorkflowBuilder()
+            .set_start_executor(simple_executor)
+            .add_edge(simple_executor, request_info)
+            .add_edge(request_info, simple_executor)
+            .with_checkpointing(storage)
+            .build()
+        )
+
+        # This validates that checkpoint_id + responses is allowed (for checkpoint resume + HIL)
+        # The actual execution may fail due to invalid checkpoint_id, but the parameter
+        # validation should pass
+        try:
+            async for _ in workflow.run_stream(checkpoint_id="fake_checkpoint", responses={"req_id": "response"}):
+                pass
+        except (ValueError, RuntimeError) as e:
+            # We expect a checkpoint restoration error, not a parameter validation error
+            assert "Cannot provide both" not in str(e), "Parameter validation should allow checkpoint_id + responses"
+            # Expected errors: "Cannot restore from checkpoint" or "Failed to restore"
+            assert "checkpoint" in str(e).lower() or "restore" in str(e).lower()

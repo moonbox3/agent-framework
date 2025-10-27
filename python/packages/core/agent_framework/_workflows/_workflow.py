@@ -459,9 +459,7 @@ class Workflow(DictConvertible):
                 ):
                     process(event)
         """
-        self._ensure_not_running()
-
-        # Validate mutually exclusive parameters
+        # Validate mutually exclusive parameters BEFORE setting running flag
         if message is not None and checkpoint_id is not None:
             raise ValueError("Cannot provide both 'message' and 'checkpoint_id'. Use one or the other.")
 
@@ -470,6 +468,15 @@ class Workflow(DictConvertible):
                 "Must provide at least one of: 'message' (new run), 'checkpoint_id' (resume), "
                 "or 'responses' (HIL continuation)."
             )
+
+        # Prevent invalid combination: both message and responses provided
+        if message is not None and responses is not None:
+            raise ValueError(
+                "Cannot provide both 'message' and 'responses'. Use 'message' for new runs, "
+                "'responses' for HIL continuation."
+            )
+
+        self._ensure_not_running()
 
         # Enable runtime checkpointing if storage provided
         # Two cases:
@@ -628,9 +635,7 @@ class Workflow(DictConvertible):
                     responses={"req_1": "approved"}
                 )
         """
-        self._ensure_not_running()
-
-        # Validate mutually exclusive parameters
+        # Validate mutually exclusive parameters BEFORE setting running flag
         if message is not None and checkpoint_id is not None:
             raise ValueError("Cannot provide both 'message' and 'checkpoint_id'. Use one or the other.")
 
@@ -639,6 +644,15 @@ class Workflow(DictConvertible):
                 "Must provide at least one of: 'message' (new run), 'checkpoint_id' (resume), "
                 "or 'responses' (HIL continuation)."
             )
+
+        # Prevent invalid combination: both message and responses provided
+        if message is not None and responses is not None:
+            raise ValueError(
+                "Cannot provide both 'message' and 'responses'. Use 'message' for new runs, "
+                "'responses' for HIL continuation."
+            )
+
+        self._ensure_not_running()
 
         # Enable runtime checkpointing if storage provided
         if checkpoint_storage is not None:

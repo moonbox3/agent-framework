@@ -36,9 +36,7 @@ def _unwrap_descriptor(func: Any) -> Callable[..., Any]:
     Returns:
         The underlying callable
     """
-    if isinstance(func, staticmethod):
-        return func.__func__  # type: ignore[return-value]
-    if isinstance(func, classmethod):
+    if isinstance(func, (staticmethod, classmethod)):
         return func.__func__  # type: ignore[return-value]
     return func
 

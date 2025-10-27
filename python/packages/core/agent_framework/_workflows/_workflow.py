@@ -422,27 +422,39 @@ class Workflow(DictConvertible):
 
         Examples:
             Initial run:
+
+            .. code-block:: python
+
                 async for event in workflow.run_stream("start message"):
                     process(event)
 
             Enable checkpointing at runtime:
+
+            .. code-block:: python
+
                 storage = FileCheckpointStorage("./checkpoints")
                 async for event in workflow.run_stream("start", checkpoint_storage=storage):
                     process(event)
 
             Resume from checkpoint (storage provided at build time):
+
+            .. code-block:: python
+
                 async for event in workflow.run_stream(checkpoint_id="cp_123"):
                     process(event)
 
             Resume from checkpoint (storage provided at runtime):
+
+            .. code-block:: python
+
                 storage = FileCheckpointStorage("./checkpoints")
-                async for event in workflow.run_stream(
-                    checkpoint_id="cp_123",
-                    checkpoint_storage=storage
-                ):
+                async for event in workflow.run_stream(checkpoint_id="cp_123", checkpoint_storage=storage):
                     process(event)
 
             Send HIL responses (request_id from RequestInfoEvent):
+
+            .. code-block:: python
+
                 # First, collect request ID from the event
                 async for event in workflow.run_stream("task"):
                     if isinstance(event, RequestInfoEvent):
@@ -453,10 +465,10 @@ class Workflow(DictConvertible):
                     process(event)
 
             Resume from checkpoint AND send HIL responses:
-                async for event in workflow.run_stream(
-                    checkpoint_id="cp_123",
-                    responses={"req_1": "approved"}
-                ):
+
+            .. code-block:: python
+
+                async for event in workflow.run_stream(checkpoint_id="cp_123", responses={"req_1": "approved"}):
                     process(event)
         """
         # Validate mutually exclusive parameters BEFORE setting running flag
@@ -603,24 +615,36 @@ class Workflow(DictConvertible):
 
         Examples:
             Initial run:
+
+            .. code-block:: python
+
                 result = await workflow.run("start message")
                 outputs = result.get_outputs()
 
             Enable checkpointing at runtime:
+
+            .. code-block:: python
+
                 storage = FileCheckpointStorage("./checkpoints")
                 result = await workflow.run("start", checkpoint_storage=storage)
 
             Resume from checkpoint (storage provided at build time):
+
+            .. code-block:: python
+
                 result = await workflow.run(checkpoint_id="cp_123")
 
             Resume from checkpoint (storage provided at runtime):
+
+            .. code-block:: python
+
                 storage = FileCheckpointStorage("./checkpoints")
-                result = await workflow.run(
-                    checkpoint_id="cp_123",
-                    checkpoint_storage=storage
-                )
+                result = await workflow.run(checkpoint_id="cp_123", checkpoint_storage=storage)
 
             Send HIL responses (request_id from RequestInfoEvent):
+
+            .. code-block:: python
+
                 # First, get request ID from RequestInfoEvent
                 result = await workflow.run("task")
                 for event in result.events:
@@ -630,10 +654,10 @@ class Workflow(DictConvertible):
                 result = await workflow.run(responses={request_id: "approved"})
 
             Resume and send HIL responses:
-                result = await workflow.run(
-                    checkpoint_id="cp_123",
-                    responses={"req_1": "approved"}
-                )
+
+            .. code-block:: python
+
+                result = await workflow.run(checkpoint_id="cp_123", responses={"req_1": "approved"})
         """
         # Validate mutually exclusive parameters BEFORE setting running flag
         if message is not None and checkpoint_id is not None:

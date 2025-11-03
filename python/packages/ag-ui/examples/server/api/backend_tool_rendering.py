@@ -2,8 +2,9 @@
 
 """Backend tool rendering endpoint."""
 
-from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
 from fastapi import FastAPI
+
+from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
 
 from ...agents.weather_agent import weather_agent
 

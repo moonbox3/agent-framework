@@ -9,10 +9,9 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "agent-framework",
+    "agent-framework-core",
     "ag-ui-protocol>=0.1.9",
     "fastapi>=0.115.0",
-    "pydantic>=2.0.0",
     "uvicorn>=0.30.0"
 ]
 

@@ -2,6 +2,7 @@
 
 """Tests for message adapters."""
 
+import pytest
 from agent_framework import ChatMessage, FunctionCallContent, Role, TextContent
 
 from agent_framework_ag_ui._message_adapters import (
@@ -9,6 +10,18 @@ from agent_framework_ag_ui._message_adapters import (
     agui_messages_to_agent_framework,
     extract_text_from_contents,
 )
+
+
+@pytest.fixture
+def sample_agui_message():
+    """Create a sample AG-UI message."""
+    return {"role": "user", "content": "Hello", "id": "msg-123"}
+
+
+@pytest.fixture
+def sample_agent_framework_message():
+    """Create a sample Agent Framework message."""
+    return ChatMessage(role=Role.USER, contents=[TextContent(text="Hello")], message_id="msg-123")
 
 
 def test_agui_to_agent_framework_basic(sample_agui_message):

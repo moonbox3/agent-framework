@@ -4,10 +4,11 @@ Example implementations of all AG-UI features using Agent Framework.
 
 ## Setup
 
-1. Install the package and dependencies:
+1. Install the AG-UI package and its dependencies:
 ```bash
-cd packages/ag-ui
-uv pip install -e .
+# From the repository root
+pip install -e packages/ag-ui
+pip install agent-framework-azure-ai  # For Azure OpenAI support
 ```
 
 2. Set your Azure OpenAI credentials:
@@ -19,7 +20,7 @@ export AZURE_OPENAI_API_KEY="your-key"
 3. Run the example server:
 ```bash
 cd packages/ag-ui/examples
-python -m .
+python server/main.py
 ```
 
 The server will start on http://localhost:8888

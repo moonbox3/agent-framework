@@ -2,10 +2,28 @@
 
 """Tests for shared state management."""
 
+import pytest
 from ag_ui.core import StateSnapshotEvent
+from agent_framework import ChatAgent, TextContent
+from agent_framework._types import ChatResponseUpdate
 
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._events import AgentFrameworkEventBridge
+
+
+@pytest.fixture
+def mock_agent():
+    """Create a mock agent for testing."""
+
+    class MockChatClient:
+        async def get_streaming_response(self, messages, chat_options, **kwargs):
+            yield ChatResponseUpdate(contents=[TextContent(text="Hello!")])
+
+    return ChatAgent(
+        name="test_agent",
+        instructions="Test agent",
+        chat_client=MockChatClient(),
+    )
 
 
 def test_state_snapshot_event():

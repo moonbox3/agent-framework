@@ -20,8 +20,9 @@ from ag_ui.core import (
 )
 from agent_framework import ChatAgent, ai_function
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_ag_ui import AgentFrameworkAgent
 from pydantic import BaseModel, Field
+
+from agent_framework_ag_ui import AgentFrameworkAgent
 
 
 class StepStatus(str, Enum):

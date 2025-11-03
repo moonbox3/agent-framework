@@ -396,7 +396,14 @@ class Workflow(DictConvertible):
             message: Initial message for the start executor (for new runs).
             checkpoint_id: ID of checkpoint to restore from (for resuming runs).
             checkpoint_storage: Runtime checkpoint storage.
+
+        Raises:
+            ValueError: If both message and checkpoint_id are None (nothing to execute).
         """
+        # Validate that we have something to execute
+        if message is None and checkpoint_id is None:
+            raise ValueError("Must provide either 'message' or 'checkpoint_id'")
+
         # Handle checkpoint restoration
         if checkpoint_id is not None:
             has_checkpointing = self._runner.context.has_checkpointing()

@@ -113,12 +113,13 @@ add_agent_framework_fastapi_endpoint(
 def main():
     """Run the server."""
     port = int(os.getenv("PORT", "8888"))
+    host = os.getenv("HOST", "127.0.0.1")
 
     # Use log_config=None to prevent uvicorn from reconfiguring logging
     # This preserves our file + console logging setup
     uvicorn.run(
         app,
-        host="0.0.0.0",  # nosec  # noqa: S104
+        host=host,
         port=port,
         log_config=None,
     )

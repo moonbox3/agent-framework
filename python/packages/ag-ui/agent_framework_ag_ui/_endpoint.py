@@ -52,19 +52,11 @@ def add_agent_framework_fastapi_endpoint(
         """
         try:
             input_data = await request.json()
-            print(f"\n{'=' * 80}")
-            print(f"[{path}] RECEIVED REQUEST")
-            print(f"  Run ID: {input_data.get('run_id', 'no-run-id')}")
-            print(f"  Thread ID: {input_data.get('thread_id', 'no-thread-id')}")
-            print(f"  Messages: {len(input_data.get('messages', []))}")
-
-            # Debug: Print the entire input_data to see what the UI is sending
-            import json
-
-            print("  Full input data:")
-            print(json.dumps(input_data, indent=2))
-
-            print(f"{'=' * 80}\n")
+            logger.debug(
+                f"[{path}] Received request - Run ID: {input_data.get('run_id', 'no-run-id')}, "
+                f"Thread ID: {input_data.get('thread_id', 'no-thread-id')}, "
+                f"Messages: {len(input_data.get('messages', []))}"
+            )
             logger.info(f"Received request at {path}: {input_data.get('run_id', 'no-run-id')}")
 
             async def event_generator():
@@ -72,25 +64,20 @@ def add_agent_framework_fastapi_endpoint(
                 event_count = 0
                 async for event in wrapped_agent.run_agent(input_data):
                     event_count += 1
-                    print(f"[{path}] >>> EVENT {event_count}: {type(event).__name__}")
-                    if hasattr(event, "model_dump"):
-                        event_data = event.model_dump(exclude_none=True)
-                        print(f"    Data: {event_data}")
+                    logger.debug(f"[{path}] Event {event_count}: {type(event).__name__}")
 
-                    logger.info(f"[{path}] Event {event_count}: {type(event).__name__}")
                     # Log event payload for debugging
                     if hasattr(event, "model_dump"):
                         event_data = event.model_dump(exclude_none=True)
-                        logger.info(f"[{path}] Event payload: {event_data}")
+                        logger.debug(f"[{path}] Event payload: {event_data}")
+
                     encoded = encoder.encode(event)
-                    print(f"    Encoded: {encoded[:150]}..." if len(encoded) > 150 else f"    Encoded: {encoded}")
-                    logger.info(
+                    logger.debug(
                         f"[{path}] Encoded as: {encoded[:200]}..."
                         if len(encoded) > 200
                         else f"[{path}] Encoded as: {encoded}"
                     )
                     yield encoded
-                print(f"\n[{path}] COMPLETED: {event_count} events total\n")
                 logger.info(f"[{path}] Completed streaming {event_count} events")
 
             return StreamingResponse(

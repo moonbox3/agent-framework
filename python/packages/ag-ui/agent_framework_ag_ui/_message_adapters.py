@@ -2,7 +2,6 @@
 
 """Message format conversion between AG-UI and Agent Framework."""
 
-import logging
 from typing import Any
 
 from agent_framework import (
@@ -12,8 +11,6 @@ from agent_framework import (
     Role,
     TextContent,
 )
-
-logger = logging.getLogger(__name__)
 
 # Role mapping constants
 _AGUI_TO_FRAMEWORK_ROLE = {

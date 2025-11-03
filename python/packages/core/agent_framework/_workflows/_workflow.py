@@ -148,7 +148,7 @@ class Workflow(DictConvertible):
     2. Executor implements `response_handler()` to process the response
     3. Requests are emitted as RequestInfoEvent instances in the event stream
     4. Workflow enters IDLE_WITH_PENDING_REQUESTS state
-    5. Caller handles requests and provides responses via the executor's handle_response method
+    5. Caller handles requests and provides responses via the `send_responses` or `send_responses_streaming` methods
     6. Responses are routed to the requesting executors and response handlers are invoked
 
     ## Checkpointing
@@ -384,6 +384,46 @@ class Workflow(DictConvertible):
                 capture_exception(span, exception=exc)
                 raise
 
+    async def _execute_with_message_or_checkpoint(
+        self,
+        message: Any | None,
+        checkpoint_id: str | None,
+        checkpoint_storage: CheckpointStorage | None,
+    ) -> None:
+        """Internal handler for executing workflow with either initial message or checkpoint restoration.
+
+        Args:
+            message: Initial message for the start executor (for new runs).
+            checkpoint_id: ID of checkpoint to restore from (for resuming runs).
+            checkpoint_storage: Runtime checkpoint storage.
+        """
+        # Handle checkpoint restoration
+        if checkpoint_id is not None:
+            has_checkpointing = self._runner.context.has_checkpointing()
+
+            if not has_checkpointing and checkpoint_storage is None:
+                raise ValueError(
+                    "Cannot restore from checkpoint: either provide checkpoint_storage parameter "
+                    "or build workflow with WorkflowBuilder.with_checkpointing(checkpoint_storage)."
+                )
+
+            restored = await self._runner.restore_from_checkpoint(checkpoint_id, checkpoint_storage)
+
+            if not restored:
+                raise RuntimeError(f"Failed to restore from checkpoint: {checkpoint_id}")
+
+        # Handle initial message
+        elif message is not None:
+            executor = self.get_start_executor()
+            await executor.execute(
+                message,
+                [self.__class__.__name__],
+                self._shared_state,
+                self._runner.context,
+                trace_contexts=None,
+                source_span_ids=None,
+            )
+
     async def run_stream(
         self,
         message: Any | None = None,
@@ -463,50 +503,18 @@ class Workflow(DictConvertible):
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-
-            async def execution_handler() -> None:
-                # Handle checkpoint restoration
-                if checkpoint_id is not None:
-                    has_checkpointing = self._runner.context.has_checkpointing()
-
-                    if not has_checkpointing and checkpoint_storage is None:
-                        raise ValueError(
-                            "Cannot restore from checkpoint: either provide checkpoint_storage parameter "
-                            "or build workflow with WorkflowBuilder.with_checkpointing(checkpoint_storage)."
-                        )
-
-                    restored = await self._runner.restore_from_checkpoint(checkpoint_id, checkpoint_storage)
-
-                    if not restored:
-                        raise RuntimeError(f"Failed to restore from checkpoint: {checkpoint_id}")
-
-                    # Process pending messages from checkpoint
-                    if await self._runner.context.has_messages():
-                        await self._runner._run_iteration()  # type: ignore
-
-                # Handle initial message
-                elif message is not None:
-                    executor = self.get_start_executor()
-                    await executor.execute(
-                        message,
-                        [self.__class__.__name__],
-                        self._shared_state,
-                        self._runner.context,
-                        trace_contexts=None,
-                        source_span_ids=None,
-                    )
-
             # Reset context only for new runs (not checkpoint restoration)
             reset_context = message is not None and checkpoint_id is None
 
             async for event in self._run_workflow_with_tracing(
-                initial_executor_fn=execution_handler,
+                initial_executor_fn=functools.partial(
+                    self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
+                ),
                 reset_context=reset_context,
                 streaming=True,
             ):
                 yield event
         finally:
-            # Clear runtime checkpoint storage after run completes
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
             self._reset_running_flag()
@@ -607,51 +615,19 @@ class Workflow(DictConvertible):
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-
-            async def execution_handler() -> None:
-                # Handle checkpoint restoration
-                if checkpoint_id is not None:
-                    has_checkpointing = self._runner.context.has_checkpointing()
-
-                    if not has_checkpointing and checkpoint_storage is None:
-                        raise ValueError(
-                            "Cannot restore from checkpoint: either provide checkpoint_storage parameter "
-                            "or build workflow with WorkflowBuilder.with_checkpointing(checkpoint_storage)."
-                        )
-
-                    restored = await self._runner.restore_from_checkpoint(checkpoint_id, checkpoint_storage)
-
-                    if not restored:
-                        raise RuntimeError(f"Failed to restore from checkpoint: {checkpoint_id}")
-
-                    # Process pending messages from checkpoint
-                    if await self._runner.context.has_messages():
-                        await self._runner._run_iteration()  # type: ignore
-
-                # Handle initial message
-                elif message is not None:
-                    executor = self.get_start_executor()
-                    await executor.execute(
-                        message,
-                        [self.__class__.__name__],
-                        self._shared_state,
-                        self._runner.context,
-                        trace_contexts=None,
-                        source_span_ids=None,
-                    )
-
             # Reset context only for new runs (not checkpoint restoration)
             reset_context = message is not None and checkpoint_id is None
 
             raw_events = [
                 event
                 async for event in self._run_workflow_with_tracing(
-                    initial_executor_fn=execution_handler,
+                    initial_executor_fn=functools.partial(
+                        self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
+                    ),
                     reset_context=reset_context,
                 )
             ]
         finally:
-            # Clear runtime checkpoint storage after run completes
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
             self._reset_running_flag()

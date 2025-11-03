@@ -336,10 +336,15 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
 
         if await self._check_termination():
             logger.info("Handoff workflow termination condition met. Ending conversation.")
-            await ctx.yield_output(list(conversation))
+            # Clean the output conversation for display
+            cleaned_output = clean_conversation_for_handoff(conversation)
+            await ctx.yield_output(cleaned_output)
             return
 
-        await ctx.send_message(list(conversation), target_id=self._input_gateway_id)
+        # Clean conversation before sending to gateway for user input request
+        # This removes tool messages that shouldn't be shown to users
+        cleaned_for_display = clean_conversation_for_handoff(conversation)
+        await ctx.send_message(cleaned_for_display, target_id=self._input_gateway_id)
 
     @handler
     async def handle_user_input(

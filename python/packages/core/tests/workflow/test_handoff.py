@@ -155,33 +155,6 @@ async def _drain(stream: AsyncIterable[WorkflowEvent]) -> list[WorkflowEvent]:
     return [event async for event in stream]
 
 
-@pytest.mark.skip(reason="Response handling refactored - responses no longer passed to run_stream()")
-async def test_handoff_routes_to_specialist_and_requests_user_input():
-    triage = _RecordingAgent(name="triage", handoff_to="specialist")
-    specialist = _RecordingAgent(name="specialist")
-
-    workflow = HandoffBuilder(participants=[triage, specialist]).set_coordinator("triage").build()
-
-    events = await _drain(workflow.run_stream("Need help with a refund"))
-
-    assert triage.calls, "Starting agent should receive initial conversation"
-    assert specialist.calls, "Specialist should be invoked after handoff"
-    assert len(specialist.calls[0]) == 2  # user + triage reply
-
-    requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
-    assert requests, "Workflow should request additional user input"
-    request_payload = requests[-1].data
-    assert isinstance(request_payload, HandoffUserInputRequest)
-    assert len(request_payload.conversation) == 4  # user, triage tool call, tool ack, specialist
-    assert request_payload.conversation[2].role == Role.TOOL
-    assert request_payload.conversation[3].role == Role.ASSISTANT
-    assert "specialist reply" in request_payload.conversation[3].text
-
-    follow_up = await _drain(workflow.run_stream(responses={requests[-1].request_id: "Thanks"}))
-    assert any(isinstance(ev, RequestInfoEvent) for ev in follow_up)
-
-
-@pytest.mark.skip(reason="Response handling refactored - responses no longer passed to run_stream()")
 async def test_specialist_to_specialist_handoff():
     """Test that specialists can hand off to other specialists via .add_handoff() configuration."""
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
@@ -206,7 +179,7 @@ async def test_specialist_to_specialist_handoff():
     assert len(specialist.calls) > 0
 
     # Second user message - specialist hands off to escalation
-    events = await _drain(workflow.run_stream(responses={requests[-1].request_id: "This is complex"}))
+    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "This is complex"}))
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert outputs
 
@@ -214,7 +187,6 @@ async def test_specialist_to_specialist_handoff():
     assert len(escalation.calls) > 0
 
 
-@pytest.mark.skip(reason="Response handling refactored - responses no longer passed to run_stream()")
 async def test_handoff_preserves_complex_additional_properties(complex_metadata: _ComplexMetadata):
     triage = _RecordingAgent(name="triage", handoff_to="specialist", extra_properties={"complex": complex_metadata})
     specialist = _RecordingAgent(name="specialist")
@@ -259,7 +231,9 @@ async def test_handoff_preserves_complex_additional_properties(complex_metadata:
     assert restored_meta.payload["code"] == "X1"
 
     # Respond and ensure metadata survives subsequent cycles
-    follow_up_events = await _drain(workflow.run_stream(responses={requests[-1].request_id: "Here are more details"}))
+    follow_up_events = await _drain(
+        workflow.send_responses_streaming({requests[-1].request_id: "Here are more details"})
+    )
     follow_up_requests = [ev for ev in follow_up_events if isinstance(ev, RequestInfoEvent)]
     outputs = [ev for ev in follow_up_events if isinstance(ev, WorkflowOutputEvent)]
 
@@ -310,7 +284,6 @@ def test_build_fails_without_participants():
         HandoffBuilder().build()
 
 
-@pytest.mark.skip(reason="Response handling refactored - responses no longer passed to run_stream()")
 async def test_multiple_runs_dont_leak_conversation():
     """Verify that running the same workflow multiple times doesn't leak conversation history."""
     triage = _RecordingAgent(name="triage", handoff_to="specialist")
@@ -327,7 +300,7 @@ async def test_multiple_runs_dont_leak_conversation():
     events = await _drain(workflow.run_stream("First run message"))
     requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
     assert requests
-    events = await _drain(workflow.run_stream(responses={requests[-1].request_id: "Second message"}))
+    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Second message"}))
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert outputs, "First run should emit output"
 
@@ -345,7 +318,7 @@ async def test_multiple_runs_dont_leak_conversation():
     events = await _drain(workflow.run_stream("Second run different message"))
     requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
     assert requests
-    events = await _drain(workflow.run_stream(responses={requests[-1].request_id: "Another message"}))
+    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Another message"}))
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert outputs, "Second run should emit output"
 
@@ -362,7 +335,6 @@ async def test_multiple_runs_dont_leak_conversation():
     )
 
 
-@pytest.mark.skip(reason="Response handling refactored - responses no longer passed to run_stream()")
 async def test_handoff_async_termination_condition() -> None:
     """Test that async termination conditions work correctly."""
     termination_call_count = 0
@@ -386,7 +358,7 @@ async def test_handoff_async_termination_condition() -> None:
     requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
     assert requests
 
-    events = await _drain(workflow.run_stream(responses={requests[-1].request_id: "Second user message"}))
+    events = await _drain(workflow.send_responses_streaming({requests[-1].request_id: "Second user message"}))
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert len(outputs) == 1
 

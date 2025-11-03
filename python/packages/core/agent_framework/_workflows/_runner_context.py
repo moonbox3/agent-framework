@@ -355,7 +355,11 @@ class InProcRunnerContext:
         self._runtime_checkpoint_storage = storage
 
     def clear_runtime_checkpoint_storage(self) -> None:
-        """Clear runtime checkpoint storage override."""
+        """Clear runtime checkpoint storage override.
+
+        This is called automatically by workflow execution methods after a run completes,
+        ensuring runtime storage doesn't leak across runs.
+        """
         self._runtime_checkpoint_storage = None
 
     def has_checkpointing(self) -> bool:
@@ -396,6 +400,7 @@ class InProcRunnerContext:
         """Reset the context for a new workflow run.
 
         This clears messages, events, and resets streaming flag.
+        Runtime checkpoint storage is NOT cleared here as it's managed at the workflow level.
         """
         self._messages.clear()
         # Clear any pending events (best-effort) by recreating the queue

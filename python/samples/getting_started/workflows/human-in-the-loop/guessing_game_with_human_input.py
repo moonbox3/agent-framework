@@ -185,8 +185,10 @@ async def main() -> None:
 
     while workflow_output is None:
         # First iteration uses run_stream("start").
-        # Subsequent iterations use run_stream with pending_responses from the console.
-        stream = workflow.run_stream(responses=pending_responses) if pending_responses else workflow.run_stream("start")
+        # Subsequent iterations use send_responses_streaming with pending_responses from the console.
+        stream = (
+            workflow.send_responses_streaming(pending_responses) if pending_responses else workflow.run_stream("start")
+        )
         # Collect events for this turn. Among these you may see WorkflowStatusEvent
         # with state IDLE_WITH_PENDING_REQUESTS when the workflow pauses for
         # human input, preceded by IN_PROGRESS_PENDING_REQUESTS as requests are

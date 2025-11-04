@@ -391,4 +391,3 @@ class TestRequestInfoAndResponse:
             assert new_executor.approval_received is True
             expected_result = "Operation approved: Please approve the operation: checkpoint test operation"
             assert new_executor.final_result == expected_result
-

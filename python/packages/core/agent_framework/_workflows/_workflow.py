@@ -431,6 +431,34 @@ class Workflow(DictConvertible):
                 source_span_ids=None,
             )
 
+    async def _execute_with_message_checkpoint_and_responses(
+        self,
+        message: Any | None,
+        checkpoint_id: str | None,
+        checkpoint_storage: CheckpointStorage | None,
+        responses: dict[str, Any] | None,
+    ) -> None:
+        """Unified handler for workflow execution with optional checkpoint restoration and responses.
+
+        This combines checkpoint restoration and response delivery into a single operation,
+        avoiding the need for two-phase execution.
+
+        Args:
+            message: Initial message for the start executor (for new runs).
+            checkpoint_id: ID of checkpoint to restore from (for resuming runs).
+            checkpoint_storage: Runtime checkpoint storage.
+            responses: Responses to send after checkpoint restoration.
+
+        Raises:
+            ValueError: If both message and checkpoint_id are None.
+        """
+        # First restore checkpoint or execute with message
+        await self._execute_with_message_or_checkpoint(message, checkpoint_id, checkpoint_storage)
+
+        # Then send responses if provided
+        if responses:
+            await self._send_responses_internal(responses)
+
     async def run_stream(
         self,
         message: Any | None = None,
@@ -525,48 +553,31 @@ class Workflow(DictConvertible):
         self._ensure_not_running()
 
         # Enable runtime checkpointing if storage provided
-        # Two cases:
-        # 1. checkpoint_storage + checkpoint_id: Load checkpoint from this storage and resume
-        # 2. checkpoint_storage without checkpoint_id: Enable checkpointing for this run
         if checkpoint_storage is not None:
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-            # Handle checkpoint restoration with immediate response delivery
+            # When restoring with responses, suppress re-emission of RequestInfoEvents
             if checkpoint_id and responses:
-                # Reset context is False because we're restoring from checkpoint
-                reset_context = False
+                self._runner.context.set_suppress_request_events(True)
 
-                # First restore the checkpoint
-                async for _event in self._run_workflow_with_tracing(
-                    initial_executor_fn=functools.partial(
-                        self._execute_with_message_or_checkpoint, None, checkpoint_id, checkpoint_storage
-                    ),
-                    reset_context=reset_context,
-                    streaming=True,
-                ):
-                    # Don't yield restore events - they're internal to the restoration process
-                    pass
+            reset_context = message is not None and checkpoint_id is None
 
-                # Reset running flag to allow send_responses_streaming to proceed
-                self._reset_running_flag()
-
-                # Now send responses and yield those events
-                async for event in self.send_responses_streaming(responses):
-                    yield event
-            else:
-                # Standard flow: either new run or checkpoint restore without responses
-                reset_context = message is not None and checkpoint_id is None
-
-                async for event in self._run_workflow_with_tracing(
-                    initial_executor_fn=functools.partial(
-                        self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
-                    ),
-                    reset_context=reset_context,
-                    streaming=True,
-                ):
-                    yield event
+            async for event in self._run_workflow_with_tracing(
+                initial_executor_fn=functools.partial(
+                    self._execute_with_message_checkpoint_and_responses,
+                    message,
+                    checkpoint_id,
+                    checkpoint_storage,
+                    responses,
+                ),
+                reset_context=reset_context,
+                streaming=True,
+            ):
+                yield event
         finally:
+            if checkpoint_id and responses:
+                self._runner.context.set_suppress_request_events(False)
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
             self._reset_running_flag()
@@ -686,39 +697,28 @@ class Workflow(DictConvertible):
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-            # Handle checkpoint restoration with immediate response delivery
+            # When restoring with responses, suppress re-emission of RequestInfoEvents
             if checkpoint_id and responses:
-                # Reset context is False because we're restoring from checkpoint
-                reset_context = False
+                self._runner.context.set_suppress_request_events(True)
 
-                # First restore the checkpoint (don't collect events)
-                async for _event in self._run_workflow_with_tracing(
-                    initial_executor_fn=functools.partial(
-                        self._execute_with_message_or_checkpoint, None, checkpoint_id, checkpoint_storage
-                    ),
-                    reset_context=reset_context,
-                ):
-                    pass
-
-                # Reset running flag to allow send_responses to proceed
-                self._reset_running_flag()
-
-                # Now send responses and collect those events
-                return await self.send_responses(responses)
-
-            # Standard flow: either new run or checkpoint restore without responses
             reset_context = message is not None and checkpoint_id is None
 
             raw_events = [
                 event
                 async for event in self._run_workflow_with_tracing(
                     initial_executor_fn=functools.partial(
-                        self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
+                        self._execute_with_message_checkpoint_and_responses,
+                        message,
+                        checkpoint_id,
+                        checkpoint_storage,
+                        responses,
                     ),
                     reset_context=reset_context,
                 )
             ]
         finally:
+            if checkpoint_id and responses:
+                self._runner.context.set_suppress_request_events(False)
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
             self._reset_running_flag()

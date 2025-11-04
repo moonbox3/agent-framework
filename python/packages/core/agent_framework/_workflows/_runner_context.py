@@ -208,6 +208,17 @@ class RunnerContext(Protocol):
         """
         ...
 
+    def set_suppress_request_events(self, suppress: bool) -> None:
+        """Control whether RequestInfoEvents are re-emitted during checkpoint restoration.
+
+        Used when restoring a checkpoint with immediate responses to avoid re-emitting
+        events the caller has already seen.
+
+        Args:
+            suppress: True to suppress re-emission, False to allow normal emission.
+        """
+        ...
+
     async def create_checkpoint(
         self,
         shared_state: SharedState,
@@ -296,6 +307,9 @@ class InProcRunnerContext:
 
         # Streaming flag - set by workflow's run_stream() vs run()
         self._streaming: bool = False
+
+        # Suppress re-emission flag - used when restoring with immediate responses
+        self._suppress_request_events: bool = False
 
     # region Messaging and Events
     async def send_message(self, message: Message) -> None:
@@ -430,7 +444,9 @@ class InProcRunnerContext:
         for request_id, request_data in pending_requests_data.items():
             request_info_event = RequestInfoEvent.from_dict(request_data)
             self._pending_request_info_events[request_id] = request_info_event
-            await self.add_event(request_info_event)
+            # Only re-emit RequestInfoEvents if suppression is not active
+            if not self._suppress_request_events:
+                await self.add_event(request_info_event)
 
         # Restore workflow ID
         self._workflow_id = checkpoint.workflow_id
@@ -455,6 +471,17 @@ class InProcRunnerContext:
             True if streaming mode is enabled, False otherwise.
         """
         return self._streaming
+
+    def set_suppress_request_events(self, suppress: bool) -> None:
+        """Control whether RequestInfoEvents are re-emitted during checkpoint restoration.
+
+        Used when restoring a checkpoint with immediate responses to avoid re-emitting
+        events the caller has already seen.
+
+        Args:
+            suppress: True to suppress re-emission, False to allow normal emission.
+        """
+        self._suppress_request_events = suppress
 
     async def _get_serialized_workflow_state(self, shared_state: SharedState, iteration_count: int) -> _WorkflowState:
         serialized_messages: dict[str, list[dict[str, Any]]] = {}

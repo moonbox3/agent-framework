@@ -355,21 +355,18 @@ async def main() -> None:
     # Rebuild fresh instances to mimic a separate process resuming
     workflow2 = build_parent_workflow(storage)
 
-    request_info_event: RequestInfoEvent | None = None
-    async for event in workflow2.run_stream(
-        resume_checkpoint.checkpoint_id,
-    ):
-        if isinstance(event, RequestInfoEvent):
-            request_info_event = event
-
-    if request_info_event is None:
-        raise RuntimeError("No request_info_event captured.")
-
     print("\n=== Stage 3: approve draft ==")
 
     approval_response = "approve"
+    request_id = resume_checkpoint.pending_request_info_events[0]["request_id"]
+
+    # Resume and respond in a single call - no need to capture re-emitted events
     output_event: WorkflowOutputEvent | None = None
-    async for event in workflow2.send_responses_streaming({request_info_event.request_id: approval_response}):
+    async for event in workflow2.run_stream(
+        checkpoint_id=resume_checkpoint.checkpoint_id,
+        checkpoint_storage=storage,
+        responses={request_id: approval_response},
+    ):
         if isinstance(event, WorkflowOutputEvent):
             output_event = event
 

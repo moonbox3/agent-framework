@@ -298,7 +298,6 @@ async def test_magentic_orchestrator_round_limit_produces_partial_result():
     assert data.role == Role.ASSISTANT
 
 
-@pytest.mark.skip(reason="Response handling refactored - send_responses_streaming no longer exists")
 async def test_magentic_checkpoint_resume_round_trip():
     storage = InMemoryCheckpointStorage()
 
@@ -338,16 +337,12 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
     completed: WorkflowOutputEvent | None = None
-    req_event = None
-    async for event in wf_resume.run_stream(
-        resume_checkpoint.checkpoint_id,
-    ):
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
-            req_event = event
-    assert req_event is not None
-
     responses = {req_event.request_id: reply}
-    async for event in wf_resume.send_responses_streaming(responses=responses):
+    async for event in wf_resume.run_stream(
+        checkpoint_id=resume_checkpoint.checkpoint_id,
+        checkpoint_storage=storage,
+        responses=responses,
+    ):
         if isinstance(event, WorkflowOutputEvent):
             completed = event
     assert completed is not None

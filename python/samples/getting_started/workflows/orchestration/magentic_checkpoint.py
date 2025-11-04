@@ -32,8 +32,10 @@ Concepts highlighted here:
    must keep stable IDs so the checkpoint state aligns when we rebuild the graph.
 2. **Executor snapshotting** - checkpoints capture the pending plan-review request
    map, at superstep boundaries.
-3. **Resume with responses** - `Workflow.send_responses_streaming` accepts a
-   `responses` mapping so we can inject the stored human reply during restoration.
+3. **Resume with responses** - `Workflow.run_stream(checkpoint_id=..., responses=...)`
+   accepts both checkpoint_id and responses mapping so we can restore state and inject
+   the stored human reply in a single call, avoiding the need to manually capture
+   re-emitted RequestInfoEvents.
 
 Prerequisites:
 - OpenAI environment variables configured for `OpenAIChatClient`.
@@ -139,20 +141,14 @@ async def main() -> None:
     # Construct an approval reply to supply when the plan review request is re-emitted.
     approval = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
 
-    # Resume execution and capture the re-emitted plan review request.
-    request_info_event: RequestInfoEvent | None = None
-    async for event in resumed_workflow.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, MagenticPlanReviewRequest):
-            request_info_event = event
-
-    if request_info_event is None:
-        print("No plan review request re-emitted on resume; cannot approve.")
-        return
-    print(f"Resumed plan review request: {request_info_event.request_id}")
-
-    # Supply the approval and continue to run to completion.
+    # Resume execution with approval in a single call - the new API handles both
+    # checkpoint restoration and response delivery without re-emitting events.
     final_event: WorkflowOutputEvent | None = None
-    async for event in resumed_workflow.send_responses_streaming({request_info_event.request_id: approval}):
+    async for event in resumed_workflow.run_stream(
+        checkpoint_id=resume_checkpoint.checkpoint_id,
+        checkpoint_storage=checkpoint_storage,
+        responses={resume_checkpoint.pending_request_info_events[0]["request_id"]: approval},
+    ):
         if isinstance(event, WorkflowOutputEvent):
             final_event = event
 

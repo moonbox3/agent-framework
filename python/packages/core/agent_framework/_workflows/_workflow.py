@@ -437,10 +437,12 @@ class Workflow(DictConvertible):
         *,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        responses: dict[str, Any] | None = None,
     ) -> AsyncIterable[WorkflowEvent]:
         """Run the workflow and stream events.
 
-        Unified streaming interface supporting initial runs and checkpoint restoration.
+        Unified streaming interface supporting initial runs, checkpoint restoration, and
+        checkpoint restoration with immediate response delivery.
 
         Args:
             message: Initial message for the start executor. Required for new workflow runs,
@@ -452,12 +454,18 @@ class Workflow(DictConvertible):
                                - With checkpoint_id: Used to load and restore the specified checkpoint
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
+            responses: Responses to pending requests when restoring from checkpoint. If provided,
+                      checkpoint_id must also be provided. The workflow will restore state and
+                      immediately apply these responses without re-emitting the original RequestInfoEvents.
+                      Keys are request IDs, values are the corresponding response data.
 
         Yields:
             WorkflowEvent: Events generated during workflow execution.
 
         Raises:
-            ValueError: If both message and checkpoint_id are provided, or if neither is provided.
+            ValueError: If both message and checkpoint_id are provided.
+            ValueError: If responses provided without checkpoint_id.
+            ValueError: If neither message, checkpoint_id, nor responses is provided.
             ValueError: If checkpoint_id is provided but no checkpoint storage is available
                        (neither at build time nor runtime).
             RuntimeError: If checkpoint restoration fails.
@@ -492,10 +500,24 @@ class Workflow(DictConvertible):
                 storage = FileCheckpointStorage("./checkpoints")
                 async for event in workflow.run_stream(checkpoint_id="cp_123", checkpoint_storage=storage):
                     process(event)
+
+            Resume from checkpoint and immediately send responses:
+
+            .. code-block:: python
+
+                storage = FileCheckpointStorage("./checkpoints")
+                responses = {"request_id_123": "user response"}
+                async for event in workflow.run_stream(
+                    checkpoint_id="cp_123", checkpoint_storage=storage, responses=responses
+                ):
+                    process(event)
         """
-        # Validate mutually exclusive parameters BEFORE setting running flag
+        # Validate parameters
         if message is not None and checkpoint_id is not None:
             raise ValueError("Cannot provide both 'message' and 'checkpoint_id'. Use one or the other.")
+
+        if responses and not checkpoint_id:
+            raise ValueError("'responses' parameter requires 'checkpoint_id' to be provided.")
 
         if message is None and checkpoint_id is None:
             raise ValueError("Must provide either 'message' (new run) or 'checkpoint_id' (resume).")
@@ -510,17 +532,40 @@ class Workflow(DictConvertible):
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-            # Reset context only for new runs (not checkpoint restoration)
-            reset_context = message is not None and checkpoint_id is None
+            # Handle checkpoint restoration with immediate response delivery
+            if checkpoint_id and responses:
+                # Reset context is False because we're restoring from checkpoint
+                reset_context = False
 
-            async for event in self._run_workflow_with_tracing(
-                initial_executor_fn=functools.partial(
-                    self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
-                ),
-                reset_context=reset_context,
-                streaming=True,
-            ):
-                yield event
+                # First restore the checkpoint
+                async for _event in self._run_workflow_with_tracing(
+                    initial_executor_fn=functools.partial(
+                        self._execute_with_message_or_checkpoint, None, checkpoint_id, checkpoint_storage
+                    ),
+                    reset_context=reset_context,
+                    streaming=True,
+                ):
+                    # Don't yield restore events - they're internal to the restoration process
+                    pass
+
+                # Reset running flag to allow send_responses_streaming to proceed
+                self._reset_running_flag()
+
+                # Now send responses and yield those events
+                async for event in self.send_responses_streaming(responses):
+                    yield event
+            else:
+                # Standard flow: either new run or checkpoint restore without responses
+                reset_context = message is not None and checkpoint_id is None
+
+                async for event in self._run_workflow_with_tracing(
+                    initial_executor_fn=functools.partial(
+                        self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
+                    ),
+                    reset_context=reset_context,
+                    streaming=True,
+                ):
+                    yield event
         finally:
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
@@ -553,11 +598,13 @@ class Workflow(DictConvertible):
         *,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        responses: dict[str, Any] | None = None,
         include_status_events: bool = False,
     ) -> WorkflowRunResult:
         """Run the workflow to completion and return all events.
 
-        Unified non-streaming interface supporting initial runs and checkpoint restoration.
+        Unified non-streaming interface supporting initial runs, checkpoint restoration, and
+        checkpoint restoration with immediate response delivery.
 
         Args:
             message: Initial message for the start executor. Required for new workflow runs,
@@ -569,13 +616,19 @@ class Workflow(DictConvertible):
                                - With checkpoint_id: Used to load and restore the specified checkpoint
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
+            responses: Responses to pending requests when restoring from checkpoint. If provided,
+                      checkpoint_id must also be provided. The workflow will restore state and
+                      immediately apply these responses without re-emitting the original RequestInfoEvents.
+                      Keys are request IDs, values are the corresponding response data.
             include_status_events: Whether to include WorkflowStatusEvent instances in the result list.
 
         Returns:
             A WorkflowRunResult instance containing events generated during workflow execution.
 
         Raises:
-            ValueError: If both message and checkpoint_id are provided, or if neither is provided.
+            ValueError: If both message and checkpoint_id are provided.
+            ValueError: If responses provided without checkpoint_id.
+            ValueError: If neither message, checkpoint_id, nor responses is provided.
             ValueError: If checkpoint_id is provided but no checkpoint storage is available
                        (neither at build time nor runtime).
             RuntimeError: If checkpoint restoration fails.
@@ -607,10 +660,21 @@ class Workflow(DictConvertible):
 
                 storage = FileCheckpointStorage("./checkpoints")
                 result = await workflow.run(checkpoint_id="cp_123", checkpoint_storage=storage)
+
+            Resume from checkpoint and immediately send responses:
+
+            .. code-block:: python
+
+                storage = FileCheckpointStorage("./checkpoints")
+                responses = {"request_id_123": "user response"}
+                result = await workflow.run(checkpoint_id="cp_123", checkpoint_storage=storage, responses=responses)
         """
-        # Validate mutually exclusive parameters BEFORE setting running flag
+        # Validate parameters
         if message is not None and checkpoint_id is not None:
             raise ValueError("Cannot provide both 'message' and 'checkpoint_id'. Use one or the other.")
+
+        if responses and not checkpoint_id:
+            raise ValueError("'responses' parameter requires 'checkpoint_id' to be provided.")
 
         if message is None and checkpoint_id is None:
             raise ValueError("Must provide either 'message' (new run) or 'checkpoint_id' (resume).")
@@ -622,7 +686,27 @@ class Workflow(DictConvertible):
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
 
         try:
-            # Reset context only for new runs (not checkpoint restoration)
+            # Handle checkpoint restoration with immediate response delivery
+            if checkpoint_id and responses:
+                # Reset context is False because we're restoring from checkpoint
+                reset_context = False
+
+                # First restore the checkpoint (don't collect events)
+                async for _event in self._run_workflow_with_tracing(
+                    initial_executor_fn=functools.partial(
+                        self._execute_with_message_or_checkpoint, None, checkpoint_id, checkpoint_storage
+                    ),
+                    reset_context=reset_context,
+                ):
+                    pass
+
+                # Reset running flag to allow send_responses to proceed
+                self._reset_running_flag()
+
+                # Now send responses and collect those events
+                return await self.send_responses(responses)
+
+            # Standard flow: either new run or checkpoint restore without responses
             reset_context = message is not None and checkpoint_id is None
 
             raw_events = [

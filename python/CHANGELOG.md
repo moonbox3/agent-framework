@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ensure agent thread is part of checkpoint ([#1756](https://github.com/microsoft/agent-framework/pull/1756))
 - Fix middleware and cleanup confusing function ([#1865](https://github.com/microsoft/agent-framework/pull/1865))
 - Fix type compatibility check ([#1753](https://github.com/microsoft/agent-framework/pull/1753))
+- Fix mcp tool cloning for handoff pattern ([#1883](https://github.com/microsoft/agent-framework/pull/1883))
 
 ## [1.0.0b251028] - 2025-10-28
 

@@ -4,7 +4,7 @@ description = "Microsoft Agent Framework for building AI Agents with Python. Thi
 authors = [{ name = "Microsoft", email = "af-support@microsoft.com"}]
 readme = "README.md"
 requires-python = ">=3.10"
-version = "1.0.0b251016"
+version = "1.0.0b251104"
 license-files = ["LICENSE"]
 urls.homepage = "https://aka.ms/agent-framework"
 urls.source = "https://github.com/microsoft/agent-framework/tree/main/python"
@@ -24,13 +24,15 @@ classifiers = [
 dependencies = [
     "agent-framework-core",
     "agent-framework-a2a",
+    "agent-framework-ag-ui",
+    "agent-framework-anthropic",
     "agent-framework-azure-ai",
     "agent-framework-copilotstudio",
+    "agent-framework-devui",
     "agent-framework-lab",
     "agent-framework-mem0",
-    "agent-framework-redis",
-    "agent-framework-devui",
     "agent-framework-purview",
+    "agent-framework-redis",
 ]
 
 [dependency-groups]
@@ -53,6 +55,9 @@ dev = [
     "rich",
     "tomli",
     "tomli-w",
+    # AutoGen migration samples
+    "autogen-agentchat",
+    "autogen-ext[openai]",
 ]
 docs = [
     # Documentation
@@ -92,6 +97,7 @@ agent-framework-mem0 = { workspace = true }
 agent-framework-redis = { workspace = true }
 agent-framework-devui = { workspace = true }
 agent-framework-purview = { workspace = true }
+agent-framework-anthropic = { workspace = true }
 
 [tool.ruff]
 line-length = 120
@@ -175,15 +181,11 @@ omit = [
 ]
 
 [tool.pyright]
-include = ["agent_framework", "samples"]
-exclude = ["**/tests/**", "docs", "**/.venv/**", "samples/semantic-kernel-migration/**", "packages/devui/frontend/**"]
+include = ["agent_framework*"]
+exclude = ["**/tests/**", "docs", "**/.venv/**", "packages/devui/frontend/**"]
 typeCheckingMode = "strict"
 reportUnnecessaryIsInstance = false
 reportMissingTypeStubs = false
-
-[[tool.pyright.executionEnvironments]]
-root = "samples/semantic-kernel-migration"
-typeCheckingMode = "off"
 
 [tool.mypy]
 plugins = ['pydantic.mypy']
@@ -208,7 +210,6 @@ executor.type = "uv"
 
 [tool.poe.tasks]
 markdown-code-lint = """uv run python check_md_code_blocks.py README.md ./packages/**/README.md ./samples/**/*.md --exclude cookiecutter-agent-framework-lab --exclude tau2 --exclude packages/devui/frontend"""
-samples-code-check = """pyright ./samples"""
 docs-install = "uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit --group=docs"
 docs-clean = "rm -rf docs/build"
 docs-build = "uv run python ./docs/generate_docs.py"
@@ -232,8 +233,8 @@ build-meta = "python -m flit build"
 build = ["build-packages", "build-meta"]
 publish = "uv publish"
 # combined checks
-check = ["fmt", "lint", "pyright", "mypy", "test", "markdown-code-lint", "samples-code-check"]
-pre-commit-check = ["fmt", "lint", "pyright", "markdown-code-lint", "samples-code-check"]
+check = ["fmt", "lint", "pyright", "mypy", "test", "markdown-code-lint"]
+pre-commit-check = ["fmt", "lint", "pyright", "markdown-code-lint"]
 
 [tool.poe.tasks.all-tests-cov]
 cmd = """

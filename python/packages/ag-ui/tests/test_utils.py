@@ -51,6 +51,20 @@ def test_merge_state_empty_current():
     assert result == update
 
 
+def test_merge_state_deep_copy():
+    """Test that merge_state creates a deep copy preventing mutation of original."""
+    current = {"recipe": {"name": "Cake", "ingredients": ["flour", "sugar"]}}
+    update = {"other": "value"}
+
+    result = merge_state(current, update)
+
+    result["recipe"]["ingredients"].append("eggs")
+
+    assert "eggs" not in current["recipe"]["ingredients"]
+    assert current["recipe"]["ingredients"] == ["flour", "sugar"]
+    assert result["recipe"]["ingredients"] == ["flour", "sugar", "eggs"]
+
+
 def test_make_json_safe_basic():
     """Test JSON serialization of basic types."""
     assert make_json_safe("text") == "text"

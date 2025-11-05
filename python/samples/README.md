@@ -14,7 +14,8 @@ This directory contains samples demonstrating the capabilities of Microsoft Agen
 
 | File | Description |
 |------|-------------|
-| [`getting_started/agents/anthropic/anthropic_with_openai_chat_client.py`](./getting_started/agents/anthropic/anthropic_with_openai_chat_client.py) | Anthropic with OpenAI Chat Client Example |
+| [`getting_started/agents/anthropic/anthropic_basic.py`](./getting_started/agents/anthropic/anthropic_basic.py) | Agent with Anthropic Client |
+| [`getting_started/agents/anthropic/anthropic_advanced.py`](./getting_started/agents/anthropic/anthropic_advanced.py) | Advanced sample with `thinking` and hosted tools. |
 
 ### Azure AI
 
@@ -182,6 +183,7 @@ This directory contains samples demonstrating the capabilities of Microsoft Agen
 | [`getting_started/middleware/middleware_termination.py`](./getting_started/middleware/middleware_termination.py) | Middleware termination example |
 | [`getting_started/middleware/override_result_with_middleware.py`](./getting_started/middleware/override_result_with_middleware.py) | Override result with middleware example |
 | [`getting_started/middleware/shared_state_middleware.py`](./getting_started/middleware/shared_state_middleware.py) | Shared state middleware example |
+| [`getting_started/middleware/thread_behavior_middleware.py`](./getting_started/middleware/thread_behavior_middleware.py) | Thread behavior middleware example demonstrating how to track conversation state across multiple agent runs |
 
 ## Multimodal Input
 

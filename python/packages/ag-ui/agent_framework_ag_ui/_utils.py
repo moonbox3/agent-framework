@@ -2,6 +2,7 @@
 
 """Utility functions for AG-UI integration."""
 
+import copy
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
@@ -23,7 +24,7 @@ def merge_state(current: dict[str, Any], update: dict[str, Any]) -> dict[str, An
     Returns:
         Merged state
     """
-    result = current.copy()
+    result = copy.deepcopy(current)
     result.update(update)
     return result
 

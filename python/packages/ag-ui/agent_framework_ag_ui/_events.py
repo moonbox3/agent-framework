@@ -673,8 +673,3 @@ class AgentFrameworkEventBridge:
         return StateDeltaEvent(
             delta=delta,
         )
-
-
-__all__ = [
-    "AgentFrameworkEventBridge",
-]

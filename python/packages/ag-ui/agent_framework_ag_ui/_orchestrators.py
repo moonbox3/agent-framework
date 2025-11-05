@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from ag_ui.core import (
     BaseEvent,
+    RunErrorEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
@@ -231,7 +232,8 @@ class HumanInTheLoopOrchestrator(Orchestrator):
 
         except json.JSONDecodeError:
             logger.error(f"Failed to parse tool result: {tool_content_text}")
-            # Fall through - could yield error event here
+            yield RunErrorEvent(message=f"Invalid tool result format: {tool_content_text[:100]}")
+            yield event_bridge.create_run_finished_event()
 
 
 class DefaultOrchestrator(Orchestrator):
@@ -314,7 +316,7 @@ class DefaultOrchestrator(Orchestrator):
             for key, schema in context.config.state_schema.items():
                 if key not in current_state:
                     # Default to empty object; use empty array if schema specifies "array" type
-                    current_state[key] = [] if isinstance(schema, dict) and schema.get("type") == "array" else {}
+                    current_state[key] = [] if isinstance(schema, dict) and schema.get("type") == "array" else {}  # type: ignore
             yield event_bridge.create_state_snapshot_event(current_state)
 
         # Create thread for context tracking

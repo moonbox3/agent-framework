@@ -39,18 +39,15 @@ class AgentConfig:
 
 
 class AgentFrameworkAgent:
-    """Clean, orchestrator-based agent wrapper for AG-UI.
+    """Wraps Agent Framework agents for AG-UI protocol compatibility.
 
-    This is a complete rewrite of the original AgentFrameworkAgent that uses
-    the orchestrator pattern to cleanly separate concerns. The original 376-line
-    implementation has been reduced to ~100 lines by extracting orchestration
-    logic into dedicated classes.
+    Translates between Agent Framework's AgentProtocol and AG-UI's event-based
+    protocol. Uses orchestrators to handle different execution flows (standard
+    execution, human-in-the-loop, etc.). Orchestrators are checked in order;
+    the first matching orchestrator handles the request.
 
-    Key improvements:
-    - Orchestration logic extracted into separate Orchestrator classes
-    - Single responsibility: protocol translation only
-    - Composable: new flows added via orchestrators, not code modification
-    - Clean separation of concerns between translation and orchestration
+    Supports predictive state updates for agentic generative UI, with optional
+    confirmation requirements configurable per use case.
     """
 
     def __init__(

@@ -3,10 +3,8 @@ name = "agent-framework-ag-ui"
 version = "1.0.0b251105"
 description = "AG-UI protocol integration for Agent Framework"
 readme = "README.md"
-license = { file = "LICENSE" }
-authors = [
-    { name = "Microsoft", email = "agent-framework@microsoft.com" }
-]
+license-files = ["LICENSE"]
+authors = [{ name = "Microsoft", email = "af-support@microsoft.com"}]
 requires-python = ">=3.10"
 urls.homepage = "https://aka.ms/agent-framework"
 urls.source = "https://github.com/microsoft/agent-framework/tree/main/python"

@@ -46,6 +46,7 @@ class WorkflowBuilder:
     Example:
         .. code-block:: python
 
+            from typing_extensions import Never
             from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 
@@ -242,6 +243,7 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
+                from typing_extensions import Never
                 from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 
@@ -532,6 +534,7 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
+                from typing_extensions import Never
                 from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 
@@ -581,6 +584,7 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
+                from typing_extensions import Never
                 from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 
@@ -632,6 +636,7 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
+                from typing_extensions import Never
                 from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 
@@ -686,15 +691,29 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
-                from agent_framework import WorkflowBuilder
+                from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
-                # Set a custom iteration limit
+
+                class StepA(Executor):
+                    @handler
+                    async def process(self, count: int, ctx: WorkflowContext[int]) -> None:
+                        if count < 10:
+                            await ctx.send_message(count + 1)
+
+
+                class StepB(Executor):
+                    @handler
+                    async def process(self, count: int, ctx: WorkflowContext[int]) -> None:
+                        await ctx.send_message(count)
+
+
+                # Set a custom iteration limit for workflow with cycles
                 workflow = (
                     WorkflowBuilder()
                     .set_max_iterations(500)
-                    .add_edge(executor_a, executor_b)
-                    .add_edge(executor_b, executor_a)  # Cycle
-                    .set_start_executor(executor_a)
+                    .add_edge(StepA(id="step_a"), StepB(id="step_b"))
+                    .add_edge(StepB(id="step_b"), StepA(id="step_a"))  # Cycle
+                    .set_start_executor("step_a")
                     .build()
                 )
         """
@@ -719,21 +738,35 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
-                from agent_framework import WorkflowBuilder
+                from typing_extensions import Never
+                from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
                 from agent_framework import FileCheckpointStorage
+
+
+                class ProcessorA(Executor):
+                    @handler
+                    async def process(self, text: str, ctx: WorkflowContext[str]) -> None:
+                        await ctx.send_message(text.upper())
+
+
+                class ProcessorB(Executor):
+                    @handler
+                    async def process(self, text: str, ctx: WorkflowContext[Never, str]) -> None:
+                        await ctx.yield_output(text)
+
 
                 # Enable checkpointing with file-based storage
                 storage = FileCheckpointStorage("./checkpoints")
                 workflow = (
                     WorkflowBuilder()
-                    .add_edge(executor_a, executor_b)
-                    .set_start_executor(executor_a)
+                    .add_edge(ProcessorA(id="proc_a"), ProcessorB(id="proc_b"))
+                    .set_start_executor("proc_a")
                     .with_checkpointing(storage)
                     .build()
                 )
 
                 # Run with checkpoint saving
-                events = await workflow.run("input", checkpoint_after_steps=5)
+                events = await workflow.run("input")
         """
         self._checkpoint_storage = checkpoint_storage
         return self
@@ -758,6 +791,7 @@ class WorkflowBuilder:
         Example:
             .. code-block:: python
 
+                from typing_extensions import Never
                 from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 
 

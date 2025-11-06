@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0b251106] - 2025-11-06
+
+### Changed
+
+- **agent-framework-ag-ui**: export sample ag-ui agents ([#1927](https://github.com/microsoft/agent-framework/pull/1927))
+
 ## [1.0.0b251105] - 2025-11-05
 
 ### Added

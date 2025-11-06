@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0b251106.post1] - 2025-11-06
 
-### Changed
+### Fixed
 
 - **agent-framework-ag-ui**: Fix ag-ui examples packaging for PyPI publish ([#1953](https://github.com/microsoft/agent-framework/pull/1953))
 

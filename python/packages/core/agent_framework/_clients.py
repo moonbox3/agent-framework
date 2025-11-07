@@ -224,7 +224,7 @@ def _merge_chat_options(
     stop: str | Sequence[str] | None = None,
     store: bool | None = None,
     temperature: float | None = None,
-    tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = "auto",
+    tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = None,
     tools: list[ToolProtocol | dict[str, Any] | Callable[..., Any]] | None = None,
     top_p: float | None = None,
     user: str | None = None,
@@ -496,7 +496,7 @@ class BaseChatClient(SerializationMixin, ABC):
         stop: str | Sequence[str] | None = None,
         store: bool | None = None,
         temperature: float | None = None,
-        tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = "auto",
+        tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = None,
         tools: ToolProtocol
         | Callable[..., Any]
         | MutableMapping[str, Any]
@@ -595,7 +595,7 @@ class BaseChatClient(SerializationMixin, ABC):
         stop: str | Sequence[str] | None = None,
         store: bool | None = None,
         temperature: float | None = None,
-        tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = "auto",
+        tool_choice: ToolMode | Literal["auto", "required", "none"] | dict[str, Any] | None = None,
         tools: ToolProtocol
         | Callable[..., Any]
         | MutableMapping[str, Any]

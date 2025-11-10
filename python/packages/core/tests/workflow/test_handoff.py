@@ -23,7 +23,7 @@ from agent_framework import (
     WorkflowOutputEvent,
 )
 from agent_framework._mcp import MCPTool
-from agent_framework._workflows._handoff import _clone_chat_agent
+from agent_framework._workflows._handoff import _clone_chat_agent  # type: ignore[reportPrivateUsage]
 
 
 @dataclass
@@ -392,14 +392,15 @@ async def test_clone_chat_agent_preserves_mcp_tools() -> None:
     )
 
     assert hasattr(original_agent, "_local_mcp_tools")
-    assert len(original_agent._local_mcp_tools) == 1
-    assert original_agent._local_mcp_tools[0] == mock_mcp_tool
+    assert len(original_agent._local_mcp_tools) == 1  # type: ignore[reportPrivateUsage]
+    assert original_agent._local_mcp_tools[0] == mock_mcp_tool  # type: ignore[reportPrivateUsage]
 
     cloned_agent = _clone_chat_agent(original_agent)
 
     assert hasattr(cloned_agent, "_local_mcp_tools")
-    assert len(cloned_agent._local_mcp_tools) == 1
-    assert cloned_agent._local_mcp_tools[0] == mock_mcp_tool
+    assert len(cloned_agent._local_mcp_tools) == 1  # type: ignore[reportPrivateUsage]
+    assert cloned_agent._local_mcp_tools[0] == mock_mcp_tool  # type: ignore[reportPrivateUsage]
+    assert cloned_agent.chat_options.tools is not None
     assert len(cloned_agent.chat_options.tools) == 1
 
 
@@ -564,3 +565,45 @@ async def test_tool_choice_preserved_from_agent_config():
     last_tool_choice = recorded_tool_choices[-1]
     assert last_tool_choice is not None, "tool_choice should not be None"
     assert str(last_tool_choice) == "required", f"Expected 'required', got {last_tool_choice}"
+
+
+async def test_return_to_previous_state_serialization():
+    """Test that return_to_previous state is properly serialized/deserialized for checkpointing."""
+    from agent_framework._workflows._handoff import _HandoffCoordinator  # type: ignore[reportPrivateUsage]
+
+    # Create a coordinator with return_to_previous enabled
+    coordinator = _HandoffCoordinator(
+        starting_agent_id="triage",
+        specialist_ids={"specialist_a": "specialist_a", "specialist_b": "specialist_b"},
+        input_gateway_id="gateway",
+        termination_condition=lambda conv: False,
+        id="test-coordinator",
+        return_to_previous=True,
+    )
+
+    # Set the current agent (simulating a handoff scenario)
+    coordinator._current_agent_id = "specialist_a"  # type: ignore[reportPrivateUsage]
+
+    # Snapshot the state
+    state = coordinator.snapshot_state()
+
+    # Verify pattern metadata includes current_agent_id
+    assert "metadata" in state
+    assert "current_agent_id" in state["metadata"]
+    assert state["metadata"]["current_agent_id"] == "specialist_a"
+
+    # Create a new coordinator and restore state
+    coordinator2 = _HandoffCoordinator(
+        starting_agent_id="triage",
+        specialist_ids={"specialist_a": "specialist_a", "specialist_b": "specialist_b"},
+        input_gateway_id="gateway",
+        termination_condition=lambda conv: False,
+        id="test-coordinator",
+        return_to_previous=True,
+    )
+
+    # Restore state
+    coordinator2.restore_state(state)
+
+    # Verify current_agent_id was restored
+    assert coordinator2._current_agent_id == "specialist_a", "Current agent should be restored from checkpoint"  # type: ignore[reportPrivateUsage]

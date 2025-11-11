@@ -212,7 +212,7 @@ async def main():
             # Run examples in sequence
             thread_id = await streaming_example(client)
             thread_id = await non_streaming_example(client, thread_id)
-            thread_id = await tool_example(client, thread_id)
+            await tool_example(client, thread_id)
 
             # Separate conversation with new thread
             await conversation_example(client)

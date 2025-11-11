@@ -261,7 +261,7 @@ python server.py
 ```
 
 Or using uvicorn directly:
-s
+
 ```bash
 uvicorn server:app --host 127.0.0.1 --port 5100
 ```

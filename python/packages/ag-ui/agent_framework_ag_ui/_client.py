@@ -15,6 +15,7 @@ from agent_framework.observability import use_observability
 
 from ._event_converters import AGUIEventConverter
 from ._http_service import AGUIHttpService
+from ._message_adapters import agent_framework_messages_to_agui
 from ._utils import convert_tools_to_agui_format
 
 
@@ -186,22 +187,7 @@ class AGUIChatClient(BaseChatClient):
         Returns:
             List of AG-UI formatted message dictionaries
         """
-        agui_messages: list[dict[str, Any]] = []
-
-        for msg in messages:
-            role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-
-            message_dict: dict[str, Any] = {
-                "role": role,
-                "content": msg.text,
-            }
-
-            if msg.message_id:
-                message_dict["id"] = msg.message_id
-
-            agui_messages.append(message_dict)
-
-        return agui_messages
+        return agent_framework_messages_to_agui(messages)
 
     def _get_thread_id(self, chat_options: ChatOptions) -> str:
         """Get or generate thread ID from chat options.

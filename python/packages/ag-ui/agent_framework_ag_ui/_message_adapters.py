@@ -162,22 +162,21 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str
     for msg in messages:
         # If already a dict (AG-UI format), ensure it has an ID and normalize keys for Pydantic
         if isinstance(msg, dict):
+            # Always work on a copy to avoid mutating input
+            normalized_msg = msg.copy()
             # Ensure ID exists
-            if "id" not in msg:
-                msg["id"] = generate_event_id()
-
+            if "id" not in normalized_msg:
+                normalized_msg["id"] = generate_event_id()
             # Normalize tool_call_id to toolCallId for Pydantic's alias_generator=to_camel
-            if msg.get("role") == "tool":
-                normalized_msg = msg.copy()
-                if "tool_call_id" in msg:
-                    normalized_msg["toolCallId"] = msg["tool_call_id"]
+            if normalized_msg.get("role") == "tool":
+                if "tool_call_id" in normalized_msg:
+                    normalized_msg["toolCallId"] = normalized_msg["tool_call_id"]
                     del normalized_msg["tool_call_id"]
-                elif "toolCallId" not in msg:
+                elif "toolCallId" not in normalized_msg:
                     # Tool message missing toolCallId - add empty string to satisfy schema
                     normalized_msg["toolCallId"] = ""
-                result.append(normalized_msg)
-            else:
-                result.append(msg)
+            # Always append the normalized copy, not the original
+            result.append(normalized_msg)
             continue
 
         # Convert ChatMessage to AG-UI format

@@ -21,19 +21,23 @@ class AGUIHttpService:
     Examples:
         Basic usage:
 
-        >>> service = AGUIHttpService("http://localhost:8888/")
-        >>> async for event in service.post_run(
-        ...     thread_id="thread_123",
-        ...     run_id="run_456",
-        ...     messages=[{"role": "user", "content": "Hello"}]
-        ... ):
-        ...     print(event["type"])
+        .. code-block:: python
+
+            service = AGUIHttpService("http://localhost:8888/")
+            async for event in service.post_run(
+                thread_id="thread_123",
+                run_id="run_456",
+                messages=[{"role": "user", "content": "Hello"}]
+            ):
+                print(event["type"])
 
         With context manager:
 
-        >>> async with AGUIHttpService("http://localhost:8888/") as service:
-        ...     async for event in service.post_run(...):
-        ...         print(event)
+        .. code-block:: python
+
+            async with AGUIHttpService("http://localhost:8888/") as service:
+                async for event in service.post_run(...):
+                    print(event)
     """
 
     def __init__(
@@ -78,15 +82,17 @@ class AGUIHttpService:
             ValueError: If SSE parsing encounters invalid data
 
         Examples:
-            >>> service = AGUIHttpService("http://localhost:8888/")
-            >>> async for event in service.post_run(
-            ...     thread_id="thread_abc",
-            ...     run_id="run_123",
-            ...     messages=[{"role": "user", "content": "Hello"}],
-            ...     state={"user_context": {"name": "Alice"}}
-            ... ):
-            ...     if event["type"] == "TEXT_MESSAGE_CONTENT":
-            ...         print(event["delta"])
+            .. code-block:: python
+
+                service = AGUIHttpService("http://localhost:8888/")
+                async for event in service.post_run(
+                    thread_id="thread_abc",
+                    run_id="run_123",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    state={"user_context": {"name": "Alice"}}
+                ):
+                    if event["type"] == "TEXT_MESSAGE_CONTENT":
+                        print(event["delta"])
         """
         # Build request payload
         request_data: dict[str, Any] = {

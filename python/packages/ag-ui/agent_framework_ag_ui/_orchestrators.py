@@ -374,7 +374,7 @@ Never replace existing data - always append or merge."""
 
         # After agent completes, check if we should stop (waiting for user to confirm changes)
         if event_bridge.should_stop_after_confirm:
-            logger.info("  >>> Stopping run after confirm_changes - waiting for user response")
+            logger.info("Stopping run after confirm_changes - waiting for user response")
             yield event_bridge.create_run_finished_event()
             return
 

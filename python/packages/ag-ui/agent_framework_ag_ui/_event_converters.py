@@ -42,17 +42,21 @@ class AGUIEventConverter:
 
         Examples:
             RUN_STARTED event:
-            >>> converter = AGUIEventConverter()
-            >>> event = {"type": "RUN_STARTED", "threadId": "t1", "runId": "r1"}
-            >>> update = converter.convert_event(event)
-            >>> update.additional_properties["thread_id"]
-            't1'
+
+            .. code-block:: python
+
+                converter = AGUIEventConverter()
+                event = {"type": "RUN_STARTED", "threadId": "t1", "runId": "r1"}
+                update = converter.convert_event(event)
+                assert update.additional_properties["thread_id"] == "t1"
 
             TEXT_MESSAGE_CONTENT event:
-            >>> event = {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m1", "delta": "Hello"}
-            >>> update = converter.convert_event(event)
-            >>> update.contents[0].text
-            'Hello'
+
+            .. code-block:: python
+
+                event = {"type": "TEXT_MESSAGE_CONTENT", "messageId": "m1", "delta": "Hello"}
+                update = converter.convert_event(event)
+                assert update.contents[0].text == "Hello"
         """
         event_type = event.get("type", "")
 

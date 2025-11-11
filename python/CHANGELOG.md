@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0b251111] - 2025-11-11
+
+### Added
+
+- **agent-framework-ag-ui**: Add concrete AGUIChatClient ([#2072](https://github.com/microsoft/agent-framework/pull/2072))
+
 ## [1.0.0b251108] - 2025-11-08
 
 ### Added

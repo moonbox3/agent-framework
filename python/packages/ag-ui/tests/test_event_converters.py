@@ -107,6 +107,36 @@ class TestAGUIEventConverter:
         assert converter.current_tool_call_id == "call_123"
         assert converter.current_tool_name == "get_weather"
 
+    def test_tool_call_start_with_tool_call_name(self) -> None:
+        """Ensure TOOL_CALL_START with toolCallName still sets the tool name."""
+        converter = AGUIEventConverter()
+        event = {
+            "type": "TOOL_CALL_START",
+            "toolCallId": "call_abc",
+            "toolCallName": "get_weather",
+        }
+
+        update = converter.convert_event(event)
+
+        assert update is not None
+        assert update.contents[0].name == "get_weather"
+        assert converter.current_tool_name == "get_weather"
+
+    def test_tool_call_start_with_tool_call_name_snake_case(self) -> None:
+        """Support tool_call_name snake_case field for backwards compatibility."""
+        converter = AGUIEventConverter()
+        event = {
+            "type": "TOOL_CALL_START",
+            "toolCallId": "call_snake",
+            "tool_call_name": "get_weather",
+        }
+
+        update = converter.convert_event(event)
+
+        assert update is not None
+        assert update.contents[0].name == "get_weather"
+        assert converter.current_tool_name == "get_weather"
+
     def test_tool_call_args_streaming(self) -> None:
         """Test streaming tool arguments across multiple TOOL_CALL_ARGS events."""
         converter = AGUIEventConverter()

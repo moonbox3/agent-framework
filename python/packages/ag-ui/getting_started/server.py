@@ -2,16 +2,24 @@
 
 """AG-UI server example with server-side tools."""
 
+import logging
 import os
 
 from agent_framework import ChatAgent, ai_function
+from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
 from agent_framework.azure import AzureOpenAIChatClient
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
-from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
-
 load_dotenv()
+
+# Enable debug logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 # Read required configuration
 endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
@@ -24,7 +32,7 @@ if not deployment_name:
 
 
 # Server-side tool (executes on server)
-@ai_function
+@ai_function(description="Get the time zone for a location.")
 def get_time_zone(location: str) -> str:
     """Get the time zone for a location.
 
@@ -43,30 +51,14 @@ def get_time_zone(location: str) -> str:
     return result
 
 
-# Server-side weather tool (for fallback if client doesn't handle it)
-@ai_function
-def get_weather(location: str) -> str:
-    """Get the current weather for a location.
-
-    Args:
-        location: The city or location name
-    """
-    print(f"[SERVER] get_weather tool called with location: {location}")
-    weather_data = {
-        "seattle": "Rainy, 55°F (SERVER DATA)",
-        "san francisco": "Foggy, 62°F (SERVER DATA)",
-        "new york": "Sunny, 68°F (SERVER DATA)",
-        "london": "Cloudy, 52°F (SERVER DATA)",
-    }
-    result = weather_data.get(location.lower(), f"Weather data not available for {location}")
-    print(f"[SERVER] get_weather returning: {result}")
-    return result
-
-
-# Create the AI agent with server-side tools
-# Note: Client will also send its own tools which could execute client-side
-# When both client and server have the same tool, the client-side one should execute
-# (via @use_function_invocation decorator on AGUIChatClient)
+# Create the AI agent with ONLY server-side tools
+# IMPORTANT: Do NOT include tools that the client provides!
+# In this example:
+# - get_time_zone: SERVER-ONLY tool (only server has this)
+# - get_weather: CLIENT-ONLY tool (client provides this, server should NOT include it)
+# The client will send get_weather tool metadata so the LLM knows about it,
+# and @use_function_invocation on AGUIChatClient will execute it client-side.
+# This matches the .NET AG-UI hybrid execution pattern.
 agent = ChatAgent(
     name="AGUIAssistant",
     instructions="You are a helpful assistant. Use get_weather for weather and get_time_zone for time zones.",
@@ -74,7 +66,7 @@ agent = ChatAgent(
         endpoint=endpoint,
         deployment_name=deployment_name,
     ),
-    tools=[get_weather, get_time_zone],
+    tools=[get_time_zone],  # ONLY server-side tools
 )
 
 # Create FastAPI app
@@ -86,4 +78,4 @@ add_agent_framework_fastapi_endpoint(app, agent, "/")
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=5100)
+    uvicorn.run(app, host="127.0.0.1", port=5100, log_level="debug", access_log=True)

@@ -127,7 +127,7 @@ class AGUIEventConverter:
     def _handle_tool_call_start(self, event: dict[str, Any]) -> ChatResponseUpdate:
         """Handle TOOL_CALL_START event."""
         self.current_tool_call_id = event.get("toolCallId")
-        self.current_tool_name = event.get("toolName")
+        self.current_tool_name = event.get("toolName") or event.get("toolCallName") or event.get("tool_call_name")
         self.accumulated_tool_args = ""
 
         return ChatResponseUpdate(
@@ -165,7 +165,7 @@ class AGUIEventConverter:
     def _handle_tool_call_result(self, event: dict[str, Any]) -> ChatResponseUpdate:
         """Handle TOOL_CALL_RESULT event."""
         tool_call_id = event.get("toolCallId", "")
-        result = event.get("result")
+        result = event.get("result") if event.get("result") is not None else event.get("content")
 
         return ChatResponseUpdate(
             role=Role.TOOL,

@@ -60,6 +60,44 @@ def make_json_safe(obj: Any) -> Any:  # noqa: ANN401
     return str(obj)
 
 
+def convert_agui_tools_to_agent_framework(
+    agui_tools: list[dict[str, Any]] | None,
+) -> list[AIFunction[Any, Any]] | None:
+    """Convert AG-UI tool definitions to Agent Framework AIFunction declarations.
+
+    Creates declaration-only AIFunction instances (no executable implementation).
+    These are used to tell the LLM about available tools. The actual execution
+    happens on the client side via @use_function_invocation.
+
+    CRITICAL: These tools MUST have func=None so that declaration_only returns True.
+    This prevents the server from trying to execute client-side tools.
+
+    Args:
+        agui_tools: List of AG-UI tool definitions with name, description, parameters
+
+    Returns:
+        List of AIFunction declarations, or None if no tools provided
+    """
+    if not agui_tools:
+        return None
+
+    result: list[AIFunction[Any, Any]] = []
+    for tool_def in agui_tools:
+        # Create declaration-only AIFunction (func=None means no implementation)
+        # When func=None, the declaration_only property returns True,
+        # which tells @use_function_invocation to return the function call
+        # without executing it (so it can be sent back to the client)
+        func: AIFunction[Any, Any] = AIFunction(
+            name=tool_def.get("name", ""),
+            description=tool_def.get("description", ""),
+            func=None,  # CRITICAL: Makes declaration_only=True
+            input_model=tool_def.get("parameters", {}),
+        )
+        result.append(func)
+
+    return result
+
+
 def convert_tools_to_agui_format(
     tools: (
         ToolProtocol

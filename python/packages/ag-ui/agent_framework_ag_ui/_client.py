@@ -3,14 +3,26 @@
 """AG-UI Chat Client implementation."""
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterable, MutableSequence
-from typing import Any
+from functools import wraps
+from typing import Any, TypeVar, cast
 
 import httpx
-from agent_framework import BaseChatClient, ChatMessage, ChatOptions, ChatResponse, ChatResponseUpdate, DataContent
+from agent_framework import (
+    AIFunction,
+    BaseChatClient,
+    ChatMessage,
+    ChatOptions,
+    ChatResponse,
+    ChatResponseUpdate,
+    DataContent,
+    FunctionCallContent,
+)
 from agent_framework._middleware import use_chat_middleware
 from agent_framework._tools import use_function_invocation
+from agent_framework._types import BaseContent, Contents
 from agent_framework.observability import use_observability
 
 from ._event_converters import AGUIEventConverter
@@ -18,7 +30,64 @@ from ._http_service import AGUIHttpService
 from ._message_adapters import agent_framework_messages_to_agui
 from ._utils import convert_tools_to_agui_format
 
+logger: logging.Logger = logging.getLogger(__name__)
 
+
+class ServerFunctionCallContent(BaseContent):
+    """Wrapper for server function calls to prevent client re-execution.
+
+    All function calls from the remote server are server-side executions.
+    This wrapper prevents @use_function_invocation from trying to execute them again.
+    """
+
+    function_call_content: FunctionCallContent
+
+    def __init__(self, function_call_content: FunctionCallContent) -> None:
+        """Initialize with the function call content."""
+        super().__init__(type="server_function_call")
+        self.function_call_content = function_call_content
+
+
+def _unwrap_server_function_call_contents(contents: MutableSequence[Contents | dict[str, Any]]) -> None:
+    """Replace ServerFunctionCallContent instances with their underlying call content."""
+    for idx, content in enumerate(contents):
+        if isinstance(content, ServerFunctionCallContent):
+            contents[idx] = content.function_call_content  # type: ignore[assignment]
+
+
+TBaseChatClient = TypeVar("TBaseChatClient", bound=type[BaseChatClient])
+
+
+def _apply_server_function_call_unwrap(chat_client: TBaseChatClient) -> TBaseChatClient:
+    """Class decorator that unwraps server-side function calls after tool handling."""
+
+    original_get_streaming_response = chat_client.get_streaming_response
+
+    @wraps(original_get_streaming_response)
+    async def streaming_wrapper(self, *args: Any, **kwargs: Any) -> AsyncIterable[ChatResponseUpdate]:
+        async for update in original_get_streaming_response(self, *args, **kwargs):
+            _unwrap_server_function_call_contents(cast(MutableSequence[Contents | dict[str, Any]], update.contents))
+            yield update
+
+    chat_client.get_streaming_response = streaming_wrapper  # type: ignore[assignment]
+
+    original_get_response = chat_client.get_response
+
+    @wraps(original_get_response)
+    async def response_wrapper(self, *args: Any, **kwargs: Any) -> ChatResponse:
+        response = await original_get_response(self, *args, **kwargs)
+        if response.messages:
+            for message in response.messages:
+                _unwrap_server_function_call_contents(
+                    cast(MutableSequence[Contents | dict[str, Any]], message.contents)
+                )
+        return response
+
+    chat_client.get_response = response_wrapper  # type: ignore[assignment]
+    return chat_client
+
+
+@_apply_server_function_call_unwrap
 @use_function_invocation
 @use_observability
 @use_chat_middleware
@@ -39,22 +108,21 @@ class AGUIChatClient(BaseChatClient):
         request. However, even with ChatAgent, the server must echo back all context for the
         agent to maintain history across turns.
 
-    Important: Tool Handling
-        This client has @use_function_invocation decorator, enabling HYBRID tool execution:
+    Important: Tool Handling (Hybrid Execution - matches .NET)
+        1. Client tool metadata sent to server - LLM knows about both client and server tools
+        2. Server has its own tools that execute server-side
+        3. When LLM calls a client tool, @use_function_invocation executes it locally
+        4. Both client and server tools work together (hybrid pattern)
 
-        1. Client tool metadata (name, description, schema) is sent to server for planning
-        2. Server can have additional tools that execute server-side
-        3. When server requests a client tool, @use_function_invocation intercepts and executes locally
-        4. Both client and server tools work together simultaneously (hybrid pattern)
-
-        This matches the .NET AG-UI implementation behavior.
+        The wrapping ChatAgent's @use_function_invocation handles client tool execution
+        automatically when the server's LLM decides to call them.
 
     Examples:
         Direct usage (server manages thread history):
 
         .. code-block:: python
 
-            from agent_framework_ag_ui import AGUIChatClient
+            from agent_framework.ag_ui import AGUIChatClient
 
             client = AGUIChatClient(endpoint="http://localhost:8888/")
 
@@ -73,7 +141,7 @@ class AGUIChatClient(BaseChatClient):
         .. code-block:: python
 
             from agent_framework import ChatAgent
-            from agent_framework_ag_ui import AGUIChatClient
+            from agent_framework.ag_ui import AGUIChatClient
 
             client = AGUIChatClient(endpoint="http://localhost:8888/")
             agent = ChatAgent(name="assistant", client=client)
@@ -140,6 +208,29 @@ class AGUIChatClient(BaseChatClient):
     async def __aexit__(self, *args: Any) -> None:
         """Exit async context manager."""
         await self.close()
+
+    def _register_server_tool_placeholder(self, tool_name: str) -> None:
+        """Register a declaration-only placeholder so function invocation skips execution."""
+
+        config = getattr(self, "function_invocation_configuration", None)
+        if not config:
+            return
+        if any(getattr(tool, "name", None) == tool_name for tool in config.additional_tools):
+            return
+
+        placeholder: AIFunction[Any, Any] = AIFunction(
+            name=tool_name,
+            description="Server-managed tool placeholder (AG-UI)",
+            func=None,
+        )
+        config.additional_tools = list(config.additional_tools) + [placeholder]
+        registered: set[str] = getattr(self, "_registered_server_tools", set())
+        registered.add(tool_name)
+        self._registered_server_tools = registered  # type: ignore[attr-defined]
+        from agent_framework._logging import get_logger
+
+        logger = get_logger()
+        logger.debug(f"[AGUIChatClient] Registered server placeholder: {tool_name}")
 
     def _extract_state_from_messages(
         self, messages: MutableSequence[ChatMessage]
@@ -224,16 +315,13 @@ class AGUIChatClient(BaseChatClient):
         Returns:
             ChatResponse object
         """
-        updates: list[ChatResponseUpdate] = []
-
-        async for update in self._inner_get_streaming_response(
-            messages=messages,
-            chat_options=chat_options,
-            **kwargs,
-        ):
-            updates.append(update)
-
-        return ChatResponse.from_chat_response_updates(updates)
+        return await ChatResponse.from_chat_response_generator(
+            self._inner_get_streaming_response(
+                messages=messages,
+                chat_options=chat_options,
+                **kwargs,
+            )
+        )
 
     async def _inner_get_streaming_response(
         self,
@@ -259,11 +347,29 @@ class AGUIChatClient(BaseChatClient):
 
         agui_messages = self._convert_messages_to_agui_format(messages_to_send)
 
-        # Convert client tools to AG-UI format
-        # Send tool metadata (name, description, JSON schema) to server for planning
-        # The @use_function_invocation decorator handles client-side execution when
-        # the server requests a function. This matches .NET implementation behavior.
+        # Send client tools to server so LLM knows about them
+        # Client tools execute via ChatAgent's @use_function_invocation wrapper
         agui_tools = convert_tools_to_agui_format(chat_options.tools)
+
+        # Build set of client tool names (matches .NET clientToolSet)
+        # Used to distinguish client vs server tools in response stream
+        client_tool_set: set[str] = set()
+        if chat_options.tools:
+            for tool in chat_options.tools:
+                if hasattr(tool, "name"):
+                    client_tool_set.add(tool.name)  # type: ignore[arg-type]
+        self._last_client_tool_set = client_tool_set  # type: ignore[attr-defined]
+
+        logger.debug(
+            "[AGUIChatClient] Preparing request",
+            extra={
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "client_tools": list(client_tool_set),
+                "messages": [msg.text for msg in messages_to_send if msg.text],
+            },
+        )
+        logger.debug(f"[AGUIChatClient] Client tool set: {client_tool_set}")
 
         converter = AGUIEventConverter()
 
@@ -274,6 +380,28 @@ class AGUIChatClient(BaseChatClient):
             state=state,
             tools=agui_tools,
         ):
+            logger.debug(f"[AGUIChatClient] Raw AG-UI event: {event}")
             update = converter.convert_event(event)
             if update is not None:
+                logger.debug(
+                    "[AGUIChatClient] Converted update",
+                    extra={"role": update.role, "contents": [type(c).__name__ for c in update.contents]},
+                )
+                # Distinguish client vs server tools
+                for i, content in enumerate(update.contents):
+                    if isinstance(content, FunctionCallContent):
+                        logger.debug(
+                            f"[AGUIChatClient] Function call: {content.name}, in client_tool_set: {content.name in client_tool_set}"
+                        )
+                        if content.name in client_tool_set:
+                            # Client tool - let @use_function_invocation execute it
+                            if not content.additional_properties:
+                                content.additional_properties = {}
+                            content.additional_properties["agui_thread_id"] = thread_id
+                        else:
+                            # Server tool - wrap so @use_function_invocation ignores it
+                            logger.debug(f"[AGUIChatClient] Wrapping server tool: {content.name}")
+                            self._register_server_tool_placeholder(content.name)
+                            update.contents[i] = ServerFunctionCallContent(content)  # type: ignore
+
                 yield update

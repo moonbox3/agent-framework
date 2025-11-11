@@ -19,14 +19,22 @@ This matches .NET pattern: thread maintains state, tools execute on appropriate 
 """
 
 import asyncio
+import logging
 import os
 
-from agent_framework import ChatAgent, ai_function
+from agent_framework import ChatAgent, FunctionCallContent, FunctionResultContent, TextContent, ai_function
 
 from agent_framework_ag_ui import AGUIChatClient
 
+# Enable debug logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-@ai_function
+
+@ai_function(description="Get the current weather for a location.")
 def get_weather(location: str) -> str:
     """Get the current weather for a location.
 
@@ -71,77 +79,98 @@ async def main():
     print("  4. HYBRID: Client and server tools work together simultaneously\n")
 
     try:
-        # Create remote client
-        remote_client = AGUIChatClient(endpoint=server_url)
+        # Create remote client in async context manager
+        async with AGUIChatClient(endpoint=server_url) as remote_client:
+            # Wrap in ChatAgent for conversation history management
+            agent = ChatAgent(
+                name="remote_assistant",
+                instructions="You are a helpful assistant. Remember user information across the conversation.",
+                chat_client=remote_client,
+                tools=[get_weather],
+            )
 
-        # Wrap in ChatAgent for conversation history management
-        agent = ChatAgent(
-            name="remote_assistant",
-            instructions="You are a helpful assistant. Remember user information across the conversation.",
-            chat_client=remote_client,
-            tools=[get_weather],
-        )
+            # Create a thread to maintain conversation state (like .NET AgentThread)
+            thread = agent.get_new_thread()
 
-        # Create a thread to maintain conversation state (like .NET AgentThread)
-        thread = agent.get_new_thread()
+            print("=" * 70)
+            print("CONVERSATION WITH HISTORY")
+            print("=" * 70)
 
-        print("=" * 70)
-        print("CONVERSATION WITH HISTORY")
-        print("=" * 70)
+            # Turn 1: Introduce
+            print("\nUser: My name is Alice and I live in Seattle\n")
+            async for chunk in agent.run_stream("My name is Alice and I live in Seattle", thread=thread):
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+            print("\n")
 
-        # Turn 1: Introduce
-        print("\nUser: My name is Alice and I live in Seattle\n")
-        async for chunk in agent.run_stream("My name is Alice and I live in Seattle", thread=thread):
-            if chunk.text:
-                print(chunk.text, end="", flush=True)
-        print("\n")
+            # Turn 2: Ask about name (tests history)
+            print("User: What's my name?\n")
+            async for chunk in agent.run_stream("What's my name?", thread=thread):
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+            print("\n")
 
-        # Turn 2: Ask about name (tests history)
-        print("User: What's my name?\n")
-        async for chunk in agent.run_stream("What's my name?", thread=thread):
-            if chunk.text:
-                print(chunk.text, end="", flush=True)
-        print("\n")
+            # Turn 3: Ask about location (tests history)
+            print("User: Where do I live?\n")
+            async for chunk in agent.run_stream("Where do I live?", thread=thread):
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+            print("\n")
 
-        # Turn 3: Ask about location (tests history)
-        print("User: Where do I live?\n")
-        async for chunk in agent.run_stream("Where do I live?", thread=thread):
-            if chunk.text:
-                print(chunk.text, end="", flush=True)
-        print("\n")
+            # Turn 4: Test client-side tool (get_weather is client-side)
+            print("User: What's the weather forecast for today in Seattle?\n")
+            async for chunk in agent.run_stream("What's the weather forecast for today in Seattle?", thread=thread):
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+            print("\n")
 
-        # Turn 4: Test client-side tool (get_weather is client-side)
-        print("User: What's the weather in Seattle?\n")
-        async for chunk in agent.run_stream("What's the weather in Seattle?", thread=thread):
-            if chunk.text:
-                print(chunk.text, end="", flush=True)
-        print("\n")
+            # Turn 5: Test server-side tool (get_time_zone is server-side only)
+            print("User: What time zone is Seattle in?\n")
+            async for chunk in agent.run_stream("What time zone is Seattle in?", thread=thread):
+                if chunk.text:
+                    print(chunk.text, end="", flush=True)
+            print("\n")
 
-        # Turn 5: Test server-side tool (get_time_zone is server-side only)
-        print("User: What time zone is Seattle in?\n")
-        async for chunk in agent.run_stream("What time zone is Seattle in?", thread=thread):
-            if chunk.text:
-                print(chunk.text, end="", flush=True)
-        print("\n")
+            # Show thread state
+            if thread.message_store:
 
-        await remote_client.close()
+                def _preview_for_message(m) -> str:
+                    # Prefer plain text when present
+                    if getattr(m, "text", ""):
+                        t = m.text
+                        return (t[:60] + "...") if len(t) > 60 else t
+                    # Build from contents when no direct text
+                    parts: list[str] = []
+                    for c in getattr(m, "contents", []) or []:
+                        if isinstance(c, FunctionCallContent):
+                            args = c.arguments
+                            if isinstance(args, dict):
+                                try:
+                                    import json as _json
 
-        # Show thread state
-        if thread.message_store:
-            messages = await thread.message_store.list_messages()
-            print(f"\n[THREAD STATE] {len(messages)} messages in thread's message_store")
-            for i, msg in enumerate(messages[-6:], 1):  # Show last 6
-                role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-                text_preview = msg.text[:60] + "..." if len(msg.text) > 60 else msg.text
-                print(f"  {i}. [{role}]: {text_preview}")
+                                    args_str = _json.dumps(args)
+                                except Exception:
+                                    args_str = str(args)
+                            else:
+                                args_str = str(args or "{}")
+                            parts.append(f"tool_call {c.name} {args_str}")
+                        elif isinstance(c, FunctionResultContent):
+                            parts.append(f"tool_result[{c.call_id}]: {str(c.result)[:40]}")
+                        elif isinstance(c, TextContent):
+                            if c.text:
+                                parts.append(c.text)
+                        else:
+                            typename = getattr(c, "type", c.__class__.__name__)
+                            parts.append(f"<{typename}>")
+                    preview = " | ".join(parts) if parts else ""
+                    return (preview[:60] + "...") if len(preview) > 60 else preview
 
-        print("\n" + "=" * 70)
-        print("HYBRID TOOL EXECUTION DEMONSTRATED:")
-        print("- Check console output for [CLIENT] vs [SERVER] tool execution logs")
-        print("- get_weather executes CLIENT-SIDE (via @use_function_invocation)")
-        print("- get_time_zone executes SERVER-SIDE (server-only tool)")
-        print("- AgentThread maintains conversation state (like .NET AgentThread)")
-        print("=" * 70)
+                messages = await thread.message_store.list_messages()
+                print(f"\n[THREAD STATE] {len(messages)} messages in thread's message_store")
+                for i, msg in enumerate(messages[-6:], 1):  # Show last 6
+                    role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+                    text_preview = _preview_for_message(msg)
+                    print(f"  {i}. [{role}]: {text_preview}")
 
     except ConnectionError as e:
         print(f"\n\033[91mConnection Error: {e}\033[0m")

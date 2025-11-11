@@ -2,9 +2,9 @@
 
 import json
 
-from agent_framework import ChatMessage, ChatOptions, Role
+from agent_framework import ChatMessage, ChatOptions, FunctionCallContent, Role, ai_function
 
-from agent_framework_ag_ui._client import AGUIChatClient
+from agent_framework_ag_ui._client import AGUIChatClient, ServerFunctionCallContent
 
 
 class TestAGUIChatClient:
@@ -211,6 +211,73 @@ class TestAGUIChatClient:
         response = await client._inner_get_response(messages=messages, chat_options=chat_options)
 
         assert response is not None
+
+    async def test_server_tool_calls_unwrapped_after_invocation(self, monkeypatch) -> None:
+        """Ensure server-side tool calls are exposed as FunctionCallContent after processing."""
+
+        mock_events = [
+            {"type": "RUN_STARTED", "threadId": "thread_1", "runId": "run_1"},
+            {"type": "TOOL_CALL_START", "toolCallId": "call_1", "toolName": "get_time_zone"},
+            {"type": "TOOL_CALL_ARGS", "toolCallId": "call_1", "delta": '{"location": "Seattle"}'},
+            {"type": "RUN_FINISHED", "threadId": "thread_1", "runId": "run_1"},
+        ]
+
+        async def mock_post_run(*args, **kwargs):
+            for event in mock_events:
+                yield event
+
+        client = AGUIChatClient(endpoint="http://localhost:8888/")
+        monkeypatch.setattr(client._http_service, "post_run", mock_post_run)
+
+        messages = [ChatMessage(role="user", text="Test server tool execution")]
+        chat_options = ChatOptions()
+
+        updates = []
+        async for update in client.get_streaming_response(messages, chat_options=chat_options):
+            updates.append(update)
+
+        function_calls = [
+            content for update in updates for content in update.contents if isinstance(content, FunctionCallContent)
+        ]
+        assert function_calls
+        assert function_calls[0].name == "get_time_zone"
+        assert not any(
+            isinstance(content, ServerFunctionCallContent) for update in updates for content in update.contents
+        )
+
+    async def test_server_tool_calls_not_executed_locally(self, monkeypatch) -> None:
+        """Server tools should not trigger local function invocation even when client tools exist."""
+
+        @ai_function
+        def client_tool() -> str:
+            """Client tool stub."""
+            return "client"
+
+        mock_events = [
+            {"type": "RUN_STARTED", "threadId": "thread_1", "runId": "run_1"},
+            {"type": "TOOL_CALL_START", "toolCallId": "call_1", "toolName": "get_time_zone"},
+            {"type": "TOOL_CALL_ARGS", "toolCallId": "call_1", "delta": '{"location": "Seattle"}'},
+            {"type": "RUN_FINISHED", "threadId": "thread_1", "runId": "run_1"},
+        ]
+
+        async def mock_post_run(*args, **kwargs):
+            for event in mock_events:
+                yield event
+
+        async def fake_auto_invoke(*args, **kwargs):
+            function_call = kwargs.get("function_call_content") or args[0]
+            raise AssertionError(f"Unexpected local execution of server tool: {getattr(function_call, 'name', '?')}")
+
+        monkeypatch.setattr("agent_framework._tools._auto_invoke_function", fake_auto_invoke)
+
+        client = AGUIChatClient(endpoint="http://localhost:8888/")
+        monkeypatch.setattr(client._http_service, "post_run", mock_post_run)
+
+        messages = [ChatMessage(role="user", text="Test server tool execution")]
+        chat_options = ChatOptions(tool_choice="auto", tools=[client_tool])
+
+        async for _ in client.get_streaming_response(messages, chat_options=chat_options):
+            pass
 
     async def test_state_transmission(self, monkeypatch) -> None:
         """Test state is properly transmitted to server."""

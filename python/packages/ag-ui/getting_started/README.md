@@ -186,7 +186,7 @@ import os
 
 from agent_framework import ChatAgent
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
+from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
 from fastapi import FastAPI
 
 # Read required configuration
@@ -293,7 +293,7 @@ import asyncio
 import os
 
 from agent_framework import TextContent
-from agent_framework_ag_ui import AGUIChatClient
+from agent_framework.ag_ui import AGUIChatClient
 
 
 async def main():

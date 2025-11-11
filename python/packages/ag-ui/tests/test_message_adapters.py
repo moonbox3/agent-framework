@@ -63,10 +63,9 @@ def test_agui_tool_result_to_agent_framework():
     assert isinstance(message.contents[0], TextContent)
     assert message.contents[0].text == '{"accepted": true, "steps": []}'
 
-    assert hasattr(message, "metadata")
-    assert message.metadata is not None
-    assert message.metadata.get("is_tool_result") is True
-    assert message.metadata.get("tool_call_id") == "call_123"
+    assert message.additional_properties is not None
+    assert message.additional_properties.get("is_tool_result") is True
+    assert message.additional_properties.get("tool_call_id") == "call_123"
 
 
 def test_agui_multiple_messages_to_agent_framework():
@@ -157,6 +156,36 @@ def test_agui_message_without_id():
 
     assert len(messages) == 1
     assert messages[0].message_id is None
+
+
+def test_agui_with_tool_calls_to_agent_framework():
+    """Assistant message with tool_calls is converted to FunctionCallContent."""
+    agui_msg = {
+        "role": "assistant",
+        "content": "Calling tool",
+        "tool_calls": [
+            {
+                "id": "call-123",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": {"location": "Seattle"}},
+            }
+        ],
+        "id": "msg-789",
+    }
+
+    messages = agui_messages_to_agent_framework([agui_msg])
+
+    assert len(messages) == 1
+    msg = messages[0]
+    assert msg.role == Role.ASSISTANT
+    assert msg.message_id == "msg-789"
+    # First content is text, second is the function call
+    assert isinstance(msg.contents[0], TextContent)
+    assert msg.contents[0].text == "Calling tool"
+    assert isinstance(msg.contents[1], FunctionCallContent)
+    assert msg.contents[1].call_id == "call-123"
+    assert msg.contents[1].name == "get_weather"
+    assert msg.contents[1].arguments == {"location": "Seattle"}
 
 
 def test_agent_framework_to_agui_with_tool_calls():

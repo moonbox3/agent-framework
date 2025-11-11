@@ -198,13 +198,15 @@ def test_agent_framework_to_agui_multiple_text_contents():
 
 
 def test_agent_framework_to_agui_no_message_id():
-    """Test message without message_id."""
+    """Test message without message_id - should auto-generate ID."""
     msg = ChatMessage(role=Role.USER, contents=[TextContent(text="Hello")])
 
     messages = agent_framework_messages_to_agui([msg])
 
     assert len(messages) == 1
-    assert "id" not in messages[0]
+    assert "id" in messages[0]  # ID should be auto-generated
+    assert messages[0]["id"]  # ID should not be empty
+    assert len(messages[0]["id"]) > 0  # ID should be a valid string
 
 
 def test_agent_framework_to_agui_system_role():

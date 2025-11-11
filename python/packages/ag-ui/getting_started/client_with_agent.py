@@ -1,0 +1,157 @@
+# Copyright (c) Microsoft. All rights reserved.
+
+"""Example showing ChatAgent with AGUIChatClient for hybrid tool execution.
+
+This demonstrates the HYBRID pattern matching .NET AGUIClient implementation:
+
+1. AgentThread Pattern (like .NET):
+   - Create thread with agent.get_new_thread()
+   - Pass thread to agent.run_stream() on each turn
+   - Thread automatically maintains conversation history via message_store
+
+2. Hybrid Tool Execution:
+   - AGUIChatClient has @use_function_invocation decorator
+   - Client-side tools (get_weather) can execute locally when server requests them
+   - Server may also have its own tools that execute server-side
+   - Both work together: server LLM decides which tool to call, decorator handles client execution
+
+This matches .NET pattern: thread maintains state, tools execute on appropriate side.
+"""
+
+import asyncio
+import os
+
+from agent_framework import ChatAgent, ai_function
+
+from agent_framework_ag_ui import AGUIChatClient
+
+
+@ai_function
+def get_weather(location: str) -> str:
+    """Get the current weather for a location.
+
+    Args:
+        location: The city or location name
+    """
+    print(f"[CLIENT] get_weather tool called with location: {location}")
+    weather_data = {
+        "seattle": "Rainy, 55°F",
+        "san francisco": "Foggy, 62°F",
+        "new york": "Sunny, 68°F",
+        "london": "Cloudy, 52°F",
+    }
+    result = weather_data.get(location.lower(), f"Weather data not available for {location}")
+    print(f"[CLIENT] get_weather returning: {result}")
+    return result
+
+
+async def main():
+    """Demonstrate ChatAgent + AGUIChatClient hybrid tool execution.
+
+    This matches the .NET pattern from Program.cs where:
+    - AIAgent agent = chatClient.CreateAIAgent(tools: [...])
+    - AgentThread thread = agent.GetNewThread()
+    - RunStreamingAsync(messages, thread)
+
+    Python equivalent:
+    - agent = ChatAgent(chat_client=AGUIChatClient(...), tools=[...])
+    - thread = agent.get_new_thread()  # Creates thread with message_store
+    - agent.run_stream(message, thread=thread)  # Thread accumulates history
+    """
+    server_url = os.environ.get("AGUI_SERVER_URL", "http://127.0.0.1:5100/")
+
+    print("=" * 70)
+    print("ChatAgent + AGUIChatClient: Hybrid Tool Execution")
+    print("=" * 70)
+    print(f"\nServer: {server_url}")
+    print("\nThis example demonstrates:")
+    print("  1. AgentThread maintains conversation state (like .NET)")
+    print("  2. Client-side tools execute locally via @use_function_invocation")
+    print("  3. Server may have additional tools that execute server-side")
+    print("  4. HYBRID: Client and server tools work together simultaneously\n")
+
+    try:
+        # Create remote client
+        remote_client = AGUIChatClient(endpoint=server_url)
+
+        # Wrap in ChatAgent for conversation history management
+        agent = ChatAgent(
+            name="remote_assistant",
+            instructions="You are a helpful assistant. Remember user information across the conversation.",
+            chat_client=remote_client,
+            tools=[get_weather],
+        )
+
+        # Create a thread to maintain conversation state (like .NET AgentThread)
+        thread = agent.get_new_thread()
+
+        print("=" * 70)
+        print("CONVERSATION WITH HISTORY")
+        print("=" * 70)
+
+        # Turn 1: Introduce
+        print("\nUser: My name is Alice and I live in Seattle\n")
+        async for chunk in agent.run_stream("My name is Alice and I live in Seattle", thread=thread):
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+        print("\n")
+
+        # Turn 2: Ask about name (tests history)
+        print("User: What's my name?\n")
+        async for chunk in agent.run_stream("What's my name?", thread=thread):
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+        print("\n")
+
+        # Turn 3: Ask about location (tests history)
+        print("User: Where do I live?\n")
+        async for chunk in agent.run_stream("Where do I live?", thread=thread):
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+        print("\n")
+
+        # Turn 4: Test client-side tool (get_weather is client-side)
+        print("User: What's the weather in Seattle?\n")
+        async for chunk in agent.run_stream("What's the weather in Seattle?", thread=thread):
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+        print("\n")
+
+        # Turn 5: Test server-side tool (get_time_zone is server-side only)
+        print("User: What time zone is Seattle in?\n")
+        async for chunk in agent.run_stream("What time zone is Seattle in?", thread=thread):
+            if chunk.text:
+                print(chunk.text, end="", flush=True)
+        print("\n")
+
+        await remote_client.close()
+
+        # Show thread state
+        if thread.message_store:
+            messages = await thread.message_store.list_messages()
+            print(f"\n[THREAD STATE] {len(messages)} messages in thread's message_store")
+            for i, msg in enumerate(messages[-6:], 1):  # Show last 6
+                role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+                text_preview = msg.text[:60] + "..." if len(msg.text) > 60 else msg.text
+                print(f"  {i}. [{role}]: {text_preview}")
+
+        print("\n" + "=" * 70)
+        print("HYBRID TOOL EXECUTION DEMONSTRATED:")
+        print("- Check console output for [CLIENT] vs [SERVER] tool execution logs")
+        print("- get_weather executes CLIENT-SIDE (via @use_function_invocation)")
+        print("- get_time_zone executes SERVER-SIDE (server-only tool)")
+        print("- AgentThread maintains conversation state (like .NET AgentThread)")
+        print("=" * 70)
+
+    except ConnectionError as e:
+        print(f"\n\033[91mConnection Error: {e}\033[0m")
+        print("\nMake sure an AG-UI server is running at the specified endpoint.")
+    except Exception as e:
+        print(f"\n\033[91mError: {e}\033[0m")
+        import traceback
+
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

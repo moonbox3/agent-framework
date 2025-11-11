@@ -8,6 +8,7 @@ from agent_framework import (
     ChatMessage,
     FunctionApprovalResponseContent,
     FunctionCallContent,
+    FunctionResultContent,
     Role,
     TextContent,
 )
@@ -146,21 +147,45 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
     return result
 
 
-def agent_framework_messages_to_agui(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Agent Framework messages to AG-UI format.
 
     Args:
-        messages: List of Agent Framework ChatMessage objects
+        messages: List of Agent Framework ChatMessage objects or AG-UI dicts (already converted)
 
     Returns:
         List of AG-UI message dictionaries
     """
+    from ._utils import generate_event_id
+
     result: list[dict[str, Any]] = []
     for msg in messages:
+        # If already a dict (AG-UI format), ensure it has an ID and normalize keys for Pydantic
+        if isinstance(msg, dict):
+            # Ensure ID exists
+            if "id" not in msg:
+                msg["id"] = generate_event_id()
+
+            # Normalize tool_call_id to toolCallId for Pydantic's alias_generator=to_camel
+            if msg.get("role") == "tool":
+                normalized_msg = msg.copy()
+                if "tool_call_id" in msg:
+                    normalized_msg["toolCallId"] = msg["tool_call_id"]
+                    del normalized_msg["tool_call_id"]
+                elif "toolCallId" not in msg:
+                    # Tool message missing toolCallId - add empty string to satisfy schema
+                    normalized_msg["toolCallId"] = ""
+                result.append(normalized_msg)
+            else:
+                result.append(msg)
+            continue
+
+        # Convert ChatMessage to AG-UI format
         role = _FRAMEWORK_TO_AGUI_ROLE.get(msg.role, "user")
 
         content_text = ""
         tool_calls: list[dict[str, Any]] = []
+        tool_result_call_id: str | None = None
 
         for content in msg.contents:
             if isinstance(content, TextContent):
@@ -176,17 +201,31 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage]) -> list[dict[s
                         },
                     }
                 )
+            elif isinstance(content, FunctionResultContent):
+                # Tool result content - extract call_id and result
+                tool_result_call_id = content.call_id
+                # Serialize result to string
+                if isinstance(content.result, dict):
+                    import json
+
+                    content_text = json.dumps(content.result)  # type: ignore
+                elif content.result is not None:
+                    content_text = str(content.result)
 
         agui_msg: dict[str, Any] = {
+            "id": msg.message_id if msg.message_id else generate_event_id(),  # Always include id
             "role": role,
             "content": content_text,
         }
 
-        if msg.message_id:
-            agui_msg["id"] = msg.message_id
-
         if tool_calls:
             agui_msg["tool_calls"] = tool_calls
+
+        # If this is a tool result message, add toolCallId (using camelCase for Pydantic)
+        if tool_result_call_id:
+            agui_msg["toolCallId"] = tool_result_call_id
+            # Tool result messages should have role="tool"
+            agui_msg["role"] = "tool"
 
         result.append(agui_msg)
 

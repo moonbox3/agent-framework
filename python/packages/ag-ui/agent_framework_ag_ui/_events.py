@@ -410,11 +410,13 @@ class AgentFrameworkEventBridge:
                 events.append(result_event)
 
                 # Track tool result for MessagesSnapshotEvent
+                # AG-UI protocol expects: { role: "tool", toolCallId: ..., content: ... }
+                # Use camelCase for Pydantic's alias_generator=to_camel
                 self.tool_results.append(
                     {
                         "id": result_message_id,
                         "role": "tool",
-                        "tool_call_id": content.call_id,
+                        "toolCallId": content.call_id,
                         "content": result_content,
                     }
                 )
@@ -422,6 +424,9 @@ class AgentFrameworkEventBridge:
                 # Emit MessagesSnapshotEvent with the complete conversation including tool calls and results
                 # This is required for CopilotKit's useCopilotAction to detect tool result
                 if self.pending_tool_calls and self.tool_results:
+                    # Import message adapter
+                    from ._message_adapters import agent_framework_messages_to_agui
+
                     # Build assistant message with tool_calls
                     assistant_message = {
                         "id": generate_event_id(),
@@ -429,12 +434,17 @@ class AgentFrameworkEventBridge:
                         "tool_calls": self.pending_tool_calls.copy(),  # Copy the accumulated tool calls
                     }
 
+                    # Convert Agent Framework messages to AG-UI format (adds required 'id' field)
+                    converted_input_messages = agent_framework_messages_to_agui(self.input_messages)
+
                     # Build complete messages array: input messages + assistant message + tool results
-                    all_messages = list(self.input_messages) + [assistant_message] + self.tool_results.copy()
+                    all_messages = converted_input_messages + [assistant_message] + self.tool_results.copy()
 
                     # Emit MessagesSnapshotEvent using the proper event type
+                    # Note: messages are dict[str, Any] but Pydantic will validate them as Message types
                     messages_snapshot_event = MessagesSnapshotEvent(
-                        type=EventType.MESSAGES_SNAPSHOT, messages=all_messages
+                        type=EventType.MESSAGES_SNAPSHOT,
+                        messages=all_messages,  # type: ignore[arg-type]
                     )
                     logger.info(f"  >>> Emitting MessagesSnapshotEvent with {len(all_messages)} messages")
                     events.append(messages_snapshot_event)
@@ -518,6 +528,9 @@ class AgentFrameworkEventBridge:
                         events.append(confirm_end)
 
                         # Emit MessagesSnapshotEvent so confirm_changes persists after RUN_FINISHED
+                        # Import message adapter
+                        from ._message_adapters import agent_framework_messages_to_agui
+
                         # Build assistant message with pending confirm_changes tool call
                         assistant_message = {
                             "id": generate_event_id(),
@@ -525,12 +538,17 @@ class AgentFrameworkEventBridge:
                             "tool_calls": self.pending_tool_calls.copy(),  # Includes confirm_changes
                         }
 
+                        # Convert Agent Framework messages to AG-UI format (adds required 'id' field)
+                        converted_input_messages = agent_framework_messages_to_agui(self.input_messages)
+
                         # Build complete messages array: input messages + assistant message + any tool results
-                        all_messages = list(self.input_messages) + [assistant_message] + self.tool_results.copy()
+                        all_messages = converted_input_messages + [assistant_message] + self.tool_results.copy()
 
                         # Emit MessagesSnapshotEvent
+                        # Note: messages are dict[str, Any] but Pydantic will validate them as Message types
                         messages_snapshot_event = MessagesSnapshotEvent(
-                            type=EventType.MESSAGES_SNAPSHOT, messages=all_messages
+                            type=EventType.MESSAGES_SNAPSHOT,
+                            messages=all_messages,  # type: ignore[arg-type]
                         )
                         logger.info(
                             f"  >>> Emitting MessagesSnapshotEvent for confirm_changes with {len(all_messages)} messages"

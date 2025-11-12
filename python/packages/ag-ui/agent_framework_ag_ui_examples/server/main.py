@@ -112,8 +112,11 @@ add_agent_framework_fastapi_endpoint(
 
 def main():
     """Run the server."""
-    port = int(os.getenv("PORT", "8888"))
+    port = int(os.getenv("PORT", "8887"))
     host = os.getenv("HOST", "127.0.0.1")
+
+    print(f"\nAG-UI Examples Server starting on http://{host}:{port}")
+    print("Set ENABLE_DEBUG_LOGGING=1 for detailed request logging\n")
 
     # Use log_config=None to prevent uvicorn from reconfiguring logging
     # This preserves our file + console logging setup

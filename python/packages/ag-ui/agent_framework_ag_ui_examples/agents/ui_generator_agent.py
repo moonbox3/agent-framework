@@ -5,7 +5,7 @@
 from typing import Any
 
 from agent_framework import AIFunction, ChatAgent
-from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework._clients import ChatClientProtocol
 
 from agent_framework_ag_ui import AgentFrameworkAgent
 
@@ -140,10 +140,7 @@ show_comparison_table = AIFunction[Any, str](
 )
 
 
-# Create the UI generator agent using tool-based approach with forced tool usage
-agent = ChatAgent(
-    name="ui_generator",
-    instructions="""You MUST use the provided tools to generate content. Never respond with plain text descriptions.
+_UI_GENERATOR_INSTRUCTIONS = """You MUST use the provided tools to generate content. Never respond with plain text descriptions.
 
     For haiku requests:
     - Call generate_haiku tool with all 4 required parameters
@@ -153,15 +150,29 @@ agent = ChatAgent(
     - gradient: CSS gradient string
 
     For other requests, use the appropriate tool (create_chart, display_timeline, show_comparison_table).
-    """,
-    chat_client=AzureOpenAIChatClient(),
-    tools=[generate_haiku, create_chart, display_timeline, show_comparison_table],
-    # Force tool usage - the LLM MUST call a tool, cannot respond with plain text
-    chat_options={"tool_choice": "required"},
-)
+    """
 
-ui_generator_agent = AgentFrameworkAgent(
-    agent=agent,
-    name="UIGenerator",
-    description="Generates custom UI components through tool calls",
-)
+
+def ui_generator_agent(chat_client: ChatClientProtocol) -> AgentFrameworkAgent:
+    """Create a UI generator agent with frontend rendering tools.
+
+    Args:
+        chat_client: The chat client to use for the agent
+
+    Returns:
+        A configured AgentFrameworkAgent instance with UI generation tools
+    """
+    agent = ChatAgent(
+        name="ui_generator",
+        instructions=_UI_GENERATOR_INSTRUCTIONS,
+        chat_client=chat_client,
+        tools=[generate_haiku, create_chart, display_timeline, show_comparison_table],
+        # Force tool usage - the LLM MUST call a tool, cannot respond with plain text
+        chat_options={"tool_choice": "required"},
+    )
+
+    return AgentFrameworkAgent(
+        agent=agent,
+        name="UIGenerator",
+        description="Generates custom UI components through tool calls",
+    )

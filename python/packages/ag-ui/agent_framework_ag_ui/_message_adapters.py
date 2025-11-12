@@ -79,8 +79,6 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                 result.append(chat_msg)
                 continue
 
-            from agent_framework import FunctionResultContent
-
             chat_msg = ChatMessage(
                 role=Role.TOOL,
                 contents=[FunctionResultContent(call_id=str(tool_call_id), result=result_content)],
@@ -93,8 +91,6 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
         # Backend tool rendering payloads without an explicit role
         # Prefer standard tool mapping above; this block only covers legacy/minimal payloads
         if "actionExecutionId" in msg or "actionName" in msg:
-            from agent_framework import FunctionResultContent
-
             # Prefer toolCallId if present; otherwise fall back to actionExecutionId
             tool_call_id = msg.get("toolCallId") or msg.get("tool_call_id") or msg.get("actionExecutionId", "")
             result_content = msg.get("result", msg.get("content", ""))

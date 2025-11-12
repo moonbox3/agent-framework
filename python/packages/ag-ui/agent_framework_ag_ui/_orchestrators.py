@@ -346,8 +346,9 @@ class DefaultOrchestrator(Orchestrator):
                             pending_confirm_changes_id = None
                             # Don't add the user message to sanitized - it's been converted to tool result
                             continue
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                    except (json.JSONDecodeError, KeyError) as e:
+                        # Failed to parse user message as confirm_changes response; continue normal processing
+                        logger.debug(f"Could not parse user message as confirm_changes response: {e}")
 
                     # Not a confirm_changes response, continue normal processing
                     sanitized.append(msg)

@@ -249,7 +249,10 @@ class WeatherChatKitServer(ChatKitServer[dict[str, Any]]):
             thread_items: All items in the thread.
             context: The context dictionary.
         """
+        logger.info(f"Attempting to update thread title for thread: {thread.id}")
+        
         if not thread_items:
+            logger.debug("No thread items available for title generation")
             return
 
         # Collect user messages to understand the conversation topic
@@ -262,7 +265,10 @@ class WeatherChatKitServer(ChatKitServer[dict[str, Any]]):
                         break
 
         if not user_messages:
+            logger.debug("No user messages found for title generation")
             return
+
+        logger.debug(f"Found {len(user_messages)} user message(s) for title generation")
 
         try:
             # Use the agent's chat client to generate a concise title
@@ -306,6 +312,7 @@ class WeatherChatKitServer(ChatKitServer[dict[str, Any]]):
                 title += "..."
             thread.title = title
             await self.store.save_thread(thread, context)
+            logger.info(f"Updated thread {thread.id} title to (fallback): {title}")
 
     async def respond(
         self,

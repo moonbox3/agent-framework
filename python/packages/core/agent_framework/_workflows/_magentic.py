@@ -102,9 +102,6 @@ def _message_from_payload(payload: Any) -> ChatMessage:
 MAGENTIC_EVENT_TYPE_ORCHESTRATOR = "orchestrator_message"
 MAGENTIC_EVENT_TYPE_AGENT_DELTA = "agent_delta"
 
-# Orchestrator message kind values for orchestrator_message_kind in additional_properties
-# (already defined above as ORCH_MSG_KIND_*)
-
 # endregion Magentic event metadata constants
 
 # region Magentic One Prompts

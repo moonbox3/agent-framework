@@ -962,8 +962,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
     ) -> None:
         """Emit orchestrator message to the workflow event stream.
 
-        Emits both MagenticOrchestratorMessageEvent (for backward compatibility) and
-        AgentRunUpdateEvent (for agent wrapper consumers) with metadata indicating
+        Emits an AgentRunUpdateEvent (for agent wrapper consumers) with metadata indicating
         the orchestrator event type.
 
         Args:

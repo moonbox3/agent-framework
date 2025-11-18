@@ -473,13 +473,14 @@ class BaseAgent(SerializationMixin):
             # Create final text from accumulated updates
             return AgentRunResponse.from_agent_run_response_updates(response_updates).text
 
-        return AIFunction(
+        agent_tool: AIFunction[BaseModel, str] = AIFunction(
             name=tool_name,
             description=tool_description,
             func=agent_wrapper,
             input_model=input_model,  # type: ignore
-            forward_additional_kwargs=True,
         )
+        agent_tool._forward_runtime_kwargs = True  # type: ignore
+        return agent_tool
 
     def _normalize_messages(
         self,
@@ -872,7 +873,9 @@ class ChatAgent(BaseAgent):
             user=user,
             **(additional_chat_options or {}),
         )
-        response = await self.chat_client.get_response(messages=thread_messages, chat_options=co, **kwargs)
+        # Filter chat_options from kwargs to prevent duplicate keyword argument
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "chat_options"}
+        response = await self.chat_client.get_response(messages=thread_messages, chat_options=co, **filtered_kwargs)
 
         await self._update_thread_with_type_and_conversation_id(thread, response.conversation_id)
 
@@ -1004,9 +1007,11 @@ class ChatAgent(BaseAgent):
             **(additional_chat_options or {}),
         )
 
+        # Filter chat_options from kwargs to prevent duplicate keyword argument
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "chat_options"}
         response_updates: list[ChatResponseUpdate] = []
         async for update in self.chat_client.get_streaming_response(
-            messages=thread_messages, chat_options=co, **kwargs
+            messages=thread_messages, chat_options=co, **filtered_kwargs
         ):
             response_updates.append(update)
 

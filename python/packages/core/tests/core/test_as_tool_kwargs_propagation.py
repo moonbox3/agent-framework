@@ -23,7 +23,6 @@ class TestAsToolKwargsPropagation:
             context: AgentRunContext, next: Callable[[AgentRunContext], Awaitable[None]]
         ) -> None:
             # Capture kwargs passed to the sub-agent
-            print(f"Middleware captured kwargs: {context.kwargs}")
             captured_kwargs.update(context.kwargs)
             await next(context)
 
@@ -43,14 +42,12 @@ class TestAsToolKwargsPropagation:
         tool = sub_agent.as_tool(name="delegate", arg_name="task")
 
         # Directly invoke the tool with kwargs (simulating what happens during agent execution)
-        result = await tool.invoke(
+        _ = await tool.invoke(
             arguments=tool.input_model(task="Test delegation"),
             api_token="secret-xyz-123",
             user_id="user-456",
             session_id="session-789",
         )
-        print(f"Tool result: {result}")
-        print(f"Captured kwargs after invoke: {captured_kwargs}")
 
         # Verify kwargs were forwarded to sub-agent
         assert "api_token" in captured_kwargs, f"Expected 'api_token' in {captured_kwargs}"

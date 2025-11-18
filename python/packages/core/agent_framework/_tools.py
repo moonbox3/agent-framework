@@ -587,7 +587,6 @@ class AIFunction(BaseTool, Generic[ArgsT, ReturnT]):
         additional_properties: dict[str, Any] | None = None,
         func: Callable[..., Awaitable[ReturnT] | ReturnT] | None = None,
         input_model: type[ArgsT] | Mapping[str, Any] | None = None,
-        forward_additional_kwargs: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the AIFunction.
@@ -606,8 +605,6 @@ class AIFunction(BaseTool, Generic[ArgsT, ReturnT]):
             input_model: The Pydantic model that defines the input parameters for the function.
                 This can also be a JSON schema dictionary.
                 If not provided, it will be inferred from the function signature.
-            forward_additional_kwargs: Whether to forward unknown kwargs directly to the wrapped function.
-                Used by agent tools created via ``as_tool`` so they can receive runtime context kwargs.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(
@@ -629,7 +626,7 @@ class AIFunction(BaseTool, Generic[ArgsT, ReturnT]):
         self.invocation_exception_count = 0
         self._invocation_duration_histogram = _default_histogram()
         self.type: Literal["ai_function"] = "ai_function"
-        self.forward_additional_kwargs = forward_additional_kwargs
+        self._forward_runtime_kwargs: bool = False
 
     @property
     def declaration_only(self) -> bool:
@@ -694,18 +691,16 @@ class AIFunction(BaseTool, Generic[ArgsT, ReturnT]):
         global OBSERVABILITY_SETTINGS
         from .observability import OBSERVABILITY_SETTINGS
 
-        tool_call_id = kwargs.pop("tool_call_id", None)
-        provided_kwargs = dict(kwargs)
+        original_kwargs = dict(kwargs)
+        tool_call_id = original_kwargs.pop("tool_call_id", None)
         if arguments is not None:
             if not isinstance(arguments, self.input_model):
                 raise TypeError(f"Expected {self.input_model.__name__}, got {type(arguments).__name__}")
-            argument_values = arguments.model_dump(exclude_none=True)
-            if self.forward_additional_kwargs:
-                kwargs = {**provided_kwargs, **argument_values}
-            else:
-                kwargs = argument_values
+            kwargs = arguments.model_dump(exclude_none=True)
+            if getattr(self, "_forward_runtime_kwargs", False) and original_kwargs:
+                kwargs.update(original_kwargs)
         else:
-            kwargs = provided_kwargs
+            kwargs = original_kwargs
         if not OBSERVABILITY_SETTINGS.ENABLED:  # type: ignore[name-defined]
             logger.info(f"Function name: {self.name}")
             logger.debug(f"Function arguments: {kwargs}")
@@ -1239,22 +1234,20 @@ async def _auto_invoke_function(
 
     parsed_args: dict[str, Any] = dict(function_call_content.parse_arguments() or {})
 
-    # Filter out internal framework kwargs before merging/passing to tools.
+    # Filter out internal framework kwargs before passing to tools.
     runtime_kwargs: dict[str, Any] = {
         key: value
         for key, value in (custom_args or {}).items()
-        if key not in {"_function_middleware_pipeline", "middleware", "chat_options", "tools"}
+        if key not in {"_function_middleware_pipeline", "middleware"}
     }
-
-    # Merge with user-supplied args; right-hand side dominates, so parsed args win on conflicts.
-    merged_args: dict[str, Any] = runtime_kwargs | parsed_args
     try:
-        args = tool.input_model.model_validate(merged_args)
+        args = tool.input_model.model_validate(parsed_args)
     except ValidationError as exc:
         message = "Error: Argument parsing failed."
         if config.include_detailed_errors:
             message = f"{message} Exception: {exc}"
         return FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+
     if not middleware_pipeline or (
         not hasattr(middleware_pipeline, "has_middlewares") and not middleware_pipeline.has_middlewares
     ):
@@ -1263,8 +1256,8 @@ async def _auto_invoke_function(
             function_result = await tool.invoke(
                 arguments=args,
                 tool_call_id=function_call_content.call_id,
-                **runtime_kwargs,
-            )  # type: ignore[arg-type]
+                **runtime_kwargs if getattr(tool, "_forward_runtime_kwargs", False) else {},
+            )
             return FunctionResultContent(
                 call_id=function_call_content.call_id,
                 result=function_result,
@@ -1287,7 +1280,7 @@ async def _auto_invoke_function(
         return await tool.invoke(
             arguments=context_obj.arguments,
             tool_call_id=function_call_content.call_id,
-            **context_obj.kwargs,
+            **context_obj.kwargs if getattr(tool, "_forward_runtime_kwargs", False) else {},
         )
 
     try:

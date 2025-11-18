@@ -210,6 +210,7 @@ async def test_ai_function_invoke_ignores_additional_kwargs() -> None:
 
     assert result == "HELLO WORLD"
 
+
 async def test_ai_function_invoke_telemetry_with_pydantic_args(span_exporter: InMemorySpanExporter):
     """Test the ai_function invoke method with Pydantic model arguments."""
 

@@ -454,13 +454,16 @@ class BaseAgent(SerializationMixin):
             # Extract the input from kwargs using the specified arg_name
             input_text = kwargs.get(arg_name, "")
 
+            # Forward all kwargs except the arg_name to support runtime context propagation
+            forwarded_kwargs = {k: v for k, v in kwargs.items() if k != arg_name}
+
             if stream_callback is None:
                 # Use non-streaming mode
-                return (await self.run(input_text)).text
+                return (await self.run(input_text, **forwarded_kwargs)).text
 
             # Use streaming mode - accumulate updates and create final response
             response_updates: list[AgentRunResponseUpdate] = []
-            async for update in self.run_stream(input_text):
+            async for update in self.run_stream(input_text, **forwarded_kwargs):
                 response_updates.append(update)
                 if is_async_callback:
                     await stream_callback(update)  # type: ignore[misc]
@@ -475,6 +478,7 @@ class BaseAgent(SerializationMixin):
             description=tool_description,
             func=agent_wrapper,
             input_model=input_model,  # type: ignore
+            forward_additional_kwargs=True,
         )
 
     def _normalize_messages(

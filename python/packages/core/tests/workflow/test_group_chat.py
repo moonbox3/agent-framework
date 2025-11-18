@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from collections.abc import AsyncIterable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -134,16 +134,18 @@ async def test_group_chat_builder_basic_flow() -> None:
         .build()
     )
 
-    outputs: list[ChatMessage] = []
+    outputs: list[list[ChatMessage]] = []
     async for event in workflow.run_stream("coordinate task"):
         if isinstance(event, WorkflowOutputEvent):
             data = event.data
-            if isinstance(data, ChatMessage):
-                outputs.append(data)
+            if isinstance(data, list):
+                outputs.append(cast(list[ChatMessage], data))
 
     assert len(outputs) == 1
-    assert outputs[0].text == "done"
-    assert outputs[0].author_name == "manager"
+    assert len(outputs[0]) >= 1
+    # The final message should be "done" from the manager
+    assert outputs[0][-1].text == "done"
+    assert outputs[0][-1].author_name == "manager"
 
 
 async def test_magentic_builder_returns_workflow_and_runs() -> None:
@@ -154,7 +156,7 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
 
     assert isinstance(workflow, Workflow)
 
-    outputs: list[ChatMessage] = []
+    outputs: list[list[ChatMessage]] = []
     orchestrator_events: list[MagenticOrchestratorMessageEvent] = []
     agent_events: list[MagenticAgentMessageEvent] = []
     start_message = _MagenticStartMessage.from_string("compose summary")
@@ -165,11 +167,13 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
             agent_events.append(event)
         if isinstance(event, WorkflowOutputEvent):
             msg = event.data
-            if isinstance(msg, ChatMessage):
-                outputs.append(msg)
+            if isinstance(msg, list):
+                outputs.append(cast(list[ChatMessage], msg))
 
     assert outputs, "Expected a final output message"
-    final = outputs[-1]
+    conversation = outputs[-1]
+    assert len(conversation) >= 1
+    final = conversation[-1]
     assert final.text == "final"
     assert final.author_name == "magentic_manager"
     assert orchestrator_events, "Expected orchestrator events to be emitted"
@@ -338,17 +342,19 @@ class TestGroupChatOrchestrator:
             .build()
         )
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test task"):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         # Should have terminated due to max_rounds, expect at least one output
         assert len(outputs) >= 1
-        # The final message should be about round limit
-        final_output = outputs[-1]
+        # The final message in the conversation should be about round limit
+        conversation = outputs[-1]
+        assert len(conversation) >= 1
+        final_output = conversation[-1]
         assert "round limit" in final_output.text.lower()
 
     async def test_unknown_participant_error(self) -> None:
@@ -528,12 +534,12 @@ class TestCheckpointing:
             GroupChatBuilder().select_speakers(selector).participants([agent]).with_checkpointing(storage).build()
         )
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test task"):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         assert len(outputs) == 1  # Should complete normally
 
@@ -589,6 +595,44 @@ class TestPromptBasedManager:
         with pytest.raises(RuntimeError, match="Manager selected unknown participant 'unknown'"):
             await manager(state)
 
+    async def test_manager_with_chat_options(self) -> None:
+        """Test that chat_options are passed through to get_response."""
+        from agent_framework import ChatOptions
+
+        received_kwargs: dict[str, Any] = {}
+
+        class MockChatClient:
+            async def get_response(self, messages: Any, **kwargs: Any) -> Any:
+                # Capture the kwargs that were passed
+                received_kwargs.update(kwargs)
+
+                class MockResponse:
+                    def __init__(self) -> None:
+                        self.value = {"finish": True, "next_agent": None, "final_response": "done"}
+                        self.messages: list[Any] = []
+
+                return MockResponse()
+
+        # Create manager with chat_options
+        chat_options = ChatOptions(temperature=0.5, seed=3, max_tokens=100)
+        manager = _PromptBasedGroupChatManager(MockChatClient(), chat_options=chat_options)  # type: ignore
+
+        state = {
+            "participants": {"agent": "desc"},
+            "task": ChatMessage(role=Role.USER, text="test"),
+            "conversation": (),
+        }
+
+        await manager(state)
+
+        # Verify that chat_options were passed through
+        assert "temperature" in received_kwargs
+        assert received_kwargs["temperature"] == 0.5
+        assert "seed" in received_kwargs
+        assert received_kwargs["seed"] == 3
+        assert "max_tokens" in received_kwargs
+        assert received_kwargs["max_tokens"] == 100
+
 
 class TestFactoryFunctions:
     """Tests for factory functions."""
@@ -617,12 +661,12 @@ class TestConversationHandling:
 
         workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test string"):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         assert len(outputs) == 1
 
@@ -639,12 +683,12 @@ class TestConversationHandling:
 
         workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream(task_message):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         assert len(outputs) == 1
 
@@ -665,12 +709,12 @@ class TestConversationHandling:
 
         workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream(conversation):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         assert len(outputs) == 1
 
@@ -697,17 +741,19 @@ class TestRoundLimitEnforcement:
             .build()
         )
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test"):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         # Should have at least one output (the round limit message)
         assert len(outputs) >= 1
-        # The last message should be about round limit
-        final_output = outputs[-1]
+        # The last message in the conversation should be about round limit
+        conversation = outputs[-1]
+        assert len(conversation) >= 1
+        final_output = conversation[-1]
         assert "round limit" in final_output.text.lower()
 
     async def test_round_limit_in_ingest_participant_message(self) -> None:
@@ -730,17 +776,19 @@ class TestRoundLimitEnforcement:
             .build()
         )
 
-        outputs: list[ChatMessage] = []
+        outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test"):
             if isinstance(event, WorkflowOutputEvent):
                 data = event.data
-                if isinstance(data, ChatMessage):
-                    outputs.append(data)
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
 
         # Should have at least one output (the round limit message)
         assert len(outputs) >= 1
-        # The last message should be about round limit
-        final_output = outputs[-1]
+        # The last message in the conversation should be about round limit
+        conversation = outputs[-1]
+        assert len(conversation) >= 1
+        final_output = conversation[-1]
         assert "round limit" in final_output.text.lower()
 
 
@@ -756,10 +804,10 @@ async def test_group_chat_checkpoint_runtime_only() -> None:
 
     wf = GroupChatBuilder().participants([agent_a, agent_b]).select_speakers(selector).build()
 
-    baseline_output: list[ChatMessage] | None = None
+    baseline_output: list[list[ChatMessage]] | None = None
     async for ev in wf.run_stream("runtime checkpoint test", checkpoint_storage=storage):
         if isinstance(ev, WorkflowOutputEvent):
-            baseline_output = ev.data  # type: ignore[assignment]
+            baseline_output = [ev.data] if isinstance(ev.data, list) else None  # type: ignore[assignment]
         if isinstance(ev, WorkflowStatusEvent) and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
@@ -795,10 +843,10 @@ async def test_group_chat_checkpoint_runtime_overrides_buildtime() -> None:
             .build()
         )
 
-        baseline_output: list[ChatMessage] | None = None
+        baseline_output: list[list[ChatMessage]] | None = None
         async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):
             if isinstance(ev, WorkflowOutputEvent):
-                baseline_output = ev.data  # type: ignore[assignment]
+                baseline_output = [ev.data] if isinstance(ev.data, list) else None  # type: ignore[assignment]
             if isinstance(ev, WorkflowStatusEvent) and ev.state in (
                 WorkflowRunState.IDLE,
                 WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,

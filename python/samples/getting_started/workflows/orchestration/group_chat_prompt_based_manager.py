@@ -2,8 +2,9 @@
 
 import asyncio
 import logging
+from typing import cast
 
-from agent_framework import AgentRunUpdateEvent, ChatAgent, GroupChatBuilder, WorkflowOutputEvent
+from agent_framework import AgentRunUpdateEvent, ChatAgent, ChatMessage, GroupChatBuilder, WorkflowOutputEvent
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
 
 logging.basicConfig(level=logging.INFO)
@@ -48,7 +49,7 @@ async def main() -> None:
     print("\nStarting Group Chat Workflow...\n")
     print(f"TASK: {task}\n")
 
-    final_response = None
+    final_conversation: list[ChatMessage] = []
     last_executor_id: str | None = None
     async for event in workflow.run_stream(task):
         if isinstance(event, AgentRunUpdateEvent):
@@ -61,13 +62,17 @@ async def main() -> None:
                 last_executor_id = eid
             print(event.data, end="", flush=True)
         elif isinstance(event, WorkflowOutputEvent):
-            final_response = getattr(event.data, "text", str(event.data))
+            final_conversation = cast(list[ChatMessage], event.data)
 
-    if final_response:
+    if final_conversation and isinstance(final_conversation, list):
         print("=" * 60)
-        print("FINAL RESPONSE")
+        print("FINAL CONVERSATION")
         print("=" * 60)
-        print(final_response)
+        for msg in final_conversation:
+            author = getattr(msg, "author_name", "Unknown")
+            text = getattr(msg, "text", str(msg))
+            print(f"[{author}]: {text}")
+            print("-" * 60)
         print("=" * 60)
 
 

@@ -273,14 +273,17 @@ async def resume_with_responses(
 
         elif isinstance(event, WorkflowOutputEvent):
             print("\n[Workflow Output Event - Conversation Update]")
-            if event.data and isinstance(event.data, list):
-                # Cast event.data to list[ChatMessage] for type checking
-                conversation = cast(list[ChatMessage], event.data)  # type: ignore
+            if (
+                event.data
+                and isinstance(event.data, list)
+                and all(isinstance(msg, ChatMessage) for msg in event.data)
+            ):
+                # Now safe to cast event.data to list[ChatMessage]
+                conversation = cast(list[ChatMessage], event.data)
                 for msg in conversation[-3:]:  # Show last 3 messages
-                    if isinstance(msg, ChatMessage):
-                        author = msg.author_name or msg.role.value
-                        text = msg.text[:100] + "..." if len(msg.text) > 100 else msg.text
-                        print(f"  {author}: {text}")
+                    author = msg.author_name or msg.role.value
+                    text = msg.text[:100] + "..." if len(msg.text) > 100 else msg.text
+                    print(f"  {author}: {text}")
 
         elif isinstance(event, RequestInfoEvent):
             new_pending_requests.append(event)

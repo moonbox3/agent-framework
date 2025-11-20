@@ -933,7 +933,7 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
 
     manager_callable = wiring.manager
     if manager_callable is None:
-
+        # Keep orchestrator signature satisfied; agent managers are routed via the workflow graph
         async def _agent_manager_placeholder(_: GroupChatStateSnapshot) -> GroupChatDirective:  # noqa: RUF029
             raise RuntimeError(
                 "Manager callable invoked unexpectedly. Agent-based managers should route through the workflow graph."

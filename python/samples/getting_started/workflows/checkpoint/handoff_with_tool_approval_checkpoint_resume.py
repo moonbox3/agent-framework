@@ -1,29 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""
-Sample: Handoff Workflow with Checkpoint-Based Pause/Resume
-
-Demonstrates the two-step pattern for resuming a handoff workflow from a checkpoint
-and providing user responses to HandoffUserInputRequest.
-
-Scenario:
-1. User starts a conversation with the workflow
-2. Workflow requests user input (HandoffUserInputRequest is emitted)
-3. Workflow pauses and saves a checkpoint
-4. Process can exit/restart
-5. On resume: Load checkpoint + provide user response
-6. Workflow continues from where it left off
-
-Pattern:
-- Step 1: workflow.run_stream(checkpoint_id=...) to restore checkpoint
-- Step 2: workflow.send_responses_streaming(responses) to provide user input
-- This two-step approach is required because send_responses_streaming doesn't accept checkpoint_id
-
-Prerequisites:
-- Azure CLI authentication (az login)
-- Environment variables configured for AzureOpenAIChatClient
-"""
-
 import asyncio
 import json
 import logging
@@ -46,6 +22,31 @@ from agent_framework import (
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
+"""
+Sample: Handoff Workflow with Tool Approvals + Checkpoint Resume
+
+Demonstrates the two-step pattern for resuming a handoff workflow from a checkpoint
+while handling both HandoffUserInputRequest prompts and FunctionApprovalRequestContent
+for tool calls (e.g., submit_refund).
+
+Scenario:
+1. User starts a conversation with the workflow.
+2. Agents may emit user input requests or tool approval requests.
+3. Workflow pauses and writes a checkpoint capturing pending requests.
+4. Process can exit/restart.
+5. On resume: Load the checkpoint, surface pending approvals/user prompts, and provide responses.
+6. Workflow continues from the saved state.
+
+Pattern:
+- Step 1: workflow.run_stream(checkpoint_id=...) to restore checkpoint and pending requests.
+- Step 2: workflow.send_responses_streaming(responses) to supply human replies and approvals.
+- Two-step approach is required because send_responses_streaming does not accept checkpoint_id.
+
+Prerequisites:
+- Azure CLI authentication (az login).
+- Environment variables configured for AzureOpenAIChatClient.
+"""
+
 CHECKPOINT_DIR = Path(__file__).parent / "tmp" / "handoff_checkpoints"
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -53,8 +54,7 @@ CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 @ai_function(approval_mode="always_require")
 def submit_refund(refund_description: str, amount: str, order_id: str) -> str:
     """Capture a refund request for manual review before processing."""
-    summary = f"refund recorded for order {order_id} (amount: {amount}) with details: {refund_description}"
-    return summary
+    return f"refund recorded for order {order_id} (amount: {amount}) with details: {refund_description}"
 
 
 def create_agents(client: AzureOpenAIChatClient) -> tuple[ChatAgent, ChatAgent, ChatAgent]:

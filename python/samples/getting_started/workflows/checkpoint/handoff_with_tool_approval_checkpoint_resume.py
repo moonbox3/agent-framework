@@ -32,7 +32,7 @@ for tool calls (e.g., submit_refund).
 Scenario:
 1. User starts a conversation with the workflow.
 2. Agents may emit user input requests or tool approval requests.
-3. Workflow pauses and writes a checkpoint capturing pending requests.
+3. Workflow writes a checkpoint capturing pending requests and pauses.
 4. Process can exit/restart.
 5. On resume: Load the checkpoint, surface pending approvals/user prompts, and provide responses.
 6. Workflow continues from the saved state.

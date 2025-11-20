@@ -751,10 +751,10 @@ async def test_group_chat_checkpoint_runtime_only() -> None:
 
     wf = GroupChatBuilder().participants([agent_a, agent_b]).select_speakers(selector).build()
 
-    baseline_output: list[list[ChatMessage]] | None = None
+    baseline_output: list[ChatMessage] | None = None
     async for ev in wf.run_stream("runtime checkpoint test", checkpoint_storage=storage):
         if isinstance(ev, WorkflowOutputEvent):
-            baseline_output = [ev.data] if isinstance(ev.data, list) else None  # type: ignore[assignment]
+            baseline_output = cast(list[ChatMessage], ev.data) if isinstance(ev.data, list) else None
         if isinstance(ev, WorkflowStatusEvent) and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
@@ -790,10 +790,10 @@ async def test_group_chat_checkpoint_runtime_overrides_buildtime() -> None:
             .build()
         )
 
-        baseline_output: list[list[ChatMessage]] | None = None
+        baseline_output: list[ChatMessage] | None = None
         async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):
             if isinstance(ev, WorkflowOutputEvent):
-                baseline_output = [ev.data] if isinstance(ev.data, list) else None  # type: ignore[assignment]
+                baseline_output = cast(list[ChatMessage], ev.data) if isinstance(ev.data, list) else None
             if isinstance(ev, WorkflowStatusEvent) and ev.state in (
                 WorkflowRunState.IDLE,
                 WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,

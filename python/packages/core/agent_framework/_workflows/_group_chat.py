@@ -586,8 +586,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             last_msg = messages[-1]
             text = last_msg.text or ""
             try:
-                data = json.loads(text)
-                return ManagerSelectionResponse.from_dict(data)
+                return ManagerSelectionResponse.model_validate_json(text)
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
 
@@ -932,14 +931,18 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
             "Call set_manager(...) or select_speakers(...) before build()."
         )
 
-    if wiring.manager is None:
-        raise RuntimeError(
-            "Callable manager is required for GroupChatOrchestratorExecutor. "
-            "This should not occur with agent-based managers."
-        )
+    manager_callable = wiring.manager
+    if manager_callable is None:
+
+        async def _agent_manager_placeholder(_: GroupChatStateSnapshot) -> GroupChatDirective:  # noqa: RUF029
+            raise RuntimeError(
+                "Manager callable invoked unexpectedly. Agent-based managers should route through the workflow graph."
+            )
+
+        manager_callable = _agent_manager_placeholder
 
     return GroupChatOrchestratorExecutor(
-        manager=wiring.manager,
+        manager=manager_callable,
         participants={name: spec.description for name, spec in wiring.participants.items()},
         manager_name=wiring.manager_name,
         max_rounds=wiring.max_rounds,

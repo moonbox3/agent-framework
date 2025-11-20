@@ -53,7 +53,7 @@ async def main() -> None:
         name="Moderator",
         description="Guides philosophical discussion by selecting next speaker",
         instructions="""
-You are a thoughtful moderator guiding a philosophical discussion on: "What does a good life mean to you personally?"
+You are a thoughtful moderator guiding a philosophical discussion on the topic handed to you by the user.
 
 Your participants bring diverse global perspectives. Select speakers strategically to:
 - Create natural conversation flow and responses to previous points

@@ -9,10 +9,10 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     GroupChatBuilder,
-    ManagerSelectionResponse,
     WorkflowOutputEvent,
 )
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import AzureCliCredential
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,8 +29,13 @@ Prerequisites:
 """
 
 
+def _get_chat_client() -> AzureOpenAIChatClient:
+    return AzureOpenAIChatClient(credential=AzureCliCredential())
+
+
 async def main() -> None:
     # Create coordinator agent with structured output for speaker selection
+    # Note: response_format is automatically set to ManagerSelectionResponse by set_manager()
     coordinator = ChatAgent(
         name="Coordinator",
         description="Coordinates multi-agent collaboration by selecting speakers",
@@ -38,44 +43,28 @@ async def main() -> None:
 You coordinate a team conversation to solve the user's task.
 
 Review the conversation history and select the next participant to speak.
-Consider each participant's expertise:
-- Researcher: Collects background information and facts
-- Writer: Synthesizes polished answers from gathered information
-
-Return your decision as JSON with this structure:
-{
-    "selected_participant": "Researcher",
-    "instruction": "Optional instruction for the participant",
-    "finish": false
-}
-
-When the task is complete after multiple participants have contributed, return:
-{
-    "finish": true,
-    "final_message": "Summary of the conversation results"
-}
 
 Guidelines:
 - Start with Researcher to gather information
 - Then have Writer synthesize the final answer
 - Only finish after both have contributed meaningfully
+- Allow for multiple rounds of information gathering if needed
 """,
-        chat_client=OpenAIChatClient(model_id="gpt-4o"),
-        response_format=ManagerSelectionResponse,
+        chat_client=_get_chat_client(),
     )
 
     researcher = ChatAgent(
         name="Researcher",
         description="Collects relevant background information",
         instructions="Gather concise facts that help a teammate answer the question.",
-        chat_client=OpenAIChatClient(model_id="gpt-4o-mini"),
+        chat_client=_get_chat_client(),
     )
 
     writer = ChatAgent(
         name="Writer",
         description="Synthesizes polished answers from gathered information",
         instructions="Compose clear and structured answers using any notes provided.",
-        chat_client=OpenAIChatClient(model_id="gpt-4o-mini"),
+        chat_client=_get_chat_client(),
     )
 
     workflow = (

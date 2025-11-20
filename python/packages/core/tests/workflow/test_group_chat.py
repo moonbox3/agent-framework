@@ -27,9 +27,9 @@ from agent_framework import (
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
 from agent_framework._workflows._group_chat import (
     GroupChatOrchestratorExecutor,
+    ManagerSelectionResponse,
     _default_orchestrator_factory,  # type: ignore
     _GroupChatConfig,  # type: ignore
-    _PromptBasedGroupChatManager,  # type: ignore
     _SpeakerSelectorAdapter,  # type: ignore
 )
 from agent_framework._workflows._magentic import (
@@ -544,94 +544,41 @@ class TestCheckpointing:
         assert len(outputs) == 1  # Should complete normally
 
 
-class TestPromptBasedManager:
-    """Tests for _PromptBasedGroupChatManager."""
+class TestAgentManagerConfiguration:
+    """Tests for agent-based manager configuration."""
 
-    async def test_manager_with_missing_next_agent_raises_error(self) -> None:
-        """Test that manager directive without next_agent raises RuntimeError."""
+    async def test_set_manager_configures_response_format(self) -> None:
+        """Ensure ChatAgent managers receive default ManagerSelectionResponse formatting."""
+        from unittest.mock import MagicMock
 
-        class MockChatClient:
-            async def get_response(self, messages: Any, response_format: Any = None) -> Any:
-                # Return response that has finish=False but no next_agent
-                class MockResponse:
-                    def __init__(self) -> None:
-                        self.value = {"finish": False, "next_agent": None}
-                        self.messages: list[Any] = []
+        from agent_framework import ChatAgent
 
-                return MockResponse()
+        chat_client = MagicMock()
+        manager_agent = ChatAgent(chat_client=chat_client, name="Coordinator")
+        assert manager_agent.chat_options.response_format is None
 
-        manager = _PromptBasedGroupChatManager(MockChatClient())  # type: ignore
+        worker = StubAgent("worker", "response")
 
-        state = {
-            "participants": {"agent": "desc"},
-            "task": ChatMessage(role=Role.USER, text="test"),
-            "conversation": (),
-        }
+        builder = GroupChatBuilder().set_manager(manager_agent).participants([worker])
 
-        with pytest.raises(RuntimeError, match="missing next_agent while finish is False"):
-            await manager(state)
+        assert manager_agent.chat_options.response_format is ManagerSelectionResponse
+        assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
 
-    async def test_manager_with_unknown_participant_raises_error(self) -> None:
-        """Test that manager selecting unknown participant raises RuntimeError."""
+    async def test_set_manager_accepts_agent_manager(self) -> None:
+        """Verify agent-based manager can be set and workflow builds."""
+        from unittest.mock import MagicMock
 
-        class MockChatClient:
-            async def get_response(self, messages: Any, response_format: Any = None) -> Any:
-                # Return response selecting unknown participant
-                class MockResponse:
-                    def __init__(self) -> None:
-                        self.value = {"finish": False, "next_agent": "unknown"}
-                        self.messages: list[Any] = []
+        from agent_framework import ChatAgent
 
-                return MockResponse()
+        chat_client = MagicMock()
+        manager_agent = ChatAgent(chat_client=chat_client, name="Coordinator")
+        worker = StubAgent("worker", "response")
 
-        manager = _PromptBasedGroupChatManager(MockChatClient())  # type: ignore
+        builder = GroupChatBuilder().set_manager(manager_agent, display_name="Orchestrator")
+        builder = builder.participants([worker]).with_max_rounds(1)
 
-        state = {
-            "participants": {"agent": "desc"},
-            "task": ChatMessage(role=Role.USER, text="test"),
-            "conversation": (),
-        }
-
-        with pytest.raises(RuntimeError, match="Manager selected unknown participant 'unknown'"):
-            await manager(state)
-
-    async def test_manager_with_chat_options(self) -> None:
-        """Test that chat_options are passed through to get_response."""
-        from agent_framework import ChatOptions
-
-        received_kwargs: dict[str, Any] = {}
-
-        class MockChatClient:
-            async def get_response(self, messages: Any, **kwargs: Any) -> Any:
-                # Capture the kwargs that were passed
-                received_kwargs.update(kwargs)
-
-                class MockResponse:
-                    def __init__(self) -> None:
-                        self.value = {"finish": True, "next_agent": None, "final_response": "done"}
-                        self.messages: list[Any] = []
-
-                return MockResponse()
-
-        # Create manager with chat_options
-        chat_options = ChatOptions(temperature=0.5, seed=3, max_tokens=100)
-        manager = _PromptBasedGroupChatManager(MockChatClient(), chat_options=chat_options)  # type: ignore
-
-        state = {
-            "participants": {"agent": "desc"},
-            "task": ChatMessage(role=Role.USER, text="test"),
-            "conversation": (),
-        }
-
-        await manager(state)
-
-        # Verify that chat_options were passed through
-        assert "temperature" in received_kwargs
-        assert received_kwargs["temperature"] == 0.5
-        assert "seed" in received_kwargs
-        assert received_kwargs["seed"] == 3
-        assert "max_tokens" in received_kwargs
-        assert received_kwargs["max_tokens"] == 100
+        assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
+        assert "worker" in builder._participants  # type: ignore[attr-defined]
 
 
 class TestFactoryFunctions:
@@ -639,9 +586,9 @@ class TestFactoryFunctions:
 
     def test_default_orchestrator_factory_without_manager_raises_error(self) -> None:
         """Test that default factory requires manager to be set."""
-        config = _GroupChatConfig(manager=None, manager_name="test", participants={})
+        config = _GroupChatConfig(manager=None, manager_participant=None, manager_name="test", participants={})
 
-        with pytest.raises(RuntimeError, match="requires a manager to be set"):
+        with pytest.raises(RuntimeError, match="requires a manager to be configured"):
             _default_orchestrator_factory(config)
 
 

@@ -9,6 +9,7 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     GroupChatBuilder,
+    Role,
     WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
@@ -70,6 +71,7 @@ Guidelines:
     workflow = (
         GroupChatBuilder()
         .set_manager(coordinator, display_name="Orchestrator")
+        .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == Role.ASSISTANT) >= 2)
         .participants([researcher, writer])
         .build()
     )

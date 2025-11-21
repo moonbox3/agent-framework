@@ -317,6 +317,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         self._history: list[_GroupChatTurn] = []
         self._task_message: ChatMessage | None = None
         self._pending_agent: str | None = None
+        self._pending_finalization: bool = False
         # Stashes the initial conversation list until _handle_task_message normalizes it into _conversation.
         self._pending_initial_conversation: list[ChatMessage] | None = None
 
@@ -402,13 +403,57 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         if not await self._check_termination():
             return False
 
-        final_message = ensure_author(
-            self._create_completion_message(
-                text="Conversation halted after termination condition was met.",
-                reason="termination_condition",
-            ),
-            self._manager_name,
-        )
+        if self._is_manager_agent():
+            if self._pending_finalization:
+                return True
+
+            self._pending_finalization = True
+            termination_prompt = ChatMessage(
+                role=Role.SYSTEM,
+                text="Termination condition met. Provide a final manager summary and finish the conversation.",
+            )
+            manager_conversation = [
+                self._build_manager_context_message(),
+                termination_prompt,
+                *list(self._conversation),
+            ]
+            self._pending_agent = self._manager_name
+            await self._route_to_participant(
+                participant_name=self._manager_name,
+                conversation=manager_conversation,
+                ctx=ctx,
+                instruction="",
+                task=self._task_message,
+                metadata={"termination_condition": True},
+            )
+            return True
+
+        final_message: ChatMessage | None = None
+        if self._manager is not None and not self._is_manager_agent():
+            try:
+                directive = await self._manager(self._build_state())
+            except Exception:
+                logger.warning("Manager finalization failed during termination; using default termination message.")
+            else:
+                if directive.final_message is not None:
+                    final_message = ensure_author(directive.final_message, self._manager_name)
+                elif directive.finish:
+                    final_message = ensure_author(
+                        self._create_completion_message(
+                            text="Conversation completed.",
+                            reason="termination_condition_manager_finish",
+                        ),
+                        self._manager_name,
+                    )
+
+        if final_message is None:
+            final_message = ensure_author(
+                self._create_completion_message(
+                    text="Conversation halted after termination condition was met.",
+                    reason="termination_condition",
+                ),
+                self._manager_name,
+            )
         self._conversation.append(final_message)
         self._history.append(_GroupChatTurn(self._manager_name, "manager", final_message))
         self._pending_agent = None
@@ -656,6 +701,22 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             RuntimeError: If manager response cannot be parsed
         """
         selection = self._parse_manager_selection(response)
+
+        if self._pending_finalization:
+            self._pending_finalization = False
+            final_message_obj = selection.get_final_message_as_chat_message()
+            if final_message_obj is None:
+                final_message_obj = self._create_completion_message(
+                    text="Conversation halted after termination condition was met.",
+                    reason="termination_condition_manager",
+                )
+            final_message_obj = ensure_author(final_message_obj, self._manager_name)
+
+            self._conversation.append(final_message_obj)
+            self._history.append(_GroupChatTurn(self._manager_name, "manager", final_message_obj))
+            self._pending_agent = None
+            await ctx.yield_output(list(self._conversation))
+            return
 
         if selection.finish:
             # Manager decided to complete conversation

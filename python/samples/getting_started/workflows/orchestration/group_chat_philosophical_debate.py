@@ -9,6 +9,7 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     GroupChatBuilder,
+    Role,
     WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
@@ -212,7 +213,7 @@ Share your perspective authentically. Feel free to:
         GroupChatBuilder()
         .set_manager(moderator, display_name="Moderator")
         .participants([farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor])
-        .with_max_rounds(15)
+        .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == Role.ASSISTANT) >= 10)
         .build()
     )
 

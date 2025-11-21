@@ -69,6 +69,73 @@ class StubAgent(BaseAgent):
         return _stream()
 
 
+class StubManagerAgent(BaseAgent):
+    def __init__(self) -> None:
+        super().__init__(name="manager_agent", description="Stub manager")
+        self._call_count = 0
+
+    async def run(
+        self,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: AgentThread | None = None,
+        **kwargs: Any,
+    ) -> AgentRunResponse:  # type: ignore[override]
+        if self._call_count == 0:
+            self._call_count += 1
+            payload = {"selected_participant": "agent", "finish": False, "final_message": None}
+            return AgentRunResponse(
+                messages=[
+                    ChatMessage(
+                        role=Role.ASSISTANT,
+                        text='{"selected_participant": "agent", "finish": false}',
+                        author_name=self.name,
+                    )
+                ],
+                value=payload,
+            )
+
+        payload = {"selected_participant": None, "finish": True, "final_message": "agent manager final"}
+        return AgentRunResponse(
+            messages=[
+                ChatMessage(
+                    role=Role.ASSISTANT,
+                    text='{"finish": true, "final_message": "agent manager final"}',
+                    author_name=self.name,
+                )
+            ],
+            value=payload,
+        )
+
+    def run_stream(
+        self,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: AgentThread | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterable[AgentRunResponseUpdate]:  # type: ignore[override]
+        if self._call_count == 0:
+            self._call_count += 1
+
+            async def _stream_initial() -> AsyncIterable[AgentRunResponseUpdate]:
+                yield AgentRunResponseUpdate(
+                    contents=[TextContent(text='{"selected_participant": "agent", "finish": false}')],
+                    role=Role.ASSISTANT,
+                    author_name=self.name,
+                )
+
+            return _stream_initial()
+
+        async def _stream_final() -> AsyncIterable[AgentRunResponseUpdate]:
+            yield AgentRunResponseUpdate(
+                contents=[TextContent(text='{"finish": true, "final_message": "agent manager final"}')],
+                role=Role.ASSISTANT,
+                author_name=self.name,
+            )
+
+        return _stream_final()
+
+
 def make_sequence_selector() -> Callable[[GroupChatStateSnapshot], Any]:
     state_counter = {"value": 0}
 
@@ -391,6 +458,60 @@ class TestGroupChatOrchestrator:
         final_output = conversation[-1]
         assert final_output.author_name == "manager"
         assert "termination condition" in final_output.text.lower()
+
+    async def test_termination_condition_uses_manager_final_message(self) -> None:
+        """Test that manager-provided final message is used on termination."""
+
+        async def selector(state: GroupChatStateSnapshot) -> str | None:
+            return None
+
+        agent = StubAgent("agent", "response")
+        final_text = "manager summary on termination"
+
+        workflow = (
+            GroupChatBuilder()
+            .select_speakers(selector, final_message=final_text)
+            .participants([agent])
+            .with_termination_condition(lambda _: True)
+            .build()
+        )
+
+        outputs: list[list[ChatMessage]] = []
+        async for event in workflow.run_stream("test task"):
+            if isinstance(event, WorkflowOutputEvent):
+                data = event.data
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
+
+        assert outputs, "Expected termination to yield output"
+        conversation = outputs[-1]
+        assert conversation[-1].text == final_text
+        assert conversation[-1].author_name == "manager"
+
+    async def test_termination_condition_agent_manager_finalizes(self) -> None:
+        """Test that agent-based manager can provide final message on termination."""
+        manager = StubManagerAgent()
+        worker = StubAgent("agent", "response")
+
+        workflow = (
+            GroupChatBuilder()
+            .set_manager(manager, display_name="Manager")
+            .participants([worker])
+            .with_termination_condition(lambda conv: any(msg.author_name == "agent" for msg in conv))
+            .build()
+        )
+
+        outputs: list[list[ChatMessage]] = []
+        async for event in workflow.run_stream("test task"):
+            if isinstance(event, WorkflowOutputEvent):
+                data = event.data
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
+
+        assert outputs, "Expected termination to yield output"
+        conversation = outputs[-1]
+        assert conversation[-1].text == "agent manager final"
+        assert conversation[-1].author_name == "Manager"
 
     async def test_unknown_participant_error(self) -> None:
         """Test that _apply_directive raises error for unknown participants."""

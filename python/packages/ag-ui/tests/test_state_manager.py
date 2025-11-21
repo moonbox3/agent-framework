@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+
 from ag_ui.core import CustomEvent, EventType
 from agent_framework import ChatMessage, TextContent
 

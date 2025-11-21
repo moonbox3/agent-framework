@@ -46,16 +46,19 @@ class AgentConfig:
         if isinstance(state_schema, dict):
             return cast(dict[str, Any], state_schema)
 
+        base_model_type: type[Any] | None
         try:
-            from pydantic import BaseModel
-        except Exception:
-            BaseModel = None  # type: ignore  # noqa: N806
+            from pydantic import BaseModel as ImportedBaseModel
 
-        if BaseModel and isinstance(state_schema, BaseModel):
+            base_model_type = ImportedBaseModel
+        except Exception:  # pragma: no cover
+            base_model_type = None
+
+        if base_model_type is not None and isinstance(state_schema, base_model_type):
             schema_dict = state_schema.__class__.model_json_schema()
             return schema_dict.get("properties", {}) or {}
 
-        if BaseModel and isinstance(state_schema, type) and issubclass(state_schema, BaseModel):
+        if base_model_type is not None and isinstance(state_schema, type) and issubclass(state_schema, base_model_type):
             schema_dict = state_schema.model_json_schema()
             return schema_dict.get("properties", {}) or {}
 

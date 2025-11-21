@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+
 from agent_framework import ChatMessage, FunctionCallContent, FunctionResultContent, TextContent
 
 from agent_framework_ag_ui._orchestration.message_hygiene import (

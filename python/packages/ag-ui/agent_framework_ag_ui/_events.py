@@ -335,6 +335,7 @@ class AgentFrameworkEventBridge:
                 tool_arg_name,
             )
 
+            state_value: Any
             if tool_arg_name == "*":
                 state_value = parsed_args
                 logger.info("Using all args as state value, keys: %s", list(state_value.keys()))
@@ -568,6 +569,7 @@ class AgentFrameworkEventBridge:
                     tool_arg_name,
                 )
 
+                state_value: Any
                 if tool_arg_name == "*":
                     state_value = parsed_args
                 elif tool_arg_name in parsed_args:

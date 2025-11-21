@@ -185,6 +185,7 @@ class _GroupChatConfig:
         manager_name: Display name for the manager in conversation history
         participants: Mapping of participant names to their specifications
         max_rounds: Optional limit on manager selection rounds to prevent infinite loops
+        termination_condition: Optional callable that halts the conversation when it returns True
         orchestrator: Orchestrator executor instance (populated during build)
         participant_aliases: Mapping of aliases to executor IDs
         participant_executors: Mapping of participant names to their executor instances
@@ -195,6 +196,7 @@ class _GroupChatConfig:
     manager_name: str
     participants: Mapping[str, GroupChatParticipantSpec]
     max_rounds: int | None = None
+    termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = None
     orchestrator: Executor | None = None
     participant_aliases: dict[str, str] = field(default_factory=dict)  # type: ignore[type-arg]
     participant_executors: dict[str, Executor] = field(default_factory=dict)  # type: ignore[type-arg]
@@ -292,6 +294,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         participants: Mapping of participant names to descriptions (for manager context)
         manager_name: Display name for manager in conversation history
         max_rounds: Optional limit on manager selection rounds (None = unlimited)
+        termination_condition: Optional callable that halts the conversation when it returns True
         executor_id: Optional custom ID for observability (auto-generated if not provided)
     """
 
@@ -302,6 +305,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         participants: Mapping[str, str],
         manager_name: str,
         max_rounds: int | None = None,
+        termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = None,
         executor_id: str | None = None,
     ) -> None:
         super().__init__(executor_id or f"groupchat_orchestrator_{uuid4().hex[:8]}")
@@ -309,6 +313,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         self._participants = dict(participants)
         self._manager_name = manager_name
         self._max_rounds = max_rounds
+        self._termination_condition = termination_condition
         self._history: list[_GroupChatTurn] = []
         self._task_message: ChatMessage | None = None
         self._pending_agent: str | None = None
@@ -389,6 +394,27 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
                 for turn in metadata["history"]
             ]
 
+    async def _complete_on_termination(
+        self,
+        ctx: WorkflowContext[AgentExecutorRequest | _GroupChatRequestMessage, list[ChatMessage]],
+    ) -> bool:
+        """Finish the conversation early when the termination condition is met."""
+        if not await self._check_termination():
+            return False
+
+        final_message = ensure_author(
+            self._create_completion_message(
+                text="Conversation halted after termination condition was met.",
+                reason="termination_condition",
+            ),
+            self._manager_name,
+        )
+        self._conversation.append(final_message)
+        self._history.append(_GroupChatTurn(self._manager_name, "manager", final_message))
+        self._pending_agent = None
+        await ctx.yield_output(list(self._conversation))
+        return True
+
     async def _apply_directive(
         self,
         directive: GroupChatDirective,
@@ -458,6 +484,9 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             self._conversation.extend((manager_message,))
             self._history.append(_GroupChatTurn(self._manager_name, "manager", manager_message))
 
+        if await self._complete_on_termination(ctx):
+            return
+
         self._pending_agent = agent_name
         self._increment_round()
 
@@ -497,6 +526,9 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         self._conversation.extend((message,))
         self._history.append(_GroupChatTurn(participant_name, "agent", message))
         self._pending_agent = None
+
+        if await self._complete_on_termination(ctx):
+            return
 
         if self._check_round_limit():
             final_message = self._create_completion_message(
@@ -660,6 +692,9 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             self._conversation.append(manager_message)
             self._history.append(_GroupChatTurn(self._manager_name, "manager", manager_message))
 
+        if await self._complete_on_termination(ctx):
+            return
+
         self._pending_agent = selected
         self._increment_round()
 
@@ -765,6 +800,9 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             self._history = [_GroupChatTurn("user", "user", task_message)]
         self._pending_agent = None
         self._round_index = 0
+
+        if await self._complete_on_termination(ctx):
+            return
 
         # Query manager for first speaker selection
         if self._is_manager_agent():
@@ -913,7 +951,7 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
 
     Behavior:
         - Extracts participant names and descriptions for manager context
-        - Forwards manager instance, manager name, and max_rounds settings
+        - Forwards manager instance, manager name, max_rounds, and termination_condition settings
         - Allows orchestrator to auto-generate its executor ID
         - Supports both callable managers (select_speakers) and agent-based managers (set_manager)
 
@@ -946,6 +984,7 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
         participants={name: spec.description for name, spec in wiring.participants.items()},
         manager_name=wiring.manager_name,
         max_rounds=wiring.max_rounds,
+        termination_condition=wiring.termination_condition,
     )
 
 
@@ -1156,6 +1195,7 @@ class GroupChatBuilder:
         self._manager_name: str = "manager"
         self._checkpoint_storage: CheckpointStorage | None = None
         self._max_rounds: int | None = None
+        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = None
         self._interceptors: list[_InterceptorSpec] = []
         self._orchestrator_factory = group_chat_orchestrator(_orchestrator_factory)
         self._participant_factory = _participant_factory or _default_participant_factory
@@ -1486,6 +1526,40 @@ class GroupChatBuilder:
         self._interceptors.append((factory, condition))
         return self
 
+    def with_termination_condition(
+        self,
+        condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]],
+    ) -> "GroupChatBuilder":
+        """Define a custom termination condition for the group chat workflow.
+
+        The condition receives the full conversation (including manager and agent messages) and may be async.
+        When it returns True, the orchestrator halts the conversation and emits a completion message authored
+        by the manager.
+
+        Example:
+
+        .. code-block:: python
+
+            from agent_framework import ChatMessage, GroupChatBuilder, Role
+
+
+            def stop_after_two_calls(conversation: list[ChatMessage]) -> bool:
+                calls = sum(1 for msg in conversation if msg.role == Role.ASSISTANT and msg.author_name == "specialist")
+                return calls >= 2
+
+
+            specialist_agent = ...
+            workflow = (
+                GroupChatBuilder()
+                .select_speakers(lambda _: "specialist")
+                .participants(specialist=specialist_agent)
+                .with_termination_condition(stop_after_two_calls)
+                .build()
+            )
+        """
+        self._termination_condition = condition
+        return self
+
     def with_max_rounds(self, max_rounds: int | None) -> "GroupChatBuilder":
         """Set a maximum number of manager rounds to prevent infinite conversations.
 
@@ -1602,6 +1676,7 @@ class GroupChatBuilder:
             manager_name=self._manager_name,
             participants=participant_specs,
             max_rounds=self._max_rounds,
+            termination_condition=self._termination_condition,
             participant_aliases=metadata["aliases"],
             participant_executors=metadata["executors"],
         )

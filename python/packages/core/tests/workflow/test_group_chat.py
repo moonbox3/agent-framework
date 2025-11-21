@@ -357,6 +357,41 @@ class TestGroupChatOrchestrator:
         final_output = conversation[-1]
         assert "round limit" in final_output.text.lower()
 
+    async def test_termination_condition_halts_conversation(self) -> None:
+        """Test that a custom termination condition stops the workflow."""
+
+        def selector(state: GroupChatStateSnapshot) -> str | None:
+            return "agent"
+
+        def termination_condition(conversation: list[ChatMessage]) -> bool:
+            replies = [msg for msg in conversation if msg.role == Role.ASSISTANT and msg.author_name == "agent"]
+            return len(replies) >= 2
+
+        agent = StubAgent("agent", "response")
+
+        workflow = (
+            GroupChatBuilder()
+            .select_speakers(selector)
+            .participants([agent])
+            .with_termination_condition(termination_condition)
+            .build()
+        )
+
+        outputs: list[list[ChatMessage]] = []
+        async for event in workflow.run_stream("test task"):
+            if isinstance(event, WorkflowOutputEvent):
+                data = event.data
+                if isinstance(data, list):
+                    outputs.append(cast(list[ChatMessage], data))
+
+        assert outputs, "Expected termination to yield output"
+        conversation = outputs[-1]
+        agent_replies = [msg for msg in conversation if msg.author_name == "agent" and msg.role == Role.ASSISTANT]
+        assert len(agent_replies) == 2
+        final_output = conversation[-1]
+        assert final_output.author_name == "manager"
+        assert "termination condition" in final_output.text.lower()
+
     async def test_unknown_participant_error(self) -> None:
         """Test that _apply_directive raises error for unknown participants."""
 

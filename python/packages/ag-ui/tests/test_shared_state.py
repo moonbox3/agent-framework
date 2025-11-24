@@ -2,6 +2,8 @@
 
 """Tests for shared state management."""
 
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,7 +14,8 @@ from agent_framework._types import ChatResponseUpdate
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._events import AgentFrameworkEventBridge
 
-from tests._test_stubs import StreamingChatClientStub, stream_from_updates
+sys.path.insert(0, str(Path(__file__).parent))
+from test_helpers_ag_ui import StreamingChatClientStub, stream_from_updates
 
 
 @pytest.fixture

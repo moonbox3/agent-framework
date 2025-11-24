@@ -2,7 +2,9 @@
 
 """Comprehensive tests for orchestrator coverage."""
 
+import sys
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,7 +19,8 @@ from pydantic import BaseModel
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._orchestrators import DefaultOrchestrator, HumanInTheLoopOrchestrator
 
-from tests._test_stubs import StubAgent, TestExecutionContext
+sys.path.insert(0, str(Path(__file__).parent))
+from test_helpers_ag_ui import StubAgent, TestExecutionContext
 
 
 @ai_function(approval_mode="always_require")

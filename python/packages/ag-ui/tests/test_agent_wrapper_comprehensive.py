@@ -3,7 +3,9 @@
 """Comprehensive tests for AgentFrameworkAgent (_agent.py)."""
 
 import json
+import sys
 from collections.abc import AsyncIterator, MutableSequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,7 +13,8 @@ from agent_framework import ChatAgent, ChatMessage, ChatOptions, TextContent
 from agent_framework._types import ChatResponseUpdate
 from pydantic import BaseModel
 
-from tests._test_stubs import StreamingChatClientStub
+sys.path.insert(0, str(Path(__file__).parent))
+from test_helpers_ag_ui import StreamingChatClientStub
 
 
 async def test_agent_initialization_basic():

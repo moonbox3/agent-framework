@@ -10,7 +10,7 @@ from agent_framework import ChatAgent, ChatMessage, ChatOptions, TextContent
 from agent_framework._types import ChatResponseUpdate
 from pydantic import BaseModel
 
-from ._test_stubs import StreamingChatClientStub, stream_from_updates
+from tests._test_stubs import StreamingChatClientStub, stream_from_updates
 
 
 class RecipeOutput(BaseModel):

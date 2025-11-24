@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._orchestrators import DefaultOrchestrator, HumanInTheLoopOrchestrator
 
-from ._test_stubs import StubAgent, TestExecutionContext
+from tests._test_stubs import StubAgent, TestExecutionContext
 
 
 @ai_function(approval_mode="always_require")

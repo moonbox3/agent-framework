@@ -12,7 +12,7 @@ from agent_framework._types import ChatResponseUpdate
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._events import AgentFrameworkEventBridge
 
-from ._test_stubs import StreamingChatClientStub, stream_from_updates
+from tests._test_stubs import StreamingChatClientStub, stream_from_updates
 
 
 @pytest.fixture

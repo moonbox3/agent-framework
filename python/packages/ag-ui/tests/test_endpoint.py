@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._endpoint import add_agent_framework_fastapi_endpoint
 
-from ._test_stubs import StreamingChatClientStub, stream_from_updates
+from tests._test_stubs import StreamingChatClientStub, stream_from_updates
 
 
 def build_chat_client(response_text: str = "Test response") -> StreamingChatClientStub:

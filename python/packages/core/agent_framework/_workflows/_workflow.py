@@ -9,7 +9,7 @@ import logging
 import sys
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..observability import OtelAttr, capture_exception, create_workflow_span
 from ._agent import WorkflowAgent

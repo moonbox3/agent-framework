@@ -5,11 +5,9 @@ from typing import Any
 import pytest
 
 from agent_framework import (
-    ConnectionHandle,
     Executor,
     Workflow,
     WorkflowBuilder,
-    WorkflowConnection,
     WorkflowContext,
     handler,
 )
@@ -41,10 +39,7 @@ class _Sink(Executor):
 
 async def test_connect_merges_fragments_and_runs() -> None:
     connection_one = (
-        WorkflowBuilder()
-        .add_edge(_Source(id="src"), _Upper(id="up"))
-        .set_start_executor("src")
-        .as_connection()
+        WorkflowBuilder().add_edge(_Source(id="src"), _Upper(id="up")).set_start_executor("src").as_connection()
     )
 
     connection_two = (
@@ -72,10 +67,7 @@ async def test_connect_merges_fragments_and_runs() -> None:
 
 async def test_connect_detects_id_collision_with_raw_connection() -> None:
     connection = (
-        WorkflowBuilder()
-        .add_edge(_Source(id="dup"), _Upper(id="dup_upper"))
-        .set_start_executor("dup")
-        .as_connection()
+        WorkflowBuilder().add_edge(_Source(id="dup"), _Upper(id="dup_upper")).set_start_executor("dup").as_connection()
     )
 
     builder = WorkflowBuilder()

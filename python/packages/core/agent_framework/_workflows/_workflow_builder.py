@@ -5,7 +5,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, overload
+from typing import Any
 
 from .._agents import AgentProtocol
 from ..observability import OtelAttr, capture_exception, create_workflow_span
@@ -84,7 +84,10 @@ class WorkflowConnection:
             entry=self.entry,
             exits=list(self.exits),
             start_input_types=list(self.start_input_types or []),
-            exit_points=[ConnectionPoint(p.id, list(p.output_types), list(p.workflow_output_types)) for p in self.exit_points or []],
+            exit_points=[
+                ConnectionPoint(p.id, list(p.output_types), list(p.workflow_output_types))
+                for p in self.exit_points or []
+            ],
         )
 
     def with_prefix(self, prefix: str | None) -> "WorkflowConnection":
@@ -184,7 +187,8 @@ def _remap_edge_group_ids(group: EdgeGroup, mapping: dict[str, str], prefix: str
             remapped._target_ids[idx] = mapping.get(target, target)  # type: ignore[attr-defined]
             new_targets.append(remapped._target_ids[idx])  # type: ignore[attr-defined]
         remapped.cases = [  # type: ignore[attr-defined]
-            _remap_switch_case(case, mapping) for case in remapped.cases  # type: ignore[attr-defined]
+            _remap_switch_case(case, mapping)
+            for case in remapped.cases  # type: ignore[attr-defined]
         ]
     return remapped
 
@@ -208,7 +212,7 @@ def _derive_exit_ids(edge_groups: list[EdgeGroup], executors: dict[str, Executor
             outgoing.setdefault(edge.source_id, []).append(edge.target_id)
 
     exits: list[str] = []
-    for executor_id, executor in executors.items():
+    for executor_id, _ in executors.items():
         targets = outgoing.get(executor_id, [])
         if not targets:
             exits.append(executor_id)
@@ -384,17 +388,16 @@ class WorkflowBuilder:
             else prepared.builder._start_executor
         )
         start_types = prepared.start_input_types or _get_executor_input_types(prepared.builder._executors, start_id)
-        exit_points = prepared.exit_points or _derive_exit_points(prepared.builder._edge_groups, prepared.builder._executors)
-        handle = ConnectionHandle(
+        exit_points = prepared.exit_points or _derive_exit_points(
+            prepared.builder._edge_groups, prepared.builder._executors
+        )
+        return ConnectionHandle(
             start_id=start_id,
             start_input_types=start_types,
             output_points=exit_points,
         )
-        return handle
 
-    def _derive_prefix(
-        self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", explicit: str | None
-    ) -> str:
+    def _derive_prefix(self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", explicit: str | None) -> str:
         """Choose a stable prefix from explicit input, fragment name, or a deterministic fallback."""
         if explicit:
             return explicit
@@ -429,8 +432,7 @@ class WorkflowBuilder:
         if isinstance(fragment, Workflow):
             return fragment.as_connection(prefix=prefix)
         raise TypeError(
-            "add_workflow expects a WorkflowBuilder, Workflow, or WorkflowConnection; "
-            f"got {type(fragment).__name__}."
+            f"add_workflow expects a WorkflowBuilder, Workflow, or WorkflowConnection; got {type(fragment).__name__}."
         )
 
     def _normalize_endpoint(self, endpoint: Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str) -> str:

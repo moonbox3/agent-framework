@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from agent_framework_ag_ui._orchestration.tooling import merge_tools, register_additional_client_tools
+from agent_framework_ag_ui._orchestration._tooling import merge_tools, register_additional_client_tools
 
 
 class DummyTool:

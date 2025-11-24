@@ -3,22 +3,27 @@
 """Comprehensive tests for AgentFrameworkAgent (_agent.py)."""
 
 import json
+from collections.abc import AsyncIterator, MutableSequence
+from typing import Any
 
 import pytest
-from agent_framework import ChatAgent, TextContent
+from agent_framework import ChatAgent, ChatMessage, ChatOptions, TextContent
 from agent_framework._types import ChatResponseUpdate
 from pydantic import BaseModel
+
+from ._test_stubs import StreamingChatClientStub
 
 
 async def test_agent_initialization_basic():
     """Test basic agent initialization without state schema."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     assert wrapper.name == "test_agent"
@@ -31,12 +36,13 @@ async def test_agent_initialization_with_state_schema():
     """Test agent initialization with state_schema."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
-    state_schema = {"document": {"type": "string"}}
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
+    state_schema: dict[str, dict[str, Any]] = {"document": {"type": "string"}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
     assert wrapper.config.state_schema == state_schema
@@ -46,11 +52,12 @@ async def test_agent_initialization_with_predict_state_config():
     """Test agent initialization with predict_state_config."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     predict_config = {"document": {"tool": "write_doc", "tool_argument": "content"}}
     wrapper = AgentFrameworkAgent(agent=agent, predict_state_config=predict_config)
 
@@ -61,15 +68,16 @@ async def test_agent_initialization_with_pydantic_state_schema():
     """Test agent initialization when state_schema is provided as Pydantic model/class."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
     class MyState(BaseModel):
         document: str
         tags: list[str] = []
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
 
     wrapper_class_schema = AgentFrameworkAgent(agent=agent, state_schema=MyState)
     wrapper_instance_schema = AgentFrameworkAgent(agent=agent, state_schema=MyState(document="hi"))
@@ -83,16 +91,17 @@ async def test_run_started_event_emission():
     """Test RunStartedEvent is emitted at start of run."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -106,11 +115,12 @@ async def test_predict_state_custom_event_emission():
     """Test PredictState CustomEvent is emitted when predict_state_config is present."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     predict_config = {
         "document": {"tool": "write_doc", "tool_argument": "content"},
         "summary": {"tool": "summarize", "tool_argument": "text"},
@@ -119,7 +129,7 @@ async def test_predict_state_custom_event_emission():
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -137,11 +147,12 @@ async def test_initial_state_snapshot_with_schema():
     """Test initial StateSnapshotEvent emission when state_schema present."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     state_schema = {"document": {"type": "string"}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
@@ -150,7 +161,7 @@ async def test_initial_state_snapshot_with_schema():
         "state": {"document": "Initial content"},
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -166,17 +177,18 @@ async def test_state_initialization_object_type():
     """Test state initialization with object type in schema."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
-    state_schema = {"recipe": {"type": "object", "properties": {}}}
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
+    state_schema: dict[str, dict[str, Any]] = {"recipe": {"type": "object", "properties": {}}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -192,17 +204,18 @@ async def test_state_initialization_array_type():
     """Test state initialization with array type in schema."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
-    state_schema = {"steps": {"type": "array", "items": {}}}
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
+    state_schema: dict[str, dict[str, Any]] = {"steps": {"type": "array", "items": {}}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -218,16 +231,17 @@ async def test_run_finished_event_emission():
     """Test RunFinishedEvent is emitted at end of run."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -239,11 +253,12 @@ async def test_tool_result_confirm_changes_accepted():
     """Test confirm_changes tool result handling when accepted."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Document updated")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Document updated")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(
         agent=agent,
         state_schema={"document": {"type": "string"}},
@@ -251,8 +266,8 @@ async def test_tool_result_confirm_changes_accepted():
     )
 
     # Simulate tool result message with acceptance
-    tool_result = {"accepted": True, "steps": []}
-    input_data = {
+    tool_result: dict[str, Any] = {"accepted": True, "steps": []}
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",  # Tool result from UI
@@ -263,7 +278,7 @@ async def test_tool_result_confirm_changes_accepted():
         "state": {"document": "Updated content"},
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -285,16 +300,17 @@ async def test_tool_result_confirm_changes_rejected():
     """Test confirm_changes tool result handling when rejected."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="OK")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result message with rejection
-    tool_result = {"accepted": False, "steps": []}
-    input_data = {
+    tool_result: dict[str, Any] = {"accepted": False, "steps": []}
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",
@@ -304,7 +320,7 @@ async def test_tool_result_confirm_changes_rejected():
         ],
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -318,22 +334,23 @@ async def test_tool_result_function_approval_accepted():
     """Test function approval tool result when steps are accepted."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="OK")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result with multiple steps
-    tool_result = {
+    tool_result: dict[str, Any] = {
         "accepted": True,
         "steps": [
             {"id": "step1", "description": "Send email", "status": "enabled"},
             {"id": "step2", "description": "Create calendar event", "status": "enabled"},
         ],
     }
-    input_data = {
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",
@@ -343,7 +360,7 @@ async def test_tool_result_function_approval_accepted():
         ],
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -363,19 +380,20 @@ async def test_tool_result_function_approval_rejected():
     """Test function approval tool result when rejected."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="OK")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result rejection with steps
-    tool_result = {
+    tool_result: dict[str, Any] = {
         "accepted": False,
         "steps": [{"id": "step1", "description": "Send email", "status": "disabled"}],
     }
-    input_data = {
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",
@@ -385,7 +403,7 @@ async def test_tool_result_function_approval_rejected():
         ],
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -399,17 +417,16 @@ async def test_thread_metadata_tracking():
     """Test that thread metadata includes ag_ui_thread_id and ag_ui_run_id."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    thread_metadata = {}
+    thread_metadata: dict[str, Any] = {}
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            # Capture thread metadata from kwargs
-            nonlocal thread_metadata
-            if "thread" in kwargs:
-                thread_metadata = kwargs["thread"].metadata
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if "thread" in kwargs:
+            thread_metadata.update(kwargs["thread"].metadata)
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {
@@ -418,28 +435,28 @@ async def test_thread_metadata_tracking():
         "run_id": "test_run_456",
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
-    # Check thread metadata was set
-    # Note: This test may need adjustment based on actual thread passing mechanism
+    assert thread_metadata.get("ag_ui_thread_id") == "test_thread_123"
+    assert thread_metadata.get("ag_ui_run_id") == "test_run_456"
 
 
 async def test_state_context_injection():
     """Test that current state is injected into thread metadata."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    thread_metadata = {}
+    thread_metadata: dict[str, Any] = {}
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            # Track if state context message was added
-            nonlocal thread_metadata
-            # In actual implementation, thread is passed and state is in metadata
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if "thread" in kwargs:
+            thread_metadata.update(kwargs["thread"].metadata)
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(
         agent=agent,
         state_schema={"document": {"type": "string"}},
@@ -450,27 +467,28 @@ async def test_state_context_injection():
         "state": {"document": "Test content"},
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
-    # State should be injected - this is validated by agent execution flow
+    assert thread_metadata.get("current_state") == {"document": "Test content"}
 
 
 async def test_no_messages_provided():
     """Test handling when no messages are provided."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
-    input_data = {"messages": []}
+    input_data: dict[str, Any] = {"messages": []}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -484,16 +502,17 @@ async def test_message_end_event_emission():
     """Test TextMessageEndEvent is emitted for assistant messages."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Hello world")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Hello world")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
-    input_data = {"messages": [{"role": "user", "content": "Hi"}]}
+    input_data: dict[str, Any] = {"messages": [{"role": "user", "content": "Hi"}]}
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -511,19 +530,20 @@ async def test_error_handling_with_exception():
     """Test that exceptions during agent execution are re-raised."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class FailingChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            if False:
-                yield
-            raise RuntimeError("Simulated failure")
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if False:
+            yield ChatResponseUpdate(contents=[])
+        raise RuntimeError("Simulated failure")
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=FailingChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
-    input_data = {"messages": [{"role": "user", "content": "Hi"}]}
+    input_data: dict[str, Any] = {"messages": [{"role": "user", "content": "Hi"}]}
 
     with pytest.raises(RuntimeError, match="Simulated failure"):
-        async for event in wrapper.run_agent(input_data):
+        async for _ in wrapper.run_agent(input_data):
             pass
 
 
@@ -531,18 +551,18 @@ async def test_json_decode_error_in_tool_result():
     """Test handling of orphaned tool result - should be sanitized out."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            # Should not be called since orphaned tool result is dropped
-            if False:
-                yield
-            raise AssertionError("ChatClient should not be called with orphaned tool result")
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if False:
+            yield ChatResponseUpdate(contents=[])
+        raise AssertionError("ChatClient should not be called with orphaned tool result")
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Send invalid JSON as tool result without preceding tool call
-    input_data = {
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",
@@ -552,7 +572,7 @@ async def test_json_decode_error_in_tool_result():
         ],
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
@@ -568,11 +588,12 @@ async def test_suppressed_summary_with_document_state():
     """Test suppressed summary uses document state for confirmation message."""
     from agent_framework.ag_ui import AgentFrameworkAgent, DocumentWriterConfirmationStrategy
 
-    class MockChatClient:
-        async def get_streaming_response(self, messages, chat_options, **kwargs):
-            yield ChatResponseUpdate(contents=[TextContent(text="Response")])
+    async def stream_fn(
+        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(contents=[TextContent(text="Response")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=MockChatClient())
+    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
     wrapper = AgentFrameworkAgent(
         agent=agent,
         state_schema={"document": {"type": "string"}},
@@ -581,8 +602,8 @@ async def test_suppressed_summary_with_document_state():
     )
 
     # Simulate confirmation with document state
-    tool_result = {"accepted": True, "steps": []}
-    input_data = {
+    tool_result: dict[str, Any] = {"accepted": True, "steps": []}
+    input_data: dict[str, Any] = {
         "messages": [
             {
                 "role": "tool",
@@ -593,7 +614,7 @@ async def test_suppressed_summary_with_document_state():
         "state": {"document": "This is the beginning of a document. It contains important information."},
     }
 
-    events = []
+    events: list[Any] = []
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 

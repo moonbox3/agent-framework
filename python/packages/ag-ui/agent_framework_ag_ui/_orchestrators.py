@@ -271,16 +271,15 @@ class DefaultOrchestrator(Orchestrator):
         """
         from ._events import AgentFrameworkEventBridge
         from ._message_adapters import agui_messages_to_snapshot_format
-        from ._orchestration import (
-            StateManager,
+        from ._orchestration._message_hygiene import deduplicate_messages, sanitize_tool_history
+        from ._orchestration._state_manager import StateManager
+        from ._orchestration._tooling import (
             collect_server_tools,
-            deduplicate_messages,
             merge_tools,
             register_additional_client_tools,
-            sanitize_tool_history,
         )
 
-        logger.info("Starting default agent run for thread_id=%s, run_id=%s", context.thread_id, context.run_id)
+        logger.info(f"Starting default agent run for thread_id={context.thread_id}, run_id={context.run_id}")
 
         response_format = None
         if isinstance(context.agent, ChatAgent):
@@ -328,28 +327,32 @@ class DefaultOrchestrator(Orchestrator):
             yield event_bridge.create_run_finished_event()
             return
 
-        logger.info("Received %s raw messages from client", len(raw_messages))
+        logger.info(f"Received {len(raw_messages)} raw messages from client")
         for i, msg in enumerate(raw_messages):
             role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
             msg_id = getattr(msg, "message_id", None)
-            logger.info("  Raw message %s: role=%s, id=%s", i, role, msg_id)
+            logger.info(f"  Raw message {i}: role={role}, id={msg_id}")
             if hasattr(msg, "contents") and msg.contents:
                 for j, content in enumerate(msg.contents):
                     content_type = type(content).__name__
                     if isinstance(content, TextContent):
-                        logger.debug("    Content %s: %s - %s", j, content_type, content.text)
+                        logger.debug("    Content %s: %s - text_length=%s", j, content_type, len(content.text))
                     elif isinstance(content, FunctionCallContent):
-                        logger.debug("    Content %s: %s - %s(%s)", j, content_type, content.name, content.arguments)
-                    elif isinstance(content, FunctionResultContent):
+                        arg_length = len(str(content.arguments)) if content.arguments else 0
                         logger.debug(
-                            "    Content %s: %s - call_id=%s, result=%s",
+                            "    Content %s: %s - %s args_length=%s", j, content_type, content.name, arg_length
+                        )
+                    elif isinstance(content, FunctionResultContent):
+                        result_preview = type(content.result).__name__ if content.result is not None else "None"
+                        logger.debug(
+                            "    Content %s: %s - call_id=%s, result_type=%s",
                             j,
                             content_type,
                             content.call_id,
-                            content.result,
+                            result_preview,
                         )
                     else:
-                        logger.debug("    Content %s: %s - %s", j, content_type, content)
+                        logger.debug(f"    Content {j}: {content_type}")
 
         sanitized_messages = sanitize_tool_history(raw_messages)
         provider_messages = deduplicate_messages(sanitized_messages)
@@ -359,27 +362,29 @@ class DefaultOrchestrator(Orchestrator):
             yield event_bridge.create_run_finished_event()
             return
 
-        logger.info("Processing %s provider messages after sanitization/deduplication", len(provider_messages))
+        logger.info(f"Processing {len(provider_messages)} provider messages after sanitization/deduplication")
         for i, msg in enumerate(provider_messages):
             role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-            logger.info("  Message %s: role=%s", i, role)
+            logger.info(f"  Message {i}: role={role}")
             if hasattr(msg, "contents") and msg.contents:
                 for j, content in enumerate(msg.contents):
                     content_type = type(content).__name__
                     if isinstance(content, TextContent):
-                        logger.info("    Content %s: %s - %s", j, content_type, content.text)
+                        logger.info(f"    Content {j}: {content_type} - text_length={len(content.text)}")
                     elif isinstance(content, FunctionCallContent):
-                        logger.info("    Content %s: %s - %s(%s)", j, content_type, content.name, content.arguments)
+                        arg_length = len(str(content.arguments)) if content.arguments else 0
+                        logger.info("    Content %s: %s - %s args_length=%s", j, content_type, content.name, arg_length)
                     elif isinstance(content, FunctionResultContent):
+                        result_preview = type(content.result).__name__ if content.result is not None else "None"
                         logger.info(
-                            "    Content %s: %s - call_id=%s, result=%s",
+                            "    Content %s: %s - call_id=%s, result_type=%s",
                             j,
                             content_type,
                             content.call_id,
-                            content.result,
+                            result_preview,
                         )
                     else:
-                        logger.info("    Content %s: %s - %s", j, content_type, content)
+                        logger.info(f"    Content {j}: {content_type}")
 
         messages_to_run: list[Any] = []
         is_new_user_turn = False
@@ -405,12 +410,12 @@ class DefaultOrchestrator(Orchestrator):
         messages_to_run.extend(provider_messages)
 
         client_tools = convert_agui_tools_to_agent_framework(context.input_data.get("tools"))
-        logger.info("[TOOLS] Client sent %s tools", len(client_tools) if client_tools else 0)
+        logger.info(f"[TOOLS] Client sent {len(client_tools) if client_tools else 0} tools")
         if client_tools:
             for tool in client_tools:
                 tool_name = getattr(tool, "name", "unknown")
                 declaration_only = getattr(tool, "declaration_only", None)
-                logger.info("[TOOLS]   - Client tool: %s, declaration_only=%s", tool_name, declaration_only)
+                logger.info(f"[TOOLS]   - Client tool: {tool_name}, declaration_only={declaration_only}")
 
         server_tools = collect_server_tools(context.agent)
         register_additional_client_tools(context.agent, client_tools)
@@ -420,15 +425,15 @@ class DefaultOrchestrator(Orchestrator):
         update_count = 0
         async for update in context.agent.run_stream(messages_to_run, thread=thread, tools=tools_param):
             update_count += 1
-            logger.info("[STREAM] Received update #%s from agent", update_count)
+            logger.info(f"[STREAM] Received update #{update_count} from agent")
             all_updates.append(update)
             events = await event_bridge.from_agent_run_update(update)
-            logger.info("[STREAM] Update #%s produced %s events", update_count, len(events))
+            logger.info(f"[STREAM] Update #{update_count} produced {len(events)} events")
             for event in events:
-                logger.info("[STREAM] Yielding event: %s", type(event).__name__)
+                logger.info(f"[STREAM] Yielding event: {type(event).__name__}")
                 yield event
 
-        logger.info("[STREAM] Agent stream completed. Total updates: %s", update_count)
+        logger.info(f"[STREAM] Agent stream completed. Total updates: {update_count}")
 
         if event_bridge.should_stop_after_confirm:
             logger.info("Stopping run after confirm_changes - waiting for user response")
@@ -450,45 +455,39 @@ class DefaultOrchestrator(Orchestrator):
                         from ag_ui.core import ToolCallEndEvent
 
                         end_event = ToolCallEndEvent(tool_call_id=tool_call_id)
-                        logger.info(
-                            "Emitting ToolCallEndEvent for declaration-only tool call '%s'",
-                            tool_call_id,
-                        )
+                        logger.info(f"Emitting ToolCallEndEvent for declaration-only tool call '{tool_call_id}'")
                         yield end_event
 
         if all_updates and response_format:
             from agent_framework import AgentRunResponse
             from pydantic import BaseModel
 
-            logger.info("Processing structured output, update count: %s", len(all_updates))
+            logger.info(f"Processing structured output, update count: {len(all_updates)}")
             final_response = AgentRunResponse.from_agent_run_response_updates(
                 all_updates, output_format_type=response_format
             )
 
             if final_response.value and isinstance(final_response.value, BaseModel):
                 response_dict = final_response.value.model_dump(mode="json", exclude_none=True)
-                logger.info("Received structured output: %s", list(response_dict.keys()))
+                logger.info(f"Received structured output keys: {list(response_dict.keys())}")
 
                 state_updates = state_manager.extract_state_updates(response_dict)
                 if state_updates:
                     state_manager.apply_state_updates(state_updates)
                     state_snapshot = event_bridge.create_state_snapshot_event(current_state)
                     yield state_snapshot
-                    logger.info("Emitted StateSnapshotEvent with updates: %s", list(state_updates.keys()))
+                    logger.info(f"Emitted StateSnapshotEvent with updates: {list(state_updates.keys())}")
 
                 if "message" in response_dict and response_dict["message"]:
                     message_id = generate_event_id()
                     yield TextMessageStartEvent(message_id=message_id, role="assistant")
                     yield TextMessageContentEvent(message_id=message_id, delta=response_dict["message"])
                     yield TextMessageEndEvent(message_id=message_id)
-                    logger.info("Emitted conversational message: %s...", response_dict["message"][:100])
+                    logger.info(f"Emitted conversational message with length={len(response_dict['message'])}")
 
-        logger.info("[FINALIZE] Checking for unclosed message. current_message_id=%s", event_bridge.current_message_id)
+        logger.info(f"[FINALIZE] Checking for unclosed message. current_message_id={event_bridge.current_message_id}")
         if event_bridge.current_message_id:
-            logger.info(
-                "[FINALIZE] Emitting TextMessageEndEvent for message_id=%s",
-                event_bridge.current_message_id,
-            )
+            logger.info(f"[FINALIZE] Emitting TextMessageEndEvent for message_id={event_bridge.current_message_id}")
             yield event_bridge.create_message_end_event(event_bridge.current_message_id)
 
             assistant_text_message = {
@@ -525,7 +524,7 @@ class DefaultOrchestrator(Orchestrator):
 
         logger.info("[FINALIZE] Emitting RUN_FINISHED event")
         yield event_bridge.create_run_finished_event()
-        logger.info("Completed agent run for thread_id=%s, run_id=%s", context.thread_id, context.run_id)
+        logger.info(f"Completed agent run for thread_id={context.thread_id}, run_id={context.run_id}")
 
 
 __all__ = [

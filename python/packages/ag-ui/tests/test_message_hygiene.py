@@ -2,7 +2,7 @@
 
 from agent_framework import ChatMessage, FunctionCallContent, FunctionResultContent, TextContent
 
-from agent_framework_ag_ui._orchestration.message_hygiene import (
+from agent_framework_ag_ui._orchestration._message_hygiene import (
     deduplicate_messages,
     sanitize_tool_history,
 )

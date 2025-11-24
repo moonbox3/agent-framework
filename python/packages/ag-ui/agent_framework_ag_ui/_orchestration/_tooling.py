@@ -15,11 +15,11 @@ def collect_server_tools(agent: Any) -> list[Any]:
     if isinstance(agent, ChatAgent):
         tools_from_agent = agent.chat_options.tools
         server_tools = list(tools_from_agent) if tools_from_agent else []
-        logger.info("[TOOLS] Agent has %s configured tools", len(server_tools))
+        logger.info(f"[TOOLS] Agent has {len(server_tools)} configured tools")
         for tool in server_tools:
             tool_name = getattr(tool, "name", "unknown")
             approval_mode = getattr(tool, "approval_mode", None)
-            logger.info("[TOOLS]   - %s: approval_mode=%s", tool_name, approval_mode)
+            logger.info(f"[TOOLS]   - {tool_name}: approval_mode={approval_mode}")
         return server_tools
 
     try:
@@ -40,7 +40,7 @@ def register_additional_client_tools(agent: Any, client_tools: list[Any] | None)
         chat_client = agent.chat_client
         if isinstance(chat_client, BaseChatClient) and chat_client.function_invocation_configuration is not None:
             chat_client.function_invocation_configuration.additional_tools = client_tools
-            logger.debug("[TOOLS] Registered %s client tools as additional_tools (declaration-only)", len(client_tools))
+            logger.debug(f"[TOOLS] Registered {len(client_tools)} client tools as additional_tools (declaration-only)")
         return
 
     try:
@@ -50,7 +50,7 @@ def register_additional_client_tools(agent: Any, client_tools: list[Any] | None)
             if fic is not None:
                 fic.additional_tools = client_tools  # type: ignore[attr-defined]
                 logger.debug(
-                    "[TOOLS] Registered %s client tools as additional_tools (declaration-only)", len(client_tools)
+                    f"[TOOLS] Registered {len(client_tools)} client tools as additional_tools (declaration-only)"
                 )
     except AttributeError:
         return
@@ -74,9 +74,7 @@ def merge_tools(server_tools: list[Any], client_tools: list[Any] | None) -> list
         combined_tools.extend(server_tools)
     combined_tools.extend(unique_client_tools)
     logger.info(
-        "[TOOLS] Passing tools= parameter with %s tools (%s server + %s unique client)",
-        len(combined_tools),
-        len(server_tools),
-        len(unique_client_tools),
+        f"[TOOLS] Passing tools= parameter with {len(combined_tools)} tools "
+        f"({len(server_tools)} server + {len(unique_client_tools)} unique client)"
     )
     return combined_tools

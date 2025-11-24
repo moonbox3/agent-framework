@@ -5,6 +5,7 @@
 import json
 import logging
 import re
+from copy import deepcopy
 from typing import Any
 
 from ag_ui.core import (
@@ -100,9 +101,9 @@ class AgentFrameworkEventBridge:
         """
         events: list[BaseEvent] = []
 
-        logger.info("Processing AgentRunUpdate with %s content items", len(update.contents))
+        logger.info(f"Processing AgentRunUpdate with {len(update.contents)} content items")
         for idx, content in enumerate(update.contents):
-            logger.info("  Content %s: type=%s", idx, type(content).__name__)
+            logger.info(f"  Content {idx}: type={type(content).__name__}")
             if isinstance(content, TextContent):
                 events.extend(self._handle_text_content(content))
             elif isinstance(content, FunctionCallContent):
@@ -116,7 +117,7 @@ class AgentFrameworkEventBridge:
 
     def _handle_text_content(self, content: TextContent) -> list[BaseEvent]:
         events: list[BaseEvent] = []
-        logger.info("  TextContent found: text_length=%s, text_preview='%s'", len(content.text), content.text[:100])
+        logger.info(f"  TextContent found: length={len(content.text)}")
         logger.info(
             "  Flags: skip_text_content=%s, should_stop_after_confirm=%s",
             self.skip_text_content,
@@ -130,7 +131,7 @@ class AgentFrameworkEventBridge:
         if self.should_stop_after_confirm:
             logger.info("  SKIPPING TextContent: waiting for confirm_changes response")
             self.suppressed_summary += content.text
-            logger.info("  Suppressed summary now has %s chars", len(self.suppressed_summary))
+            logger.info(f"  Suppressed summary length={len(self.suppressed_summary)}")
             return events
 
         if not self.current_message_id:
@@ -139,7 +140,7 @@ class AgentFrameworkEventBridge:
                 message_id=self.current_message_id,
                 role="assistant",
             )
-            logger.info("  EMITTING TextMessageStartEvent with message_id=%s", self.current_message_id)
+            logger.info(f"  EMITTING TextMessageStartEvent with message_id={self.current_message_id}")
             events.append(start_event)
 
         event = TextMessageContentEvent(
@@ -147,20 +148,23 @@ class AgentFrameworkEventBridge:
             delta=content.text,
         )
         self.accumulated_text_content += content.text
-        logger.info("  EMITTING TextMessageContentEvent with delta: '%s'", content.text)
+        logger.info(f"  EMITTING TextMessageContentEvent with text_len={len(content.text)}")
         events.append(event)
         return events
 
     def _handle_function_call_content(self, content: FunctionCallContent) -> list[BaseEvent]:
         events: list[BaseEvent] = []
         if content.name:
-            logger.debug("Tool call: %s (call_id: %s)", content.name, content.call_id)
+            logger.debug(f"Tool call: {content.name} (call_id: {content.call_id})")
 
         if not content.name and not content.call_id and not self.current_tool_call_name:
-            args_preview = str(content.arguments)[:50] if content.arguments else "None"
-            logger.warning("FunctionCallContent missing name and call_id. Args: %s", args_preview)
+            args_length = len(str(content.arguments)) if content.arguments else 0
+            logger.warning(f"FunctionCallContent missing name and call_id. args_length={args_length}")
 
         tool_call_id = self._coalesce_tool_call_id(content)
+        if content.name and tool_call_id != self.current_tool_call_id:
+            self.streaming_tool_args = ""
+            self.state_delta_count = 0
         if content.name:
             self.current_tool_call_id = tool_call_id
             self.current_tool_call_name = content.name
@@ -170,7 +174,7 @@ class AgentFrameworkEventBridge:
                 tool_call_name=content.name,
                 parent_message_id=self.current_message_id,
             )
-            logger.info("Emitting ToolCallStartEvent with name='%s', id='%s'", content.name, tool_call_id)
+            logger.info(f"Emitting ToolCallStartEvent with name='{content.name}', id='{tool_call_id}'")
             events.append(tool_start_event)
 
             self.pending_tool_calls.append(
@@ -188,7 +192,7 @@ class AgentFrameworkEventBridge:
 
         if content.arguments:
             delta_str = content.arguments if isinstance(content.arguments, str) else json.dumps(content.arguments)
-            logger.info("Emitting ToolCallArgsEvent with delta: %r..., id='%s'", delta_str, tool_call_id)
+            logger.info(f"Emitting ToolCallArgsEvent with delta_length={len(delta_str)}, id='{tool_call_id}'")
             args_event = ToolCallArgsEvent(
                 tool_call_id=tool_call_id,
                 delta=delta_str,
@@ -251,20 +255,15 @@ class AgentFrameworkEventBridge:
 
                         self.state_delta_count += 1
                         if self.state_delta_count % 10 == 1:
-                            value_preview = (
-                                str(partial_value)[:100] + "..."
-                                if len(str(partial_value)) > 100
-                                else str(partial_value)
-                            )
                             logger.info(
-                                "StateDeltaEvent #%s for '%s': op=replace, path=/%s, value=%s",
+                                "StateDeltaEvent #%s for '%s': op=replace, path=/%s, value_length=%s",
                                 self.state_delta_count,
                                 state_key,
                                 state_key,
-                                value_preview,
+                                len(str(partial_value)),
                             )
                         elif self.state_delta_count % 100 == 0:
-                            logger.info("StateDeltaEvent #%s emitted", self.state_delta_count)
+                            logger.info(f"StateDeltaEvent #{self.state_delta_count} emitted")
 
                         events.append(state_delta_event)
                         self.last_emitted_state[state_key] = partial_value
@@ -296,18 +295,15 @@ class AgentFrameworkEventBridge:
 
                     self.state_delta_count += 1
                     if self.state_delta_count % 10 == 1:
-                        value_preview = (
-                            str(state_value)[:100] + "..." if len(str(state_value)) > 100 else str(state_value)
-                        )
                         logger.info(
-                            "StateDeltaEvent #%s for '%s': op=replace, path=/%s, value=%s",
+                            "StateDeltaEvent #%s for '%s': op=replace, path=/%s, value_length=%s",
                             self.state_delta_count,
                             state_key,
                             state_key,
-                            value_preview,
+                            len(str(state_value)),
                         )
                     elif self.state_delta_count % 100 == 0:
-                        logger.info("StateDeltaEvent #%s emitted", self.state_delta_count)
+                        logger.info(f"StateDeltaEvent #{self.state_delta_count} emitted")
 
                     events.append(state_delta_event)
                     self.last_emitted_state[state_key] = state_value
@@ -322,28 +318,34 @@ class AgentFrameworkEventBridge:
         if not parsed_args:
             return events
 
-        logger.info("Checking predict_state_config: %s", self.predict_state_config)
+        logger.info(
+            "Checking predict_state_config keys: %s",
+            list(self.predict_state_config.keys()) if self.predict_state_config else "None",
+        )
         for state_key, config in self.predict_state_config.items():
-            logger.info("Checking state_key='%s', config=%s", state_key, config)
+            logger.info(f"Checking state_key='{state_key}'")
             if config["tool"] != content.name:
                 continue
             tool_arg_name = config["tool_argument"]
-            logger.info(
-                "MATCHED tool '%s' for state key '%s', arg='%s'",
-                content.name,
-                state_key,
-                tool_arg_name,
-            )
+            logger.info(f"MATCHED tool '{content.name}' for state key '{state_key}', arg='{tool_arg_name}'")
 
             state_value: Any
             if tool_arg_name == "*":
                 state_value = parsed_args
-                logger.info("Using all args as state value, keys: %s", list(state_value.keys()))
+                logger.info(f"Using all args as state value, keys: {list(state_value.keys())}")
             elif tool_arg_name in parsed_args:
                 state_value = parsed_args[tool_arg_name]
-                logger.info("Using specific arg '%s' as state value", tool_arg_name)
+                logger.info(f"Using specific arg '{tool_arg_name}' as state value")
             else:
-                logger.warning("Tool argument '%s' not found in parsed args", tool_arg_name)
+                logger.warning(f"Tool argument '{tool_arg_name}' not found in parsed args")
+                continue
+
+            previous_value = self.last_emitted_state.get(state_key, object())
+            if previous_value == state_value:
+                logger.info(
+                    "Skipping duplicate StateDeltaEvent for key '%s' - value unchanged",
+                    state_key,
+                )
                 continue
 
             state_delta_event = StateDeltaEvent(
@@ -355,9 +357,10 @@ class AgentFrameworkEventBridge:
                     }
                 ],
             )
-            logger.info("Emitting StateDeltaEvent for key '%s', value type: %s", state_key, type(state_value))  # type: ignore
+            logger.info(f"Emitting StateDeltaEvent for key '{state_key}', value type: {type(state_value)}")  # type: ignore
             events.append(state_delta_event)
             self.pending_state_updates[state_key] = state_value
+            self.last_emitted_state[state_key] = state_value
         return events
 
     def _handle_function_result_content(self, content: FunctionResultContent) -> list[BaseEvent]:
@@ -366,7 +369,7 @@ class AgentFrameworkEventBridge:
             end_event = ToolCallEndEvent(
                 tool_call_id=content.call_id,
             )
-            logger.info("Emitting ToolCallEndEvent for completed tool call '%s'", content.call_id)
+            logger.info(f"Emitting ToolCallEndEvent for completed tool call '{content.call_id}'")
             events.append(end_event)
             self.tool_calls_ended.add(content.call_id)
 
@@ -440,7 +443,7 @@ class AgentFrameworkEventBridge:
                 type=EventType.MESSAGES_SNAPSHOT,
                 messages=all_messages,  # type: ignore[arg-type]
             )
-            logger.info("Emitting MessagesSnapshotEvent with %s messages", len(all_messages))
+            logger.info(f"Emitting MessagesSnapshotEvent with {len(all_messages)} messages")
             events.append(messages_snapshot_event)
         return events
 
@@ -450,7 +453,7 @@ class AgentFrameworkEventBridge:
             for key, value in self.pending_state_updates.items():
                 self.current_state[key] = value
 
-            logger.info("Emitting StateSnapshotEvent with keys: %s", list(self.current_state.keys()))
+            logger.info(f"Emitting StateSnapshotEvent with keys: {list(self.current_state.keys())}")
             if "recipe" in self.current_state:
                 recipe = self.current_state["recipe"]
                 logger.info(
@@ -488,7 +491,7 @@ class AgentFrameworkEventBridge:
                 logger.info("Skipping confirm_changes - require_confirmation is False")
 
             self.pending_state_updates.clear()
-            self.last_emitted_state.clear()
+            self.last_emitted_state = deepcopy(self.current_state)
             self.current_tool_call_name = None
         return events
 
@@ -540,7 +543,7 @@ class AgentFrameworkEventBridge:
             type=EventType.MESSAGES_SNAPSHOT,
             messages=all_messages,  # type: ignore[arg-type]
         )
-        logger.info("Emitting MessagesSnapshotEvent for confirm_changes with %s messages", len(all_messages))
+        logger.info(f"Emitting MessagesSnapshotEvent for confirm_changes with {len(all_messages)} messages")
         events.append(messages_snapshot_event)
 
         self.should_stop_after_confirm = True
@@ -550,14 +553,18 @@ class AgentFrameworkEventBridge:
     def _handle_function_approval_request_content(self, content: FunctionApprovalRequestContent) -> list[BaseEvent]:
         events: list[BaseEvent] = []
         logger.info("=== FUNCTION APPROVAL REQUEST ===")
-        logger.info("  Function: %s", content.function_call.name)
-        logger.info("  Call ID: %s", content.function_call.call_id)
+        logger.info(f"  Function: {content.function_call.name}")
+        logger.info(f"  Call ID: {content.function_call.call_id}")
 
         parsed_args = content.function_call.parse_arguments()
-        logger.info("  Parsed args keys: %s", list(parsed_args.keys()) if parsed_args else "None")
+        parsed_arg_keys = list(parsed_args.keys()) if parsed_args else "None"
+        logger.info(f"  Parsed args keys: {parsed_arg_keys}")
 
         if parsed_args and self.predict_state_config:
-            logger.info("  Checking predict_state_config: %s", self.predict_state_config)
+            logger.info(
+                "  Checking predict_state_config keys: %s",
+                list(self.predict_state_config.keys()) if self.predict_state_config else "None",
+            )
             for state_key, config in self.predict_state_config.items():
                 if config["tool"] != content.function_call.name:
                     continue
@@ -575,7 +582,7 @@ class AgentFrameworkEventBridge:
                 elif tool_arg_name in parsed_args:
                     state_value = parsed_args[tool_arg_name]
                 else:
-                    logger.warning("  Tool argument '%s' not found in parsed args", tool_arg_name)
+                    logger.warning(f"  Tool argument '{tool_arg_name}' not found in parsed args")
                     continue
 
                 self.current_state[state_key] = state_value
@@ -589,7 +596,7 @@ class AgentFrameworkEventBridge:
             end_event = ToolCallEndEvent(
                 tool_call_id=content.function_call.call_id,
             )
-            logger.info("Emitting ToolCallEndEvent for approval-required tool '%s'", content.function_call.call_id)
+            logger.info(f"Emitting ToolCallEndEvent for approval-required tool '{content.function_call.call_id}'")
             events.append(end_event)
             self.tool_calls_ended.add(content.function_call.call_id)
 
@@ -604,7 +611,7 @@ class AgentFrameworkEventBridge:
                 },
             },
         )
-        logger.info("Emitting function_approval_request custom event for '%s'", content.function_call.name)
+        logger.info(f"Emitting function_approval_request custom event for '{content.function_call.name}'")
         events.append(approval_event)
         return events
 

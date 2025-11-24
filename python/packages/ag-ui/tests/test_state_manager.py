@@ -4,7 +4,7 @@ from ag_ui.core import CustomEvent, EventType
 from agent_framework import ChatMessage, TextContent
 
 from agent_framework_ag_ui._events import AgentFrameworkEventBridge
-from agent_framework_ag_ui._orchestration.state_manager import StateManager
+from agent_framework_ag_ui._orchestration._state_manager import StateManager
 
 
 def test_state_manager_initializes_defaults_and_snapshot() -> None:

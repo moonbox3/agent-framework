@@ -51,8 +51,7 @@ def sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                     parsed = json.loads(user_text)
                     if "accepted" in parsed:
                         logger.info(
-                            "Injecting synthetic tool result for confirm_changes call_id=%s",
-                            pending_confirm_changes_id,
+                            f"Injecting synthetic tool result for confirm_changes call_id={pending_confirm_changes_id}"
                         )
                         synthetic_result = ChatMessage(
                             role="tool",
@@ -69,15 +68,14 @@ def sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                         pending_confirm_changes_id = None
                         continue
                 except (json.JSONDecodeError, KeyError) as exc:
-                    logger.debug("Could not parse user message as confirm_changes response: %s", exc)
+                    logger.debug("Could not parse user message as confirm_changes response: %s", type(exc).__name__)
 
             if pending_tool_call_ids:
                 logger.info(
-                    "User message arrived with %s pending tool calls - injecting synthetic results",
-                    len(pending_tool_call_ids),
+                    f"User message arrived with {len(pending_tool_call_ids)} pending tool calls - injecting synthetic results"
                 )
                 for pending_call_id in pending_tool_call_ids:
-                    logger.info("Injecting synthetic tool result for pending call_id=%s", pending_call_id)
+                    logger.info(f"Injecting synthetic tool result for pending call_id={pending_call_id}")
                     synthetic_result = ChatMessage(
                         role="tool",
                         contents=[
@@ -140,10 +138,10 @@ def deduplicate_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
                 new_result = msg.contents[0].result
 
                 if (not existing_result or existing_result == "") and new_result:
-                    logger.info("Replacing empty tool result at index %s with data from index %s", existing_idx, idx)
+                    logger.info(f"Replacing empty tool result at index {existing_idx} with data from index {idx}")
                     unique_messages[existing_idx] = msg
                 else:
-                    logger.info("Skipping duplicate tool result at index %s: call_id=%s", idx, call_id)
+                    logger.info(f"Skipping duplicate tool result at index {idx}: call_id={call_id}")
                 continue
 
             seen_keys[key] = len(unique_messages)
@@ -158,7 +156,7 @@ def deduplicate_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
             key = (role_value, tool_call_ids)
 
             if key in seen_keys:
-                logger.info("Skipping duplicate assistant tool call at index %s", idx)
+                logger.info(f"Skipping duplicate assistant tool call at index {idx}")
                 continue
 
             seen_keys[key] = len(unique_messages)
@@ -169,7 +167,7 @@ def deduplicate_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
             key = (role_value, hash(content_str))
 
             if key in seen_keys:
-                logger.info("Skipping duplicate message at index %s: role=%s", idx, role_value)
+                logger.info(f"Skipping duplicate message at index {idx}: role={role_value}")
                 continue
 
             seen_keys[key] = len(unique_messages)

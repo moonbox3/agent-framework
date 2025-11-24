@@ -68,26 +68,20 @@ class Emit(Executor):
 
 
 async def main() -> None:
-    intake_fragment = (
-        WorkflowBuilder()
-        .add_edge(Intake(id="intake"), Screen(id="screen"))
-        .set_start_executor("intake")
-        .as_connection()
-    )
+    intake_fragment = WorkflowBuilder().add_edge(Intake(id="intake"), Screen(id="screen")).set_start_executor("intake")
 
     concurrent_fragment = (
         ConcurrentBuilder()
         .participants([ReviewWorker(id="policy"), ReviewWorker(id="risk")])
         .with_aggregator(Aggregator(id="combine"))
-        .as_connection()
     )
 
     builder = WorkflowBuilder()
-    intake_handle = builder.add_connection(intake_fragment, prefix="intake")
-    concurrent_handle = builder.add_connection(concurrent_fragment, prefix="review")
-    builder.connect(intake_handle.output_points[0], concurrent_handle.start_id)
-    builder.connect(concurrent_handle.output_points[0], Emit(id="emit"))
-    builder.set_start_executor(intake_handle.start_id)
+    intake_handle = builder.add_workflow(intake_fragment, prefix="intake")
+    concurrent_handle = builder.add_workflow(concurrent_fragment, prefix="review")
+    builder.connect(intake_handle.outputs[0], concurrent_handle.start)
+    builder.connect(concurrent_handle.outputs[0], Emit(id="emit"))
+    builder.set_start_executor(intake_handle.start)
 
     workflow = builder.build()
     print("Outputs:")

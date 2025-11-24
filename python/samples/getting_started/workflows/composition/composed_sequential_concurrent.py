@@ -73,27 +73,24 @@ class Emit(Executor):
 
 
 async def main() -> None:
-    sequential_fragment = (
-        SequentialBuilder().participants([DraftExecutor(id="draft"), RefineExecutor(id="refine")]).as_connection()
-    )
+    sequential_fragment = SequentialBuilder().participants([DraftExecutor(id="draft"), RefineExecutor(id="refine")])
 
     concurrent_fragment = (
         ConcurrentBuilder()
         .participants([ReviewWorker(id="legal"), ReviewWorker(id="brand")])
         .with_aggregator(Aggregator(id="collect"))
-        .as_connection()
     )
 
     builder = WorkflowBuilder()
-    seq_handle = builder.add_connection(sequential_fragment, prefix="seq")
-    concurrent_handle = builder.add_connection(concurrent_fragment, prefix="conc")
+    seq_handle = builder.add_workflow(sequential_fragment, prefix="seq")
+    concurrent_handle = builder.add_workflow(concurrent_fragment, prefix="conc")
 
     # Wire sequential output into concurrent, then terminate with emit:
     # - sequential fragment outputs a list[ChatMessage] conversation -> feed into concurrent start
     # - concurrent aggregator emits list[ChatMessage] results -> send to emit to yield workflow output
-    builder.connect(seq_handle.output_points[0], concurrent_handle.start_id)
-    builder.connect(concurrent_handle.output_points[0], Emit(id="emit"))
-    builder.set_start_executor(seq_handle.start_id)
+    builder.connect(seq_handle.outputs[0], concurrent_handle.start)
+    builder.connect(concurrent_handle.outputs[0], Emit(id="emit"))
+    builder.set_start_executor(seq_handle.start)
 
     workflow = builder.build()
     print("Outputs:")

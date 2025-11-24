@@ -16,9 +16,15 @@ informed: team
 - Reuse existing primitives (WorkflowBuilder, WorkflowExecutor, Workflow.as_agent) rather than inventing new one-off constructs.
 - Keep checkpointing, request/response handling, and observability semantics intact across composed graphs.
 
+## Terminology
+- Workflow: an immutable, built artifact that can be executed or wrapped (e.g., by WorkflowExecutor). Composition should not mutate an existing Workflow.
+- WorkflowBuilder: the mutable authoring surface for wiring executors, merging graphs, and validating types. All composition logic lives here.
+- High-level builders: convenience builders (ConcurrentBuilder, SequentialBuilder, group chat variants) that internally use WorkflowBuilder; they will share a base mixin that provides `.as_connection()` so the composition API is consistent.
+
 ## Current State
 - High-level builders (ConcurrentBuilder, SequentialBuilder, group chat variants) emit a finished Workflow; the graph is immutable and cannot be extended directly.
 - WorkflowExecutor already wraps a Workflow as an Executor; composition is possible but requires manual wrapping and does not provide fluent sugar on builders.
+- Sub-workflows today are therefore possible via WorkflowExecutor, but the nested boundary brings double superstep scheduling, separate checkpoints, and manual edge wiring; there is no inline-merge path that keeps a single workflow boundary.
 - Workflow.as_agent is convenient for agent-based chaining but forces list[ChatMessage] inputs and loses internal workflow outputs unless they are ChatMessages.
 - Type compatibility is enforced by WorkflowBuilder during validation, but only within a single builder instance; cross-workflow composition relies on developers hand-wiring compatible adapters.
 
@@ -37,6 +43,7 @@ informed: team
   - `allow_direct_output=False` keeps current semantics (sub-workflow outputs become messages to downstream nodes). `True` forwards sub-workflow outputs as workflow outputs; parent edges receive nothing.
   - Optional `adapter` transforms sub-workflow outputs before routing (e.g., list[ChatMessage] -> MyAnalysisSummary). Adapter runs inside the WorkflowExecutor to preserve type validation.
   - Input type compatibility is checked using existing is_type_compatible between parent edge source and sub-workflow start executor types; adapter output types are validated before send_message.
+- Intent: this is strictly sugar over the existing `WorkflowExecutor(workflow, id=..., ...)` pattern; edges are still attached with `add_edge(...)` and no new lifecycle semantics are introduced.
 - Example:
 
 ```python
@@ -58,44 +65,36 @@ workflow = (
 - Pros: minimal code surface; reuses WorkflowExecutor and existing validation. Cons: maintains nested execution boundary (double superstep scheduling, separate checkpoint lineage), and post-build graph edits are still indirect.
 
 ## Option 2: Inline Fragments With Builder Merge (connect-first API)
-- Keep fragment inlining but make connection verbs explicit and fluent via `.connect(...)`.
-- `WorkflowConnection`:
+- Keep fragment inlining but make connection verbs explicit and fluent via `.add_workflow(...)` for fragments and `.connect(...)` for edges.
+- `WorkflowConnection` (thin wrapper, mainly for cases where the source builder is not directly available):
   - `builder`: WorkflowBuilder holding the fragment wiring.
   - `entry`: canonical entry executor id.
   - `exits`: executor ids that are safe to target (default terminal outputs or last adapters).
   - `contract`: input/output type sets plus semantics tags for validation (reuses Option 3 contracts if available).
 - Production:
-  - High-level builders expose `.as_connection()` returning connection metadata without building a Workflow.
-  - Built workflows expose `.as_connection()` by cloning topology into a new builder (immutable source).
+  - High-level builders expose `.as_connection(prefix: str | None = None)` returning connection metadata without building a Workflow. Prefix defaults to the builder's `name` if set.
+  - Built workflows expose `.as_connection(prefix: str | None = None)` by cloning topology into a new builder (immutable source); prefix defaults to the workflow `name`.
+  - All high-level builders share the same mixin so `.as_connection()` exists regardless of the concrete builder type.
 - Composition API (renamed for clarity):
-  - Single verb: `connect(...)` handles both merge and wiring. No `add_fragment`.
-  - Accepted inputs:
-    - `connect(fragment_or_workflow, *, prefix=None, source=None, target=None, adapter=None)`
-    - `connect(source_executor_id_or_port, target_executor_id_or_port, *, adapter=None)`
-  - If `fragment_or_workflow` is provided:
-    - Merge its builder into the caller with optional `prefix` to avoid ID collisions.
-    - Return a handle with `.start` and `.outputs` to allow chaining.
-    - If `source` is provided, wire `source -> fragment.start`.
-    - If `target` is provided, wire `fragment.outputs[0] -> target` (or all outputs if specified).
-  - `FragmentHandle.start` alias for entry; `FragmentHandle.outputs` alias for exits to keep names concise in chaining.
-  - Optional chaining: `builder.connect(orchestrator, analysis.start).connect(analysis.outputs[0], aggregator)`.
-- Naming shift: prefer `connect` over `add_edge` for user-facing fluent APIs; keep `add_edge` under the hood for compatibility.
-- Type safety:
-  - `connect` enforces compatibility between source output types and target input types (or fragment contract).
-  - Allow optional `adapter` param to inject a converter executor inline if strict types differ (compatible with Option 3 registry).
+  - `handle = builder.add_workflow(fragment: WorkflowBuilder | Workflow | WorkflowConnection, *, prefix=None)` merges the fragment into the caller and returns a handle with `.start`/`.outputs`. If `prefix` is omitted, the fragment's `name` (or class name) is used to avoid collisions. `add_workflow` calls `.as_connection(prefix)` internally so callers rarely invoke `.as_connection()` themselves.
+  - `builder.connect(source_executor_id_or_port, target_executor_id_or_port, *, adapter=None)` wires two existing nodes/ports together; use the handle returned from `add_workflow` to address fragment entry/exit points.
+  - Internally this is still the existing `add_edge` machinery plus a builder merge; there are no new edge types or runner semantics.
+- Defaults and safety:
+  - Reusing the same fragment multiple times yields independent cloned builders so immutability is preserved.
+  - Multi-exit fragments require explicit `handle.outputs[...]` selection; no implicit first-exit wiring.
+  - Collision avoidance uses `prefix or fragment.name` with a deterministic fallback (`fragment-{n}`) when no name is present.
+  - Connection handles freeze only entry/exit metadata; the graph remains a WorkflowBuilder to avoid duplicating builder APIs.
+- Caller knowledge:
+  - When you control both builders, you can rely only on the surfaced `start`/`outputs` handle and continue to use `add_edge`/`connect`; internal executor IDs remain encapsulated.
+  - For hosted/pre-built workflows where the builder is hidden, the connection exposes the public entry/exit surface and can later map to different endpoints when hosted.
 - Example:
 
 ```python
-analysis = (
-    ConcurrentBuilder()
-    .participants([operation, compliance])
-    .as_connection()
-)
-
+analysis_builder = ConcurrentBuilder().participants([operation, compliance])
 builder = WorkflowBuilder()
-analysis_handle = builder.connect(analysis, prefix="analysis")  # merge + handle
-builder.connect(orchestrator, analysis_handle.start)
-builder.connect(analysis_handle.outputs[0], aggregator_executor)
+analysis = builder.add_workflow(analysis_builder)  # prefix defaults to analysis_builder.name/class
+builder.connect(orchestrator, analysis.start)
+builder.connect(analysis.outputs[0], aggregator_executor)
 workflow = builder.set_start_executor(orchestrator).build()
 ```
 - Pros: single workflow boundary, explicit connect vocabulary, compatibility with port semantics later. Cons: still needs ID renaming during merge and clear immutability rules for fragments.
@@ -118,10 +117,10 @@ summarize_connection = (
 )
 
 builder = WorkflowBuilder()
-normalize_handle = builder.add_connection(normalize_connection, prefix="prep")
-summarize_handle = builder.add_connection(summarize_connection, prefix="summary")
-builder.connect(normalize_handle.output_points[0], summarize_handle.start_id)
-builder.set_start_executor(normalize_handle.start_id)
+normalize_handle = builder.add_workflow(normalize_connection, prefix="prep")
+summarize_handle = builder.add_workflow(summarize_connection, prefix="summary")
+builder.connect(normalize_handle.outputs[0], summarize_handle.start)
+builder.set_start_executor(normalize_handle.start)
 
 workflow = builder.build()
 print("Outputs:")
@@ -137,6 +136,7 @@ async for event in workflow.run_stream("  Hello Composition  "):
 - Expose explicit type contracts on fragments/workflows:
   - `WorkflowContract` capturing `input_types`, `output_types`, and optional `output_semantics` (e.g., “conversation”, “agent_response”, “request_message”).
   - Composition helpers use contracts to fail fast or select the right canned adapter.
+- Note: this remains sugar for “add a new executor that transforms the data”; the value is deterministic naming, validation, and observability of these adapters instead of one-off inline callables.
 - Pros: predictable type-safe bridges and better error messages. Cons: adds small surface area but aligns with existing adapter executors already used inside SequentialBuilder.
 
 ## Option 4: Port-Based Interfaces and Extension Points
@@ -149,6 +149,9 @@ async for event in workflow.run_stream("  Hello Composition  "):
   - SequentialBuilder exposes `input_normalizer_out`, `final_conversation_out`.
   - Group chat exposes manager in/out, participant in/out.
 - Composition uses ports rather than raw executor IDs, enabling fluent “attach after aggregator” semantics without cloning graphs or nesting:
+  - Hosted/remote workflows could expose their ports to let callers bind different endpoints per input/output when instantiating a hosted instance.
+  - Scope control: port specs are metadata carried by builders/manifest; low-level executors stay unchanged unless explicitly annotated, keeping the API surface small for non-port users.
+  - Port metadata is derived from builder-declared wiring (or optional static executor annotations) rather than a new runtime interface on Executor implementations.
 
 ```python
 concurrent = ConcurrentBuilder().participants([...]).build_ports()
@@ -230,7 +233,7 @@ builder.connect(orchestrator.port("out"), analysis.port("entry"))
 - Tooling cost: contract authoring, validation, and codegen add maintenance overhead; ensure payoff justifies complexity.
 
 ## Recommendation
-- Option 2: Code included for connect-first Option 2 with `.as_connection()` and typed `ConnectionHandle`/`ConnectionPoint`, plus samples and tests.
+- Option 2: proceed with `add_workflow(...)` + `connect(...)`, default prefixing from workflow/builder name, shared `.as_connection()` mixin on all high-level builders, and typed `ConnectionHandle`/`ConnectionPoint` handles. Samples and tests cover both builder and workflow inputs.
 
 ### Optional Add-ons
 - Stage 2: Harden type contracts and adapters (Option 3) on top of connections: registry for converters, explicit adapter insertion toggles, richer diagnostics.
@@ -240,6 +243,6 @@ builder.connect(orchestrator.port("out"), analysis.port("entry"))
 ## Compatibility and Behavior Notes
 - Checkpointing: WorkflowExecutor already supports checkpoints via wrapped workflow. Connection merge must carry over checkpoint storage configuration when cloning, but runtime checkpoint overrides should still flow through parent run() parameters.
 - RequestInfo propagation: WorkflowExecutor currently surfaces SubWorkflowRequestMessage; connection merge must ensure request edges remain intact and reachable after ID renaming.
-- Observability: retain executor IDs that describe provenance; id_prefix in connection merge prevents collisions while keeping names interpretable in traces.
+- Observability: retain executor IDs that describe provenance; prefixing via fragment `name` keeps traces readable while avoiding collisions.
 - Streaming semantics: nested workflows already stream through WorkflowExecutor; merged fragments rely on existing superstep scheduling so no change is needed.
-- Backward compatibility: existing builder APIs remain valid; new helpers are additive.
+- Backward compatibility: existing builder APIs remain valid; `add_workflow`/`connect` are additive and degrade to explicit `add_edge` usage when desired.

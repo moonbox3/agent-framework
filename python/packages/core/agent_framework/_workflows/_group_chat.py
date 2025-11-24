@@ -1152,10 +1152,10 @@ class GroupChatBuilder:
             )
         return specs
 
-    def as_connection(self) -> WorkflowConnection:
+    def as_connection(self, prefix: str | None = None) -> WorkflowConnection:
         """Expose the group chat wiring as a reusable connection."""
         builder = self._build_workflow_builder()
-        return builder.as_connection()
+        return builder.as_connection(prefix=prefix)
 
     def build(self) -> Workflow:
         """Build and validate the group chat workflow.

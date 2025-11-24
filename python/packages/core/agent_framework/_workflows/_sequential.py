@@ -157,10 +157,10 @@ class SequentialBuilder:
         self._checkpoint_storage = checkpoint_storage
         return self
 
-    def as_connection(self) -> WorkflowConnection:
+    def as_connection(self, prefix: str | None = None) -> WorkflowConnection:
         """Expose the sequential wiring as a reusable connection."""
         builder = self._build_workflow_builder()
-        return builder.as_connection()
+        return builder.as_connection(prefix=prefix)
 
     def build(self) -> Workflow:
         """Build and validate the sequential workflow.

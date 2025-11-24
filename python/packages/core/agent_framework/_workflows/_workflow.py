@@ -855,5 +855,5 @@ class Workflow(DictConvertible):
         builder._edge_groups = copy.deepcopy(self.edge_groups)
         builder._executors = {eid: copy.deepcopy(executor) for eid, executor in self.executors.items()}
         builder._start_executor = self.start_executor_id
-        connection = builder.as_connection()
-        return connection.with_prefix(prefix) if prefix else connection
+        effective_prefix = prefix if prefix is not None else self.name
+        return builder.as_connection(prefix=effective_prefix)

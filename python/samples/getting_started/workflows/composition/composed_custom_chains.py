@@ -32,25 +32,19 @@ class Publish(Executor):
 
 
 async def main() -> None:
-    normalize_connection = (
-        WorkflowBuilder()
-        .add_edge(Normalize(id="normalize"), Enrich(id="enrich"))
-        .set_start_executor("normalize")
-        .as_connection()
+    normalize_connection = WorkflowBuilder().add_edge(Normalize(id="normalize"), Enrich(id="enrich")).set_start_executor(
+        "normalize"
     )
 
-    summarize_connection = (
-        WorkflowBuilder()
-        .add_edge(Summarize(id="summarize"), Publish(id="publish"))
-        .set_start_executor("summarize")
-        .as_connection()
+    summarize_connection = WorkflowBuilder().add_edge(Summarize(id="summarize"), Publish(id="publish")).set_start_executor(
+        "summarize"
     )
 
     builder = WorkflowBuilder()
-    normalize_handle = builder.add_connection(normalize_connection, prefix="prep")
-    summarize_handle = builder.add_connection(summarize_connection, prefix="summary")
-    builder.connect(normalize_handle.output_points[0], summarize_handle.start_id)
-    builder.set_start_executor(normalize_handle.start_id)
+    normalize_handle = builder.add_workflow(normalize_connection, prefix="prep")
+    summarize_handle = builder.add_workflow(summarize_connection, prefix="summary")
+    builder.connect(normalize_handle.outputs[0], summarize_handle.start)
+    builder.set_start_executor(normalize_handle.start)
 
     workflow = builder.build()
     print("Outputs:")

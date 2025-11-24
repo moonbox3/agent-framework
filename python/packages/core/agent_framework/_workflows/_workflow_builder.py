@@ -55,6 +55,16 @@ class ConnectionHandle:
     start_input_types: list[type[Any]]
     output_points: list[ConnectionPoint]
 
+    @property
+    def start(self) -> str:
+        """Alias for start_id to match the fluent connect API."""
+        return self.start_id
+
+    @property
+    def outputs(self) -> list[ConnectionPoint]:
+        """Alias for output_points to match the fluent connect API."""
+        return self.output_points
+
 
 @dataclass
 class WorkflowConnection:
@@ -295,6 +305,7 @@ class WorkflowBuilder:
         self._max_iterations: int = max_iterations
         self._name: str | None = name
         self._description: str | None = description
+        self._fragment_counter: int = 0
         # Maps underlying AgentProtocol object id -> wrapped Executor so we reuse the same wrapper
         # across set_start_executor / add_edge calls. Without this, unnamed agents (which receive
         # random UUID based executor ids) end up wrapped multiple times, giving different ids for
@@ -303,7 +314,7 @@ class WorkflowBuilder:
 
     # Agents auto-wrapped by builder now always stream incremental updates.
 
-    def as_connection(self) -> WorkflowConnection:
+    def as_connection(self, prefix: str | None = None) -> WorkflowConnection:
         """Render this builder as a reusable connection without finalising into a Workflow."""
         if not self._start_executor:
             raise ValueError("Starting executor must be set before calling as_connection().")
@@ -321,15 +332,24 @@ class WorkflowBuilder:
         entry_types = _get_executor_input_types(clone._executors, entry_id)
         exit_points = _derive_exit_points(clone._edge_groups, clone._executors)
         exit_ids = [p.id for p in exit_points]
-        return WorkflowConnection(
+        connection = WorkflowConnection(
             builder=clone,
             entry=entry_id,
             start_input_types=entry_types,
             exit_points=exit_points,
             exits=exit_ids,
         )
+        return connection.with_prefix(prefix) if prefix else connection
 
     Endpoint = Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str
+
+    def add_workflow(
+        self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", *, prefix: str | None = None
+    ) -> ConnectionHandle:
+        """Merge a builder/workflow/connection and return a handle for wiring."""
+        effective_prefix = self._derive_prefix(fragment, prefix)
+        connection = self._to_connection(fragment, prefix=effective_prefix)
+        return self._merge_connection(connection, prefix=None)
 
     def add_connection(self, connection: WorkflowConnection, *, prefix: str | None = None) -> ConnectionHandle:
         """Merge a connection into this builder and return a handle for wiring."""
@@ -372,7 +392,48 @@ class WorkflowBuilder:
         )
         return handle
 
-    def _normalize_endpoint(self, endpoint: Executor | AgentProtocol | ConnectionHandle | str) -> str:
+    def _derive_prefix(
+        self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", explicit: str | None
+    ) -> str:
+        """Choose a stable prefix from explicit input, fragment name, or a deterministic fallback."""
+        if explicit:
+            return explicit
+
+        name: str | None = None
+        if isinstance(fragment, WorkflowConnection):
+            name = fragment.builder._name  # Accessing private name to avoid duplicating state
+        elif isinstance(fragment, WorkflowBuilder):
+            name = fragment._name
+        elif isinstance(fragment, Workflow):
+            name = fragment.name
+
+        if name:
+            return name
+
+        class_name = type(fragment).__name__
+        if class_name not in {"WorkflowBuilder", "Workflow", "WorkflowConnection"}:
+            return class_name
+
+        # Fall back to a deterministic suffix when no name exists or is too generic.
+        self._fragment_counter += 1
+        return f"fragment-{self._fragment_counter}"
+
+    def _to_connection(
+        self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", *, prefix: str
+    ) -> WorkflowConnection:
+        """Normalize a fragment to a WorkflowConnection, applying a prefix for collision safety."""
+        if isinstance(fragment, WorkflowConnection):
+            return fragment.with_prefix(prefix)
+        if isinstance(fragment, WorkflowBuilder):
+            return fragment.as_connection(prefix=prefix)
+        if isinstance(fragment, Workflow):
+            return fragment.as_connection(prefix=prefix)
+        raise TypeError(
+            "add_workflow expects a WorkflowBuilder, Workflow, or WorkflowConnection; "
+            f"got {type(fragment).__name__}."
+        )
+
+    def _normalize_endpoint(self, endpoint: Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str) -> str:
         """Resolve a connect endpoint to an executor id, adding executors when provided."""
         if isinstance(endpoint, ConnectionHandle):
             return endpoint.start_id

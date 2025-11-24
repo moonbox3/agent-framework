@@ -56,31 +56,21 @@ class Publish(Executor):
 
 
 async def main() -> None:
-    # Connection A: string -> Task -> EnrichedTask
-    prep = (
-        WorkflowBuilder()
-        .add_edge(Ingest(id="ingest"), Tagger(id="tagger"))
-        .set_start_executor("ingest")
-        .as_connection()
-    )
+    # Fragment A: string -> Task -> EnrichedTask
+    prep = WorkflowBuilder().add_edge(Ingest(id="ingest"), Tagger(id="tagger")).set_start_executor("ingest")
 
-    # Connection B: EnrichedTask -> Decision -> publish
-    review = (
-        WorkflowBuilder()
-        .add_edge(Reviewer(id="reviewer"), Publish(id="publish"))
-        .set_start_executor("reviewer")
-        .as_connection()
-    )
+    # Fragment B: EnrichedTask -> Decision -> publish
+    review = WorkflowBuilder().add_edge(Reviewer(id="reviewer"), Publish(id="publish")).set_start_executor("reviewer")
 
     builder = WorkflowBuilder()
-    prep_handle = builder.add_connection(prep, prefix="prep")
-    review_handle = builder.add_connection(review, prefix="rev")
+    prep_handle = builder.add_workflow(prep, prefix="prep")
+    review_handle = builder.add_workflow(review, prefix="rev")
 
     # Wire using typed connection points (no raw ids):
-    # - prep_handle.output_points[0] describes the exit executor AND its output types (EnrichedTask here)
-    # - review_handle.start_id refers to the entry executor whose input types include EnrichedTask
-    builder.connect(prep_handle.output_points[0], review_handle.start_id)
-    builder.set_start_executor(prep_handle.start_id)
+    # - prep_handle.outputs[0] describes the exit executor AND its output types (EnrichedTask here)
+    # - review_handle.start refers to the entry executor whose input types include EnrichedTask
+    builder.connect(prep_handle.outputs[0], review_handle.start)
+    builder.set_start_executor(prep_handle.start)
 
     workflow = builder.build()
     print("Outputs:")

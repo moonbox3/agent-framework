@@ -53,21 +53,20 @@ async def main() -> None:
             selection_func=select_branch,
         )
         .set_start_executor("router")
-        .as_connection()
     )
 
     # Downstream connection that expects str inputs
-    next_conn = WorkflowBuilder().set_start_executor(NextStage(id="next")).as_connection()
+    next_conn = WorkflowBuilder().set_start_executor(NextStage(id="next"))
 
     builder = WorkflowBuilder()
-    branch_handle = builder.add_connection(branch_conn, prefix="branch")
-    next_handle = builder.add_connection(next_conn, prefix="down")
+    branch_handle = builder.add_workflow(branch_conn, prefix="branch")
+    next_handle = builder.add_workflow(next_conn, prefix="down")
 
     # Wire both branch exits to the next connection start; only the active branch fires.
-    for out_point in branch_handle.output_points:
-        builder.connect(out_point, next_handle.start_id)
+    for out_point in branch_handle.outputs:
+        builder.connect(out_point, next_handle.start)
 
-    builder.set_start_executor(branch_handle.start_id)
+    builder.set_start_executor(branch_handle.start)
 
     workflow = builder.build()
     print("Outputs:")

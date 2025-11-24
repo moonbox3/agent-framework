@@ -56,11 +56,11 @@ async def test_connect_merges_fragments_and_runs() -> None:
 
     sink = _Sink(id="sink")
     builder = WorkflowBuilder()
-    handle_one = builder.add_connection(connection_one, prefix="f1")
-    handle_two = builder.add_connection(connection_two, prefix="f2")
-    builder.connect(handle_one.output_points[0], handle_two.start_id)
-    builder.connect(handle_two.output_points[0], sink)
-    builder.set_start_executor(handle_one.start_id)
+    handle_one = builder.add_workflow(connection_one, prefix="f1")
+    handle_two = builder.add_workflow(connection_two, prefix="f2")
+    builder.connect(handle_one.outputs[0], handle_two.start)
+    builder.connect(handle_two.outputs[0], sink)
+    builder.set_start_executor(handle_one.start)
 
     workflow: Workflow = builder.build()
     result = await workflow.run("hello")
@@ -70,7 +70,7 @@ async def test_connect_merges_fragments_and_runs() -> None:
     assert any(exec_id.startswith("f2/") for exec_id in workflow.executors)
 
 
-async def test_connect_detects_id_collision() -> None:
+async def test_connect_detects_id_collision_with_raw_connection() -> None:
     connection = (
         WorkflowBuilder()
         .add_edge(_Source(id="dup"), _Upper(id="dup_upper"))
@@ -87,17 +87,16 @@ async def test_connect_detects_id_collision() -> None:
 
 
 async def test_workflow_as_connection_round_trip() -> None:
-    inner = (
-        WorkflowBuilder()
+    inner_builder = (
+        WorkflowBuilder(name="wrapped")
         .add_edge(_Source(id="inner_src"), _Sink(id="inner_sink"))
         .set_start_executor("inner_src")
-        .build()
     )
+    inner = inner_builder.build()
 
-    connection = inner.as_connection(prefix="wrapped")
     outer = WorkflowBuilder()
-    handle = outer.add_connection(connection)
-    outer.set_start_executor(handle.start_id)
+    handle = outer.add_workflow(inner)
+    outer.set_start_executor(handle.start)
     workflow = outer.build()
 
     result = await workflow.run("pipeline")

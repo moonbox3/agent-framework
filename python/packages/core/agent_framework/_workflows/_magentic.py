@@ -2161,10 +2161,10 @@ class MagenticBuilder:
         group_builder = self._build_group_chat_builder()
         return group_builder.build()
 
-    def as_connection(self) -> WorkflowConnection:
+    def as_connection(self, prefix: str | None = None) -> WorkflowConnection:
         """Expose the Magentic wiring as a reusable connection."""
         group_builder = self._build_group_chat_builder()
-        return group_builder.as_connection()
+        return group_builder.as_connection(prefix=prefix)
 
     def _build_group_chat_builder(self) -> GroupChatBuilder:
         """Internal helper to construct the underlying group chat builder."""

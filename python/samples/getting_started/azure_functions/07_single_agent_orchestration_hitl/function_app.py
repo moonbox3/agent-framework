@@ -14,10 +14,9 @@ from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
 
-import azure.durable_functions as df
 import azure.functions as func
 from agent_framework.azure import AgentFunctionApp, AzureOpenAIChatClient
-from azure.durable_functions import DurableOrchestrationContext
+from azure.durable_functions import DurableOrchestrationClient, DurableOrchestrationContext
 from azure.identity import AzureCliCredential
 from pydantic import BaseModel, ValidationError
 
@@ -160,7 +159,7 @@ def content_generation_hitl_orchestration(context: DurableOrchestrationContext):
 @app.durable_client_input(client_name="client")
 async def start_content_generation(
     req: func.HttpRequest,
-    client: df.DurableOrchestrationClient,
+    client: DurableOrchestrationClient,
 ) -> func.HttpResponse:
     try:
         body = req.get_json()
@@ -209,7 +208,7 @@ async def start_content_generation(
 @app.durable_client_input(client_name="client")
 async def send_human_approval(
     req: func.HttpRequest,
-    client: df.DurableOrchestrationClient,
+    client: DurableOrchestrationClient,
 ) -> func.HttpResponse:
     instance_id = req.route_params.get("instanceId")
     if not instance_id:
@@ -260,7 +259,7 @@ async def send_human_approval(
 @app.durable_client_input(client_name="client")
 async def get_orchestration_status(
     req: func.HttpRequest,
-    client: df.DurableOrchestrationClient,
+    client: DurableOrchestrationClient,
 ) -> func.HttpResponse:
     instance_id = req.route_params.get("instanceId")
     if not instance_id:
@@ -276,7 +275,7 @@ async def get_orchestration_status(
         show_history_output=False,
         show_input=True,
     )
-    
+
     # Check if status is None or if the instance doesn't exist (runtime_status is None)
     if status is None or getattr(status, "runtime_status", None) is None:
         return func.HttpResponse(

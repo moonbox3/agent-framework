@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import sys
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -41,6 +42,11 @@ from agent_framework._workflows._magentic import (  # type: ignore[reportPrivate
     _MagenticProgressLedgerItem,  # type: ignore
     _MagenticStartMessage,  # type: ignore
 )
+
+if sys.version_info >= (3, 12):
+    from typing import override
+else:
+    from typing_extensions import override
 
 
 def test_magentic_start_message_from_string():
@@ -101,8 +107,9 @@ class FakeManager(MagenticManagerBase):
     next_speaker_name: str = "agentA"
     instruction_text: str = "Proceed with step 1"
 
-    def snapshot_state(self) -> dict[str, Any]:
-        state = super().snapshot_state()
+    @override
+    def on_checkpoint_save(self) -> dict[str, Any]:
+        state = super().on_checkpoint_save()
         if self.task_ledger is not None:
             state = dict(state)
             state["task_ledger"] = {
@@ -111,8 +118,9 @@ class FakeManager(MagenticManagerBase):
             }
         return state
 
-    def restore_state(self, state: dict[str, Any]) -> None:
-        super().restore_state(state)
+    @override
+    def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+        super().on_checkpoint_restore(state)
         ledger_state = state.get("task_ledger")
         if isinstance(ledger_state, dict):
             ledger_dict = cast(dict[str, Any], ledger_state)
@@ -366,7 +374,7 @@ class _DummyExec(Executor):
         pass
 
 
-def test_magentic_agent_executor_snapshot_roundtrip():
+async def test_magentic_agent_executor_on_checkpoint_save_and_restore_roundtrip():
     backing_executor = _DummyExec("backing")
     agent_exec = MagenticAgentExecutor(backing_executor, "agentA")
     agent_exec._chat_history.extend([  # type: ignore[reportPrivateUsage]
@@ -374,10 +382,10 @@ def test_magentic_agent_executor_snapshot_roundtrip():
         ChatMessage(role=Role.ASSISTANT, text="world", author_name="agentA"),
     ])
 
-    state = agent_exec.snapshot_state()
+    state = await agent_exec.on_checkpoint_save()
 
     restored_executor = MagenticAgentExecutor(_DummyExec("backing2"), "agentA")
-    restored_executor.restore_state(state)
+    await restored_executor.on_checkpoint_restore(state)
 
     assert len(restored_executor._chat_history) == 2  # type: ignore[reportPrivateUsage]
     assert restored_executor._chat_history[0].text == "hello"  # type: ignore[reportPrivateUsage]

@@ -412,8 +412,6 @@ class OpenAIBaseResponsesClient(OpenAIBase, BaseChatClient):
         args: dict[str, Any] = {
             "role": message.role.value if isinstance(message.role, Role) else message.role,
         }
-        if message.additional_properties:
-            args["metadata"] = message.additional_properties
         for content in message.contents:
             match content:
                 case TextReasoningContent():
@@ -520,9 +518,8 @@ class OpenAIBaseResponsesClient(OpenAIBase, BaseChatClient):
                 args: dict[str, Any] = {
                     "call_id": content.call_id,
                     "type": "function_call_output",
+                    "output": prepare_function_call_results(content.result),
                 }
-                if content.result:
-                    args["output"] = prepare_function_call_results(content.result)
                 return args
             case FunctionApprovalRequestContent():
                 return {

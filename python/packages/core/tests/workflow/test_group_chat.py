@@ -1,9 +1,11 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import logging
 from collections.abc import AsyncIterable, Callable
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from agent_framework import (
     AgentRunResponse,
@@ -199,7 +201,7 @@ async def test_group_chat_builder_basic_flow() -> None:
 
     workflow = (
         GroupChatBuilder()
-        .select_speakers(selector, display_name="manager", final_message="done")
+        .set_select_speakers_func(selector, display_name="manager", final_message="done")
         .participants(alpha=alpha, beta=beta)
         .build()
     )
@@ -257,7 +259,7 @@ async def test_group_chat_as_agent_accepts_conversation() -> None:
 
     workflow = (
         GroupChatBuilder()
-        .select_speakers(selector, display_name="manager", final_message="done")
+        .set_select_speakers_func(selector, display_name="manager", final_message="done")
         .participants(alpha=alpha, beta=beta)
         .build()
     )
@@ -309,7 +311,7 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="participants must be configured before build"):
             builder.build()
@@ -320,10 +322,10 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="already has a manager configured"):
-            builder.select_speakers(selector)
+            builder.set_select_speakers_func(selector)
 
     def test_empty_participants_raises_error(self) -> None:
         """Test that empty participants list raises ValueError."""
@@ -331,7 +333,7 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="participants cannot be empty"):
             builder.participants([])
@@ -344,7 +346,7 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="Duplicate participant name 'test'"):
             builder.participants([agent1, agent2])
@@ -372,7 +374,7 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="must define a non-empty 'name' attribute"):
             builder.participants([agent])
@@ -384,7 +386,7 @@ class TestGroupChatBuilder:
         def selector(state: GroupChatStateSnapshot) -> str | None:
             return None
 
-        builder = GroupChatBuilder().select_speakers(selector)
+        builder = GroupChatBuilder().set_select_speakers_func(selector)
 
         with pytest.raises(ValueError, match="participant names must be non-empty strings"):
             builder.participants({"": agent})
@@ -406,7 +408,7 @@ class TestGroupChatOrchestrator:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(selector)
+            .set_select_speakers_func(selector)
             .participants([agent])
             .with_max_rounds(2)  # Limit to 2 rounds
             .build()
@@ -441,7 +443,7 @@ class TestGroupChatOrchestrator:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(selector)
+            .set_select_speakers_func(selector)
             .participants([agent])
             .with_termination_condition(termination_condition)
             .build()
@@ -473,7 +475,7 @@ class TestGroupChatOrchestrator:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(selector, final_message=final_text)
+            .set_select_speakers_func(selector, final_message=final_text)
             .participants([agent])
             .with_termination_condition(lambda _: True)
             .build()
@@ -524,7 +526,7 @@ class TestGroupChatOrchestrator:
 
         agent = StubAgent("agent", "response")
 
-        workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
+        workflow = GroupChatBuilder().set_select_speakers_func(selector).participants([agent]).build()
 
         with pytest.raises(ValueError, match="Manager selected unknown participant 'unknown_agent'"):
             async for _ in workflow.run_stream("test task"):
@@ -540,7 +542,7 @@ class TestGroupChatOrchestrator:
         agent = StubAgent("agent", "response")
 
         # The _SpeakerSelectorAdapter will catch this and raise TypeError
-        workflow = GroupChatBuilder().select_speakers(bad_selector).participants([agent]).build()  # type: ignore
+        workflow = GroupChatBuilder().set_select_speakers_func(bad_selector).participants([agent]).build()  # type: ignore
 
         # This should raise a TypeError because selector doesn't return str or None
         with pytest.raises(TypeError, match="must return a participant name \\(str\\) or None"):
@@ -555,7 +557,7 @@ class TestGroupChatOrchestrator:
 
         agent = StubAgent("agent", "response")
 
-        workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
+        workflow = GroupChatBuilder().set_select_speakers_func(selector).participants([agent]).build()
 
         with pytest.raises(ValueError, match="requires at least one chat message"):
             async for _ in workflow.run_stream([]):
@@ -690,7 +692,11 @@ class TestCheckpointing:
         storage = InMemoryCheckpointStorage()
 
         workflow = (
-            GroupChatBuilder().select_speakers(selector).participants([agent]).with_checkpointing(storage).build()
+            GroupChatBuilder()
+            .set_select_speakers_func(selector)
+            .participants([agent])
+            .with_checkpointing(storage)
+            .build()
         )
 
         outputs: list[list[ChatMessage]] = []
@@ -739,6 +745,26 @@ class TestAgentManagerConfiguration:
         assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
         assert "worker" in builder._participants  # type: ignore[attr-defined]
 
+    async def test_set_manager_overrides_existing_response_format(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Warn and override custom response_format on ChatAgent managers."""
+        from unittest.mock import MagicMock
+
+        from agent_framework import ChatAgent
+
+        class CustomResponse(BaseModel):
+            value: str
+
+        chat_client = MagicMock()
+        manager_agent = ChatAgent(chat_client=chat_client, name="Coordinator", response_format=CustomResponse)
+        worker = StubAgent("worker", "response")
+
+        with caplog.at_level(logging.WARNING):
+            builder = GroupChatBuilder().set_manager(manager_agent).participants([worker])
+
+        assert manager_agent.chat_options.response_format is ManagerSelectionResponse
+        assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
+        assert any("overriding configured response_format" in message for message in caplog.messages)
+
 
 class TestFactoryFunctions:
     """Tests for factory functions."""
@@ -765,7 +791,7 @@ class TestConversationHandling:
 
         agent = StubAgent("agent", "response")
 
-        workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
+        workflow = GroupChatBuilder().set_select_speakers_func(selector).participants([agent]).build()
 
         outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream("test string"):
@@ -787,7 +813,7 @@ class TestConversationHandling:
 
         agent = StubAgent("agent", "response")
 
-        workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
+        workflow = GroupChatBuilder().set_select_speakers_func(selector).participants([agent]).build()
 
         outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream(task_message):
@@ -813,7 +839,7 @@ class TestConversationHandling:
 
         agent = StubAgent("agent", "response")
 
-        workflow = GroupChatBuilder().select_speakers(selector).participants([agent]).build()
+        workflow = GroupChatBuilder().set_select_speakers_func(selector).participants([agent]).build()
 
         outputs: list[list[ChatMessage]] = []
         async for event in workflow.run_stream(conversation):
@@ -841,7 +867,7 @@ class TestRoundLimitEnforcement:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(selector)
+            .set_select_speakers_func(selector)
             .participants([agent])
             .with_max_rounds(1)  # Very low limit
             .build()
@@ -876,7 +902,7 @@ class TestRoundLimitEnforcement:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(selector)
+            .set_select_speakers_func(selector)
             .participants([agent])
             .with_max_rounds(1)  # Hit limit after first response
             .build()
@@ -908,7 +934,7 @@ async def test_group_chat_checkpoint_runtime_only() -> None:
     agent_b = StubAgent("agentB", "Reply from B")
     selector = make_sequence_selector()
 
-    wf = GroupChatBuilder().participants([agent_a, agent_b]).select_speakers(selector).build()
+    wf = GroupChatBuilder().participants([agent_a, agent_b]).set_select_speakers_func(selector).build()
 
     baseline_output: list[ChatMessage] | None = None
     async for ev in wf.run_stream("runtime checkpoint test", checkpoint_storage=storage):
@@ -944,7 +970,7 @@ async def test_group_chat_checkpoint_runtime_overrides_buildtime() -> None:
         wf = (
             GroupChatBuilder()
             .participants([agent_a, agent_b])
-            .select_speakers(selector)
+            .set_select_speakers_func(selector)
             .with_checkpointing(buildtime_storage)
             .build()
         )

@@ -36,7 +36,7 @@ def _get_chat_client() -> AzureOpenAIChatClient:
 
 async def main() -> None:
     # Create coordinator agent with structured output for speaker selection
-    # Note: response_format is automatically set to ManagerSelectionResponse by set_manager()
+    # Note: response_format is enforced to ManagerSelectionResponse by set_manager()
     coordinator = ChatAgent(
         name="Coordinator",
         description="Coordinates multi-agent collaboration by selecting speakers",

@@ -180,7 +180,7 @@ class _GroupChatConfig:
     """Internal: Configuration passed to factories during workflow assembly.
 
     Attributes:
-        manager: Manager callable for orchestration decisions (used by select_speakers)
+        manager: Manager callable for orchestration decisions (used by set_select_speakers_func)
         manager_participant: Manager agent/executor instance (used by set_manager)
         manager_name: Display name for the manager in conversation history
         participants: Mapping of participant names to their specifications
@@ -1014,7 +1014,7 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
         - Extracts participant names and descriptions for manager context
         - Forwards manager instance, manager name, max_rounds, and termination_condition settings
         - Allows orchestrator to auto-generate its executor ID
-        - Supports both callable managers (select_speakers) and agent-based managers (set_manager)
+        - Supports both callable managers (set_select_speakers_func) and agent-based managers (set_manager)
 
     Why descriptions are extracted:
         The manager needs participant descriptions (not full specs) to make informed
@@ -1027,7 +1027,7 @@ def _default_orchestrator_factory(wiring: _GroupChatConfig) -> Executor:
     if wiring.manager is None and wiring.manager_participant is None:
         raise RuntimeError(
             "Default orchestrator factory requires a manager to be configured. "
-            "Call set_manager(...) or select_speakers(...) before build()."
+            "Call set_manager(...) or set_select_speakers_func(...) before build()."
         )
 
     manager_callable = wiring.manager
@@ -1151,13 +1151,13 @@ class GroupChatBuilder:
     r"""High-level builder for manager-directed group chat workflows with dynamic orchestration.
 
     GroupChat coordinates multi-agent conversations using a manager that selects which participant
-    speaks next. The manager can be a simple Python function (:py:meth:`GroupChatBuilder.select_speakers`)
+    speaks next. The manager can be a simple Python function (:py:meth:`GroupChatBuilder.set_select_speakers_func`)
     or an agent-based selector via :py:meth:`GroupChatBuilder.set_manager`. These two approaches are
     mutually exclusive.
 
     **Core Workflow:**
     1. Define participants: list of agents (uses their .name) or dict mapping names to agents
-    2. Configure speaker selection: :py:meth:`GroupChatBuilder.select_speakers` OR
+    2. Configure speaker selection: :py:meth:`GroupChatBuilder.set_select_speakers_func` OR
        :py:meth:`GroupChatBuilder.set_manager` (not both)
     3. Optional: set round limits, checkpointing, termination conditions
     4. Build and run the workflow
@@ -1183,7 +1183,7 @@ class GroupChatBuilder:
 
         workflow = (
             GroupChatBuilder()
-            .select_speakers(select_next_speaker)
+            .set_select_speakers_func(select_next_speaker)
             .participants([researcher_agent, writer_agent])  # Uses agent.name
             .build()
         )
@@ -1220,7 +1220,7 @@ class GroupChatBuilder:
 
     **State Snapshot Structure:**
 
-    The GroupChatStateSnapshot passed to select_speakers contains:
+    The GroupChatStateSnapshot passed to set_select_speakers_func contains:
     - `task`: ChatMessage - Original user task
     - `participants`: dict[str, str] - Mapping of participant names to descriptions
     - `conversation`: tuple[ChatMessage, ...] - Full conversation history
@@ -1229,7 +1229,7 @@ class GroupChatBuilder:
     - `pending_agent`: str | None - Name of agent currently processing (if any)
 
     **Important Constraints:**
-    - Cannot combine :py:meth:`GroupChatBuilder.select_speakers` and :py:meth:`GroupChatBuilder.set_manager`
+    - Cannot combine :py:meth:`GroupChatBuilder.set_select_speakers_func` and :py:meth:`GroupChatBuilder.set_manager`
     - Participant names must be unique
     - When using list form, agents must have a non-empty `name` attribute
     """
@@ -1269,7 +1269,7 @@ class GroupChatBuilder:
         if self._manager is not None or self._manager_participant is not None:
             raise ValueError(
                 "GroupChatBuilder already has a manager configured. "
-                "Call select_speakers(...) or set_manager(...) at most once."
+                "Call set_select_speakers_func(...) or set_manager(...) at most once."
             )
         resolved_name = display_name or getattr(manager, "name", None) or "manager"
         self._manager = manager
@@ -1290,6 +1290,8 @@ class GroupChatBuilder:
 
         The manager agent must produce structured output compatible with ManagerSelectionResponse
         to communicate its speaker selection decisions. Use response_format for reliable parsing.
+        GroupChatBuilder enforces this when the manager is a ChatAgent, overriding any pre-set
+        response_format.
 
         Args:
             manager: Agent or executor responsible for speaker selection and coordination.
@@ -1301,7 +1303,7 @@ class GroupChatBuilder:
             Self for fluent chaining.
 
         Raises:
-            ValueError: If manager is already configured via :py:meth:`GroupChatBuilder.select_speakers`
+            ValueError: If manager is already configured via :py:meth:`GroupChatBuilder.set_select_speakers_func`
             TypeError: If manager is not AgentProtocol or Executor instance
 
         Example:
@@ -1311,7 +1313,7 @@ class GroupChatBuilder:
             from agent_framework import GroupChatBuilder, ChatAgent
             from agent_framework.openai import OpenAIChatClient
 
-            # Coordinator agent - response_format is automatically set to ManagerSelectionResponse
+            # Coordinator agent - response_format is enforced to ManagerSelectionResponse
             coordinator = ChatAgent(
                 name="Coordinator",
                 description="Coordinates multi-agent collaboration",
@@ -1332,13 +1334,13 @@ class GroupChatBuilder:
             )
 
         Note:
-            The manager agent's response_format is automatically configured to use
-            ManagerSelectionResponse for structured output if none is set.
+            The manager agent's response_format is enforced to ManagerSelectionResponse for structured output.
+            Custom response formats are overridden with a warning.
         """
         if self._manager is not None or self._manager_participant is not None:
             raise ValueError(
                 "GroupChatBuilder already has a manager configured. "
-                "Call select_speakers(...) or set_manager(...) at most once."
+                "Call set_select_speakers_func(...) or set_manager(...) at most once."
             )
 
         if not isinstance(manager, (AgentProtocol, Executor)):
@@ -1348,15 +1350,24 @@ class GroupChatBuilder:
         if display_name is None:
             display_name = manager.id if isinstance(manager, Executor) else manager.name or "manager"
 
-        # Auto-configure response_format for ChatAgent managers if not already set
-        if isinstance(manager, ChatAgent) and manager.chat_options.response_format is None:
-            manager.chat_options.response_format = ManagerSelectionResponse
+        # Enforce ManagerSelectionResponse for ChatAgent managers
+        if isinstance(manager, ChatAgent):
+            configured_format = manager.chat_options.response_format
+            if configured_format is not ManagerSelectionResponse:
+                if configured_format is not None:
+                    configured_format_name = getattr(configured_format, "__name__", str(configured_format))
+                    logger.warning(
+                        f"Manager response_format must be ManagerSelectionResponse; "
+                        f"overriding configured response_format '{configured_format_name}' "
+                        f"for manager '{display_name}'."
+                    )
+                manager.chat_options.response_format = ManagerSelectionResponse
 
         self._manager_participant = manager
         self._manager_name = display_name
         return self
 
-    def select_speakers(
+    def set_select_speakers_func(
         self,
         selector: (
             Callable[[GroupChatStateSnapshot], Awaitable[str | None]] | Callable[[GroupChatStateSnapshot], str | None]
@@ -1413,7 +1424,7 @@ class GroupChatBuilder:
 
             workflow = (
                 GroupChatBuilder()
-                .select_speakers(select_next_speaker)
+                .set_select_speakers_func(select_next_speaker)
                 .participants(researcher=researcher_agent, writer=writer_agent)
                 .build()
             )
@@ -1440,7 +1451,7 @@ class GroupChatBuilder:
                 )
 
 
-            workflow = GroupChatBuilder().select_speakers(llm_based_selector).participants(...).build()
+            workflow = GroupChatBuilder().set_select_speakers_func(llm_based_selector).participants(...).build()
 
         Note:
             Cannot be combined with :py:meth:`GroupChatBuilder.set_manager`. Choose one orchestration strategy.
@@ -1612,7 +1623,7 @@ class GroupChatBuilder:
             specialist_agent = ...
             workflow = (
                 GroupChatBuilder()
-                .select_speakers(lambda _: "specialist")
+                .set_select_speakers_func(lambda _: "specialist")
                 .participants(specialist=specialist_agent)
                 .with_termination_condition(stop_after_two_calls)
                 .build()
@@ -1724,7 +1735,7 @@ class GroupChatBuilder:
         ):
             raise ValueError(
                 "manager must be configured before build() when using default orchestrator. "
-                "Call set_manager(...) or select_speakers(...) before build()."
+                "Call set_manager(...) or set_select_speakers_func(...) before build()."
             )
         if not self._participants:
             raise ValueError("participants must be configured before build()")

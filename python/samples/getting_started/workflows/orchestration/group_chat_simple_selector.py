@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 Sample: Group Chat with Simple Speaker Selector Function
 
 What it does:
-- Demonstrates the select_speakers() API for GroupChat orchestration
+- Demonstrates the set_select_speakers_func() API for GroupChat orchestration
 - Uses a pure Python function to control speaker selection based on conversation state
 - Alternates between researcher and writer agents in a simple round-robin pattern
 - Shows how to access conversation history, round index, and participant metadata
@@ -85,7 +85,7 @@ async def main() -> None:
     # 2. Dict form - explicit names: .participants(researcher=researcher, writer=writer)
     workflow = (
         GroupChatBuilder()
-        .select_speakers(select_next_speaker, display_name="Orchestrator")
+        .set_select_speakers_func(select_next_speaker, display_name="Orchestrator")
         .participants([researcher, writer])  # Uses agent.name for participant names
         .build()
     )

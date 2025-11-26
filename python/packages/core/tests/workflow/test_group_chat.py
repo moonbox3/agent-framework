@@ -34,14 +34,18 @@ from agent_framework._workflows._group_chat import (
     GroupChatOrchestratorExecutor,
     ManagerSelectionResponse,
     _default_orchestrator_factory,  # type: ignore
+    _default_participant_factory,  # type: ignore
     _GroupChatConfig,  # type: ignore
     _SpeakerSelectorAdapter,  # type: ignore
+    assemble_group_chat_workflow,
 )
 from agent_framework._workflows._magentic import (
     _MagenticProgressLedger,  # type: ignore
     _MagenticProgressLedgerItem,  # type: ignore
     _MagenticStartMessage,  # type: ignore
 )
+from agent_framework._workflows._participant_utils import GroupChatParticipantSpec
+from agent_framework._workflows._workflow_builder import WorkflowBuilder
 
 
 class StubAgent(BaseAgent):
@@ -192,6 +196,22 @@ class StubMagenticManager(MagenticManagerBase):
 
     async def prepare_final_answer(self, magentic_context: MagenticContext) -> ChatMessage:
         return ChatMessage(role=Role.ASSISTANT, text="final", author_name="magentic_manager")
+
+
+class PassthroughExecutor(Executor):
+    @handler
+    async def forward(self, message: Any, ctx: WorkflowContext[Any]) -> None:
+        await ctx.send_message(message)
+
+
+class CountingWorkflowBuilder(WorkflowBuilder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_calls = 0
+
+    def set_start_executor(self, executor: Any) -> "CountingWorkflowBuilder":
+        self.start_calls += 1
+        return cast("CountingWorkflowBuilder", super().set_start_executor(executor))
 
 
 async def test_group_chat_builder_basic_flow() -> None:
@@ -393,6 +413,48 @@ class TestGroupChatBuilder:
 
         with pytest.raises(ValueError, match="participant names must be non-empty strings"):
             builder.participants({"": agent})
+
+    def test_assemble_group_chat_respects_existing_start_executor(self) -> None:
+        """Ensure assemble_group_chat_workflow does not override preconfigured start executor."""
+
+        async def manager(_: GroupChatStateSnapshot) -> GroupChatDirective:
+            return GroupChatDirective(finish=True)
+
+        builder = CountingWorkflowBuilder()
+        entry = PassthroughExecutor(id="entry")
+        builder = builder.set_start_executor(entry)
+
+        participant = PassthroughExecutor(id="participant")
+        participant_spec = GroupChatParticipantSpec(
+            name="participant",
+            participant=participant,
+            description="participant",
+        )
+
+        wiring = _GroupChatConfig(
+            manager=manager,
+            manager_participant=None,
+            manager_name="manager",
+            participants={"participant": participant_spec},
+            max_rounds=None,
+            termination_condition=None,
+            participant_aliases={},
+            participant_executors={"participant": participant},
+        )
+
+        result = assemble_group_chat_workflow(
+            wiring=wiring,
+            participant_factory=_default_participant_factory,
+            orchestrator_factory=_default_orchestrator_factory,
+            builder=builder,
+            return_builder=True,
+        )
+
+        assert isinstance(result, tuple)
+        assembled_builder, _ = result
+        assert assembled_builder is builder
+        assert builder.start_calls == 1
+        assert assembled_builder._start_executor is entry  # type: ignore
 
 
 class TestGroupChatOrchestrator:

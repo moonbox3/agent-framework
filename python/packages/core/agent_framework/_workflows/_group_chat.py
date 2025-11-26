@@ -1071,7 +1071,9 @@ def assemble_group_chat_workflow(
     wiring.orchestrator = orchestrator
 
     workflow_builder = builder or WorkflowBuilder()
-    workflow_builder = workflow_builder.set_start_executor(orchestrator)
+    start_executor = getattr(workflow_builder, "_start_executor", None)
+    if start_executor is None:
+        workflow_builder = workflow_builder.set_start_executor(orchestrator)
 
     # Wire manager as participant if agent-based manager is configured
     if wiring.manager_participant is not None:

@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-import logging
 from collections.abc import AsyncIterable, Callable
 from typing import Any, cast
 
@@ -749,8 +748,8 @@ class TestAgentManagerConfiguration:
         assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
         assert "worker" in builder._participants  # type: ignore[attr-defined]
 
-    async def test_set_manager_overrides_existing_response_format(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Warn and override custom response_format on ChatAgent managers."""
+    async def test_set_manager_rejects_custom_response_format(self) -> None:
+        """Reject custom response_format on ChatAgent managers."""
         from unittest.mock import MagicMock
 
         from agent_framework import ChatAgent
@@ -762,12 +761,10 @@ class TestAgentManagerConfiguration:
         manager_agent = ChatAgent(chat_client=chat_client, name="Coordinator", response_format=CustomResponse)
         worker = StubAgent("worker", "response")
 
-        with caplog.at_level(logging.WARNING):
-            builder = GroupChatBuilder().set_manager(manager_agent).participants([worker])
+        with pytest.raises(ValueError, match="response_format must be ManagerSelectionResponse"):
+            GroupChatBuilder().set_manager(manager_agent).participants([worker])
 
-        assert manager_agent.chat_options.response_format is ManagerSelectionResponse
-        assert builder._manager_participant is manager_agent  # type: ignore[attr-defined]
-        assert any("overriding configured response_format" in message for message in caplog.messages)
+        assert manager_agent.chat_options.response_format is CustomResponse
 
 
 class TestFactoryFunctions:

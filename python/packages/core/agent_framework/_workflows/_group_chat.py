@@ -1290,8 +1290,8 @@ class GroupChatBuilder:
 
         The manager agent must produce structured output compatible with ManagerSelectionResponse
         to communicate its speaker selection decisions. Use response_format for reliable parsing.
-        GroupChatBuilder enforces this when the manager is a ChatAgent, overriding any pre-set
-        response_format.
+        GroupChatBuilder enforces this when the manager is a ChatAgent and rejects incompatible
+        response formats.
 
         Args:
             manager: Agent or executor responsible for speaker selection and coordination.
@@ -1334,8 +1334,8 @@ class GroupChatBuilder:
             )
 
         Note:
-            The manager agent's response_format is enforced to ManagerSelectionResponse for structured output.
-            Custom response formats are overridden with a warning.
+            The manager agent's response_format must be ManagerSelectionResponse for structured output.
+            Custom response formats raise ValueError instead of being overridden.
         """
         if self._manager is not None or self._manager_participant is not None:
             raise ValueError(
@@ -1353,15 +1353,14 @@ class GroupChatBuilder:
         # Enforce ManagerSelectionResponse for ChatAgent managers
         if isinstance(manager, ChatAgent):
             configured_format = manager.chat_options.response_format
-            if configured_format is not ManagerSelectionResponse:
-                if configured_format is not None:
-                    configured_format_name = getattr(configured_format, "__name__", str(configured_format))
-                    logger.warning(
-                        f"Manager response_format must be ManagerSelectionResponse; "
-                        f"overriding configured response_format '{configured_format_name}' "
-                        f"for manager '{display_name}'."
-                    )
+            if configured_format is None:
                 manager.chat_options.response_format = ManagerSelectionResponse
+            elif configured_format is not ManagerSelectionResponse:
+                configured_format_name = getattr(configured_format, "__name__", str(configured_format))
+                raise ValueError(
+                    "Manager ChatAgent response_format must be ManagerSelectionResponse. "
+                    f"Received '{configured_format_name}' for manager '{display_name}'."
+                )
 
         self._manager_participant = manager
         self._manager_name = display_name

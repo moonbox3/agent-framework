@@ -33,6 +33,7 @@ from agent_framework import (
     WorkflowStatusEvent,
     handler,
 )
+from agent_framework._workflows import _group_chat as group_chat_module  # type: ignore
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
 from agent_framework._workflows._magentic import (  # type: ignore[reportPrivateUsage]
     MagenticAgentExecutor,
@@ -42,6 +43,7 @@ from agent_framework._workflows._magentic import (  # type: ignore[reportPrivate
     _MagenticProgressLedgerItem,  # type: ignore
     _MagenticStartMessage,  # type: ignore
 )
+from agent_framework._workflows._workflow_builder import WorkflowBuilder
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -160,6 +162,19 @@ class FakeManager(MagenticManagerBase):
 
     async def prepare_final_answer(self, magentic_context: MagenticContext) -> ChatMessage:
         return ChatMessage(role=Role.ASSISTANT, text="FINAL", author_name="magentic_manager")
+
+
+class _CountingWorkflowBuilder(WorkflowBuilder):
+    created: list["_CountingWorkflowBuilder"] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.start_calls = 0
+        _CountingWorkflowBuilder.created.append(self)
+
+    def set_start_executor(self, executor: Any) -> "_CountingWorkflowBuilder":  # type: ignore[override]
+        self.start_calls += 1
+        return cast("_CountingWorkflowBuilder", super().set_start_executor(executor))
 
 
 async def test_standard_manager_plan_and_replan_combined_ledger():
@@ -375,6 +390,23 @@ class _DummyExec(Executor):
     @handler
     async def _noop(self, message: object, ctx: WorkflowContext[object]) -> None:  # pragma: no cover - not called
         pass
+
+
+def test_magentic_builder_sets_start_executor_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure MagenticBuilder wiring sets the start executor only once."""
+    _CountingWorkflowBuilder.created.clear()
+    monkeypatch.setattr(group_chat_module, "WorkflowBuilder", _CountingWorkflowBuilder)
+
+    manager = FakeManager()
+
+    workflow = (
+        MagenticBuilder().participants(agentA=_DummyExec("agentA")).with_standard_manager(manager=manager).build()
+    )
+
+    assert workflow is not None
+    assert _CountingWorkflowBuilder.created, "Expected CountingWorkflowBuilder to be instantiated"
+    builder = _CountingWorkflowBuilder.created[-1]
+    assert builder.start_calls == 1, "set_start_executor should be called exactly once"
 
 
 async def test_magentic_agent_executor_on_checkpoint_save_and_restore_roundtrip():

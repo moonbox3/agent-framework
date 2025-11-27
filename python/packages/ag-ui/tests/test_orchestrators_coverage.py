@@ -743,6 +743,7 @@ async def test_agent_protocol_fallback_paths() -> None:
             *,
             thread: Any = None,
             tools: list[Any] | None = None,
+            **kwargs: Any,
         ) -> AsyncGenerator[AgentRunResponseUpdate, None]:
             self.messages_received = messages
             yield AgentRunResponseUpdate(contents=[TextContent(text="response")], role="assistant")

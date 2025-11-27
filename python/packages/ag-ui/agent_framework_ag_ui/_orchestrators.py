@@ -423,7 +423,25 @@ class DefaultOrchestrator(Orchestrator):
 
         all_updates: list[Any] = []
         update_count = 0
-        async for update in context.agent.run_stream(messages_to_run, thread=thread, tools=tools_param):
+        # Prepare metadata for chat client (Azure requires string values)
+        safe_metadata: dict[str, Any] = {}
+        thread_metadata = getattr(thread, "metadata", None)
+        if thread_metadata:
+            for key, value in thread_metadata.items():
+                value_str = value if isinstance(value, str) else json.dumps(value)
+                if len(value_str) > 512:
+                    value_str = value_str[:512]
+                safe_metadata[key] = value_str
+
+        run_kwargs: dict[str, Any] = {
+            "thread": thread,
+            "tools": tools_param,
+            "metadata": safe_metadata,
+        }
+        if safe_metadata:
+            run_kwargs["store"] = True
+
+        async for update in context.agent.run_stream(messages_to_run, **run_kwargs):
             update_count += 1
             logger.info(f"[STREAM] Received update #{update_count} from agent")
             all_updates.append(update)

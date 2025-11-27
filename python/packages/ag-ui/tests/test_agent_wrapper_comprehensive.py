@@ -425,8 +425,8 @@ async def test_thread_metadata_tracking():
     async def stream_fn(
         messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        if "thread" in kwargs:
-            thread_metadata.update(kwargs["thread"].metadata)
+        if chat_options.metadata:
+            thread_metadata.update(chat_options.metadata)
         yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
@@ -455,8 +455,8 @@ async def test_state_context_injection():
     async def stream_fn(
         messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        if "thread" in kwargs:
-            thread_metadata.update(kwargs["thread"].metadata)
+        if chat_options.metadata:
+            thread_metadata.update(chat_options.metadata)
         yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
@@ -474,7 +474,10 @@ async def test_state_context_injection():
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
-    assert thread_metadata.get("current_state") == {"document": "Test content"}
+    current_state = thread_metadata.get("current_state")
+    if isinstance(current_state, str):
+        current_state = json.loads(current_state)
+    assert current_state == {"document": "Test content"}
 
 
 async def test_no_messages_provided():

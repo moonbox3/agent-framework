@@ -879,7 +879,6 @@ class ChatAgent(BaseAgent):
         response = await self.chat_client.get_response(
             messages=thread_messages,
             chat_options=co,
-            thread=thread,
             **filtered_kwargs,
         )
 
@@ -1020,7 +1019,6 @@ class ChatAgent(BaseAgent):
         async for update in self.chat_client.get_streaming_response(
             messages=thread_messages,
             chat_options=co,
-            thread=thread,
             **filtered_kwargs,
         ):
             response_updates.append(update)

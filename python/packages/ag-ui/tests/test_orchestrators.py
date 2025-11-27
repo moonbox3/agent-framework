@@ -36,6 +36,7 @@ class DummyAgent:
         *,
         thread: Any,
         tools: list[Any] | None = None,
+        **kwargs: Any,
     ) -> AsyncGenerator[AgentRunResponseUpdate, None]:
         self.seen_tools = tools
         yield AgentRunResponseUpdate(contents=[TextContent(text="ok")], role="assistant")

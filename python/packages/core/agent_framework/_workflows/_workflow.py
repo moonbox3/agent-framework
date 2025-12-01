@@ -370,6 +370,11 @@ class Workflow(DictConvertible):
 
                 span.add_event(OtelAttr.WORKFLOW_COMPLETED)
             except Exception as exc:
+                # Drain any pending events (e.g., ExecutorFailedEvent) before yielding WorkflowFailedEvent
+                if await self._runner.context.has_events():
+                    for event in await self._runner.context.drain_events():
+                        yield event
+
                 # Surface structured failure details before propagating exception
                 details = WorkflowErrorDetails.from_exception(exc)
                 with _framework_event_origin():

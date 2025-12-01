@@ -321,7 +321,7 @@ async def test_single_edge_group_tracing_success(span_exporter) -> None:
     assert success is True
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -365,7 +365,7 @@ async def test_single_edge_group_tracing_condition_failure(span_exporter) -> Non
     assert success is True  # Returns True but condition failed
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -399,7 +399,7 @@ async def test_single_edge_group_tracing_type_mismatch(span_exporter) -> None:
     assert success is False
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -432,7 +432,7 @@ async def test_single_edge_group_tracing_target_mismatch(span_exporter) -> None:
     assert success is False
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -790,7 +790,7 @@ async def test_fan_out_edge_group_tracing_success(span_exporter) -> None:
     assert success is True
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -845,7 +845,7 @@ async def test_fan_out_edge_group_tracing_with_target(span_exporter) -> None:
     assert success is True
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -1012,7 +1012,7 @@ async def test_fan_in_edge_group_tracing_buffered(span_exporter) -> None:
     assert success is True
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -1043,7 +1043,7 @@ async def test_fan_in_edge_group_tracing_buffered(span_exporter) -> None:
     assert success is True
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 
@@ -1088,7 +1088,7 @@ async def test_fan_in_edge_group_tracing_type_mismatch(span_exporter) -> None:
     assert success is False
 
     spans = span_exporter.get_finished_spans()
-    edge_group_spans = [s for s in spans if s.name == "edge_group.process"]
+    edge_group_spans = [s for s in spans if s.attributes and s.attributes.get("edge_group.type") is not None]
 
     assert len(edge_group_spans) == 1
 

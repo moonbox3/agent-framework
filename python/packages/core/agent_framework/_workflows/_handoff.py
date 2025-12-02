@@ -1286,6 +1286,8 @@ class HandoffBuilder:
     def with_interaction_mode(
         self,
         interaction_mode: Literal["human_in_loop", "autonomous"] | None = "human_in_loop",
+        *,
+        autonomous_turn_limit: int | None = None,
     ) -> "HandoffBuilder":
         """Choose whether the workflow requests user input or runs autonomously after agent replies.
 
@@ -1297,9 +1299,13 @@ class HandoffBuilder:
         Args:
             interaction_mode: `"human_in_loop"` (default) requests user input after each agent response
                               that does not trigger a handoff. `"autonomous"` lets agents continue
-                              working until they invoke a handoff tool or the turn limit is reached
-                              (default: 50, configurable via `with_autonomous_turn_limit`).
+                              working until they invoke a handoff tool or the turn limit is reached.
                               `None` resets to the default.
+            autonomous_turn_limit: Maximum number of agent responses before the workflow yields
+                                   when in autonomous mode. Only applicable when interaction_mode
+                                   is `"autonomous"`. Default is 50. Set to `None` to disable
+                                   the limit (use with caution). Raises `ValueError` if provided
+                                   when interaction_mode is `"human_in_loop"`.
 
         Returns:
             Self for chaining.
@@ -1313,8 +1319,7 @@ class HandoffBuilder:
                 .set_coordinator(coordinator)
                 .add_handoff(coordinator, research_agent)
                 .add_handoff(research_agent, coordinator)
-                .with_interaction_mode("autonomous")
-                .with_autonomous_turn_limit(20)
+                .with_interaction_mode("autonomous", autonomous_turn_limit=20)
                 .build()
             )
 
@@ -1331,10 +1336,22 @@ class HandoffBuilder:
         if interaction_mode not in ("human_in_loop", "autonomous"):
             raise ValueError("interaction_mode must be either 'human_in_loop' or 'autonomous'")
         self._interaction_mode = interaction_mode
+
+        if autonomous_turn_limit is not None:
+            if interaction_mode != "autonomous":
+                raise ValueError("autonomous_turn_limit can only be set when interaction_mode is 'autonomous'")
+            if autonomous_turn_limit <= 0:
+                raise ValueError("autonomous_turn_limit must be positive when provided")
+            self._autonomous_turn_limit = autonomous_turn_limit
+
         return self
 
     def with_autonomous_turn_limit(self, limit: int | None) -> "HandoffBuilder":
         """Cap agent responses in autonomous mode before yielding the conversation.
+
+        Note:
+            This method is provided for backward compatibility. Prefer using
+            `with_interaction_mode("autonomous", autonomous_turn_limit=N)` instead.
 
         In autonomous mode, agents (including specialists) continue iterating until they
         invoke a handoff tool or this turn limit is reached. Default limit is 50 responses

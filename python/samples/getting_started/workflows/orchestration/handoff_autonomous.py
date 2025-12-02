@@ -34,7 +34,7 @@ Prerequisites:
 
 Key Concepts:
     - Autonomous interaction mode: agents iterate until they handoff
-    - Turn limits: use `with_autonomous_turn_limit(N)` to cap total iterations
+    - Turn limits: use `with_interaction_mode("autonomous", autonomous_turn_limit=N)` to cap total iterations
 """
 
 
@@ -113,8 +113,7 @@ async def main() -> None:
         .add_handoff(coordinator, [research_agent, summary_agent])
         .add_handoff(research_agent, coordinator)  # Research can hand back to coordinator
         .add_handoff(summary_agent, coordinator)
-        .with_interaction_mode("autonomous")
-        .with_autonomous_turn_limit(15)  # Limit total turns to prevent runaway
+        .with_interaction_mode("autonomous", autonomous_turn_limit=15)
         .with_termination_condition(
             # Terminate after coordinator provides 5 assistant responses
             lambda conv: sum(1 for msg in conv if msg.author_name == "coordinator" and msg.role.value == "assistant")

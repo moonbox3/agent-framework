@@ -381,6 +381,49 @@ async def test_autonomous_routes_back_to_coordinator_when_specialist_stops():
     assert len(specialist.calls) >= 1, "Specialist should run without handoff"
 
 
+async def test_autonomous_mode_with_inline_turn_limit():
+    """Autonomous mode should respect turn limit passed via with_interaction_mode."""
+    worker = _RecordingAgent(name="worker")
+
+    workflow = (
+        HandoffBuilder(participants=[worker])
+        .set_coordinator(worker)
+        .with_interaction_mode("autonomous", autonomous_turn_limit=2)
+        .with_termination_condition(lambda conv: False)
+        .build()
+    )
+
+    events = await _drain(workflow.run_stream("Start"))
+    outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
+    assert outputs, "Turn limit should force a workflow output"
+    assert len(worker.calls) == 2, "Worker should stop after reaching the inline turn limit"
+
+
+def test_autonomous_turn_limit_requires_autonomous_mode():
+    """Verify that autonomous_turn_limit raises an error when mode is human_in_loop."""
+    worker = _RecordingAgent(name="worker")
+
+    with pytest.raises(ValueError, match="autonomous_turn_limit can only be set when interaction_mode is 'autonomous'"):
+        HandoffBuilder(participants=[worker]).set_coordinator(worker).with_interaction_mode(
+            "human_in_loop", autonomous_turn_limit=10
+        )
+
+
+def test_autonomous_turn_limit_must_be_positive():
+    """Verify that autonomous_turn_limit raises an error when <= 0."""
+    worker = _RecordingAgent(name="worker")
+
+    with pytest.raises(ValueError, match="autonomous_turn_limit must be positive"):
+        HandoffBuilder(participants=[worker]).set_coordinator(worker).with_interaction_mode(
+            "autonomous", autonomous_turn_limit=0
+        )
+
+    with pytest.raises(ValueError, match="autonomous_turn_limit must be positive"):
+        HandoffBuilder(participants=[worker]).set_coordinator(worker).with_interaction_mode(
+            "autonomous", autonomous_turn_limit=-5
+        )
+
+
 def test_build_fails_without_coordinator():
     """Verify that build() raises ValueError when set_coordinator() was not called."""
     triage = _RecordingAgent(name="triage")

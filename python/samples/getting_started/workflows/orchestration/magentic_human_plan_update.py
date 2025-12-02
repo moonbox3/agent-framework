@@ -66,6 +66,14 @@ async def main() -> None:
         tools=HostedCodeInterpreterTool(),
     )
 
+    # Create a manager agent for the orchestration
+    manager_agent = ChatAgent(
+        name="MagenticManager",
+        description="Orchestrator that coordinates the research and coding workflow",
+        instructions="You coordinate a team to complete complex tasks efficiently.",
+        chat_client=OpenAIChatClient(),
+    )
+
     # Callbacks
     def on_exception(exception: Exception) -> None:
         print(f"Exception occurred: {exception}")
@@ -80,7 +88,7 @@ async def main() -> None:
         MagenticBuilder()
         .participants(researcher=researcher_agent, coder=coder_agent)
         .with_standard_manager(
-            chat_client=OpenAIChatClient(),
+            agent=manager_agent,
             max_round_count=10,
             max_stall_count=3,
             max_reset_count=2,
@@ -154,21 +162,48 @@ async def main() -> None:
                 # Get human input for plan review decision
                 print("Plan review options:")
                 print("1. approve - Approve the plan as-is")
-                print("2. revise - Request revision of the plan")
-                print("3. exit - Exit the workflow")
+                print("2. approve with comments - Approve with feedback for the manager")
+                print("3. revise - Request revision with your feedback")
+                print("4. edit - Directly edit the plan text")
+                print("5. exit - Exit the workflow")
 
                 while True:
-                    choice = input("Enter your choice (approve/revise/exit): ").strip().lower()  # noqa: ASYNC250
+                    choice = input("Enter your choice (1-5): ").strip().lower()  # noqa: ASYNC250
                     if choice in ["approve", "1"]:
                         reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
                         break
-                    if choice in ["revise", "2"]:
-                        reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.REVISE)
+                    if choice in ["approve with comments", "2"]:
+                        comments = input("Enter your comments for the manager: ").strip()  # noqa: ASYNC250
+                        reply = MagenticPlanReviewReply(
+                            decision=MagenticPlanReviewDecision.APPROVE,
+                            comments=comments if comments else None,
+                        )
                         break
-                    if choice in ["exit", "3"]:
+                    if choice in ["revise", "3"]:
+                        comments = input("Enter feedback for revising the plan: ").strip()  # noqa: ASYNC250
+                        reply = MagenticPlanReviewReply(
+                            decision=MagenticPlanReviewDecision.REVISE,
+                            comments=comments if comments else None,
+                        )
+                        break
+                    if choice in ["edit", "4"]:
+                        print("Enter your edited plan (end with an empty line):")
+                        lines = []
+                        while True:
+                            line = input()  # noqa: ASYNC250
+                            if line == "":
+                                break
+                            lines.append(line)
+                        edited_plan = "\n".join(lines)
+                        reply = MagenticPlanReviewReply(
+                            decision=MagenticPlanReviewDecision.REVISE,
+                            edited_plan_text=edited_plan if edited_plan else None,
+                        )
+                        break
+                    if choice in ["exit", "5"]:
                         print("Exiting workflow...")
                         return
-                    print("Invalid choice. Please enter 'approve', 'revise', or 'exit'.")
+                    print("Invalid choice. Please enter a number 1-5.")
 
                 pending_responses = {pending_request.request_id: reply}
                 pending_request = None

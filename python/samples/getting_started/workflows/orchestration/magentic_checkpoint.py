@@ -69,6 +69,14 @@ def build_workflow(checkpoint_storage: FileCheckpointStorage):
         chat_client=AzureOpenAIChatClient(credential=AzureCliCredential()),
     )
 
+    # Create a manager agent for orchestration
+    manager_agent = ChatAgent(
+        name="MagenticManager",
+        description="Orchestrator that coordinates the research and writing workflow",
+        instructions="You coordinate a team to complete complex tasks efficiently.",
+        chat_client=AzureOpenAIChatClient(credential=AzureCliCredential()),
+    )
+
     # The builder wires in the Magentic orchestrator, sets the plan review path, and
     # stores the checkpoint backend so the runtime knows where to persist snapshots.
     return (
@@ -76,7 +84,7 @@ def build_workflow(checkpoint_storage: FileCheckpointStorage):
         .participants(researcher=researcher, writer=writer)
         .with_plan_review()
         .with_standard_manager(
-            chat_client=AzureOpenAIChatClient(credential=AzureCliCredential()),
+            agent=manager_agent,
             max_round_count=10,
             max_stall_count=3,
         )

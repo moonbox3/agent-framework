@@ -12,12 +12,12 @@ from agent_framework import (
     AgentRunResponseUpdate,
     AgentRunUpdateEvent,
     BaseAgent,
-    ChatClientProtocol,
     ChatMessage,
-    ChatResponse,
-    ChatResponseUpdate,
     Executor,
     MagenticBuilder,
+    MagenticHumanInterventionDecision,
+    MagenticHumanInterventionReply,
+    MagenticHumanInterventionRequest,
     MagenticManagerBase,
     MagenticPlanReviewDecision,
     MagenticPlanReviewReply,
@@ -220,15 +220,14 @@ async def test_magentic_workflow_plan_review_approval_to_completion():
 
     req_event: RequestInfoEvent | None = None
     async for ev in wf.run_stream("do work"):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticHumanInterventionRequest:
             req_event = ev
     assert req_event is not None
 
     completed = False
     output: list[ChatMessage] | None = None
-    async for ev in wf.send_responses_streaming(
-        responses={req_event.request_id: MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)}
-    ):
+    reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
+    async for ev in wf.send_responses_streaming(responses={req_event.request_id: reply}):
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
         elif isinstance(ev, WorkflowOutputEvent):
@@ -265,7 +264,7 @@ async def test_magentic_plan_review_approve_with_comments_replans_and_proceeds()
     # Wait for the initial plan review request
     req_event: RequestInfoEvent | None = None
     async for ev in wf.run_stream("do work"):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticHumanInterventionRequest:
             req_event = ev
     assert req_event is not None
 
@@ -274,13 +273,13 @@ async def test_magentic_plan_review_approve_with_comments_replans_and_proceeds()
     completed = False
     async for ev in wf.send_responses_streaming(
         responses={
-            req_event.request_id: MagenticPlanReviewReply(
-                decision=MagenticPlanReviewDecision.APPROVE,
+            req_event.request_id: MagenticHumanInterventionReply(
+                decision=MagenticHumanInterventionDecision.APPROVE,
                 comments="Looks good; consider Z",
             )
         }
     ):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticHumanInterventionRequest:
             saw_second_review = True
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
@@ -338,7 +337,7 @@ async def test_magentic_checkpoint_resume_round_trip():
     task_text = "checkpoint task"
     req_event: RequestInfoEvent | None = None
     async for ev in wf.run_stream(task_text):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticHumanInterventionRequest:
             req_event = ev
     assert req_event is not None
 
@@ -359,13 +358,13 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     orchestrator = next(exec for exec in wf_resume.executors.values() if isinstance(exec, MagenticOrchestratorExecutor))
 
-    reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
+    reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
     completed: WorkflowOutputEvent | None = None
     req_event = None
     async for event in wf_resume.run_stream(
         resume_checkpoint.checkpoint_id,
     ):
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticHumanInterventionRequest:
             req_event = event
     assert req_event is not None
 
@@ -430,25 +429,29 @@ async def test_magentic_agent_executor_on_checkpoint_save_and_restore_roundtrip(
 from agent_framework import StandardMagenticManager  # noqa: E402
 
 
-class _StubChatClient(ChatClientProtocol):
-    @property
-    def additional_properties(self) -> dict[str, Any]:
-        """Get additional properties associated with the client."""
-        return {}
+class _StubManagerAgent(BaseAgent):
+    """Stub agent for testing StandardMagenticManager."""
 
-    async def get_response(self, messages, **kwargs):  # type: ignore[override]
-        return ChatResponse(messages=[ChatMessage(role=Role.ASSISTANT, text="ok")])
+    async def run(
+        self,
+        request: None,
+        context: WorkflowContext | None = None,
+    ) -> AgentRunResponse:
+        return AgentRunResponse(messages=[ChatMessage(role=Role.ASSISTANT, text="ok")])
 
-    def get_streaming_response(self, messages, **kwargs) -> AsyncIterable[ChatResponseUpdate]:  # type: ignore[override]
-        async def _gen():
-            if False:
-                yield ChatResponseUpdate()  # pragma: no cover
+    def run_streaming(
+        self,
+        request: None,
+        context: WorkflowContext | None = None,
+    ) -> AsyncIterable[AgentRunResponseUpdate]:
+        async def _gen() -> AsyncIterable[AgentRunResponseUpdate]:
+            yield AgentRunResponseUpdate(message_deltas=[ChatMessage(role=Role.ASSISTANT, text="ok")])
 
         return _gen()
 
 
 async def test_standard_manager_plan_and_replan_via_complete_monkeypatch():
-    mgr = StandardMagenticManager(chat_client=_StubChatClient())
+    mgr = StandardMagenticManager(agent=_StubManagerAgent())
 
     async def fake_complete_plan(messages: list[ChatMessage], **kwargs: Any) -> ChatMessage:
         # Return a different response depending on call order length
@@ -481,7 +484,7 @@ async def test_standard_manager_plan_and_replan_via_complete_monkeypatch():
 
 
 async def test_standard_manager_progress_ledger_success_and_error():
-    mgr = StandardMagenticManager(chat_client=_StubChatClient())
+    mgr = StandardMagenticManager(agent=_StubManagerAgent())
     ctx = MagenticContext(
         task=ChatMessage(role=Role.USER, text="task"),
         participant_descriptions={"alice": "desc"},
@@ -718,7 +721,7 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
 
     req_event: RequestInfoEvent | None = None
     async for event in workflow.run_stream("task"):
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticHumanInterventionRequest:
             req_event = event
 
     assert req_event is not None

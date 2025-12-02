@@ -18,6 +18,8 @@ from agent_framework import (
     AgentRunResponse,
     AgentRunResponseUpdate,
     ChatMessage,
+    FunctionApprovalRequestContent,
+    FunctionResultContent,
     Role,
 )
 
@@ -1733,14 +1735,13 @@ class MagenticAgentExecutor(Executor):
         self,
         agent: AgentProtocol | Executor,
         agent_id: str,
-        enable_human_input: bool = False,
     ) -> None:
         super().__init__(f"agent_{agent_id}")
         self._agent = agent
         self._agent_id = agent_id
         self._chat_history: list[ChatMessage] = []
-        self._enable_human_input = enable_human_input
         self._pending_human_input_request: _MagenticHumanInterventionRequest | None = None
+        self._pending_tool_request: FunctionApprovalRequestContent | None = None
         self._current_request_message: _MagenticRequestMessage | None = None
 
     @override
@@ -1875,6 +1876,7 @@ class MagenticAgentExecutor(Executor):
         logger.debug("Agent %s: Resetting chat history", self._agent_id)
         self._chat_history.clear()
         self._pending_human_input_request = None
+        self._pending_tool_request = None
         self._current_request_message = None
 
     @response_handler
@@ -1887,8 +1889,9 @@ class MagenticAgentExecutor(Executor):
         """Handle human response for tool approval and continue agent execution.
 
         When a human provides input in response to a tool approval request,
-        this handler processes the response, adds it to the conversation, and
-        sends a response back to the orchestrator.
+        this handler processes the response, creates a FunctionResultContent with
+        the human's answer, adds it to the conversation, and re-invokes the agent
+        to continue execution.
 
         Args:
             original_request: The original human intervention request
@@ -1903,26 +1906,52 @@ class MagenticAgentExecutor(Executor):
             response_text[:50] if response_text else "",
         )
 
+        # Get the pending tool request to extract call_id
+        pending_tool_request = self._pending_tool_request
         self._pending_human_input_request = None
+        self._pending_tool_request = None
 
-        # Add the human response to the conversation with context from the original request
-        human_response_msg = ChatMessage(
-            role=Role.USER,
-            text=f"Human response to '{original_request.prompt}': {response_text}",
-            author_name="human",
-        )
-        self._chat_history.append(human_response_msg)
+        if pending_tool_request is not None:
+            # Create a FunctionResultContent with the human's response
+            function_result = FunctionResultContent(
+                call_id=pending_tool_request.function_call.call_id,
+                result=response_text,
+            )
+            # Add the function result as a message to continue the conversation
+            result_msg = ChatMessage(
+                role=Role.USER,
+                contents=[function_result],
+            )
+            self._chat_history.append(result_msg)
 
-        # Create a response message indicating human input was received
-        agent_response = ChatMessage(
-            role=Role.ASSISTANT,
-            text=f"Received human input for: {original_request.prompt}. Continuing with the task.",
-            author_name=original_request.agent_id,
-        )
-        self._chat_history.append(agent_response)
+            # Re-invoke the agent to continue execution
+            agent_response = await self._invoke_agent(context)
+            if agent_response is None:
+                # Agent is waiting for more human input
+                return
+            self._chat_history.append(agent_response)
+            await context.send_message(_MagenticResponseMessage(body=agent_response))
+        else:
+            # Fallback: no pending tool request, just add as text message
+            logger.warning(
+                f"Agent {original_request.agent_id}: No pending tool request found for response, "
+                "using fallback text handling",
+            )
+            human_response_msg = ChatMessage(
+                role=Role.USER,
+                text=f"Human response to '{original_request.prompt}': {response_text}",
+                author_name="human",
+            )
+            self._chat_history.append(human_response_msg)
 
-        # Send response back to orchestrator to continue the workflow
-        await context.send_message(_MagenticResponseMessage(body=agent_response))
+            # Create a response message indicating human input was received
+            agent_response_msg = ChatMessage(
+                role=Role.ASSISTANT,
+                text=f"Received human input for: {original_request.prompt}. Continuing with the task.",
+                author_name=original_request.agent_id,
+            )
+            self._chat_history.append(agent_response_msg)
+            await context.send_message(_MagenticResponseMessage(body=agent_response_msg))
 
     async def _emit_agent_delta_event(
         self,
@@ -1982,6 +2011,9 @@ class MagenticAgentExecutor(Executor):
                     prompt = f"Approve function call: {fn_call.name}"
                     if fn_call.arguments:
                         context_text = f"Arguments: {fn_call.arguments}"
+
+                # Store the original FunctionApprovalRequestContent for later use
+                self._pending_tool_request = user_input_request
 
                 # Create and send the human intervention request for tool approval
                 request = _MagenticHumanInterventionRequest(
@@ -2082,7 +2114,6 @@ class MagenticBuilder:
         self._manager: MagenticManagerBase | None = None
         self._enable_plan_review: bool = False
         self._checkpoint_storage: CheckpointStorage | None = None
-        self._enable_human_input: bool = False
         self._enable_stall_intervention: bool = False
 
     def participants(self, **participants: AgentProtocol | Executor) -> Self:
@@ -2167,26 +2198,6 @@ class MagenticBuilder:
             - :class:`MagenticPlanReviewDecision`: Approve/Revise/Reject options
         """
         self._enable_plan_review = enable
-        return self
-
-    def with_human_input(self, enable: bool = True) -> "MagenticBuilder":
-        """[DEPRECATED] This method is no longer needed.
-
-        Tool approval requests (user_input_requests) are now ALWAYS surfaced as
-        MagenticHumanInputRequest events. You do not need to call this method.
-
-        This method is kept for backward compatibility but has no effect.
-
-        Note:
-            For human intervention during workflow stalls, use :meth:`with_human_input_on_stall`.
-
-        Args:
-            enable: Has no effect (kept for backward compatibility)
-
-        Returns:
-            Self for method chaining
-        """
-        self._enable_human_input = enable
         return self
 
     def with_human_input_on_stall(self, enable: bool = True) -> "MagenticBuilder":
@@ -2475,8 +2486,6 @@ class MagenticBuilder:
                 executor_id="magentic_orchestrator",
             )
 
-        enable_human_input = self._enable_human_input
-
         def _participant_factory(
             spec: GroupChatParticipantSpec,
             wiring: _GroupChatConfig,
@@ -2484,7 +2493,6 @@ class MagenticBuilder:
             agent_executor = MagenticAgentExecutor(
                 spec.participant,
                 spec.name,
-                enable_human_input=enable_human_input,
             )
             orchestrator = wiring.orchestrator
             if isinstance(orchestrator, MagenticOrchestratorExecutor):

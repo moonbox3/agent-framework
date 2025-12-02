@@ -8,9 +8,10 @@ from agent_framework import (
     ChatAgent,
     FileCheckpointStorage,
     MagenticBuilder,
-    MagenticPlanReviewDecision,
-    MagenticPlanReviewReply,
-    MagenticPlanReviewRequest,
+    MagenticHumanInterventionDecision,
+    MagenticHumanInterventionKind,
+    MagenticHumanInterventionReply,
+    MagenticHumanInterventionRequest,
     RequestInfoEvent,
     WorkflowCheckpoint,
     WorkflowOutputEvent,
@@ -111,9 +112,12 @@ async def main() -> None:
     # the plan for human review.
     plan_review_request_id: str | None = None
     async for event in workflow.run_stream(TASK):
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
-            plan_review_request_id = event.request_id
-            print(f"Captured plan review request: {plan_review_request_id}")
+        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticHumanInterventionRequest:
+            request = event.data
+            if isinstance(request, MagenticHumanInterventionRequest):
+                if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:
+                    plan_review_request_id = event.request_id
+                    print(f"Captured plan review request: {plan_review_request_id}")
 
         if isinstance(event, WorkflowStatusEvent) and event.state is WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
             break
@@ -145,12 +149,12 @@ async def main() -> None:
     resumed_workflow = build_workflow(checkpoint_storage)
 
     # Construct an approval reply to supply when the plan review request is re-emitted.
-    approval = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
+    approval = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
 
     # Resume execution and capture the re-emitted plan review request.
     request_info_event: RequestInfoEvent | None = None
     async for event in resumed_workflow.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, MagenticPlanReviewRequest):
+        if isinstance(event, RequestInfoEvent) and isinstance(event.data, MagenticHumanInterventionRequest):
             request_info_event = event
 
     if request_info_event is None:

@@ -468,34 +468,6 @@ class _MagenticHumanInterventionReply:
     response_text: str | None = None
 
 
-# Backward compatibility aliases for existing types
-@dataclass
-class _MagenticPlanReviewRequest:
-    """[DEPRECATED] Use MagenticHumanInterventionRequest with kind=PLAN_REVIEW instead."""
-
-    request_id: str = field(default_factory=lambda: str(uuid4()))
-    task_text: str = ""
-    facts_text: str = ""
-    plan_text: str = ""
-    round_index: int = 0
-
-
-class MagenticPlanReviewDecision(str, Enum):
-    """[DEPRECATED] Use MagenticHumanInterventionDecision instead."""
-
-    APPROVE = "approve"
-    REVISE = "revise"
-
-
-@dataclass
-class _MagenticPlanReviewReply:
-    """[DEPRECATED] Use MagenticHumanInterventionReply instead."""
-
-    decision: MagenticPlanReviewDecision
-    edited_plan_text: str | None = None
-    comments: str | None = None
-
-
 # endregion Human Intervention Types
 
 
@@ -1199,7 +1171,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         message: _MagenticStartMessage,
         context: WorkflowContext[
-            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, list[ChatMessage]
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticHumanInterventionRequest, list[ChatMessage]
         ],
     ) -> None:
         """Handle the initial start message to begin orchestration."""
@@ -1244,7 +1216,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         task_text: str,
         context: WorkflowContext[
-            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, list[ChatMessage]
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticHumanInterventionRequest, list[ChatMessage]
         ],
     ) -> None:
         await self.handle_start_message(_MagenticStartMessage.from_string(task_text), context)
@@ -1254,7 +1226,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         task_message: ChatMessage,
         context: WorkflowContext[
-            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, list[ChatMessage]
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticHumanInterventionRequest, list[ChatMessage]
         ],
     ) -> None:
         await self.handle_start_message(_MagenticStartMessage(task_message), context)
@@ -1264,7 +1236,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         self,
         conversation: list[ChatMessage],
         context: WorkflowContext[
-            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticPlanReviewRequest, list[ChatMessage]
+            _MagenticResponseMessage | _MagenticRequestMessage | _MagenticHumanInterventionRequest, list[ChatMessage]
         ],
     ) -> None:
         await self.handle_start_message(_MagenticStartMessage(conversation), context)
@@ -2157,9 +2129,9 @@ class MagenticBuilder:
         """Enable or disable human-in-the-loop plan review before task execution.
 
         When enabled, the workflow will pause after the manager generates the initial
-        plan and emit a _MagenticPlanReviewRequest event. A human reviewer can then
-        approve, request revisions, or reject the plan. The workflow continues only
-        after approval.
+        plan and emit a MagenticHumanInterventionRequest event with kind=PLAN_REVIEW.
+        A human reviewer can then approve, request revisions, or reject the plan.
+        The workflow continues only after approval.
 
         This is useful for:
         - High-stakes tasks requiring human oversight
@@ -2180,22 +2152,25 @@ class MagenticBuilder:
             workflow = (
                 MagenticBuilder()
                 .participants(agent1=agent1)
-                .with_standard_manager(chat_client=client)
+                .with_standard_manager(agent=manager_agent)
                 .with_plan_review(enable=True)
                 .build()
             )
 
             # During execution, handle plan review
             async for event in workflow.run_stream("task"):
-                if isinstance(event, _MagenticPlanReviewRequest):
-                    # Review plan and respond
-                    reply = _MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
-                    await workflow.send(reply)
+                if isinstance(event, RequestInfoEvent):
+                    request = event.data
+                    if isinstance(request, MagenticHumanInterventionRequest):
+                        if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:
+                            # Review plan and respond
+                            reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
+                            await workflow.send_responses({event.request_id: reply})
 
         See Also:
-            - :class:`_MagenticPlanReviewRequest`: Event emitted for review
-            - :class:`_MagenticPlanReviewReply`: Response to send back
-            - :class:`MagenticPlanReviewDecision`: Approve/Revise/Reject options
+            - :class:`MagenticHumanInterventionRequest`: Event emitted for review
+            - :class:`MagenticHumanInterventionReply`: Response to send back
+            - :class:`MagenticHumanInterventionDecision`: APPROVE/REVISE options
         """
         self._enable_plan_review = enable
         return self
@@ -2745,8 +2720,6 @@ MagenticHumanInterventionRequest = _MagenticHumanInterventionRequest
 MagenticHumanInterventionReply = _MagenticHumanInterventionReply
 
 # Backward compatibility aliases (deprecated)
-MagenticPlanReviewRequest = _MagenticPlanReviewRequest
-MagenticPlanReviewReply = _MagenticPlanReviewReply
 # Old aliases - point to unified types for compatibility
 MagenticHumanInputRequest = _MagenticHumanInterventionRequest  # type: ignore
 MagenticStallInterventionRequest = _MagenticHumanInterventionRequest  # type: ignore

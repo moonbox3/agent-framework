@@ -19,9 +19,6 @@ from agent_framework import (
     MagenticHumanInterventionReply,
     MagenticHumanInterventionRequest,
     MagenticManagerBase,
-    MagenticPlanReviewDecision,
-    MagenticPlanReviewReply,
-    MagenticPlanReviewRequest,
     RequestInfoEvent,
     Role,
     TextContent,
@@ -59,21 +56,25 @@ def test_magentic_start_message_from_string():
     assert msg.task.text == "Do the thing"
 
 
-def test_plan_review_request_defaults_and_reply_variants():
-    req = MagenticPlanReviewRequest()  # defaults provided by dataclass
+def test_human_intervention_request_defaults_and_reply_variants():
+    from agent_framework._workflows._magentic import MagenticHumanInterventionKind
+
+    req = MagenticHumanInterventionRequest(kind=MagenticHumanInterventionKind.PLAN_REVIEW)
     assert hasattr(req, "request_id")
     assert req.task_text == "" and req.facts_text == "" and req.plan_text == ""
     assert isinstance(req.round_index, int) and req.round_index == 0
 
     # Replies: approve, revise with comments, revise with edited text
-    approve = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
-    revise_comments = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.REVISE, comments="Tighten scope")
-    revise_text = MagenticPlanReviewReply(
-        decision=MagenticPlanReviewDecision.REVISE,
+    approve = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
+    revise_comments = MagenticHumanInterventionReply(
+        decision=MagenticHumanInterventionDecision.REVISE, comments="Tighten scope"
+    )
+    revise_text = MagenticHumanInterventionReply(
+        decision=MagenticHumanInterventionDecision.REVISE,
         edited_plan_text="- Step 1\n- Step 2",
     )
 
-    assert approve.decision == MagenticPlanReviewDecision.APPROVE
+    assert approve.decision == MagenticHumanInterventionDecision.APPROVE
     assert revise_comments.comments == "Tighten scope"
     assert revise_text.edited_plan_text is not None and revise_text.edited_plan_text.startswith("- Step 1")
 

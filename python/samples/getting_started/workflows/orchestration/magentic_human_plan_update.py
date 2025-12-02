@@ -11,9 +11,10 @@ from agent_framework import (
     ChatAgent,
     HostedCodeInterpreterTool,
     MagenticBuilder,
-    MagenticPlanReviewDecision,
-    MagenticPlanReviewReply,
-    MagenticPlanReviewRequest,
+    MagenticHumanInterventionDecision,
+    MagenticHumanInterventionKind,
+    MagenticHumanInterventionReply,
+    MagenticHumanInterventionRequest,
     RequestInfoEvent,
     WorkflowOutputEvent,
 )
@@ -111,7 +112,7 @@ async def main() -> None:
 
     try:
         pending_request: RequestInfoEvent | None = None
-        pending_responses: dict[str, MagenticPlanReviewReply] | None = None
+        pending_responses: dict[str, MagenticHumanInterventionReply] | None = None
         completed = False
         workflow_output: str | None = None
 
@@ -142,11 +143,12 @@ async def main() -> None:
                             stream_line_open = True
                         if event.data and event.data.text:
                             print(event.data.text, end="", flush=True)
-                elif isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
-                    pending_request = event
-                    review_req = cast(MagenticPlanReviewRequest, event.data)
-                    if review_req.plan_text:
-                        print(f"\n=== PLAN REVIEW REQUEST ===\n{review_req.plan_text}\n")
+                elif isinstance(event, RequestInfoEvent) and event.request_type is MagenticHumanInterventionRequest:
+                    request = cast(MagenticHumanInterventionRequest, event.data)
+                    if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:
+                        pending_request = event
+                        if request.plan_text:
+                            print(f"\n=== PLAN REVIEW REQUEST ===\n{request.plan_text}\n")
                 elif isinstance(event, WorkflowOutputEvent):
                     # Capture workflow output during streaming
                     workflow_output = str(event.data) if event.data else None
@@ -170,19 +172,19 @@ async def main() -> None:
                 while True:
                     choice = input("Enter your choice (1-5): ").strip().lower()  # noqa: ASYNC250
                     if choice in ["approve", "1"]:
-                        reply = MagenticPlanReviewReply(decision=MagenticPlanReviewDecision.APPROVE)
+                        reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
                         break
                     if choice in ["approve with comments", "2"]:
                         comments = input("Enter your comments for the manager: ").strip()  # noqa: ASYNC250
-                        reply = MagenticPlanReviewReply(
-                            decision=MagenticPlanReviewDecision.APPROVE,
+                        reply = MagenticHumanInterventionReply(
+                            decision=MagenticHumanInterventionDecision.APPROVE,
                             comments=comments if comments else None,
                         )
                         break
                     if choice in ["revise", "3"]:
                         comments = input("Enter feedback for revising the plan: ").strip()  # noqa: ASYNC250
-                        reply = MagenticPlanReviewReply(
-                            decision=MagenticPlanReviewDecision.REVISE,
+                        reply = MagenticHumanInterventionReply(
+                            decision=MagenticHumanInterventionDecision.REVISE,
                             comments=comments if comments else None,
                         )
                         break
@@ -195,8 +197,8 @@ async def main() -> None:
                                 break
                             lines.append(line)
                         edited_plan = "\n".join(lines)
-                        reply = MagenticPlanReviewReply(
-                            decision=MagenticPlanReviewDecision.REVISE,
+                        reply = MagenticHumanInterventionReply(
+                            decision=MagenticHumanInterventionDecision.REVISE,
                             edited_plan_text=edited_plan if edited_plan else None,
                         )
                         break

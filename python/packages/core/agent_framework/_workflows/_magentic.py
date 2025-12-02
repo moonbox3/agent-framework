@@ -1081,7 +1081,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         try:
             state["manager_state"] = self._manager.on_checkpoint_save()
         except Exception as exc:
-            logger.warning("Failed to save manager state for checkpoint: %s\nSkipping...", exc)
+            logger.warning(f"Failed to save manager state for checkpoint: {exc}\nSkipping...")
 
         return state
 
@@ -1111,14 +1111,14 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
                 else:
                     self._context = None
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to restore magentic context: %s", exc)
+                logger.warning(f"Failed to restore magentic context: {exc}")
                 self._context = None
         ledger_payload = state.get("task_ledger")
         if ledger_payload is not None:
             try:
                 self._task_ledger = _message_from_payload(ledger_payload)
             except Exception as exc:  # pragma: no cover
-                logger.warning("Failed to restore task ledger message: %s", exc)
+                logger.warning(f"Failed to restore task ledger message: {exc}")
                 self._task_ledger = None
 
         if "plan_review_round" in state:
@@ -1138,7 +1138,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
             try:
                 self._manager.on_checkpoint_restore(manager_state)
             except Exception as exc:  # pragma: no cover
-                logger.warning("Failed to restore manager state: %s", exc)
+                logger.warning(f"Failed to restore manager state: {exc}")
 
         self._reconcile_restored_participants()
 
@@ -1499,20 +1499,19 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
             return
 
         ctx.round_count += 1
-        logger.info("Magentic Orchestrator: Inner loop - round %s", ctx.round_count)
+        logger.info(f"Magentic Orchestrator: Inner loop - round {ctx.round_count}")
 
         # Create progress ledger using the manager
         try:
             current_progress_ledger = await self._manager.create_progress_ledger(ctx.clone(deep=True))
         except Exception as ex:
-            logger.warning("Magentic Orchestrator: Progress ledger creation failed, triggering reset: %s", ex)
+            logger.warning(f"Magentic Orchestrator: Progress ledger creation failed, triggering reset: {ex}")
             await self._reset_and_replan(context)
             return
 
         logger.debug(
-            "Progress evaluation: satisfied=%s, next=%s",
-            current_progress_ledger.is_request_satisfied.answer,
-            current_progress_ledger.next_speaker.answer,
+            f"Progress evaluation: satisfied={current_progress_ledger.is_request_satisfied.answer}, "
+            f"next={current_progress_ledger.next_speaker.answer}"
         )
 
         # Check for task completion
@@ -1528,7 +1527,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
             ctx.stall_count = max(0, ctx.stall_count - 1)
 
         if ctx.stall_count > self._manager.max_stall_count:
-            logger.info("Magentic Orchestrator: Stalling detected after %d rounds", ctx.stall_count)
+            logger.info(f"Magentic Orchestrator: Stalling detected after {ctx.stall_count} rounds")
             if self._enable_stall_intervention:
                 # Request human intervention instead of auto-replan
                 is_progress = current_progress_ledger.is_progress_being_made.answer
@@ -1569,7 +1568,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         instruction = current_progress_ledger.instruction_or_question.answer
 
         if next_speaker_value not in self._participants:
-            logger.warning("Invalid next speaker: %s", next_speaker_value)
+            logger.warning(f"Invalid next speaker: {next_speaker_value}")
             await self._prepare_final_answer(context)
             return
 
@@ -1586,7 +1585,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         target_executor_id = f"agent_{next_speaker_value}"
 
         # Request specific agent to respond
-        logger.debug("Magentic Orchestrator: Requesting %s to respond", next_speaker_value)
+        logger.debug(f"Magentic Orchestrator: Requesting {next_speaker_value} to respond")
         await context.send_message(
             _MagenticRequestMessage(
                 agent_name=next_speaker_value,
@@ -1650,7 +1649,7 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
 
         if hit_round_limit or hit_reset_limit:
             limit_type = "round" if hit_round_limit else "reset"
-            logger.error("Magentic Orchestrator: Max %s count reached", limit_type)
+            logger.error(f"Magentic Orchestrator: Max {limit_type} count reached")
 
             # Only emit completion once and then mark terminated
             if not self._terminated:
@@ -1743,7 +1742,7 @@ class MagenticAgentExecutor(Executor):
             try:
                 self._chat_history = decode_chat_messages(history_payload)
             except Exception as exc:  # pragma: no cover
-                logger.warning("Agent %s: Failed to restore chat history: %s", self._agent_id, exc)
+                logger.warning(f"Agent {self._agent_id}: Failed to restore chat history: {exc}")
                 self._chat_history = []
         else:
             self._chat_history = []
@@ -1753,12 +1752,12 @@ class MagenticAgentExecutor(Executor):
         self, message: _MagenticResponseMessage, context: WorkflowContext[_MagenticResponseMessage]
     ) -> None:
         """Handle response message (task ledger broadcast)."""
-        logger.debug("Agent %s: Received response message", self._agent_id)
+        logger.debug(f"Agent {self._agent_id}: Received response message")
 
         # Check if this message is intended for this agent
         if message.target_agent is not None and message.target_agent != self._agent_id and not message.broadcast:
             # Message is targeted to a different agent, ignore it
-            logger.debug("Agent %s: Ignoring message targeted to %s", self._agent_id, message.target_agent)
+            logger.debug(f"Agent {self._agent_id}: Ignoring message targeted to {message.target_agent}")
             return
 
         # Add transfer message if needed
@@ -1793,7 +1792,7 @@ class MagenticAgentExecutor(Executor):
         if message.agent_name != self._agent_id:
             return
 
-        logger.info("Agent %s: Received request to respond", self._agent_id)
+        logger.info(f"Agent {self._agent_id}: Received request to respond")
 
         # Store the original request message for potential continuation after human input
         self._current_request_message = message
@@ -1833,7 +1832,7 @@ class MagenticAgentExecutor(Executor):
                 await context.send_message(_MagenticResponseMessage(body=agent_response))
 
         except Exception as e:
-            logger.warning("Agent %s invoke failed: %s", self._agent_id, e)
+            logger.warning(f"Agent {self._agent_id} invoke failed: {e}")
             # Fallback response
             response = ChatMessage(
                 role=Role.ASSISTANT,
@@ -1845,7 +1844,7 @@ class MagenticAgentExecutor(Executor):
 
     def reset(self) -> None:
         """Reset the internal chat history of the agent (internal operation)."""
-        logger.debug("Agent %s: Resetting chat history", self._agent_id)
+        logger.debug(f"Agent {self._agent_id}: Resetting chat history")
         self._chat_history.clear()
         self._pending_human_input_request = None
         self._pending_tool_request = None
@@ -1872,10 +1871,8 @@ class MagenticAgentExecutor(Executor):
         """
         response_text = response.response_text or response.comments or ""
         logger.info(
-            "Agent %s: Received tool approval for request %s: %s",
-            original_request.agent_id,
-            original_request.request_id,
-            response_text[:50] if response_text else "",
+            f"Agent {original_request.agent_id}: Received tool approval for request "
+            f"{original_request.request_id}: {response_text[:50] if response_text else ''}"
         )
 
         # Get the pending tool request to extract call_id
@@ -2440,7 +2437,7 @@ class MagenticBuilder:
         if self._manager is None:
             raise ValueError("No manager configured. Call with_standard_manager(...) before build().")
 
-        logger.info("Building Magentic workflow with %d participants", len(self._participants))
+        logger.info(f"Building Magentic workflow with {len(self._participants)} participants")
 
         # Create participant descriptions
         participant_descriptions: dict[str, str] = {}

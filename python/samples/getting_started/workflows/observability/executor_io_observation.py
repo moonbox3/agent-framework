@@ -1,5 +1,19 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import asyncio
+from typing import Any, cast
+
+from agent_framework import (
+    Executor,
+    ExecutorCompletedEvent,
+    ExecutorInvokedEvent,
+    WorkflowBuilder,
+    WorkflowContext,
+    WorkflowOutputEvent,
+    handler,
+)
+from typing_extensions import Never
+
 """
 Executor I/O Observation
 
@@ -17,20 +31,6 @@ changing the executor implementations.
 Prerequisites:
 - No external services required.
 """
-
-import asyncio
-from typing import Any, cast
-
-from agent_framework import (
-    Executor,
-    ExecutorCompletedEvent,
-    ExecutorInvokedEvent,
-    WorkflowBuilder,
-    WorkflowContext,
-    WorkflowOutputEvent,
-    handler,
-)
-from typing_extensions import Never
 
 
 class UpperCaseExecutor(Executor):

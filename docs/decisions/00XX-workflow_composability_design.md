@@ -17,9 +17,85 @@ informed: team
 - Keep checkpointing, request/response handling, and observability semantics intact across composed graphs.
 
 ## Terminology
-- Workflow: an immutable, built artifact that can be executed or wrapped (e.g., by WorkflowExecutor). Composition should not mutate an existing Workflow.
-- WorkflowBuilder: the mutable authoring surface for wiring executors, merging graphs, and validating types. All composition logic lives here.
-- High-level builders: convenience builders (ConcurrentBuilder, SequentialBuilder, group chat variants) that internally use WorkflowBuilder; they will share a base mixin that provides `.as_connection()` so the composition API is consistent.
+
+This section defines the core concepts precisely. Understanding these distinctions is critical for effective composition.
+
+### Workflow vs WorkflowBuilder vs WorkflowConnection
+
+| Concept | Mutability | Purpose | When to Use |
+|---------|-----------|---------|-------------|
+| **Workflow** | Immutable | A built, executable workflow artifact | After `builder.build()` when you need to run or wrap the workflow |
+| **WorkflowBuilder** | Mutable | The authoring surface for constructing workflow graphs | When adding executors, edges, or composing fragments |
+| **WorkflowConnection** | Immutable (snapshot) | Composition metadata wrapper around a builder | Advanced cases where you need pre-computed entry/exit metadata |
+
+**WorkflowBuilder** is the primary authoring interface. It accumulates executors and edge groups, then produces an immutable **Workflow** via `build()`. During composition, fragments are merged at the builder level to maintain a single, unified graph.
+
+**WorkflowConnection** is a thin wrapper that captures:
+- The underlying builder (cloned to preserve immutability)
+- Entry point executor ID
+- Exit point executor IDs and their types
+- Optional named outputs for multi-exit fragments
+
+Most users should **never interact with WorkflowConnection directly**. The `add_workflow()` method accepts builders directly and handles connection creation internally.
+
+### High-Level Builders
+
+High-level builders (ConcurrentBuilder, SequentialBuilder, GroupChatBuilder, etc.) are convenience APIs that internally use WorkflowBuilder. They all share a common mixin providing:
+- `.as_connection(prefix=None)` - Extract composition metadata without building
+- `.build()` - Produce an immutable Workflow
+
+### ConnectionHandle vs ConnectionPoint
+
+After merging a fragment, you receive a **ConnectionHandle** with:
+- `.start` / `.start_id` - The entry point executor ID
+- `.outputs` - An accessor for exit points (supports both `[index]` and `["name"]` access)
+- `.source_builder` - Reference to the merged builder (for advanced introspection)
+
+Each exit point is a **ConnectionPoint** containing:
+- `.id` - The executor ID (prefixed after merge)
+- `.name` - Optional semantic name (e.g., "summary", "errors")
+- `.output_types` - Types this executor sends downstream
+- `.workflow_output_types` - Types this executor yields as workflow outputs
+
+### API Selection Guide
+
+**Use `add_workflow()` when you want:**
+- Simple, high-level composition
+- Automatic prefix derivation from fragment name
+- Type-safe ConnectionHandle for wiring
+
+**Use `merge()` when you want:**
+- Lower-level control over graph merging
+- Direct access to executor IDs after merge
+- Manual edge wiring with `add_edge()`
+
+**Use `connect()` / `connect_checked()` when you want:**
+- Explicit edge creation between endpoints
+- Type validation at wire time (connect_checked)
+- Adapter insertion for type mismatches
+
+### Code Examples
+
+```python
+# High-level API (recommended for most cases)
+builder = WorkflowBuilder()
+handle = builder.add_workflow(concurrent_analysis)
+builder.connect(data_source, handle.start)
+builder.connect(handle.outputs[0], aggregator)
+
+# Lower-level API (when you need direct control)
+builder = WorkflowBuilder()
+builder.merge(concurrent_analysis, prefix="analysis")
+builder.add_edge("analysis/analyzer", "analysis/aggregator")
+
+# Type-checked connection with adapter
+from agent_framework._workflows import TextToConversation
+builder.connect_checked(
+    text_producer,
+    chat_consumer,
+    adapter=TextToConversation(),
+)
+```
 
 ## Current State
 - High-level builders (ConcurrentBuilder, SequentialBuilder, group chat variants) emit a finished Workflow; the graph is immutable and cannot be extended directly.
@@ -138,6 +214,75 @@ async for event in workflow.run_stream("  Hello Composition  "):
   - Composition helpers use contracts to fail fast or select the right canned adapter.
 - Note: this remains sugar for “add a new executor that transforms the data”; the value is deterministic naming, validation, and observability of these adapters instead of one-off inline callables.
 - Pros: predictable type-safe bridges and better error messages. Cons: adds small surface area but aligns with existing adapter executors already used inside SequentialBuilder.
+
+### Implemented Type Adapters (Stage 2)
+
+The following type adapters are now implemented in `_type_adapters.py`:
+
+**Base Classes:**
+- `TypeAdapter[TInput, TOutput]` - Abstract base class for all adapters
+- `FunctionAdapter` - Quick adapter wrapping a lambda or function
+
+**Built-in Adapters:**
+
+| Adapter | From Type | To Type | Purpose |
+|---------|-----------|---------|---------|
+| `TextToConversation` | `str` | `list[ChatMessage]` | Wrap text in a single-message conversation |
+| `ConversationToText` | `list[ChatMessage]` | `str` | Extract text from conversation messages |
+| `SingleMessageExtractor` | `list[ChatMessage]` | `ChatMessage` | Extract one message from conversation |
+| `MessageWrapper` | `ChatMessage` | `list[ChatMessage]` | Wrap single message in a list |
+| `ListToItem[T]` | `list[T]` | `T` | Extract single item from list |
+| `ItemToList[T]` | `T` | `list[T]` | Wrap item in a list |
+| `IdentityAdapter` | `T` | `T` | Pass-through for debugging/validation |
+
+**Factory Functions:**
+- `json_serializer(input_type)` - Create adapter that serializes to JSON
+- `json_deserializer(output_type)` - Create adapter that deserializes from JSON
+- `struct_to_dict_adapter(input_type)` - Convert structured objects to dicts
+- `dict_to_struct_adapter(output_type)` - Convert dicts to structured objects
+
+**Automatic Adapter Discovery:**
+- `find_adapter(source_type, target_type)` - Find a built-in adapter for type pair
+
+**Type Validation Methods (on WorkflowBuilder):**
+- `validate_edge_types(source_id, target_id)` - Check type compatibility
+- `connect_checked(source, target, adapter=None)` - Connect with type validation
+
+**Usage Examples:**
+
+```python
+from agent_framework._workflows import (
+    WorkflowBuilder,
+    TextToConversation,
+    ConversationToText,
+    find_adapter,
+)
+
+# Manual adapter insertion
+builder = WorkflowBuilder()
+builder.connect_checked(
+    text_producer,
+    chat_consumer,
+    adapter=TextToConversation(),
+)
+
+# Custom adapter via FunctionAdapter
+from agent_framework._workflows import FunctionAdapter
+
+custom_adapter = FunctionAdapter(
+    fn=lambda data, ctx: {"processed": data},
+    _input_type=str,
+    _output_type=dict,
+)
+
+# Automatic adapter suggestion on type mismatch
+try:
+    builder.connect_checked(text_producer, chat_consumer)
+except TypeError as e:
+    print(e)
+    # "Type mismatch: 'text_producer' outputs [str] but 'chat_consumer'
+    #  expects [list[ChatMessage]]. Suggested: TextToConversation()"
+```
 
 ## Option 4: Port-Based Interfaces and Extension Points
 - Elevate executor I/O to named ports with declared types, making composition addressable:

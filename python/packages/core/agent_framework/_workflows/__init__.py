@@ -86,6 +86,22 @@ from ._runner_context import (
 )
 from ._sequential import SequentialBuilder
 from ._shared_state import SharedState
+from ._type_adapters import (
+    ConversationToText,
+    FunctionAdapter,
+    IdentityAdapter,
+    ItemToList,
+    ListToItem,
+    MessageWrapper,
+    SingleMessageExtractor,
+    TextToConversation,
+    TypeAdapter,
+    dict_to_struct_adapter,
+    find_adapter,
+    json_deserializer,
+    json_serializer,
+    struct_to_dict_adapter,
+)
 from ._validation import (
     EdgeDuplicationError,
     GraphConnectivityError,
@@ -96,7 +112,7 @@ from ._validation import (
 )
 from ._viz import WorkflowViz
 from ._workflow import Workflow, WorkflowRunResult
-from ._workflow_builder import ConnectionHandle, WorkflowBuilder, WorkflowConnection
+from ._workflow_builder import ConnectionHandle, MergeResult, WorkflowBuilder, WorkflowConnection
 from ._workflow_context import WorkflowContext
 from ._workflow_executor import SubWorkflowRequestMessage, SubWorkflowResponseMessage, WorkflowExecutor
 
@@ -113,6 +129,7 @@ __all__ = [
     "CheckpointStorage",
     "ConcurrentBuilder",
     "ConnectionHandle",
+    "ConversationToText",
     "Default",
     "Edge",
     "EdgeDuplicationError",
@@ -124,6 +141,7 @@ __all__ = [
     "FanInEdgeGroup",
     "FanOutEdgeGroup",
     "FileCheckpointStorage",
+    "FunctionAdapter",
     "FunctionExecutor",
     "GraphConnectivityError",
     "GroupChatBuilder",
@@ -131,8 +149,11 @@ __all__ = [
     "GroupChatStateSnapshot",
     "HandoffBuilder",
     "HandoffUserInputRequest",
+    "IdentityAdapter",
     "InMemoryCheckpointStorage",
     "InProcRunnerContext",
+    "ItemToList",
+    "ListToItem",
     "MagenticAgentDeltaEvent",
     "MagenticAgentMessageEvent",
     "MagenticBuilder",
@@ -144,7 +165,9 @@ __all__ = [
     "MagenticPlanReviewReply",
     "MagenticPlanReviewRequest",
     "ManagerDirectiveModel",
+    "MergeResult",
     "Message",
+    "MessageWrapper",
     "OrchestrationState",
     "RequestInfoEvent",
     "Runner",
@@ -152,6 +175,7 @@ __all__ = [
     "SequentialBuilder",
     "SharedState",
     "SingleEdgeGroup",
+    "SingleMessageExtractor",
     "StandardMagenticManager",
     "SubWorkflowRequestMessage",
     "SubWorkflowResponseMessage",
@@ -160,6 +184,8 @@ __all__ = [
     "SwitchCaseEdgeGroup",
     "SwitchCaseEdgeGroupCase",
     "SwitchCaseEdgeGroupDefault",
+    "TextToConversation",
+    "TypeAdapter",
     "TypeCompatibilityError",
     "ValidationTypeEnum",
     "Workflow",
@@ -183,9 +209,14 @@ __all__ = [
     "WorkflowValidationError",
     "WorkflowViz",
     "create_edge_runner",
+    "dict_to_struct_adapter",
     "executor",
+    "find_adapter",
     "get_checkpoint_summary",
     "handler",
+    "json_deserializer",
+    "json_serializer",
     "response_handler",
+    "struct_to_dict_adapter",
     "validate_workflow_graph",
 ]

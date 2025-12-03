@@ -26,6 +26,7 @@ from ._edge import (
 )
 from ._executor import Executor
 from ._runner_context import InProcRunnerContext
+from ._typing_utils import is_type_compatible
 from ._validation import validate_workflow_graph
 from ._workflow import Workflow
 
@@ -40,41 +41,307 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ConnectionPoint:
-    """Describes an executor endpoint with its output types."""
+    """Describes an executor endpoint with its output types.
+
+    ConnectionPoint represents a named exit point from a workflow fragment,
+    carrying full type information for downstream validation. Each point
+    corresponds to an executor that produces outputs which can flow to
+    subsequent stages.
+
+    Type Information:
+        - output_types: Types this executor sends via ctx.send_message()
+        - workflow_output_types: Types this executor yields via ctx.yield_output()
+
+    These are derived from the executor's handler signatures and used for
+    compile-time validation when connecting fragments.
+
+    Attributes:
+        id: The executor ID (potentially prefixed during composition).
+        name: Optional semantic name for easier reference in multi-output
+              fragments (e.g., "summary", "errors", "analysis").
+        output_types: List of types sent to downstream executors.
+        workflow_output_types: List of types yielded as workflow outputs.
+    """
 
     id: str
     output_types: list[type[Any]]
     workflow_output_types: list[type[Any]]
+    name: str | None = None
+
+
+class OutputPointsAccessor:
+    """Provides both indexed and named access to connection output points.
+
+    This accessor enables two access patterns for multi-output fragments:
+        - Indexed: handle.outputs[0], handle.outputs[1]
+        - Named: handle.outputs["summary"], handle.outputs["errors"]
+
+    Named access requires that ConnectionPoints have their name attribute set.
+
+    Example:
+        .. code-block:: python
+
+            handle = builder.add_workflow(multi_exit_fragment)
+            # Access by index (always works)
+            builder.connect(handle.outputs[0], next_stage)
+            # Access by name (when points are named)
+            builder.connect(handle.outputs["summary"], summary_stage)
+    """
+
+    def __init__(self, points: list[ConnectionPoint]) -> None:
+        self._points = points
+        self._by_name: dict[str, ConnectionPoint] = {}
+        for p in points:
+            if p.name:
+                self._by_name[p.name] = p
+
+    def __getitem__(self, key: int | str) -> ConnectionPoint:
+        """Access output points by index or name.
+
+        Args:
+            key: Integer index or string name of the output point.
+
+        Returns:
+            The ConnectionPoint at the specified index or with the specified name.
+
+        Raises:
+            IndexError: If integer index is out of range.
+            KeyError: If string name is not found.
+            TypeError: If key is neither int nor str.
+        """
+        if isinstance(key, int):
+            return self._points[key]
+        if isinstance(key, str):
+            if key not in self._by_name:
+                available = list(self._by_name.keys()) if self._by_name else "none (outputs are unnamed)"
+                raise KeyError(f"No output named '{key}'. Available names: {available}")
+            return self._by_name[key]
+        raise TypeError(f"Output key must be int or str, got {type(key).__name__}")
+
+    def __len__(self) -> int:
+        return len(self._points)
+
+    def __iter__(self):
+        return iter(self._points)
+
+    @property
+    def names(self) -> list[str]:
+        """Return list of available output names."""
+        return list(self._by_name.keys())
+
+
+class MergeResult:
+    """Result of a merge() operation providing access to prefixed executor IDs.
+
+    MergeResult eliminates the need to manually construct prefixed IDs after
+    merging a fragment. It maps original executor IDs to their prefixed versions,
+    supporting both attribute and dictionary access patterns.
+
+    Access Patterns:
+        - Attribute: result.ingest -> "prefix/ingest"
+        - Dictionary: result["ingest"] -> "prefix/ingest"
+        - Iteration: for original, prefixed in result.items()
+
+    Example:
+        .. code-block:: python
+
+            # Merge a fragment and get the ID mapping
+            ids = builder.merge(ingest_fragment, prefix="in")
+
+            # Access prefixed IDs via attribute (if valid Python identifier)
+            builder.add_edge(ids.ingest, ids.process)
+
+            # Or via dictionary access (works for any ID)
+            builder.add_edge(ids["ingest"], ids["process"])
+
+            # List all mappings
+            for original, prefixed in ids.items():
+                print(f"{original} -> {prefixed}")
+    """
+
+    def __init__(self, mapping: dict[str, str], prefix: str) -> None:
+        self._mapping = mapping
+        self._prefix = prefix
+
+    def __getattr__(self, name: str) -> str:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name not in self._mapping:
+            available = list(self._mapping.keys())[:10]
+            raise AttributeError(
+                f"No executor with original id '{name}'. "
+                f"Available: {available}{'...' if len(self._mapping) > 10 else ''}"
+            )
+        return self._mapping[name]
+
+    def __getitem__(self, key: str) -> str:
+        if key not in self._mapping:
+            available = list(self._mapping.keys())[:10]
+            raise KeyError(
+                f"No executor with original id '{key}'. "
+                f"Available: {available}{'...' if len(self._mapping) > 10 else ''}"
+            )
+        return self._mapping[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._mapping
+
+    def __iter__(self):
+        return iter(self._mapping.values())
+
+    def __len__(self) -> int:
+        return len(self._mapping)
+
+    def items(self):
+        """Return iterator of (original_id, prefixed_id) pairs."""
+        return self._mapping.items()
+
+    def keys(self):
+        """Return original (unprefixed) executor IDs."""
+        return self._mapping.keys()
+
+    def values(self):
+        """Return prefixed executor IDs."""
+        return self._mapping.values()
+
+    @property
+    def prefix(self) -> str:
+        """Return the prefix used for this merge."""
+        return self._prefix
+
+    def __repr__(self) -> str:
+        return f"MergeResult(prefix={self._prefix!r}, ids={list(self._mapping.keys())})"
 
 
 @dataclass(frozen=True)
 class ConnectionHandle:
-    """Reference to a merged connection's entry/exit points with type metadata."""
+    """Reference to a merged fragment's entry/exit points with full type metadata.
+
+    ConnectionHandle is the primary interface returned by add_workflow() and merge().
+    It provides everything needed to wire the fragment into a larger workflow:
+
+    Entry Point:
+        - start: The executor ID that receives input to this fragment
+        - start_input_types: Types the entry executor accepts
+
+    Exit Points:
+        - outputs: Accessor supporting both indexed and named access to exits
+        - output_points: Raw list of ConnectionPoint objects
+
+    Graph Metadata:
+        - source_builder: Reference to the (cloned) builder for advanced access
+
+    Design Philosophy:
+        ConnectionHandle deliberately exposes only the "surface area" of a fragment -
+        its entry and exit points. Internal executor IDs remain encapsulated,
+        encouraging composition via the public interface rather than internal wiring.
+
+    Example:
+        .. code-block:: python
+
+            # Add a fragment and get its handle
+            analysis = builder.add_workflow(concurrent_analysis, prefix="analysis")
+
+            # Wire using the handle's entry point
+            builder.connect(data_source, analysis.start)
+
+            # Wire using indexed outputs
+            builder.connect(analysis.outputs[0], aggregator)
+
+            # Or use named outputs if the fragment defines them
+            builder.connect(analysis.outputs["summary"], report_generator)
+
+    Attributes:
+        start_id: Entry executor ID for incoming messages.
+        start_input_types: Types accepted by the entry executor.
+        output_points: List of exit points with type information.
+        source_builder: The WorkflowBuilder backing this fragment (for advanced use).
+    """
 
     start_id: str
     start_input_types: list[type[Any]]
     output_points: list[ConnectionPoint]
+    source_builder: "WorkflowBuilder | None" = None
 
     @property
     def start(self) -> str:
-        """Alias for start_id to match the fluent connect API."""
+        """Entry point executor ID for connecting upstream sources."""
         return self.start_id
 
     @property
-    def outputs(self) -> list[ConnectionPoint]:
-        """Alias for output_points to match the fluent connect API."""
-        return self.output_points
+    def outputs(self) -> OutputPointsAccessor:
+        """Exit points supporting both indexed and named access.
+
+        Returns:
+            OutputPointsAccessor providing [index] and ["name"] access patterns.
+        """
+        return OutputPointsAccessor(self.output_points)
 
 
 @dataclass
 class WorkflowConnection:
-    """Encapsulates a workflow connection that can be merged into another builder."""
+    """Encapsulates a workflow fragment for composition into another builder.
+
+    WorkflowConnection is an intermediate representation used during composition.
+    It wraps a WorkflowBuilder along with metadata about its entry and exit points,
+    enabling the composition machinery to correctly wire fragments together.
+
+    When to Use WorkflowConnection Directly:
+        Most users should NOT need to interact with WorkflowConnection directly.
+        Instead, use add_workflow() which accepts builders, workflows, or connections:
+
+        >>> # Preferred: pass builders directly to add_workflow()
+        >>> handle = parent_builder.add_workflow(child_builder)
+
+        WorkflowConnection is useful when:
+        1. You need to pre-compute connection metadata for reuse
+        2. You're building custom composition utilities
+        3. You want explicit control over cloning and prefixing
+
+    Relationship to WorkflowBuilder:
+        WorkflowConnection is NOT a replacement for WorkflowBuilder. It's a
+        thin wrapper that adds composition metadata. The actual graph structure
+        lives in the wrapped builder. Think of it as a "view" of a builder
+        prepared for composition.
+
+    Immutability Contract:
+        WorkflowConnection.clone() and .with_prefix() always return new instances
+        with deep-copied builders. This ensures that:
+        1. The original builder/connection is never mutated
+        2. Multiple compositions of the same fragment remain independent
+        3. Prefix operations are safely isolated
+
+    Attributes:
+        builder: The WorkflowBuilder holding the fragment's graph structure.
+        entry: Executor ID that serves as the fragment's input entry point.
+        exits: List of executor IDs that can connect to downstream stages.
+        start_input_types: Types accepted by the entry executor.
+        exit_points: Full ConnectionPoint metadata for each exit (types + names).
+        output_names: Optional mapping from semantic names to exit executor IDs.
+
+    Example:
+        .. code-block:: python
+
+            # Create a reusable connection from a builder
+            data_pipeline = (
+                WorkflowBuilder(name="pipeline")
+                .add_chain([Ingest(id="ingest"), Transform(id="transform"), Load(id="load")])
+                .set_start_executor("ingest")
+            )
+            conn = data_pipeline.as_connection()
+
+            # The connection can be reused with different prefixes
+            parent = WorkflowBuilder()
+            pipeline_a = parent.add_workflow(conn, prefix="region_a")
+            pipeline_b = parent.add_workflow(conn, prefix="region_b")
+    """
 
     builder: "WorkflowBuilder"
     entry: str
     exits: list[str]
     start_input_types: list[type[Any]] | None = None
     exit_points: list[ConnectionPoint] | None = None
+    output_names: dict[str, str] | None = None
 
     def clone(self) -> "WorkflowConnection":
         """Return a deep copy of this connection to avoid shared state."""
@@ -85,9 +352,10 @@ class WorkflowConnection:
             exits=list(self.exits),
             start_input_types=list(self.start_input_types or []),
             exit_points=[
-                ConnectionPoint(p.id, list(p.output_types), list(p.workflow_output_types))
+                ConnectionPoint(p.id, list(p.output_types), list(p.workflow_output_types), name=p.name)
                 for p in self.exit_points or []
             ],
+            output_names=dict(self.output_names) if self.output_names else None,
         )
 
     def with_prefix(self, prefix: str | None) -> "WorkflowConnection":
@@ -98,6 +366,10 @@ class WorkflowConnection:
         mapping = _prefix_executor_ids(builder_clone, prefix)
         entry = mapping.get(self.entry, self.entry)
         exits = [mapping.get(e, e) for e in self.exits]
+        # Remap output_names to prefixed IDs
+        remapped_names: dict[str, str] | None = None
+        if self.output_names:
+            remapped_names = {name: mapping.get(eid, eid) for name, eid in self.output_names.items()}
         return WorkflowConnection(
             builder=builder_clone,
             entry=entry,
@@ -108,9 +380,11 @@ class WorkflowConnection:
                     id=mapping.get(p.id, p.id),
                     output_types=list(p.output_types),
                     workflow_output_types=list(p.workflow_output_types),
+                    name=p.name,
                 )
                 for p in self.exit_points or []
             ],
+            output_names=remapped_names,
         )
 
 
@@ -347,24 +621,462 @@ class WorkflowBuilder:
 
     Endpoint = Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str
 
+    # =========================================================================
+    # COMPOSITION APIs - Graph merging and connection
+    # =========================================================================
+
+    def merge(
+        self,
+        other: "WorkflowBuilder | Workflow | WorkflowConnection",
+        *,
+        prefix: str | None = None,
+    ) -> MergeResult:
+        """Merge another builder's graph into this one, returning an ID mapping.
+
+        This is the simplest composition primitive. It copies all executors and edges
+        from the source into this builder, applying a prefix to avoid ID collisions.
+        The returned MergeResult maps original executor IDs to their prefixed versions,
+        eliminating the need to manually construct prefixed IDs.
+
+        Unlike add_workflow(), merge() does NOT automatically determine entry/exit
+        points - it gives you full control over the resulting graph topology.
+
+        When to Use merge() vs add_workflow():
+            - Use merge() when you need low-level control and know the internal
+              structure of the builder you're merging
+            - Use add_workflow() when you want to treat the fragment as a black box
+              with well-defined entry and exit points
+
+        ID Collision Handling:
+            If prefix is None, the method attempts to derive a prefix from the
+            fragment's name. If no name exists, a collision will raise ValueError.
+            Always provide an explicit prefix when merging unnamed builders.
+
+        Args:
+            other: A WorkflowBuilder, Workflow, or WorkflowConnection to merge.
+            prefix: Prefix applied to all executor IDs from the merged graph.
+                    If None, attempts to use the fragment's name property.
+
+        Returns:
+            MergeResult mapping original IDs to prefixed IDs. Supports both
+            attribute access (result.executor_name) and dictionary access
+            (result["executor-name"]).
+
+        Raises:
+            ValueError: If executor ID collision occurs without a prefix.
+
+        Example:
+            .. code-block:: python
+
+                # Create two separate workflow builders
+                data_prep = (
+                    WorkflowBuilder(name="prep")
+                    .add_chain([Ingest(id="ingest"), Clean(id="clean")])
+                    .set_start_executor("ingest")
+                )
+                analysis = (
+                    WorkflowBuilder(name="analysis")
+                    .add_edge(Analyze(id="analyze"), Report(id="report"))
+                    .set_start_executor("analyze")
+                )
+
+                # Merge and wire using the returned ID mapping
+                builder = WorkflowBuilder()
+                prep = builder.merge(data_prep, prefix="prep")
+                analysis = builder.merge(analysis_builder, prefix="analysis")
+
+                # Access prefixed IDs via attribute or dictionary
+                builder.add_edge(prep.clean, analysis.analyze)
+                # Or: builder.add_edge(prep["clean"], analysis["analyze"])
+                builder.set_start_executor(prep.ingest)
+        """
+        effective_prefix = self._derive_prefix(other, prefix)
+
+        # Capture original IDs before prefixing
+        if isinstance(other, WorkflowConnection):
+            original_ids = list(other.builder._executors.keys())
+        elif isinstance(other, (WorkflowBuilder, Workflow)):
+            original_ids = list(other._executors.keys())
+        else:
+            original_ids = []
+
+        connection = self._to_connection(other, prefix=effective_prefix)
+        prepared = connection.clone()  # Already prefixed by _to_connection
+
+        # Detect collisions before mutating state
+        for executor_id in prepared.builder._executors:
+            if executor_id in self._executors:
+                raise ValueError(
+                    f"Executor id '{executor_id}' already exists in builder. Provide a different prefix when merging."
+                )
+
+        # Merge executor map and edge groups
+        self._executors.update(prepared.builder._executors)
+        self._edge_groups.extend(prepared.builder._edge_groups)
+
+        # Build mapping from original IDs to prefixed IDs
+        mapping = {orig: f"{effective_prefix}/{orig}" for orig in original_ids}
+        return MergeResult(mapping, effective_prefix)
+
     def add_workflow(
         self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", *, prefix: str | None = None
     ) -> ConnectionHandle:
-        """Merge a builder/workflow/connection and return a handle for wiring."""
+        """Merge a workflow fragment and return a handle for wiring.
+
+        This is the primary composition API. It merges the fragment's graph into
+        this builder and returns a ConnectionHandle with type-safe entry and exit
+        points. You can then use connect() to wire the fragment to other executors.
+
+        The method accepts any composable type:
+            - WorkflowBuilder: Unbuilt builder (recommended for composition)
+            - Workflow: Built, immutable workflow (cloned during merge)
+            - WorkflowConnection: Pre-computed connection metadata
+
+        No Need for as_connection():
+            add_workflow() internally calls as_connection() when needed, so you
+            rarely need to call it yourself. Simply pass your builder directly:
+
+            >>> # Preferred - pass builder directly
+            >>> handle = parent.add_workflow(child_builder)
+            >>>
+            >>> # Equivalent but more verbose
+            >>> handle = parent.add_workflow(child_builder.as_connection())
+
+        Prefix Derivation:
+            If prefix is None, it's derived automatically:
+            1. From the fragment's name property if set
+            2. From the fragment's class name if a custom subclass
+            3. From a counter-based fallback ("fragment-1", "fragment-2", etc.)
+
+        Args:
+            fragment: The workflow fragment to merge.
+            prefix: Explicit prefix for executor IDs. If None, derived from
+                    the fragment's name or class.
+
+        Returns:
+            ConnectionHandle with .start (entry point) and .outputs (exit points).
+
+        Example:
+            .. code-block:: python
+
+                # Create fragments
+                concurrent = ConcurrentBuilder().participants([analyzer_a, analyzer_b])
+
+                # Compose into a larger workflow
+                builder = WorkflowBuilder()
+                analysis = builder.add_workflow(concurrent, prefix="analysis")
+
+                # Wire using the handle
+                builder.connect(data_source, analysis.start)
+                builder.connect(analysis.outputs[0], aggregator)
+                builder.set_start_executor(data_source)
+        """
         effective_prefix = self._derive_prefix(fragment, prefix)
         connection = self._to_connection(fragment, prefix=effective_prefix)
         return self._merge_connection(connection, prefix=None)
 
     def add_connection(self, connection: WorkflowConnection, *, prefix: str | None = None) -> ConnectionHandle:
-        """Merge a connection into this builder and return a handle for wiring."""
+        """Merge a WorkflowConnection and return a handle for wiring.
+
+        This is a lower-level API that accepts a pre-computed WorkflowConnection.
+        Most users should prefer add_workflow() which accepts any composable type.
+
+        Args:
+            connection: A WorkflowConnection with pre-computed entry/exit metadata.
+            prefix: Optional additional prefix. Note that if the connection was
+                    already created with a prefix, this adds another layer.
+
+        Returns:
+            ConnectionHandle for wiring the merged fragment.
+        """
         return self._merge_connection(connection, prefix=prefix)
 
     def connect(self, source: Endpoint, target: Endpoint, /) -> Self:
-        """Connect two endpoints (executors, connection points, or executor ids)."""
+        """Connect two endpoints with a directed edge.
+
+        This is the composition wiring primitive. It creates an edge from source
+        to target, where both can be:
+            - Executor instances (added to graph if not present)
+            - Agent instances (auto-wrapped in AgentExecutor)
+            - ConnectionHandle (uses .start_id as the endpoint)
+            - ConnectionPoint (uses .id as the endpoint)
+            - String executor IDs (must already exist in graph)
+
+        Type Validation:
+            Currently, type compatibility is validated at build() time rather than
+            connect() time. Future versions may add eager type checking.
+
+        Args:
+            source: The source endpoint (output producer).
+            target: The target endpoint (input consumer).
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            ValueError: If a string ID is used but not found in the executor map.
+            TypeError: If an endpoint type is not supported.
+
+        Example:
+            .. code-block:: python
+
+                # Connect executors directly
+                builder.connect(producer, consumer)
+
+                # Connect using handles from add_workflow()
+                fragment = builder.add_workflow(some_builder)
+                builder.connect(data_source, fragment.start)
+                builder.connect(fragment.outputs[0], sink)
+
+                # Connect by ID (after merge)
+                builder.connect("prep/clean", "analysis/analyze")
+        """
         src_id = self._normalize_endpoint(source)
         tgt_id = self._normalize_endpoint(target)
         self._edge_groups.append(SingleEdgeGroup(src_id, tgt_id))  # type: ignore[arg-type]
         return self
+
+    def connect_checked(
+        self,
+        source: "Endpoint",
+        target: "Endpoint",
+        /,
+        *,
+        adapter: "Executor | None" = None,
+    ) -> Self:
+        """Connect two endpoints with type validation, optionally inserting an adapter.
+
+        This is the type-safe variant of connect(). It validates that the source's
+        output types are compatible with the target's input types BEFORE creating
+        the edge. If types are incompatible and no adapter is provided, it raises
+        a TypeError with guidance on which adapter to use.
+
+        Type Validation:
+            The method checks if ANY source output type is compatible with ANY
+            target input type. This is permissive by design - the runtime will
+            route messages based on actual types.
+
+        Automatic Adapter Suggestions:
+            When types are incompatible, the error message suggests built-in
+            adapters that could bridge the gap (e.g., TextToConversation for
+            str -> list[ChatMessage]).
+
+        Args:
+            source: The source endpoint (output producer).
+            target: The target endpoint (input consumer).
+            adapter: Optional adapter executor to insert between source and target.
+                     When provided, the connection becomes: source -> adapter -> target.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            TypeError: If types are incompatible and no adapter is provided.
+            ValueError: If a string ID is not found in the executor map.
+
+        Example:
+            .. code-block:: python
+
+                # Direct connection with type checking
+                builder.connect_checked(producer, consumer)
+
+                # Insert an adapter for type conversion
+                from agent_framework._workflows._type_adapters import TextToConversation
+
+                builder.connect_checked(
+                    text_producer,
+                    chat_consumer,
+                    adapter=TextToConversation(),
+                )
+
+                # Error with guidance
+                builder.connect_checked(str_producer, chat_consumer)
+                # TypeError: Type mismatch: 'str_producer' outputs [str] but 'chat_consumer'
+                #            expects [list[ChatMessage]]. Consider inserting a TypeAdapter.
+                #            Suggested: TextToConversation()
+        """
+        src_id = self._normalize_endpoint(source)
+        tgt_id = self._normalize_endpoint(target)
+
+        if adapter is not None:
+            # With adapter: source -> adapter -> target
+            adapter_id = self._normalize_endpoint(adapter)
+
+            # Validate source -> adapter
+            self.validate_edge_types(src_id, adapter_id, raise_on_mismatch=True)
+
+            # Validate adapter -> target
+            self.validate_edge_types(adapter_id, tgt_id, raise_on_mismatch=True)
+
+            # Create the two edges
+            self._edge_groups.append(SingleEdgeGroup(src_id, adapter_id))  # type: ignore[arg-type]
+            self._edge_groups.append(SingleEdgeGroup(adapter_id, tgt_id))  # type: ignore[arg-type]
+        else:
+            # Direct connection: validate and create single edge
+            is_compatible, error_msg = self.validate_edge_types(src_id, tgt_id, raise_on_mismatch=False)
+            if not is_compatible:
+                # Try to suggest an adapter
+                suggestion = self._suggest_adapter(src_id, tgt_id)
+                if suggestion:
+                    error_msg = f"{error_msg}\nSuggested: {suggestion}"
+                raise TypeError(error_msg)
+
+            self._edge_groups.append(SingleEdgeGroup(src_id, tgt_id))  # type: ignore[arg-type]
+
+        return self
+
+    def _suggest_adapter(self, source_id: str, target_id: str) -> str | None:
+        """Suggest a built-in adapter for type mismatch."""
+        from ._type_adapters import find_adapter
+
+        source_exec = self._executors.get(source_id)
+        target_exec = self._executors.get(target_id)
+        if not source_exec or not target_exec:
+            return None
+
+        # Check each output/input pair for a matching adapter
+        for src_type in source_exec.output_types:
+            for tgt_type in target_exec.input_types:
+                adapter = find_adapter(src_type, tgt_type)
+                if adapter:
+                    return f"{adapter.__class__.__name__}()"
+        return None
+
+    def get_executor(self, executor_id: str) -> Executor:
+        """Retrieve an executor by ID from this builder.
+
+        This is useful after merge() when you need type-safe access to executors
+        from merged fragments for wiring with add_edge().
+
+        Args:
+            executor_id: The executor ID (potentially prefixed after merge).
+
+        Returns:
+            The Executor instance with the given ID.
+
+        Raises:
+            KeyError: If no executor with the given ID exists.
+
+        Example:
+            .. code-block:: python
+
+                builder = WorkflowBuilder()
+                builder.merge(fragment_a, prefix="a")
+                builder.merge(fragment_b, prefix="b")
+
+                # Access merged executors for wiring
+                builder.add_edge(builder.get_executor("a/output"), builder.get_executor("b/input"))
+        """
+        if executor_id not in self._executors:
+            available = list(self._executors.keys())
+            raise KeyError(
+                f"No executor with id '{executor_id}'. "
+                f"Available executors: {available[:10]}{'...' if len(available) > 10 else ''}"
+            )
+        return self._executors[executor_id]
+
+    def get_executors(self) -> dict[str, Executor]:
+        """Return a copy of the executor map.
+
+        Returns:
+            Dictionary mapping executor IDs to Executor instances.
+        """
+        return dict(self._executors)
+
+    def validate_edge_types(
+        self,
+        source_id: str,
+        target_id: str,
+        *,
+        raise_on_mismatch: bool = True,
+    ) -> tuple[bool, str | None]:
+        """Validate type compatibility between two executors.
+
+        This method checks whether the output types of the source executor
+        are compatible with the input types of the target executor using
+        the is_type_compatible function from _typing_utils.
+
+        Type Compatibility Rules:
+            - Exact match: int -> int (compatible)
+            - Subtype: ChildClass -> ParentClass (compatible)
+            - Union member: str -> str | int (compatible)
+            - List covariance: list[ChildClass] -> list[ParentClass] (compatible)
+
+        Note:
+            This performs eager (connect-time) validation. The workflow graph
+            validation at build() time performs more comprehensive checks.
+
+        Args:
+            source_id: The ID of the source executor.
+            target_id: The ID of the target executor.
+            raise_on_mismatch: If True, raise TypeError on incompatibility.
+                               If False, return (False, error_message) instead.
+
+        Returns:
+            A tuple of (is_compatible, error_message). error_message is None
+            if compatible.
+
+        Raises:
+            TypeError: If raise_on_mismatch is True and types are incompatible.
+            KeyError: If either executor ID is not found.
+
+        Example:
+            .. code-block:: python
+
+                builder.validate_edge_types("text_producer", "chat_consumer")
+                # Returns: (False, "Type mismatch: text_producer outputs [str] ...")
+
+                # With raise_on_mismatch
+                builder.validate_edge_types("producer", "consumer", raise_on_mismatch=True)
+                # Raises: TypeError: Type mismatch: ...
+        """
+        if source_id not in self._executors:
+            raise KeyError(f"Source executor '{source_id}' not found in builder.")
+        if target_id not in self._executors:
+            raise KeyError(f"Target executor '{target_id}' not found in builder.")
+
+        source_exec = self._executors[source_id]
+        target_exec = self._executors[target_id]
+
+        source_outputs = source_exec.output_types
+        target_inputs = target_exec.input_types
+
+        # Check if any source output type is compatible with any target input type
+        # This is a permissive check - at least one path must exist
+        for src_type in source_outputs:
+            for tgt_type in target_inputs:
+                if is_type_compatible(src_type, tgt_type):
+                    return (True, None)
+
+        # No compatible path found - build error message
+        src_type_names = [t.__name__ if hasattr(t, "__name__") else str(t) for t in source_outputs]
+        tgt_type_names = [t.__name__ if hasattr(t, "__name__") else str(t) for t in target_inputs]
+
+        error_msg = (
+            f"Type mismatch: '{source_id}' outputs {src_type_names} "
+            f"but '{target_id}' expects {tgt_type_names}. "
+            f"Consider inserting a TypeAdapter to bridge these types."
+        )
+
+        if raise_on_mismatch:
+            raise TypeError(error_msg)
+
+        return (False, error_msg)
+
+    @property
+    def name(self) -> str | None:
+        """The name of this builder, used for prefix derivation."""
+        return self._name
+
+    @name.setter
+    def name(self, value: str | None) -> None:
+        """Set the name of this builder."""
+        self._name = value
+
+    @property
+    def executor_ids(self) -> list[str]:
+        """List of all executor IDs currently in this builder."""
+        return list(self._executors.keys())
 
     def _merge_connection(self, fragment: WorkflowConnection, *, prefix: str | None) -> ConnectionHandle:
         """Merge a connection into this builder, returning a handle to its connection points."""
@@ -395,6 +1107,7 @@ class WorkflowBuilder:
             start_id=start_id,
             start_input_types=start_types,
             output_points=exit_points,
+            source_builder=prepared.builder,
         )
 
     def _derive_prefix(self, fragment: "WorkflowBuilder | Workflow | WorkflowConnection", explicit: str | None) -> str:
@@ -570,8 +1283,8 @@ class WorkflowBuilder:
 
     def add_edge(
         self,
-        source: Executor | AgentProtocol,
-        target: Executor | AgentProtocol,
+        source: Endpoint,
+        target: Endpoint,
         condition: Callable[[Any], bool] | None = None,
     ) -> Self:
         """Add a directed edge between two executors.
@@ -579,9 +1292,16 @@ class WorkflowBuilder:
         The output types of the source and the input types of the target must be compatible.
         Messages sent by the source executor will be routed to the target executor.
 
+        Supported endpoint types:
+            - Executor instances (added to graph if not present)
+            - Agent instances (auto-wrapped in AgentExecutor)
+            - ConnectionHandle (uses .start_id as the endpoint)
+            - ConnectionPoint (uses .id as the endpoint)
+            - String executor IDs (must already exist in graph)
+
         Args:
-            source: The source executor of the edge.
-            target: The target executor of the edge.
+            source: The source executor or endpoint of the edge.
+            target: The target executor or endpoint of the edge.
             condition: An optional condition function that determines whether the edge
                        should be traversed based on the message type.
 
@@ -624,12 +1344,14 @@ class WorkflowBuilder:
                     .set_start_executor("a")
                     .build()
                 )
+
+                # Connect by string ID (after merge)
+                builder.merge(fragment_a, prefix="a")
+                builder.merge(fragment_b, prefix="b")
+                builder.add_edge("a/output", "b/input")
         """
-        # TODO(@taochen): Support executor factories for lazy initialization
-        source_exec = self._maybe_wrap_agent(source)
-        target_exec = self._maybe_wrap_agent(target)
-        source_id = self._add_executor(source_exec)
-        target_id = self._add_executor(target_exec)
+        source_id = self._normalize_endpoint(source)
+        target_id = self._normalize_endpoint(target)
         self._edge_groups.append(SingleEdgeGroup(source_id, target_id, condition))  # type: ignore[call-arg]
         return self
 

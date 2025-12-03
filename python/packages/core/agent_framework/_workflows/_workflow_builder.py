@@ -1111,11 +1111,7 @@ class WorkflowBuilder:
         start_executor = prepared.builder._start_executor
         if start_executor is None:
             raise ValueError("Merged fragment must have a start executor set.")
-        start_id: str = (
-            start_executor.id
-            if isinstance(start_executor, Executor)
-            else start_executor
-        )
+        start_id: str = start_executor.id if isinstance(start_executor, Executor) else start_executor
         start_types = prepared.start_input_types or _get_executor_input_types(prepared.builder._executors, start_id)
         exit_points = prepared.exit_points or _derive_exit_points(
             prepared.builder._edge_groups, prepared.builder._executors

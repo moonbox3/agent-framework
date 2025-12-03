@@ -1860,19 +1860,22 @@ class MagenticAgentExecutor(Executor):
         """Handle human response for tool approval and continue agent execution.
 
         When a human provides input in response to a tool approval request,
-        this handler processes the response, creates a FunctionResultContent with
-        the human's answer, adds it to the conversation, and re-invokes the agent
-        to continue execution.
+        this handler processes the response based on the decision type:
+
+        - APPROVE: Execute the tool call with the provided response text
+        - REJECT: Do not execute the tool, inform the agent of rejection
+        - GUIDANCE: Execute the tool call with the guidance text as input
 
         Args:
             original_request: The original human intervention request
-            response: The human's response
+            response: The human's response containing the decision and any text
             context: The workflow context
         """
         response_text = response.response_text or response.comments or ""
+        decision = response.decision
         logger.info(
-            f"Agent {original_request.agent_id}: Received tool approval for request "
-            f"{original_request.request_id}: {response_text[:50] if response_text else ''}"
+            f"Agent {original_request.agent_id}: Received tool approval response "
+            f"(decision={decision.value}): {response_text[:50] if response_text else ''}"
         )
 
         # Get the pending tool request to extract call_id
@@ -1880,6 +1883,40 @@ class MagenticAgentExecutor(Executor):
         self._pending_human_input_request = None
         self._pending_tool_request = None
 
+        # Handle REJECT decision - do not execute the tool call
+        if decision == MagenticHumanInterventionDecision.REJECT:
+            rejection_reason = response_text or "Tool call rejected by human"
+            logger.info(f"Agent {self._agent_id}: Tool call rejected: {rejection_reason}")
+
+            if pending_tool_request is not None:
+                # Create a FunctionResultContent indicating rejection
+                function_result = FunctionResultContent(
+                    call_id=pending_tool_request.function_call.call_id,
+                    result=f"Tool call was rejected by human reviewer. Reason: {rejection_reason}",
+                )
+                result_msg = ChatMessage(
+                    role=Role.USER,
+                    contents=[function_result],
+                )
+                self._chat_history.append(result_msg)
+            else:
+                # Fallback without pending tool request
+                rejection_msg = ChatMessage(
+                    role=Role.USER,
+                    text=f"Tool call '{original_request.prompt}' was rejected: {rejection_reason}",
+                    author_name="human",
+                )
+                self._chat_history.append(rejection_msg)
+
+            # Re-invoke the agent so it can adapt to the rejection
+            agent_response = await self._invoke_agent(context)
+            if agent_response is None:
+                return
+            self._chat_history.append(agent_response)
+            await context.send_message(_MagenticResponseMessage(body=agent_response))
+            return
+
+        # Handle APPROVE and GUIDANCE decisions - execute the tool call
         if pending_tool_request is not None:
             # Create a FunctionResultContent with the human's response
             function_result = FunctionResultContent(
@@ -1953,6 +1990,15 @@ class MagenticAgentExecutor(Executor):
     ) -> ChatMessage | None:
         """Invoke the wrapped agent and return a response.
 
+        This method streams the agent's response updates, collects them into an
+        AgentRunResponse, and handles any human input requests (tool approvals).
+
+        Note:
+            If multiple user input requests are present in the agent's response,
+            only the first one is processed. A warning is logged and subsequent
+            requests are ignored. This is a current limitation of the single-request
+            pending state architecture.
+
         Returns:
             ChatMessage with the agent's response, or None if waiting for human input.
         """
@@ -1967,34 +2013,45 @@ class MagenticAgentExecutor(Executor):
 
         run_result: AgentRunResponse = AgentRunResponse.from_agent_run_response_updates(updates)
 
-        # Handle human input requests (tool approval) - always surface these events
+        # Handle human input requests (tool approval) - process one at a time
         if run_result.user_input_requests:
-            for user_input_request in run_result.user_input_requests:
-                # Build a prompt from the request
-                prompt = "Human input required"
-                context_text = None
-
-                # Extract information from the request to build a useful prompt
-                if hasattr(user_input_request, "function_call"):
-                    fn_call = user_input_request.function_call
-                    prompt = f"Approve function call: {fn_call.name}"
-                    if fn_call.arguments:
-                        context_text = f"Arguments: {fn_call.arguments}"
-
-                # Store the original FunctionApprovalRequestContent for later use
-                self._pending_tool_request = user_input_request
-
-                # Create and send the human intervention request for tool approval
-                request = _MagenticHumanInterventionRequest(
-                    kind=MagenticHumanInterventionKind.TOOL_APPROVAL,
-                    agent_id=self._agent_id,
-                    prompt=prompt,
-                    context=context_text,
-                    conversation_snapshot=list(self._chat_history[-5:]),
+            if len(run_result.user_input_requests) > 1:
+                logger.warning(
+                    f"Agent {self._agent_id}: Multiple user input requests received "
+                    f"({len(run_result.user_input_requests)}), processing only the first one"
                 )
-                self._pending_human_input_request = request
-                await ctx.request_info(request, _MagenticHumanInterventionReply)
-                return None  # Signal that we're waiting for human input
+
+            user_input_request = run_result.user_input_requests[0]
+
+            # Build a prompt from the request based on its type
+            prompt: str
+            context_text: str | None = None
+
+            if isinstance(user_input_request, FunctionApprovalRequestContent):
+                fn_call = user_input_request.function_call
+                prompt = f"Approve function call: {fn_call.name}"
+                if fn_call.arguments:
+                    context_text = f"Arguments: {fn_call.arguments}"
+            else:
+                # Fallback for unknown request types
+                request_type = type(user_input_request).__name__
+                prompt = f"Agent {self._agent_id} requires human input ({request_type})"
+                logger.warning(f"Agent {self._agent_id}: Unrecognized user input request type: {request_type}")
+
+            # Store the original FunctionApprovalRequestContent for later use
+            self._pending_tool_request = user_input_request
+
+            # Create and send the human intervention request for tool approval
+            request = _MagenticHumanInterventionRequest(
+                kind=MagenticHumanInterventionKind.TOOL_APPROVAL,
+                agent_id=self._agent_id,
+                prompt=prompt,
+                context=context_text,
+                conversation_snapshot=list(self._chat_history[-5:]),
+            )
+            self._pending_human_input_request = request
+            await ctx.request_info(request, _MagenticHumanInterventionReply)
+            return None  # Signal that we're waiting for human input
 
         messages: list[ChatMessage] | None = None
         with contextlib.suppress(Exception):
@@ -2110,7 +2167,7 @@ class MagenticBuilder:
                 .participants(
                     researcher=research_agent, writer=writing_agent, coder=coding_agent, reviewer=review_agent
                 )
-                .with_standard_manager(chat_client=client)
+                .with_standard_manager(agent=manager_agent)
                 .build()
             )
 
@@ -2205,7 +2262,7 @@ class MagenticBuilder:
             workflow = (
                 MagenticBuilder()
                 .participants(agent1=agent1)
-                .with_standard_manager(chat_client=client, max_stall_count=3)
+                .with_standard_manager(agent=manager_agent, max_stall_count=3)
                 .with_human_input_on_stall(enable=True)
                 .build()
             )
@@ -2257,7 +2314,7 @@ class MagenticBuilder:
             workflow = (
                 MagenticBuilder()
                 .participants(agent1=agent1)
-                .with_standard_manager(chat_client=client)
+                .with_standard_manager(agent=manager_agent)
                 .with_checkpointing(storage)
                 .build()
             )

@@ -435,15 +435,19 @@ class _StubManagerAgent(BaseAgent):
 
     async def run(
         self,
-        request: None,
-        context: WorkflowContext | None = None,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: Any = None,
+        **kwargs: Any,
     ) -> AgentRunResponse:
         return AgentRunResponse(messages=[ChatMessage(role=Role.ASSISTANT, text="ok")])
 
-    def run_streaming(
+    def run_stream(
         self,
-        request: None,
-        context: WorkflowContext | None = None,
+        messages: str | ChatMessage | list[str] | list[ChatMessage] | None = None,
+        *,
+        thread: Any = None,
+        **kwargs: Any,
     ) -> AsyncIterable[AgentRunResponseUpdate]:
         async def _gen() -> AsyncIterable[AgentRunResponseUpdate]:
             yield AgentRunResponseUpdate(message_deltas=[ChatMessage(role=Role.ASSISTANT, text="ok")])

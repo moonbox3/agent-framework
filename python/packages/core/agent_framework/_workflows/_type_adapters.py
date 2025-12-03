@@ -288,8 +288,8 @@ class TypeAdapter(ABC, Executor, Generic[TInput, TOutput]):
         value: Any
         if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
             # Multiple inputs - use first if single, otherwise pass all
-            seq = cast(Sequence[Any], data)
-            value = seq[0] if len(seq) == 1 else cast(Any, data)
+            seq: Sequence[Any] = data
+            value = seq[0] if len(seq) == 1 else data
         else:
             value = data
 
@@ -350,8 +350,8 @@ class FunctionAdapter(TypeAdapter[TInput, TOutput]):
         """Apply the wrapped function to transform the value."""
         result = self.fn(value, ctx)
         if isinstance(result, Awaitable):
-            return cast(TOutput, await result)
-        return cast(TOutput, result)
+            return await result  # type: ignore[return-value]
+        return result  # type: ignore[return-value]
 
 
 # =============================================================================
@@ -655,6 +655,7 @@ def json_serializer(
     from dataclasses import asdict, is_dataclass
 
     def serialize(value: TInput, ctx: WorkflowContext) -> str:
+        data: Any
         if is_dataclass(value) and not isinstance(value, type):
             data = asdict(value)
         elif hasattr(value, "to_dict"):
@@ -715,7 +716,7 @@ def json_deserializer(
             return output_type(**filtered)  # type: ignore[return-value]
 
         if isinstance(data, dict) and hasattr(output_type, "from_dict"):
-            return output_type.from_dict(data)  # type: ignore[return-value,union-attr]
+            return output_type.from_dict(data)  # type: ignore[return-value,union-attr,no-any-return,attr-defined]
 
         return cast(TOutput, data)
 
@@ -753,7 +754,7 @@ def struct_to_dict_adapter(
         if is_dataclass(value) and not isinstance(value, type):
             return asdict(value)
         if hasattr(value, "to_dict"):
-            return value.to_dict()  # type: ignore[union-attr,return-value]
+            return value.to_dict()  # type: ignore[union-attr,return-value,no-any-return]
         if hasattr(value, "__dict__"):
             return dict(value.__dict__)  # type: ignore[arg-type]
         raise TypeError(f"Cannot convert {type(value).__name__} to dict")
@@ -800,7 +801,7 @@ def dict_to_struct_adapter(
             return output_type(**filtered)  # type: ignore[return-value]
 
         if hasattr(output_type, "from_dict"):
-            return output_type.from_dict(value)  # type: ignore[return-value,union-attr]
+            return output_type.from_dict(value)  # type: ignore[return-value,union-attr,no-any-return,attr-defined]
 
         return output_type(**value)  # type: ignore[return-value]
 

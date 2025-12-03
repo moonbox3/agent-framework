@@ -3,9 +3,9 @@
 import copy
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 from .._agents import AgentProtocol
 from ..observability import OtelAttr, capture_exception, create_workflow_span
@@ -121,7 +121,7 @@ class OutputPointsAccessor:
     def __len__(self) -> int:
         return len(self._points)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[ConnectionPoint]:
         return iter(self._points)
 
     @property
@@ -186,23 +186,23 @@ class MergeResult:
     def __contains__(self, key: str) -> bool:
         return key in self._mapping
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._mapping.values())
 
     def __len__(self) -> int:
         return len(self._mapping)
 
-    def items(self):
+    def items(self) -> Iterator[tuple[str, str]]:
         """Return iterator of (original_id, prefixed_id) pairs."""
-        return self._mapping.items()
+        return iter(self._mapping.items())
 
-    def keys(self):
+    def keys(self) -> Iterator[str]:
         """Return original (unprefixed) executor IDs."""
-        return self._mapping.keys()
+        return iter(self._mapping.keys())
 
-    def values(self):
+    def values(self) -> Iterator[str]:
         """Return prefixed executor IDs."""
-        return self._mapping.values()
+        return iter(self._mapping.values())
 
     @property
     def prefix(self) -> str:
@@ -398,9 +398,12 @@ def _clone_builder_for_connection(builder: "WorkflowBuilder") -> "WorkflowBuilde
     clone._checkpoint_storage = builder._checkpoint_storage
     clone._edge_groups = copy.deepcopy(builder._edge_groups)
     clone._executors = {eid: copy.deepcopy(executor) for eid, executor in builder._executors.items()}
-    clone._start_executor = (
-        builder._start_executor if isinstance(builder._start_executor, str) else builder._start_executor.id
-    )
+    if builder._start_executor is None:
+        clone._start_executor = None
+    elif isinstance(builder._start_executor, str):
+        clone._start_executor = builder._start_executor
+    else:
+        clone._start_executor = builder._start_executor.id
     clone._agent_wrappers = {}
     return clone
 
@@ -428,8 +431,13 @@ def _prefix_executor_ids(builder: "WorkflowBuilder", prefix: str) -> dict[str, s
     builder._executors = updated_executors
 
     # Update start executor reference
-    start_id = builder._start_executor.id if isinstance(builder._start_executor, Executor) else builder._start_executor
-    builder._start_executor = mapping.get(start_id, start_id)
+    if builder._start_executor is None:
+        pass  # Keep as None
+    elif isinstance(builder._start_executor, Executor):
+        start_id = builder._start_executor.id
+        builder._start_executor = mapping.get(start_id, start_id)
+    else:
+        builder._start_executor = mapping.get(builder._start_executor, builder._start_executor)
 
     builder._edge_groups = [_remap_edge_group_ids(group, mapping, prefix) for group in builder._edge_groups]
 
@@ -524,6 +532,10 @@ def _derive_exit_points(edge_groups: list[EdgeGroup], executors: dict[str, Execu
     return points
 
 
+# Type alias for workflow composition endpoints
+Endpoint: TypeAlias = "Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str"
+
+
 class WorkflowBuilder:
     """A builder class for constructing workflows.
 
@@ -606,7 +618,9 @@ class WorkflowBuilder:
 
         clone = _clone_builder_for_connection(self)
         start_exec = clone._start_executor
-        entry_id = start_exec.id if isinstance(start_exec, Executor) else start_exec
+        if start_exec is None:
+            raise ValueError("Starting executor must be set before calling as_connection().")
+        entry_id: str = start_exec.id if isinstance(start_exec, Executor) else start_exec
         entry_types = _get_executor_input_types(clone._executors, entry_id)
         exit_points = _derive_exit_points(clone._edge_groups, clone._executors)
         exit_ids = [p.id for p in exit_points]
@@ -618,8 +632,6 @@ class WorkflowBuilder:
             exits=exit_ids,
         )
         return connection.with_prefix(prefix) if prefix else connection
-
-    Endpoint = Executor | AgentProtocol | ConnectionHandle | ConnectionPoint | str
 
     # =========================================================================
     # COMPOSITION APIs - Graph merging and connection
@@ -695,8 +707,10 @@ class WorkflowBuilder:
         # Capture original IDs before prefixing
         if isinstance(other, WorkflowConnection):
             original_ids = list(other.builder._executors.keys())
-        elif isinstance(other, (WorkflowBuilder, Workflow)):
+        elif isinstance(other, WorkflowBuilder):
             original_ids = list(other._executors.keys())
+        elif isinstance(other, Workflow):
+            original_ids = list(other.executors.keys())
         else:
             original_ids = []
 
@@ -1094,10 +1108,13 @@ class WorkflowBuilder:
         self._executors.update(prepared.builder._executors)
         self._edge_groups.extend(prepared.builder._edge_groups)
 
-        start_id = (
-            prepared.builder._start_executor.id
-            if isinstance(prepared.builder._start_executor, Executor)
-            else prepared.builder._start_executor
+        start_executor = prepared.builder._start_executor
+        if start_executor is None:
+            raise ValueError("Merged fragment must have a start executor set.")
+        start_id: str = (
+            start_executor.id
+            if isinstance(start_executor, Executor)
+            else start_executor
         )
         start_types = prepared.start_input_types or _get_executor_input_types(prepared.builder._executors, start_id)
         exit_points = prepared.exit_points or _derive_exit_points(

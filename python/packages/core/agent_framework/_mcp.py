@@ -59,9 +59,19 @@ def _mcp_prompt_message_to_chat_message(
     mcp_type: types.PromptMessage | types.SamplingMessage,
 ) -> ChatMessage:
     """Convert a MCP container type to a Agent Framework type."""
+    content = mcp_type.content
+    # Handle the content type - newer MCP versions may have broader type unions
+    # but PromptMessage/SamplingMessage content is always a single content item
+    if isinstance(
+        content, (types.TextContent, types.ImageContent, types.AudioContent, types.EmbeddedResource, types.ResourceLink)
+    ):
+        contents = [_mcp_type_to_ai_content(content)]
+    else:
+        # Fallback for unexpected content types - convert to text representation
+        contents = [TextContent(text=str(content), raw_representation=content)]
     return ChatMessage(
         role=Role(value=mcp_type.role),
-        contents=[_mcp_type_to_ai_content(mcp_type.content)],
+        contents=contents,
         raw_representation=mcp_type,
     )
 

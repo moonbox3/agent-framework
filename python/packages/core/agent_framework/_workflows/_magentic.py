@@ -609,7 +609,7 @@ def _extract_json(text: str) -> dict[str, Any]:
 
     The `text` method is concatenating multiple text contents from diff msgs into a single string.
     """
-    fence = re.search(r"``(?:json)?\s*(\{[\s\S]*?\})\s*``", text, flags=re.IGNORECASE)
+    fence = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
     if fence:
         candidate = fence.group(1)
     else:

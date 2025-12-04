@@ -71,8 +71,8 @@ class TestHumanInputHookMixin:
 
         assert executor is None
 
-    def test_create_executor_returns_checkpoint_with_hook(self):
-        """Test that _create_human_input_executor returns a checkpoint when hook is set."""
+    def test_create_executor_returns_interceptor_with_hook(self):
+        """Test that _create_human_input_executor returns an interceptor when hook is set."""
 
         class TestBuilder(HumanInputHookMixin):
             pass

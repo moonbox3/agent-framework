@@ -187,9 +187,6 @@ class SequentialBuilder(HumanInputHookMixin):
         input_conv = _InputToConversation(id="input-conversation")
         end = _EndWithConversation(id="end")
 
-        # Create human input interceptor if hook is configured
-        human_input_interceptor = self._create_human_input_executor()
-
         builder = WorkflowBuilder()
         builder.set_start_executor(input_conv)
 
@@ -207,7 +204,7 @@ class SequentialBuilder(HumanInputHookMixin):
                 label = p.id if isinstance(p, Executor) else getattr(p, "name", None) or p.__class__.__name__
                 resp_to_conv = _ResponseToConversation(id=f"to-conversation:{label}")
 
-                if human_input_interceptor is not None:
+                if self._human_input_hook is not None:
                     # Insert human input interceptor between agent and response converter
                     # Create a dedicated interceptor per agent to avoid ID conflicts
                     interceptor = self._create_human_input_executor(f"human_input_interceptor:{label}")

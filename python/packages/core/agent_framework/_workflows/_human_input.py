@@ -16,7 +16,7 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 from typing_extensions import Self
 
@@ -198,8 +198,8 @@ class _HumanInputInterceptor(Executor):
         """
         result = self._hook(conversation, agent_id)
         if inspect.iscoroutine(result):
-            return await result
-        return result  # type: ignore[return-value]
+            return cast("HumanInputRequest | None", await result)
+        return cast("HumanInputRequest | None", result)
 
     @handler
     async def check_for_input(

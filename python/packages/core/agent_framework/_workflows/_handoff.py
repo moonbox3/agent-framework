@@ -392,8 +392,8 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         cleaned_for_display = clean_conversation_for_handoff(conversation)
 
         # The awaiting_agent_id is the agent that just responded and is awaiting user input
-        # This is the source of the current response
-        next_agent_id = source
+        # This is the source of the current response (fallback to starting agent if source is unknown)
+        next_agent_id = source or self._starting_agent_id
 
         message_to_gateway = _ConversationForUserInput(conversation=cleaned_for_display, next_agent_id=next_agent_id)
         await ctx.send_message(message_to_gateway, target_id=self._input_gateway_id)  # type: ignore[arg-type]
@@ -1471,8 +1471,10 @@ class HandoffBuilder(HumanInputHookMixin):
             participant_executors=self._executors,
         )
 
-        # Determine participant factory - wrap with human input checkpoint if hook is configured
-        participant_factory = _default_participant_factory
+        # Determine participant factory - wrap with human input interceptor if hook is configured
+        participant_factory: Callable[[GroupChatParticipantSpec, _GroupChatConfig], _GroupChatParticipantPipeline] = (
+            _default_participant_factory
+        )
         hook = self._human_input_hook
         if hook is not None:
             base_factory = _default_participant_factory

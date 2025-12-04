@@ -327,7 +327,7 @@ async def test_single_edge_group_tracing_success(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process SingleEdgeGroup"
     assert span.attributes.get("edge_group.type") == "SingleEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is True
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DELIVERED.value
@@ -372,7 +372,7 @@ async def test_single_edge_group_tracing_condition_failure(span_exporter) -> Non
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process SingleEdgeGroup"
     assert span.attributes.get("edge_group.type") == "SingleEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is False
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DROPPED_CONDITION_FALSE.value
@@ -407,7 +407,7 @@ async def test_single_edge_group_tracing_type_mismatch(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process SingleEdgeGroup"
     assert span.attributes.get("edge_group.type") == "SingleEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is False
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DROPPED_TYPE_MISMATCH.value
@@ -441,7 +441,7 @@ async def test_single_edge_group_tracing_target_mismatch(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process SingleEdgeGroup"
     assert span.attributes.get("edge_group.type") == "SingleEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is False
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DROPPED_TARGET_MISMATCH.value
@@ -800,7 +800,7 @@ async def test_fan_out_edge_group_tracing_success(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process FanOutEdgeGroup"
     assert span.attributes.get("edge_group.type") == "FanOutEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is True
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DELIVERED.value
@@ -856,7 +856,7 @@ async def test_fan_out_edge_group_tracing_with_target(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process FanOutEdgeGroup"
     assert span.attributes.get("edge_group.type") == "FanOutEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is True
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DELIVERED.value
@@ -1024,7 +1024,7 @@ async def test_fan_in_edge_group_tracing_buffered(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process FanInEdgeGroup"
     assert span.attributes.get("edge_group.type") == "FanInEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is True
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.BUFFERED.value
@@ -1056,7 +1056,7 @@ async def test_fan_in_edge_group_tracing_buffered(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process FanInEdgeGroup"
     assert span.attributes.get("edge_group.type") == "FanInEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is True
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DELIVERED.value
@@ -1102,7 +1102,7 @@ async def test_fan_in_edge_group_tracing_type_mismatch(span_exporter) -> None:
 
     span = edge_group_spans[0]
     assert span.attributes is not None
-    assert span.name == span.attributes.get("edge_group.id")
+    assert span.name == "edge_group.process FanInEdgeGroup"
     assert span.attributes.get("edge_group.type") == "FanInEdgeGroup"
     assert span.attributes.get("edge_group.delivered") is False
     assert span.attributes.get("edge_group.delivery_status") == EdgeGroupDeliveryStatus.DROPPED_TYPE_MISMATCH.value

@@ -151,8 +151,8 @@ async def test_span_creation_and_attributes(span_exporter: InMemorySpanExporter)
     event_names = [event.name for event in workflow_span.events]
     assert "workflow.started" in event_names
 
-    # Check processing span - span name is now the executor_id
-    processing_span = next(s for s in spans if s.name == "executor-456")
+    # Check processing span - span name uses format "executor.process {executor_id}"
+    processing_span = next(s for s in spans if s.name == "executor.process executor-456")
     assert processing_span.kind == trace.SpanKind.INTERNAL
     assert processing_span.attributes is not None
     assert processing_span.attributes.get("executor.id") == "executor-456"
@@ -219,7 +219,9 @@ async def test_trace_context_handling(span_exporter: InMemorySpanExporter) -> No
 
     # Verify processing span attributes
     processing_span = processing_spans[0]
-    assert processing_span.name == "test-executor"  # Span name is now executor_id
+    assert (
+        processing_span.name == "executor.process test-executor"
+    )  # Span name uses format "executor.process {executor_id}"
     assert processing_span.attributes is not None
     assert processing_span.attributes.get("executor.id") == "test-executor"
     assert processing_span.attributes.get("executor.type") == "MockExecutor"

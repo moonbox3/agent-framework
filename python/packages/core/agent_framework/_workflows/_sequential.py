@@ -175,7 +175,7 @@ class SequentialBuilder(HumanInputHookMixin):
         - _InputToConversation normalizes the initial input into list[ChatMessage]
         - For each participant in order:
             - If Agent (or AgentExecutor): pass conversation to the agent, then optionally
-              route through human input checkpoint, then convert response to conversation
+              route through human input interceptor, then convert response to conversation
               via _ResponseToConversation
             - Else (custom Executor): pass conversation directly to the executor
         - _EndWithConversation yields the final conversation and the workflow becomes idle

@@ -709,7 +709,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         logic for agent-based managers.
 
         Also handles any human input that was injected into the response's full_conversation
-        by the human input hook checkpoint.
+        by the human input hook interceptor.
 
         Args:
             response: AgentExecutor response from manager agent
@@ -856,7 +856,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         """Extract any user messages that appear after the last assistant message.
 
         This is used to capture human input that was injected by the human input hook
-        checkpoint. The hook adds user messages to full_conversation after the agent's
+        interceptor. The hook adds user messages to full_conversation after the agent's
         response, so they appear at the end of the sequence.
 
         Args:
@@ -1059,7 +1059,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
         - Participant responses: ingested as conversation messages
 
         Also handles any human input that was injected into the response's full_conversation
-        by the human input hook checkpoint.
+        by the human input hook interceptor.
         """
         participant_name = self._registry.get_participant_name(response.executor_id)
         if participant_name is None:
@@ -1869,7 +1869,7 @@ class GroupChatBuilder(HumanInputHookMixin):
         # Determine participant factory - wrap if human input hook is configured
         participant_factory = self._participant_factory
         if self._human_input_hook is not None:
-            # Create a wrapper factory that adds human input checkpoint to each pipeline
+            # Create a wrapper factory that adds human input interceptor to each pipeline
             base_factory = participant_factory
             hook = self._human_input_hook
 

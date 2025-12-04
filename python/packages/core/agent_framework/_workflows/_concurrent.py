@@ -313,7 +313,7 @@ class ConcurrentBuilder(HumanInputHookMixin):
         Wiring pattern:
         - Dispatcher (internal) fans out the input to all `participants`
         - Fan-in collects `AgentExecutorResponse` objects from all participants
-        - If human input hook is configured, the checkpoint executor checks for input
+        - If human input hook is configured, the interceptor executor checks for input
           before passing results to the aggregator
         - Aggregator yields output and the workflow becomes idle. The output is either:
           - list[ChatMessage] (default aggregator: one user + one assistant per agent)

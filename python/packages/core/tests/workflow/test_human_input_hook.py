@@ -8,7 +8,7 @@ from agent_framework import (
     HumanInputRequest,
     Role,
 )
-from agent_framework._workflows._human_input import _HumanInputCheckpoint  # type: ignore
+from agent_framework._workflows._human_input import _HumanInputInterceptor  # type: ignore
 
 
 class TestHumanInputRequest:
@@ -88,12 +88,12 @@ class TestHumanInputHookMixin:
         executor = builder._create_human_input_executor("custom_id")  # type: ignore
 
         assert executor is not None
-        assert isinstance(executor, _HumanInputCheckpoint)
+        assert isinstance(executor, _HumanInputInterceptor)
         assert executor.id == "custom_id"
 
 
-class TestHumanInputCheckpoint:
-    """Tests for _HumanInputCheckpoint executor."""
+class TestHumanInputInterceptor:
+    """Tests for _HumanInputInterceptor executor."""
 
     async def test_invoke_sync_hook(self):
         """Test invoking a synchronous hook."""
@@ -110,15 +110,15 @@ class TestHumanInputCheckpoint:
                 )
             return None
 
-        checkpoint = _HumanInputCheckpoint(sync_hook)
+        interceptor = _HumanInputInterceptor(sync_hook)
 
         # Test hook returns None
-        result = await checkpoint._invoke_hook([], None)  # type: ignore
+        result = await interceptor._invoke_hook([], None)  # type: ignore
         assert result is None
 
         # Test hook returns request
         conversation = [ChatMessage(role=Role.ASSISTANT, text="Please review this")]
-        result = await checkpoint._invoke_hook(conversation, "test_agent")  # type: ignore
+        result = await interceptor._invoke_hook(conversation, "test_agent")  # type: ignore
         assert result is not None
         assert result.prompt == "Review requested"
         assert result.source_agent_id == "test_agent"
@@ -138,10 +138,10 @@ class TestHumanInputCheckpoint:
                 )
             return None
 
-        checkpoint = _HumanInputCheckpoint(async_hook)
+        interceptor = _HumanInputInterceptor(async_hook)
 
         # Test async hook returns request
         conversation = [ChatMessage(role=Role.USER, text="Test")]
-        result = await checkpoint._invoke_hook(conversation, "async_agent")  # type: ignore
+        result = await interceptor._invoke_hook(conversation, "async_agent")  # type: ignore
         assert result is not None
         assert result.prompt == "Async review"

@@ -337,18 +337,18 @@ class ConcurrentBuilder(HumanInputHookMixin):
         dispatcher = _DispatchToAllParticipants(id="dispatcher")
         aggregator = self._aggregator or _AggregateAgentConversations(id="aggregator")
 
-        # Create human input checkpoint if hook is configured
-        human_input_checkpoint = self._create_human_input_executor()
+        # Create human input interceptor if hook is configured
+        human_input_interceptor = self._create_human_input_executor()
 
         builder = WorkflowBuilder()
         builder.set_start_executor(dispatcher)
         builder.add_fan_out_edges(dispatcher, list(self._participants))
 
-        if human_input_checkpoint is not None:
-            # Insert checkpoint between fan-in and aggregator
-            # participants -> fan-in -> checkpoint -> aggregator
-            builder.add_fan_in_edges(list(self._participants), human_input_checkpoint)
-            builder.add_edge(human_input_checkpoint, aggregator)
+        if human_input_interceptor is not None:
+            # Insert interceptor between fan-in and aggregator
+            # participants -> fan-in -> interceptor -> aggregator
+            builder.add_fan_in_edges(list(self._participants), human_input_interceptor)
+            builder.add_edge(human_input_interceptor, aggregator)
         else:
             # Direct fan-in to aggregator
             builder.add_fan_in_edges(list(self._participants), aggregator)

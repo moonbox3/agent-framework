@@ -36,7 +36,7 @@ from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage
 from ._conversation_history import ensure_author, latest_user_message
 from ._executor import Executor, handler
-from ._human_input import HumanInputHookMixin, _HumanInputCheckpoint  # type: ignore
+from ._human_input import HumanInputHookMixin, _HumanInputInterceptor  # type: ignore
 from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, wrap_participant
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -589,7 +589,8 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
                 author = trailing_msg.author_name or "human"
                 self._history.append(_GroupChatTurn(author, "user", trailing_msg))
                 logger.debug(
-                    f"Injected human input into group chat conversation: {trailing_msg.text[:50] if trailing_msg.text else '(empty)'}..."
+                    f"Injected human input into group chat conversation: "
+                    f"{trailing_msg.text[:50] if trailing_msg.text else '(empty)'}..."
                 )
 
         self._pending_agent = None
@@ -1878,12 +1879,12 @@ class GroupChatBuilder(HumanInputHookMixin):
             ) -> _GroupChatParticipantPipeline:
                 pipeline = list(base_factory(spec, config))
                 if pipeline:
-                    # Add checkpoint executor after the participant
-                    checkpoint = _HumanInputCheckpoint(
+                    # Add interceptor executor after the participant
+                    interceptor = _HumanInputInterceptor(
                         hook,
-                        executor_id=f"human_input_checkpoint:{spec.name}",
+                        executor_id=f"human_input_interceptor:{spec.name}",
                     )
-                    pipeline.append(checkpoint)
+                    pipeline.append(interceptor)
                 return tuple(pipeline)
 
             participant_factory = _factory_with_human_input

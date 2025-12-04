@@ -187,8 +187,8 @@ class SequentialBuilder(HumanInputHookMixin):
         input_conv = _InputToConversation(id="input-conversation")
         end = _EndWithConversation(id="end")
 
-        # Create human input checkpoint if hook is configured
-        human_input_checkpoint = self._create_human_input_executor()
+        # Create human input interceptor if hook is configured
+        human_input_interceptor = self._create_human_input_executor()
 
         builder = WorkflowBuilder()
         builder.set_start_executor(input_conv)
@@ -199,7 +199,7 @@ class SequentialBuilder(HumanInputHookMixin):
         for p in self._participants:
             # Agent-like branch: either explicitly an AgentExecutor or any non-AgentExecutor
             if not (isinstance(p, Executor) and not isinstance(p, AgentExecutor)):
-                # input conversation -> (agent) -> [human_input_checkpoint] -> response -> conversation
+                # input conversation -> (agent) -> [human_input_interceptor] -> response -> conversation
                 builder.add_edge(prior, p)
 
                 # Give the adapter a deterministic, self-describing id
@@ -207,13 +207,13 @@ class SequentialBuilder(HumanInputHookMixin):
                 label = p.id if isinstance(p, Executor) else getattr(p, "name", None) or p.__class__.__name__
                 resp_to_conv = _ResponseToConversation(id=f"to-conversation:{label}")
 
-                if human_input_checkpoint is not None:
-                    # Insert human input checkpoint between agent and response converter
-                    # Create a dedicated checkpoint per agent to avoid ID conflicts
-                    checkpoint = self._create_human_input_executor(f"human_input_checkpoint:{label}")
-                    if checkpoint is not None:
-                        builder.add_edge(p, checkpoint)
-                        builder.add_edge(checkpoint, resp_to_conv)
+                if human_input_interceptor is not None:
+                    # Insert human input interceptor between agent and response converter
+                    # Create a dedicated interceptor per agent to avoid ID conflicts
+                    interceptor = self._create_human_input_executor(f"human_input_interceptor:{label}")
+                    if interceptor is not None:
+                        builder.add_edge(p, interceptor)
+                        builder.add_edge(interceptor, resp_to_conv)
                 else:
                     builder.add_edge(p, resp_to_conv)
 

@@ -9,7 +9,7 @@ Key components:
 - HumanInputRequest: Standard request type emitted via RequestInfoEvent
 - HumanInputHook: Callable type alias for hook functions
 - HumanInputHookMixin: Mixin class providing `.with_human_input_hook()` method
-- _HumanInputCheckpoint: Internal executor that intercepts responses and invokes the hook
+- _HumanInputInterceptor: Internal executor that intercepts responses and invokes the hook
 """
 
 import inspect
@@ -67,7 +67,7 @@ class HumanInputHookMixin:
 
     Builders that inherit this mixin gain the `.with_human_input_hook()` method
     and internal state management for the hook. The mixin provides a factory
-    method to create the checkpoint executor when the hook is configured.
+    method to create the interceptor executor when the hook is configured.
     """
 
     _human_input_hook: HumanInputHook | None = None
@@ -136,23 +136,23 @@ class HumanInputHookMixin:
 
     def _create_human_input_executor(
         self,
-        executor_id: str = "human_input_checkpoint",
-    ) -> "_HumanInputCheckpoint | None":
-        """Factory method for builders to create the checkpoint executor if hook is set.
+        executor_id: str = "human_input_interceptor",
+    ) -> "_HumanInputInterceptor | None":
+        """Factory method for builders to create the interceptor executor if hook is set.
 
         Args:
-            executor_id: ID for the checkpoint executor (default: "human_input_checkpoint")
+            executor_id: ID for the interceptor executor (default: "human_input_interceptor")
 
         Returns:
-            _HumanInputCheckpoint instance if hook is configured, None otherwise.
+            _HumanInputInterceptor instance if hook is configured, None otherwise.
         """
         if self._human_input_hook is None:
             return None
-        return _HumanInputCheckpoint(self._human_input_hook, executor_id=executor_id)
+        return _HumanInputInterceptor(self._human_input_hook, executor_id=executor_id)
 
 
-class _HumanInputCheckpoint(Executor):
-    """Internal executor that checks for human input after each agent response.
+class _HumanInputInterceptor(Executor):
+    """Internal executor that intercepts agent responses and invokes the human input hook.
 
     This executor is inserted into the workflow graph by builders that use
     the HumanInputHookMixin. It intercepts AgentExecutorResponse messages,
@@ -171,13 +171,13 @@ class _HumanInputCheckpoint(Executor):
     def __init__(
         self,
         hook: HumanInputHook,
-        executor_id: str = "human_input_checkpoint",
+        executor_id: str = "human_input_interceptor",
     ) -> None:
-        """Initialize the checkpoint executor.
+        """Initialize the interceptor executor.
 
         Args:
             hook: The human input hook callback
-            executor_id: ID for this executor (default: "human_input_checkpoint")
+            executor_id: ID for this executor (default: "human_input_interceptor")
         """
         super().__init__(executor_id)
         self._hook = hook

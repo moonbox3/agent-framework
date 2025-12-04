@@ -1285,7 +1285,7 @@ class HandoffBuilder:
 
     def with_interaction_mode(
         self,
-        interaction_mode: Literal["human_in_loop", "autonomous"] | None = "human_in_loop",
+        interaction_mode: Literal["human_in_loop", "autonomous"] = "human_in_loop",
         *,
         autonomous_turn_limit: int | None = None,
     ) -> "HandoffBuilder":
@@ -1300,12 +1300,13 @@ class HandoffBuilder:
             interaction_mode: `"human_in_loop"` (default) requests user input after each agent response
                               that does not trigger a handoff. `"autonomous"` lets agents continue
                               working until they invoke a handoff tool or the turn limit is reached.
-                              `None` resets to the default.
+
+        Keyword Args:
             autonomous_turn_limit: Maximum number of agent responses before the workflow yields
-                                   when in autonomous mode. Only applicable when interaction_mode
-                                   is `"autonomous"`. Default is 50. Set to `None` to disable
-                                   the limit (use with caution). Raises `ValueError` if provided
-                                   when interaction_mode is `"human_in_loop"`.
+                                when in autonomous mode. Only applicable when interaction_mode
+                                is `"autonomous"`. Default is 50. Set to `None` to disable
+                                the limit (use with caution). Ignored with a warning if provided
+                                when interaction_mode is `"human_in_loop"`.
 
         Returns:
             Self for chaining.
@@ -1329,44 +1330,21 @@ class HandoffBuilder:
             # -> Research Agent calls handoff_to_coordinator when done
             # -> Coordinator provides final response
         """
-        if interaction_mode is None:
-            self._interaction_mode = "human_in_loop"
-            return self
-
         if interaction_mode not in ("human_in_loop", "autonomous"):
             raise ValueError("interaction_mode must be either 'human_in_loop' or 'autonomous'")
         self._interaction_mode = interaction_mode
 
         if autonomous_turn_limit is not None:
             if interaction_mode != "autonomous":
-                raise ValueError("autonomous_turn_limit can only be set when interaction_mode is 'autonomous'")
-            if autonomous_turn_limit <= 0:
+                logger.warning(
+                    f"autonomous_turn_limit={autonomous_turn_limit} was provided but interaction_mode is "
+                    f"'{interaction_mode}'; ignoring."
+                )
+            elif autonomous_turn_limit <= 0:
                 raise ValueError("autonomous_turn_limit must be positive when provided")
-            self._autonomous_turn_limit = autonomous_turn_limit
+            else:
+                self._autonomous_turn_limit = autonomous_turn_limit
 
-        return self
-
-    def with_autonomous_turn_limit(self, limit: int | None) -> "HandoffBuilder":
-        """Cap agent responses in autonomous mode before yielding the conversation.
-
-        Note:
-            This method is provided for backward compatibility. Prefer using
-            `with_interaction_mode("autonomous", autonomous_turn_limit=N)` instead.
-
-        In autonomous mode, agents (including specialists) continue iterating until they
-        invoke a handoff tool or this turn limit is reached. Default limit is 50 responses
-        across the workflow; set to None to disable.
-
-        Args:
-            limit: Maximum number of agent responses before the workflow yields.
-                   Set to None to disable the limit (use with caution).
-
-        Returns:
-            Self for method chaining.
-        """
-        if limit is not None and limit <= 0:
-            raise ValueError("autonomous turn limit must be positive when provided")
-        self._autonomous_turn_limit = limit
         return self
 
     def enable_return_to_previous(self, enabled: bool = True) -> "HandoffBuilder":

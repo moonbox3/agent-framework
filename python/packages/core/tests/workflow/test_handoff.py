@@ -296,8 +296,7 @@ async def test_autonomous_interaction_mode_yields_output_without_user_request():
     workflow = (
         HandoffBuilder(participants=[triage, specialist])
         .set_coordinator("triage")
-        .with_interaction_mode("autonomous")
-        .with_autonomous_turn_limit(1)
+        .with_interaction_mode("autonomous", autonomous_turn_limit=1)
         .build()
     )
 
@@ -325,8 +324,7 @@ async def test_autonomous_continues_without_handoff_until_termination():
     workflow = (
         HandoffBuilder(participants=[worker])
         .set_coordinator(worker)
-        .with_interaction_mode("autonomous")
-        .with_autonomous_turn_limit(3)
+        .with_interaction_mode("autonomous", autonomous_turn_limit=3)
         .with_termination_condition(lambda conv: False)
         .build()
     )
@@ -346,8 +344,7 @@ async def test_autonomous_turn_limit_stops_loop():
     workflow = (
         HandoffBuilder(participants=[worker])
         .set_coordinator(worker)
-        .with_interaction_mode("autonomous")
-        .with_autonomous_turn_limit(2)
+        .with_interaction_mode("autonomous", autonomous_turn_limit=2)
         .with_termination_condition(lambda conv: False)
         .build()
     )
@@ -369,8 +366,7 @@ async def test_autonomous_routes_back_to_coordinator_when_specialist_stops():
         HandoffBuilder(participants=[triage, specialist])
         .set_coordinator(triage)
         .add_handoff(triage, specialist)
-        .with_interaction_mode("autonomous")
-        .with_autonomous_turn_limit(3)
+        .with_interaction_mode("autonomous", autonomous_turn_limit=3)
         .with_termination_condition(lambda conv: len(conv) >= 4)
         .build()
     )
@@ -399,14 +395,16 @@ async def test_autonomous_mode_with_inline_turn_limit():
     assert len(worker.calls) == 2, "Worker should stop after reaching the inline turn limit"
 
 
-def test_autonomous_turn_limit_requires_autonomous_mode():
-    """Verify that autonomous_turn_limit raises an error when mode is human_in_loop."""
+def test_autonomous_turn_limit_ignored_in_human_in_loop_mode(caplog):
+    """Verify that autonomous_turn_limit logs a warning when mode is human_in_loop."""
     worker = _RecordingAgent(name="worker")
 
-    with pytest.raises(ValueError, match="autonomous_turn_limit can only be set when interaction_mode is 'autonomous'"):
-        HandoffBuilder(participants=[worker]).set_coordinator(worker).with_interaction_mode(
-            "human_in_loop", autonomous_turn_limit=10
-        )
+    # Should not raise, but should log a warning
+    HandoffBuilder(participants=[worker]).set_coordinator(worker).with_interaction_mode(
+        "human_in_loop", autonomous_turn_limit=10
+    )
+
+    assert "autonomous_turn_limit=10 was provided but interaction_mode is 'human_in_loop'; ignoring." in caplog.text
 
 
 def test_autonomous_turn_limit_must_be_positive():

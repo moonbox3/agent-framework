@@ -36,7 +36,7 @@ from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage
 from ._conversation_history import ensure_author, latest_user_message
 from ._executor import Executor, handler
-from ._human_input import RequestInfoInterceptor
+from ._orchestration_request_info import RequestInfoInterceptor
 from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, wrap_participant
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -1833,7 +1833,7 @@ class GroupChatBuilder:
                 .build()
             )
         """
-        from ._human_input import resolve_request_info_filter
+        from ._orchestration_request_info import resolve_request_info_filter
 
         self._request_info_enabled = True
         self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)

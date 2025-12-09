@@ -13,8 +13,8 @@ from agent_framework import AgentProtocol, ChatMessage, Role
 from ._agent_executor import AgentExecutorRequest, AgentExecutorResponse
 from ._checkpoint import CheckpointStorage
 from ._executor import Executor, handler
-from ._human_input import RequestInfoInterceptor
 from ._message_utils import normalize_messages_input
+from ._orchestration_request_info import RequestInfoInterceptor
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
 from ._workflow_context import WorkflowContext

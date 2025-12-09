@@ -14,7 +14,7 @@ from agent_framework import (
     Role,
 )
 from agent_framework._workflows._executor import Executor, handler
-from agent_framework._workflows._human_input import resolve_request_info_filter
+from agent_framework._workflows._orchestration_request_info import resolve_request_info_filter
 from agent_framework._workflows._workflow_context import WorkflowContext
 
 

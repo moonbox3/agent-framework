@@ -65,7 +65,6 @@ from ._group_chat import (
     ManagerSelectionResponse,
 )
 from ._handoff import HandoffBuilder, HandoffUserInputRequest
-from ._human_input import AgentInputRequest, AgentResponseReviewRequest, RequestInfoInterceptor
 from ._magentic import (
     MAGENTIC_EVENT_TYPE_AGENT_DELTA,
     MAGENTIC_EVENT_TYPE_ORCHESTRATOR,
@@ -86,6 +85,7 @@ from ._magentic import (
     MagenticStallInterventionRequest,
     StandardMagenticManager,
 )
+from ._orchestration_request_info import AgentInputRequest, AgentResponseReviewRequest, RequestInfoInterceptor
 from ._orchestration_state import OrchestrationState
 from ._request_info_mixin import response_handler
 from ._runner import Runner

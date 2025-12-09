@@ -48,7 +48,7 @@ from ._group_chat import (
     _GroupChatParticipantPipeline,  # type: ignore[reportPrivateUsage]
     assemble_group_chat_workflow,
 )
-from ._human_input import RequestInfoInterceptor
+from ._orchestration_request_info import RequestInfoInterceptor
 from ._orchestrator_helpers import clean_conversation_for_handoff
 from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, sanitize_identifier
 from ._request_info_mixin import response_handler
@@ -1487,7 +1487,7 @@ class HandoffBuilder:
                 .build()
             )
         """
-        from ._human_input import resolve_request_info_filter
+        from ._orchestration_request_info import resolve_request_info_filter
 
         self._request_info_enabled = True
         self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)

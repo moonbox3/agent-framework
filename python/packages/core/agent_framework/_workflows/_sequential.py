@@ -51,8 +51,8 @@ from ._executor import (
     Executor,
     handler,
 )
-from ._human_input import RequestInfoInterceptor
 from ._message_utils import normalize_messages_input
+from ._orchestration_request_info import RequestInfoInterceptor
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
 from ._workflow_context import WorkflowContext
@@ -204,7 +204,7 @@ class SequentialBuilder:
                 .build()
             )
         """
-        from ._human_input import resolve_request_info_filter
+        from ._orchestration_request_info import resolve_request_info_filter
 
         self._request_info_enabled = True
         self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)

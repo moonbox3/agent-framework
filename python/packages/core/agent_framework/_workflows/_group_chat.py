@@ -36,7 +36,7 @@ from ._base_group_chat_orchestrator import BaseGroupChatOrchestrator
 from ._checkpoint import CheckpointStorage
 from ._conversation_history import ensure_author, latest_user_message
 from ._executor import Executor, handler
-from ._human_input import HumanInputHookMixin, _HumanInputInterceptor  # type: ignore
+from ._human_input import RequestInfoInterceptor
 from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, wrap_participant
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -1176,13 +1176,14 @@ def assemble_group_chat_workflow(
         manager_entry = manager_pipeline[0]
         manager_exit = manager_pipeline[-1]
 
-        # Register manager with orchestrator
+        # Register manager with orchestrator (with entry and exit IDs for pipeline routing)
         register_entry = getattr(orchestrator, "register_participant_entry", None)
         if callable(register_entry):
             register_entry(
                 wiring.manager_name,
                 entry_id=manager_entry.id,
                 is_agent=not isinstance(wiring.manager_participant, Executor),
+                exit_id=manager_exit.id if manager_exit is not manager_entry else None,
             )
 
         # Wire manager edges: Orchestrator ↔ Manager
@@ -1205,10 +1206,13 @@ def assemble_group_chat_workflow(
 
         register_entry = getattr(orchestrator, "register_participant_entry", None)
         if callable(register_entry):
+            # Register both entry and exit IDs so responses can be routed correctly
+            # when interceptors are prepended to the pipeline
             register_entry(
                 name,
                 entry_id=entry_executor.id,
                 is_agent=not isinstance(spec.participant, Executor),
+                exit_id=exit_executor.id if exit_executor is not entry_executor else None,
             )
 
         workflow_builder = workflow_builder.add_edge(orchestrator, entry_executor)
@@ -1236,7 +1240,7 @@ def assemble_group_chat_workflow(
 # region Builder
 
 
-class GroupChatBuilder(HumanInputHookMixin):
+class GroupChatBuilder:
     r"""High-level builder for manager-directed group chat workflows with dynamic orchestration.
 
     GroupChat coordinates multi-agent conversations using a manager that selects which participant
@@ -1300,28 +1304,27 @@ class GroupChatBuilder(HumanInputHookMixin):
             .build()
         )
 
-    *Pattern 3: Human input hook for mid-conversation feedback*
+    *Pattern 3: Request info for mid-conversation feedback*
 
     .. code-block:: python
 
-        from agent_framework import GroupChatBuilder, HumanInputRequest
+        from agent_framework import GroupChatBuilder
 
-
-        def request_review(conversation, agent_id):
-            if "review" in conversation[-1].text.lower():
-                return HumanInputRequest(
-                    prompt="Please review and provide feedback:",
-                    conversation=conversation,
-                    source_agent_id=agent_id,
-                )
-            return None
-
-
+        # Pause before all participants
         workflow = (
             GroupChatBuilder()
             .set_select_speakers_func(select_next_speaker)
             .participants([researcher, writer])
-            .with_human_input_hook(request_review)
+            .with_request_info()
+            .build()
+        )
+
+        # Pause only before specific participants
+        workflow = (
+            GroupChatBuilder()
+            .set_select_speakers_func(select_next_speaker)
+            .participants([researcher, writer, editor])
+            .with_request_info(agents=[editor])  # Only pause before editor responds
             .build()
         )
 
@@ -1374,6 +1377,8 @@ class GroupChatBuilder(HumanInputHookMixin):
         self._interceptors: list[_InterceptorSpec] = []
         self._orchestrator_factory = group_chat_orchestrator(_orchestrator_factory)
         self._participant_factory = _participant_factory or _default_participant_factory
+        self._request_info_enabled: bool = False
+        self._request_info_filter: set[str] | None = None
 
     def _set_manager_function(
         self,
@@ -1450,6 +1455,12 @@ class GroupChatBuilder(HumanInputHookMixin):
         Note:
             The manager agent's response_format must be ManagerSelectionResponse for structured output.
             Custom response formats raise ValueError instead of being overridden.
+
+            The manager can be included in :py:meth:`with_request_info` to pause before the manager
+            runs, allowing human steering of orchestration decisions. If no filter is specified,
+            the manager is included automatically. To filter explicitly::
+
+                .with_request_info(agents=[manager, writer])  # Pause before manager and writer
         """
         if self._manager is not None or self._manager_participant is not None:
             raise ValueError(
@@ -1780,6 +1791,54 @@ class GroupChatBuilder(HumanInputHookMixin):
         self._max_rounds = max_rounds
         return self
 
+    def with_request_info(
+        self,
+        *,
+        agents: Sequence[str | AgentProtocol | Executor] | None = None,
+    ) -> "GroupChatBuilder":
+        """Enable request info before participants run in the workflow.
+
+        When enabled, the workflow pauses before each participant runs, emitting
+        a RequestInfoEvent that allows the caller to review the conversation and
+        optionally inject guidance before the participant responds. The caller provides
+        input via the standard response_handler/request_info pattern.
+
+        Args:
+            agents: Optional filter - only pause before these specific agents/executors.
+                   Accepts agent names (str), agent instances, or executor instances.
+                   If None (default), pauses before every participant.
+
+        Returns:
+            self: The builder instance for fluent chaining.
+
+        Example:
+
+        .. code-block:: python
+
+            # Pause before all participants
+            workflow = (
+                GroupChatBuilder()
+                .set_manager(manager)
+                .participants([optimist, pragmatist, creative])
+                .with_request_info()
+                .build()
+            )
+
+            # Pause only before specific participants
+            workflow = (
+                GroupChatBuilder()
+                .set_manager(manager)
+                .participants([optimist, pragmatist, creative])
+                .with_request_info(agents=[pragmatist])  # Only pause before pragmatist
+                .build()
+            )
+        """
+        from ._human_input import resolve_request_info_filter
+
+        self._request_info_enabled = True
+        self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)
+        return self
+
     def _get_participant_metadata(self) -> dict[str, Any]:
         if self._participant_metadata is None:
             self._participant_metadata = prepare_participant_metadata(
@@ -1866,28 +1925,28 @@ class GroupChatBuilder(HumanInputHookMixin):
             participant_executors=metadata["executors"],
         )
 
-        # Determine participant factory - wrap if human input hook is configured
+        # Determine participant factory - wrap if request info is enabled
         participant_factory = self._participant_factory
-        if self._human_input_hook is not None:
-            # Create a wrapper factory that adds human input interceptor to each pipeline
+        if self._request_info_enabled:
+            # Create a wrapper factory that adds request info interceptor before each participant
             base_factory = participant_factory
-            hook = self._human_input_hook
+            agent_filter = self._request_info_filter
 
-            def _factory_with_human_input(
+            def _factory_with_request_info(
                 spec: GroupChatParticipantSpec,
                 config: _GroupChatConfig,
             ) -> _GroupChatParticipantPipeline:
                 pipeline = list(base_factory(spec, config))
                 if pipeline:
-                    # Add interceptor executor after the participant
-                    interceptor = _HumanInputInterceptor(
-                        hook,
-                        executor_id=f"human_input_interceptor:{spec.name}",
+                    # Add interceptor executor BEFORE the participant (prepend)
+                    interceptor = RequestInfoInterceptor(
+                        executor_id=f"request_info:{spec.name}",
+                        agent_filter=agent_filter,
                     )
-                    pipeline.append(interceptor)
+                    pipeline.insert(0, interceptor)
                 return tuple(pipeline)
 
-            participant_factory = _factory_with_human_input
+            participant_factory = _factory_with_request_info
 
         result = assemble_group_chat_workflow(
             wiring=wiring,

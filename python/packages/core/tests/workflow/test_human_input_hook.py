@@ -1,147 +1,165 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Unit tests for HumanInputHookMixin and related classes."""
+"""Unit tests for request info support in high-level builders."""
+
+from typing import Any
+from unittest.mock import MagicMock
 
 from agent_framework import (
+    AgentInputRequest,
+    AgentProtocol,
+    AgentResponseReviewRequest,
     ChatMessage,
-    HumanInputHookMixin,
-    HumanInputRequest,
+    RequestInfoInterceptor,
     Role,
 )
-from agent_framework._workflows._human_input import _HumanInputInterceptor  # type: ignore
+from agent_framework._workflows._executor import Executor, handler
+from agent_framework._workflows._human_input import resolve_request_info_filter
+from agent_framework._workflows._workflow_context import WorkflowContext
 
 
-class TestHumanInputRequest:
-    """Tests for HumanInputRequest dataclass."""
+class DummyExecutor(Executor):
+    """Dummy executor with a handler for testing."""
+
+    @handler
+    async def handle(self, data: str, ctx: WorkflowContext[Any, Any]) -> None:
+        pass
+
+
+class TestResolveRequestInfoFilter:
+    """Tests for resolve_request_info_filter function."""
+
+    def test_returns_none_for_none_input(self):
+        """Test that None input returns None (no filtering)."""
+        result = resolve_request_info_filter(None)
+        assert result is None
+
+    def test_returns_none_for_empty_list(self):
+        """Test that empty list returns None."""
+        result = resolve_request_info_filter([])
+        assert result is None
+
+    def test_resolves_string_names(self):
+        """Test resolving string agent names."""
+        result = resolve_request_info_filter(["agent1", "agent2"])
+        assert result == {"agent1", "agent2"}
+
+    def test_resolves_executor_ids(self):
+        """Test resolving Executor instances by ID."""
+        exec1 = DummyExecutor(id="executor1")
+        exec2 = DummyExecutor(id="executor2")
+
+        result = resolve_request_info_filter([exec1, exec2])
+        assert result == {"executor1", "executor2"}
+
+    def test_resolves_agent_names(self):
+        """Test resolving AgentProtocol-like objects by name attribute."""
+        agent1 = MagicMock(spec=AgentProtocol)
+        agent1.name = "writer"
+        agent2 = MagicMock(spec=AgentProtocol)
+        agent2.name = "reviewer"
+
+        result = resolve_request_info_filter([agent1, agent2])
+        assert result == {"writer", "reviewer"}
+
+    def test_mixed_types(self):
+        """Test resolving a mix of strings, agents, and executors."""
+        agent = MagicMock(spec=AgentProtocol)
+        agent.name = "writer"
+        executor = DummyExecutor(id="custom_exec")
+
+        result = resolve_request_info_filter(["manual_name", agent, executor])
+        assert result == {"manual_name", "writer", "custom_exec"}
+
+    def test_skips_agent_without_name(self):
+        """Test that agents without names are skipped."""
+        agent_with_name = MagicMock(spec=AgentProtocol)
+        agent_with_name.name = "valid"
+        agent_without_name = MagicMock(spec=AgentProtocol)
+        agent_without_name.name = None
+
+        result = resolve_request_info_filter([agent_with_name, agent_without_name])
+        assert result == {"valid"}
+
+
+class TestAgentInputRequest:
+    """Tests for AgentInputRequest dataclass (formerly AgentResponseReviewRequest)."""
 
     def test_create_request(self):
-        """Test creating a HumanInputRequest with all fields."""
+        """Test creating an AgentInputRequest with all fields."""
         conversation = [ChatMessage(role=Role.USER, text="Hello")]
-        request = HumanInputRequest(
-            prompt="Please review:",
+        request = AgentInputRequest(
+            target_agent_id="test_agent",
             conversation=conversation,
-            source_agent_id="test_agent",
+            instruction="Review this",
             metadata={"key": "value"},
         )
 
-        assert request.prompt == "Please review:"
+        assert request.target_agent_id == "test_agent"
         assert request.conversation == conversation
-        assert request.source_agent_id == "test_agent"
+        assert request.instruction == "Review this"
         assert request.metadata == {"key": "value"}
 
     def test_create_request_defaults(self):
-        """Test creating a HumanInputRequest with default values."""
-        request = HumanInputRequest(prompt="Enter input:")
+        """Test creating an AgentInputRequest with default values."""
+        request = AgentInputRequest(target_agent_id="test_agent")
 
-        assert request.prompt == "Enter input:"
+        assert request.target_agent_id == "test_agent"
         assert request.conversation == []
-        assert request.source_agent_id is None
+        assert request.instruction is None
         assert request.metadata == {}
 
-
-class TestHumanInputHookMixin:
-    """Tests for HumanInputHookMixin."""
-
-    def test_mixin_with_hook(self):
-        """Test setting a human input hook via the mixin."""
-
-        class TestBuilder(HumanInputHookMixin):
-            pass
-
-        def my_hook(
-            conversation: list[ChatMessage],
-            agent_id: str | None,
-        ) -> HumanInputRequest | None:
-            return None
-
-        builder = TestBuilder()
-        result = builder.with_human_input_hook(my_hook)
-
-        assert result is builder  # Method chaining
-        assert builder._human_input_hook is my_hook  # type: ignore
-
-    def test_create_executor_returns_none_without_hook(self):
-        """Test that _create_human_input_executor returns None when no hook is set."""
-
-        class TestBuilder(HumanInputHookMixin):
-            pass
-
-        builder = TestBuilder()
-        executor = builder._create_human_input_executor()  # type: ignore
-
-        assert executor is None
-
-    def test_create_executor_returns_interceptor_with_hook(self):
-        """Test that _create_human_input_executor returns an interceptor when hook is set."""
-
-        class TestBuilder(HumanInputHookMixin):
-            pass
-
-        def my_hook(
-            conversation: list[ChatMessage],
-            agent_id: str | None,
-        ) -> HumanInputRequest | None:
-            return None
-
-        builder = TestBuilder()
-        builder.with_human_input_hook(my_hook)
-        executor = builder._create_human_input_executor("custom_id")  # type: ignore
-
-        assert executor is not None
-        assert isinstance(executor, _HumanInputInterceptor)
-        assert executor.id == "custom_id"
+    def test_backward_compatibility_alias(self):
+        """Test that AgentResponseReviewRequest is an alias for AgentInputRequest."""
+        assert AgentResponseReviewRequest is AgentInputRequest
 
 
-class TestHumanInputInterceptor:
-    """Tests for _HumanInputInterceptor executor."""
+class TestRequestInfoInterceptor:
+    """Tests for RequestInfoInterceptor executor."""
 
-    async def test_invoke_sync_hook(self):
-        """Test invoking a synchronous hook."""
+    def test_interceptor_creation(self):
+        """Test creating a RequestInfoInterceptor."""
+        interceptor = RequestInfoInterceptor()
+        assert interceptor.id == "request_info_interceptor"
 
-        def sync_hook(
-            conversation: list[ChatMessage],
-            agent_id: str | None,
-        ) -> HumanInputRequest | None:
-            if conversation and "review" in conversation[-1].text.lower():
-                return HumanInputRequest(
-                    prompt="Review requested",
-                    conversation=conversation,
-                    source_agent_id=agent_id,
-                )
-            return None
+    def test_interceptor_with_custom_id(self):
+        """Test creating a RequestInfoInterceptor with custom ID."""
+        interceptor = RequestInfoInterceptor(executor_id="custom_review")
+        assert interceptor.id == "custom_review"
 
-        interceptor = _HumanInputInterceptor(sync_hook)
+    def test_interceptor_with_agent_filter(self):
+        """Test creating a RequestInfoInterceptor with agent filter."""
+        agent_filter = {"agent1", "agent2"}
+        interceptor = RequestInfoInterceptor(
+            executor_id="filtered_review",
+            agent_filter=agent_filter,
+        )
+        assert interceptor.id == "filtered_review"
+        assert interceptor._agent_filter == agent_filter
 
-        # Test hook returns None
-        result = await interceptor._invoke_hook([], None)  # type: ignore
-        assert result is None
+    def test_should_pause_for_agent_no_filter(self):
+        """Test that interceptor pauses for all agents when no filter is set."""
+        interceptor = RequestInfoInterceptor()
+        assert interceptor._should_pause_for_agent("any_agent") is True
+        assert interceptor._should_pause_for_agent("another_agent") is True
+        assert interceptor._should_pause_for_agent(None) is True
 
-        # Test hook returns request
-        conversation = [ChatMessage(role=Role.ASSISTANT, text="Please review this")]
-        result = await interceptor._invoke_hook(conversation, "test_agent")  # type: ignore
-        assert result is not None
-        assert result.prompt == "Review requested"
-        assert result.source_agent_id == "test_agent"
+    def test_should_pause_for_agent_with_filter(self):
+        """Test that interceptor only pauses for agents in the filter."""
+        agent_filter = {"writer", "reviewer"}
+        interceptor = RequestInfoInterceptor(agent_filter=agent_filter)
 
-    async def test_invoke_async_hook(self):
-        """Test invoking an asynchronous hook."""
+        assert interceptor._should_pause_for_agent("writer") is True
+        assert interceptor._should_pause_for_agent("reviewer") is True
+        assert interceptor._should_pause_for_agent("drafter") is False
+        assert interceptor._should_pause_for_agent(None) is False
 
-        async def async_hook(
-            conversation: list[ChatMessage],
-            agent_id: str | None,
-        ) -> HumanInputRequest | None:
-            if conversation:
-                return HumanInputRequest(
-                    prompt="Async review",
-                    conversation=conversation,
-                    source_agent_id=agent_id,
-                )
-            return None
+    def test_should_pause_for_agent_with_prefixed_id(self):
+        """Test that filter matches agent names in prefixed executor IDs."""
+        agent_filter = {"writer"}
+        interceptor = RequestInfoInterceptor(agent_filter=agent_filter)
 
-        interceptor = _HumanInputInterceptor(async_hook)
-
-        # Test async hook returns request
-        conversation = [ChatMessage(role=Role.USER, text="Test")]
-        result = await interceptor._invoke_hook(conversation, "async_agent")  # type: ignore
-        assert result is not None
-        assert result.prompt == "Async review"
+        # Should match the name portion after the colon
+        assert interceptor._should_pause_for_agent("groupchat_agent:writer") is True
+        assert interceptor._should_pause_for_agent("request_info:writer") is True
+        assert interceptor._should_pause_for_agent("groupchat_agent:editor") is False

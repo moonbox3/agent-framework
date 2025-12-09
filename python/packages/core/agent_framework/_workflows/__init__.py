@@ -65,12 +65,7 @@ from ._group_chat import (
     ManagerSelectionResponse,
 )
 from ._handoff import HandoffBuilder, HandoffUserInputRequest
-from ._human_input import (
-    HumanInputHook,
-    HumanInputHookMixin,
-    HumanInputHookResult,
-    HumanInputRequest,
-)
+from ._human_input import AgentInputRequest, AgentResponseReviewRequest, RequestInfoInterceptor
 from ._magentic import (
     MAGENTIC_EVENT_TYPE_AGENT_DELTA,
     MAGENTIC_EVENT_TYPE_ORCHESTRATOR,
@@ -128,6 +123,8 @@ __all__ = [
     "AgentExecutor",
     "AgentExecutorRequest",
     "AgentExecutorResponse",
+    "AgentInputRequest",
+    "AgentResponseReviewRequest",
     "AgentRunEvent",
     "AgentRunUpdateEvent",
     "Case",
@@ -151,10 +148,6 @@ __all__ = [
     "GroupChatStateSnapshot",
     "HandoffBuilder",
     "HandoffUserInputRequest",
-    "HumanInputHook",
-    "HumanInputHookMixin",
-    "HumanInputHookResult",
-    "HumanInputRequest",
     "InMemoryCheckpointStorage",
     "InProcRunnerContext",
     "MagenticBuilder",
@@ -174,6 +167,7 @@ __all__ = [
     "Message",
     "OrchestrationState",
     "RequestInfoEvent",
+    "RequestInfoInterceptor",
     "Runner",
     "RunnerContext",
     "SequentialBuilder",

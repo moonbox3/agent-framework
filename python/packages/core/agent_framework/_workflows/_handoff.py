@@ -48,7 +48,7 @@ from ._group_chat import (
     _GroupChatParticipantPipeline,  # type: ignore[reportPrivateUsage]
     assemble_group_chat_workflow,
 )
-from ._human_input import HumanInputHookMixin, _HumanInputInterceptor
+from ._human_input import RequestInfoInterceptor
 from ._orchestrator_helpers import clean_conversation_for_handoff
 from ._participant_utils import GroupChatParticipantSpec, prepare_participant_metadata, sanitize_identifier
 from ._request_info_mixin import response_handler
@@ -320,8 +320,8 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
     def _extract_agent_id_from_source(self, source: str | None) -> str | None:
         """Extract the original agent ID from the source executor ID.
 
-        When a human input interceptor is in the pipeline, the source will be
-        like 'human_input_interceptor:agent_name'. This method extracts the
+        When a request info interceptor is in the pipeline, the source will be
+        like 'request_info:agent_name'. This method extracts the
         actual agent ID.
 
         Args:
@@ -332,6 +332,11 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         """
         if source is None:
             return None
+        if source.startswith("request_info:"):
+            return source[len("request_info:") :]
+        # Legacy support
+        if source.startswith("human_review:"):
+            return source[len("human_review:") :]
         if source.startswith("human_input_interceptor:"):
             return source[len("human_input_interceptor:") :]
         return source
@@ -658,7 +663,7 @@ def _default_termination_condition(conversation: list[ChatMessage]) -> bool:
     return user_message_count >= 10
 
 
-class HandoffBuilder(HumanInputHookMixin):
+class HandoffBuilder:
     r"""Fluent builder for conversational handoff workflows with coordinator and specialist agents.
 
     The handoff pattern enables a coordinator agent to route requests to specialist agents.
@@ -848,6 +853,8 @@ class HandoffBuilder(HumanInputHookMixin):
         self._return_to_previous: bool = False
         self._interaction_mode: Literal["human_in_loop", "autonomous"] = "human_in_loop"
         self._autonomous_turn_limit: int | None = _DEFAULT_AUTONOMOUS_TURN_LIMIT
+        self._request_info_enabled: bool = False
+        self._request_info_filter: set[str] | None = None
 
         if participants:
             self.participants(participants)
@@ -1440,6 +1447,52 @@ class HandoffBuilder(HumanInputHookMixin):
         self._return_to_previous = enabled
         return self
 
+    def with_request_info(
+        self,
+        *,
+        agents: Sequence[str | AgentProtocol | Executor] | None = None,
+    ) -> "HandoffBuilder":
+        """Enable request info before participants run in the workflow.
+
+        When enabled, the workflow pauses before each participant runs, emitting
+        a RequestInfoEvent that allows the caller to review the conversation and
+        optionally inject guidance before the participant responds. The caller provides
+        input via the standard response_handler/request_info pattern.
+
+        Args:
+            agents: Optional filter - only pause before these specific agents/executors.
+                   Accepts agent names (str), agent instances, or executor instances.
+                   If None (default), pauses before every participant.
+
+        Returns:
+            self: The builder instance for fluent chaining.
+
+        Example:
+
+        .. code-block:: python
+
+            # Pause before all participants
+            workflow = (
+                HandoffBuilder(participants=[coordinator, refund, shipping])
+                .set_coordinator("coordinator_agent")
+                .with_request_info()
+                .build()
+            )
+
+            # Pause only before specialist agents (not coordinator)
+            workflow = (
+                HandoffBuilder(participants=[coordinator, refund, shipping])
+                .set_coordinator("coordinator_agent")
+                .with_request_info(agents=[refund, shipping])
+                .build()
+            )
+        """
+        from ._human_input import resolve_request_info_filter
+
+        self._request_info_enabled = True
+        self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)
+        return self
+
     def build(self) -> Workflow:
         """Construct the final Workflow instance from the configured builder.
 
@@ -1584,29 +1637,29 @@ class HandoffBuilder(HumanInputHookMixin):
             participant_executors=self._executors,
         )
 
-        # Determine participant factory - wrap with human input interceptor if hook is configured
+        # Determine participant factory - wrap with request info interceptor if enabled
         participant_factory: Callable[[GroupChatParticipantSpec, _GroupChatConfig], _GroupChatParticipantPipeline] = (
             _default_participant_factory
         )
-        hook = self._human_input_hook
-        if hook is not None:
+        if self._request_info_enabled:
             base_factory = _default_participant_factory
+            agent_filter = self._request_info_filter
 
-            def _factory_with_human_input(
+            def _factory_with_request_info(
                 spec: GroupChatParticipantSpec,
                 config: _GroupChatConfig,
             ) -> _GroupChatParticipantPipeline:
                 pipeline = list(base_factory(spec, config))
                 if pipeline:
-                    # Add interceptor executor after the participant
-                    interceptor = _HumanInputInterceptor(
-                        hook,
-                        executor_id=f"human_input_interceptor:{spec.name}",
+                    # Add interceptor executor BEFORE the participant (prepend)
+                    interceptor = RequestInfoInterceptor(
+                        executor_id=f"request_info:{spec.name}",
+                        agent_filter=agent_filter,
                     )
-                    pipeline.append(interceptor)
+                    pipeline.insert(0, interceptor)
                 return tuple(pipeline)
 
-            participant_factory = _factory_with_human_input
+            participant_factory = _factory_with_request_info
 
         result = assemble_group_chat_workflow(
             wiring=wiring,
@@ -1621,7 +1674,18 @@ class HandoffBuilder(HumanInputHookMixin):
             raise TypeError("Expected tuple from assemble_group_chat_workflow with return_builder=True")
         builder, coordinator = result
 
-        builder = builder.add_edge(input_node, starting_executor)
+        # When request_info is enabled, the input should go through the interceptor first
+        if self._request_info_enabled:
+            # Get the entry executor from the builder's registered executors
+            starting_entry_id = f"request_info:{self._starting_agent_id}"
+            starting_entry_executor = builder._executors.get(starting_entry_id)  # type: ignore
+            if starting_entry_executor:
+                builder = builder.add_edge(input_node, starting_entry_executor)
+            else:
+                # Fallback to direct connection if interceptor not found
+                builder = builder.add_edge(input_node, starting_executor)
+        else:
+            builder = builder.add_edge(input_node, starting_executor)
         builder = builder.add_edge(coordinator, user_gateway)
         builder = builder.add_edge(user_gateway, coordinator)
 

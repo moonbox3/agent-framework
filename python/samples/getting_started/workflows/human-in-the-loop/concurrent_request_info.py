@@ -1,12 +1,33 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+"""
+Sample: Request Info with ConcurrentBuilder
+
+This sample demonstrates using the `.with_request_info()` method to pause a
+ConcurrentBuilder workflow AFTER all parallel agents complete but BEFORE
+aggregation, allowing human review and modification of the combined results.
+
+Purpose:
+Show how to use the request info API that pauses after concurrent agents run,
+allowing review and steering of results before they are aggregated.
+
+Demonstrate:
+- Configuring request info with `.with_request_info()`
+- Reviewing outputs from multiple concurrent agents
+- Injecting human guidance after agents execute but before aggregation
+
+Prerequisites:
+- Azure OpenAI configured for AzureOpenAIChatClient with required environment variables
+- Authentication via azure-identity (run az login before executing)
+"""
+
 import asyncio
 from typing import Any
 
 from agent_framework import (
+    AgentInputRequest,
     ChatMessage,
     ConcurrentBuilder,
-    HumanInputRequest,
     RequestInfoEvent,
     Role,
     WorkflowOutputEvent,
@@ -17,73 +38,8 @@ from agent_framework._workflows._agent_executor import AgentExecutorResponse
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
-"""
-Sample: Human Input Hook with ConcurrentBuilder
-
-This sample demonstrates using the `.with_human_input_hook()` method to request
-arbitrary human feedback mid-workflow with ConcurrentBuilder. The hook is called
-after all parallel agents complete but before the aggregator runs.
-
-Purpose:
-Show how to use HumanInputRequest to pause a ConcurrentBuilder workflow and request
-human review of parallel agent outputs before aggregation.
-
-Demonstrate:
-- Configuring a human input hook on ConcurrentBuilder
-- Reviewing outputs from multiple concurrent agents simultaneously
-- Injecting human guidance before the aggregator synthesizes results
-
-Prerequisites:
-- Azure OpenAI configured for AzureOpenAIChatClient with required environment variables
-- Authentication via azure-identity (run az login before executing)
-"""
-
 # Store chat client at module level for aggregator access
 _chat_client: AzureOpenAIChatClient | None = None
-
-
-def review_concurrent_outputs(
-    conversation: list[ChatMessage],
-    agent_id: str | None,
-) -> HumanInputRequest | None:
-    """Hook that requests human input after concurrent agents complete.
-
-    This is a simple demonstration heuristic that always requests review when
-    multiple agents have responded. In practice, you might use other strategies:
-    - Always pause unconditionally for mandatory human review
-    - Check for conflicting opinions between agents
-    - Call an async policy service to determine if review is needed
-    - Use content classification to detect topics requiring human judgment
-    - Skip review if all agents reached similar conclusions
-
-    For ConcurrentBuilder, the hook is called once with a merged view of all
-    agent outputs. The agent_id is None since multiple agents contributed.
-
-    Args:
-        conversation: Merged conversation including all concurrent agent responses
-        agent_id: None for concurrent (multiple agents contributed)
-
-    Returns:
-        HumanInputRequest to pause and request input, or None to continue
-    """
-    if not conversation:
-        return None
-
-    # Example heuristic: request review when we have multiple perspectives
-    # This is just one approach - replace with your own logic as needed
-    assistant_msgs = [m for m in conversation if m.role and m.role.value == "assistant"]
-
-    if len(assistant_msgs) >= 2:
-        return HumanInputRequest(
-            prompt=(
-                f"Received {len(assistant_msgs)} different perspectives. "
-                "Please review and provide guidance on which aspects to prioritize in the final summary:"
-            ),
-            conversation=conversation,
-            source_agent_id=agent_id,
-            metadata={"num_perspectives": len(assistant_msgs)},
-        )
-    return None
 
 
 async def aggregate_with_synthesis(results: list[AgentExecutorResponse]) -> Any:
@@ -170,12 +126,12 @@ async def main() -> None:
         ),
     )
 
-    # Build workflow with human input hook and custom aggregator
+    # Build workflow with request info enabled and custom aggregator
     workflow = (
         ConcurrentBuilder()
         .participants([technical_analyst, business_analyst, user_experience_analyst])
         .with_aggregator(aggregate_with_synthesis)
-        .with_human_input_hook(review_concurrent_outputs)
+        .with_request_info()
         .build()
     )
 
@@ -199,27 +155,26 @@ async def main() -> None:
         # Process events
         async for event in stream:
             if isinstance(event, RequestInfoEvent):
-                if isinstance(event.data, HumanInputRequest):
-                    # Display the concurrent agent outputs
+                if isinstance(event.data, AgentInputRequest):
+                    # Display pre-execution context for steering concurrent agents
                     print("\n" + "-" * 40)
-                    print("HUMAN INPUT REQUESTED")
+                    print("INPUT REQUESTED (BEFORE CONCURRENT AGENTS)")
                     print("-" * 40)
-                    print("Concurrent agent outputs:")
+                    print(f"About to call agents: {event.data.target_agent_id}")
+                    print("Conversation context:")
+                    recent = (
+                        event.data.conversation[-2:] if len(event.data.conversation) > 2 else event.data.conversation
+                    )
+                    for msg in recent:
+                        role = msg.role.value if msg.role else "unknown"
+                        text = (msg.text or "")[:150]
+                        print(f"  [{role}]: {text}...")
+                    print("-" * 40)
 
-                    # Show each assistant message (one per analyst)
-                    for msg in event.data.conversation:
-                        if msg.role and msg.role.value == "assistant":
-                            text = (msg.text or "")[:250]
-                            print(f"\n  [analyst]: {text}...")
-
-                    print("\n" + "-" * 40)
-                    print(f"Prompt: {event.data.prompt}")
-                    print("(Workflow paused)")
-
-                    # Get human input
-                    user_input = input("Your guidance (or 'skip' to continue): ")
+                    # Get human input to steer all agents
+                    user_input = input("Your guidance for the analysts (or 'skip' to continue): ")  # noqa: ASYNC250
                     if user_input.lower() == "skip":
-                        user_input = "All perspectives are equally important. Please create a balanced summary."
+                        user_input = "Please analyze objectively from your unique perspective."
 
                     pending_responses = {event.request_id: user_input}
                     print("(Resuming workflow...)")
@@ -237,7 +192,6 @@ async def main() -> None:
             elif isinstance(event, WorkflowStatusEvent):
                 if event.state == WorkflowRunState.IDLE:
                     workflow_complete = True
-                # Note: IDLE_WITH_PENDING_REQUESTS is handled inline with RequestInfoEvent
 
 
 if __name__ == "__main__":

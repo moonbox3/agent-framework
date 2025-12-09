@@ -51,7 +51,7 @@ from ._executor import (
     Executor,
     handler,
 )
-from ._human_input import HumanInputHookMixin
+from ._human_input import RequestInfoInterceptor
 from ._message_utils import normalize_messages_input
 from ._workflow import Workflow
 from ._workflow_builder import WorkflowBuilder
@@ -77,9 +77,7 @@ class _InputToConversation(Executor):
         messages: list[str | ChatMessage],
         ctx: WorkflowContext[list[ChatMessage]],
     ) -> None:
-        # Make a copy to avoid mutation downstream
-        normalized = normalize_messages_input(messages)
-        await ctx.send_message(list(normalized))
+        await ctx.send_message(normalize_messages_input(messages))
 
 
 class _ResponseToConversation(Executor):
@@ -101,7 +99,7 @@ class _EndWithConversation(Executor):
         await ctx.yield_output(list(conversation))
 
 
-class SequentialBuilder(HumanInputHookMixin):
+class SequentialBuilder:
     r"""High-level builder for sequential agent/executor workflows with shared context.
 
     - `participants([...])` accepts a list of AgentProtocol (recommended) or Executor
@@ -121,20 +119,23 @@ class SequentialBuilder(HumanInputHookMixin):
         # Enable checkpoint persistence
         workflow = SequentialBuilder().participants([agent1, agent2]).with_checkpointing(storage).build()
 
+        # Enable request info for mid-workflow feedback (pauses before each agent)
+        workflow = SequentialBuilder().participants([agent1, agent2]).with_request_info().build()
 
-        # Enable human input hook for mid-workflow feedback
-        def request_review(conversation, agent_id):
-            if "review" in conversation[-1].text.lower():
-                return HumanInputRequest(prompt="Please review:", conversation=conversation)
-            return None
-
-
-        workflow = SequentialBuilder().participants([agent1, agent2]).with_human_input_hook(request_review).build()
+        # Enable request info only for specific agents
+        workflow = (
+            SequentialBuilder()
+            .participants([agent1, agent2, agent3])
+            .with_request_info(agents=[agent2])  # Only pause before agent2
+            .build()
+        )
     """
 
     def __init__(self) -> None:
         self._participants: list[AgentProtocol | Executor] = []
         self._checkpoint_storage: CheckpointStorage | None = None
+        self._request_info_enabled: bool = False
+        self._request_info_filter: set[str] | None = None
 
     def participants(self, participants: Sequence[AgentProtocol | Executor]) -> "SequentialBuilder":
         """Define the ordered participants for this sequential workflow.
@@ -168,6 +169,47 @@ class SequentialBuilder(HumanInputHookMixin):
         self._checkpoint_storage = checkpoint_storage
         return self
 
+    def with_request_info(
+        self,
+        *,
+        agents: Sequence[str | AgentProtocol | Executor] | None = None,
+    ) -> "SequentialBuilder":
+        """Enable request info before agents run in the workflow.
+
+        When enabled, the workflow pauses before each agent runs, emitting
+        a RequestInfoEvent that allows the caller to review the conversation and
+        optionally inject guidance before the agent responds. The caller provides
+        input via the standard response_handler/request_info pattern.
+
+        Args:
+            agents: Optional filter - only pause before these specific agents/executors.
+                   Accepts agent names (str), agent instances, or executor instances.
+                   If None (default), pauses before every agent.
+
+        Returns:
+            self: The builder instance for fluent chaining.
+
+        Example:
+
+        .. code-block:: python
+
+            # Pause before all agents
+            workflow = SequentialBuilder().participants([a1, a2]).with_request_info().build()
+
+            # Pause only before specific agents
+            workflow = (
+                SequentialBuilder()
+                .participants([drafter, reviewer, finalizer])
+                .with_request_info(agents=[reviewer])  # Only pause before reviewer
+                .build()
+            )
+        """
+        from ._human_input import resolve_request_info_filter
+
+        self._request_info_enabled = True
+        self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)
+        return self
+
     def build(self) -> Workflow:
         """Build and validate the sequential workflow.
 
@@ -196,24 +238,23 @@ class SequentialBuilder(HumanInputHookMixin):
         for p in self._participants:
             # Agent-like branch: either explicitly an AgentExecutor or any non-AgentExecutor
             if not (isinstance(p, Executor) and not isinstance(p, AgentExecutor)):
-                # input conversation -> (agent) -> [human_input_interceptor] -> response -> conversation
-                builder.add_edge(prior, p)
-
-                # Give the adapter a deterministic, self-describing id
+                # input conversation -> [human_input_interceptor] -> (agent) -> response -> conversation
                 label: str
                 label = p.id if isinstance(p, Executor) else getattr(p, "name", None) or p.__class__.__name__
                 resp_to_conv = _ResponseToConversation(id=f"to-conversation:{label}")
 
-                if self._human_input_hook is not None:
-                    # Insert human input interceptor between agent and response converter
-                    # Create a dedicated interceptor per agent to avoid ID conflicts
-                    interceptor = self._create_human_input_executor(f"human_input_interceptor:{label}")
-                    if interceptor is not None:
-                        builder.add_edge(p, interceptor)
-                        builder.add_edge(interceptor, resp_to_conv)
+                if self._request_info_enabled:
+                    # Insert request info interceptor BEFORE the agent
+                    interceptor = RequestInfoInterceptor(
+                        executor_id=f"request_info:{label}",
+                        agent_filter=self._request_info_filter,
+                    )
+                    builder.add_edge(prior, interceptor)
+                    builder.add_edge(interceptor, p)
                 else:
-                    builder.add_edge(p, resp_to_conv)
+                    builder.add_edge(prior, p)
 
+                builder.add_edge(p, resp_to_conv)
                 prior = resp_to_conv
             elif isinstance(p, Executor):
                 # Custom executor operates on list[ChatMessage]

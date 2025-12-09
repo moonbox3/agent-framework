@@ -1,27 +1,26 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Human input hook support for high-level builder APIs.
+"""Request info support for high-level builder APIs.
 
-This module provides infrastructure for requesting arbitrary human feedback
-mid-workflow in `SequentialBuilder`, `ConcurrentBuilder`, and `GroupChatBuilder`.
+This module provides a mechanism for pausing workflows to request external input
+before agent turns in `SequentialBuilder`, `ConcurrentBuilder`, `GroupChatBuilder`,
+and `HandoffBuilder`.
+
+The design follows the standard `request_info` pattern used throughout the
+workflow system, keeping the API consistent and predictable.
 
 Key components:
-- HumanInputRequest: Standard request type emitted via RequestInfoEvent
-- HumanInputHook: Callable type alias for hook functions
-- HumanInputHookMixin: Mixin class providing `.with_human_input_hook()` method
-- _HumanInputInterceptor: Internal executor that intercepts responses and invokes the hook
+- AgentInputRequest: Request type emitted via RequestInfoEvent for pre-agent steering
+- RequestInfoInterceptor: Internal executor that pauses workflow before agent runs
 """
 
-import inspect
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias, cast
+from typing import Any
 
-from typing_extensions import Self
-
+from .._agents import AgentProtocol
 from .._types import ChatMessage, Role
-from ._agent_executor import AgentExecutorResponse
+from ._agent_executor import AgentExecutorRequest
 from ._executor import Executor, handler
 from ._request_info_mixin import response_handler
 from ._workflow_context import WorkflowContext
@@ -29,308 +28,291 @@ from ._workflow_context import WorkflowContext
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class HumanInputRequest:
-    """Request for human input in high-level builder workflows.
+def resolve_request_info_filter(
+    agents: list[str | AgentProtocol | Executor] | None,
+) -> set[str] | None:
+    """Resolve a list of agent/executor references to a set of IDs for filtering.
 
-    Emitted via RequestInfoEvent when a workflow needs human guidance beyond
-    binary tool approval. The human's response is injected into the conversation
-    as a user message before the workflow continues.
+    Args:
+        agents: List of agent names (str), AgentProtocol instances, or Executor instances.
+                If None, returns None (meaning no filtering - pause for all).
+
+    Returns:
+        Set of executor/agent IDs to filter on, or None if no filtering.
+    """
+    if agents is None:
+        return None
+
+    result: set[str] = set()
+    for agent in agents:
+        if isinstance(agent, str):
+            result.add(agent)
+        elif isinstance(agent, Executor):
+            result.add(agent.id)
+        elif isinstance(agent, AgentProtocol):
+            name = getattr(agent, "name", None)
+            if name:
+                result.add(name)
+            else:
+                logger.warning("AgentProtocol without name cannot be used for request_info filtering")
+        else:
+            logger.warning(f"Unsupported type for request_info filter: {type(agent).__name__}")
+
+    return result if result else None
+
+
+@dataclass
+class AgentInputRequest:
+    """Request for human input before an agent runs in high-level builder workflows.
+
+    Emitted via RequestInfoEvent when a workflow pauses before an agent executes.
+    The response is injected into the conversation as a user message to steer
+    the agent's behavior.
+
+    This is the standard request type used by `.with_request_info()` on
+    SequentialBuilder, ConcurrentBuilder, GroupChatBuilder, and HandoffBuilder.
 
     Attributes:
-        prompt: Human-readable prompt explaining what input is needed
-        conversation: Full conversation history at the time of the request
-        source_agent_id: ID of the agent whose output triggered the request (if known)
-        metadata: Optional builder-specific context (round index, agent name, etc.)
+        target_agent_id: ID of the agent that is about to run
+        conversation: Current conversation history the agent will receive
+        instruction: Optional instruction from the orchestrator (e.g., manager in GroupChat)
+        metadata: Builder-specific context (stores internal state for resume)
     """
 
-    prompt: str
+    target_agent_id: str | None
     conversation: list[ChatMessage] = field(default_factory=lambda: [])
-    source_agent_id: str | None = None
+    instruction: str | None = None
     metadata: dict[str, Any] = field(default_factory=lambda: {})
 
 
-# Type alias for human input hook result
-HumanInputHookResult: TypeAlias = HumanInputRequest | None
-
-# Type alias for the human input hook callback
-# Accepts (conversation, agent_id) and returns HumanInputRequest to pause or None to continue
-# Supports both sync and async callbacks
-HumanInputHook: TypeAlias = Callable[
-    [list[ChatMessage], str | None],
-    HumanInputHookResult | Awaitable[HumanInputHookResult],
-]
+# Keep legacy name as alias for backward compatibility
+AgentResponseReviewRequest = AgentInputRequest
 
 
-class HumanInputHookMixin:
-    """Mixin providing human input hook capability for high-level builders.
+class RequestInfoInterceptor(Executor):
+    """Internal executor that pauses workflow for human input before agent runs.
 
-    Builders that inherit this mixin gain the `.with_human_input_hook()` method
-    and internal state management for the hook. The mixin provides a factory
-    method to create the interceptor executor when the hook is configured.
-    """
+    This executor is inserted into the workflow graph by builders when
+    `.with_request_info()` is called. It intercepts AgentExecutorRequest messages
+    BEFORE the agent runs and pauses the workflow via `ctx.request_info()` with
+    an AgentInputRequest.
 
-    _human_input_hook: HumanInputHook | None = None
+    When a response is received, the response handler injects the input
+    as a user message into the conversation and forwards the request to the agent.
 
-    def with_human_input_hook(
-        self: Self,
-        hook: HumanInputHook,
-    ) -> Self:
-        """Add a hook that can request human input between agent turns.
-
-        The hook is called after each agent completes. If it returns a
-        HumanInputRequest, the workflow pauses and emits a RequestInfoEvent.
-        The human's response is injected into the conversation as a user
-        message before the next agent runs.
-
-        The hook can be either sync or async. Async hooks are awaited internally.
-
-        Args:
-            hook: Callback that receives (conversation, agent_id) and returns
-                  HumanInputRequest to pause, or None to continue. Can be
-                  sync or async.
-
-        Returns:
-            Self for method chaining.
-
-        Example:
-
-        .. code-block:: python
-
-            # Sync hook - simple inspection
-            def review_on_keyword(
-                conversation: list[ChatMessage],
-                agent_id: str | None,
-            ) -> HumanInputRequest | None:
-                if conversation and "review" in conversation[-1].text.lower():
-                    return HumanInputRequest(
-                        prompt="Please review and provide feedback:",
-                        conversation=conversation,
-                        source_agent_id=agent_id,
-                    )
-                return None
-
-
-            # Async hook - checks external service
-            async def check_policy_service(
-                conversation: list[ChatMessage],
-                agent_id: str | None,
-            ) -> HumanInputRequest | None:
-                requires_review = await policy_api.check_content(conversation[-1].text)
-                if requires_review:
-                    return HumanInputRequest(
-                        prompt="Content flagged for review:",
-                        conversation=conversation,
-                        source_agent_id=agent_id,
-                    )
-                return None
-
-
-            # Both work the same way
-            workflow = (
-                SequentialBuilder().participants([agent1, agent2]).with_human_input_hook(check_policy_service).build()
-            )
-        """
-        self._human_input_hook = hook
-        return self
-
-    def _create_human_input_executor(
-        self,
-        executor_id: str = "human_input_interceptor",
-    ) -> "_HumanInputInterceptor | None":
-        """Factory method for builders to create the interceptor executor if hook is set.
-
-        Args:
-            executor_id: ID for the interceptor executor (default: "human_input_interceptor")
-
-        Returns:
-            _HumanInputInterceptor instance if hook is configured, None otherwise.
-        """
-        if self._human_input_hook is None:
-            return None
-        return _HumanInputInterceptor(self._human_input_hook, executor_id=executor_id)
-
-
-class _HumanInputInterceptor(Executor):
-    """Internal executor that intercepts agent responses and invokes the human input hook.
-
-    This executor is inserted into the workflow graph by builders that use
-    the HumanInputHookMixin. It intercepts AgentExecutorResponse messages,
-    invokes the configured hook, and either:
-    - Passes through the response unchanged (hook returns None)
-    - Pauses the workflow via ctx.request_info() (hook returns HumanInputRequest)
-
-    When the human responds, the response handler injects the human's input
-    as a user message into the conversation and continues the workflow.
-
-    For ConcurrentBuilder, this executor also handles list[AgentExecutorResponse]
-    from fan-in aggregation. In that case, all conversations are merged before
-    invoking the hook with agent_id=None.
+    The optional `agent_filter` parameter allows limiting which agents trigger the pause.
+    If the target agent's ID is not in the filter set, the request is forwarded
+    without pausing.
     """
 
     def __init__(
         self,
-        hook: HumanInputHook,
-        executor_id: str = "human_input_interceptor",
+        executor_id: str = "request_info_interceptor",
+        agent_filter: set[str] | None = None,
     ) -> None:
-        """Initialize the interceptor executor.
+        """Initialize the request info interceptor executor.
 
         Args:
-            hook: The human input hook callback
-            executor_id: ID for this executor (default: "human_input_interceptor")
+            executor_id: ID for this executor (default: "request_info_interceptor")
+            agent_filter: Optional set of agent/executor IDs to filter on.
+                         If provided, only requests to these agents trigger a pause.
+                         If None (default), all requests trigger a pause.
         """
         super().__init__(executor_id)
-        self._hook = hook
+        self._agent_filter = agent_filter
 
-    async def _invoke_hook(
-        self,
-        conversation: list[ChatMessage],
-        agent_id: str | None,
-    ) -> HumanInputRequest | None:
-        """Invoke the hook, handling both sync and async callbacks.
+    def _should_pause_for_agent(self, agent_id: str | None) -> bool:
+        """Check if we should pause for the given agent ID."""
+        if self._agent_filter is None:
+            return True
+        if agent_id is None:
+            return False
+        # Check both the full ID and any name portion after a prefix
+        # e.g., "groupchat_agent:writer" should match filter "writer"
+        if agent_id in self._agent_filter:
+            return True
+        # Extract name from prefixed IDs like "groupchat_agent:writer" or "request_info:writer"
+        if ":" in agent_id:
+            name_part = agent_id.split(":", 1)[1]
+            if name_part in self._agent_filter:
+                return True
+        return False
 
-        Args:
-            conversation: Current conversation history
-            agent_id: ID of the agent that produced the last response
+    def _extract_agent_name_from_executor_id(self) -> str | None:
+        """Extract the agent name from this interceptor's executor ID.
 
-        Returns:
-            HumanInputRequest if human input is needed, None otherwise
+        The interceptor ID is typically "request_info:<agent_name>", so we
+        extract the agent name to determine which agent we're intercepting for.
         """
-        result = self._hook(conversation, agent_id)
-        if inspect.iscoroutine(result):
-            return cast("HumanInputRequest | None", await result)
-        return cast("HumanInputRequest | None", result)
+        if ":" in self.id:
+            return self.id.split(":", 1)[1]
+        return None
 
     @handler
-    async def check_for_input(
+    async def intercept_agent_request(
         self,
-        response: AgentExecutorResponse,
-        ctx: WorkflowContext[AgentExecutorResponse, Any],
+        request: AgentExecutorRequest,
+        ctx: WorkflowContext[AgentExecutorRequest, Any],
     ) -> None:
-        """Check if human input is needed after an agent response.
+        """Intercept request before agent runs and pause for human input.
 
-        If the hook returns a HumanInputRequest, the workflow pauses and emits
-        a RequestInfoEvent. Otherwise, the response passes through unchanged.
+        Pauses the workflow and emits a RequestInfoEvent with the current
+        conversation for steering. If an agent filter is configured and this
+        agent is not in the filter, the request is forwarded without pausing.
 
         Args:
-            response: The agent's response to check
-            ctx: Workflow context for sending messages or requesting info
+            request: The request about to be sent to the agent
+            ctx: Workflow context for requesting info
         """
-        conversation = list(response.full_conversation or [])
-        agent_id = response.executor_id
+        # Determine the target agent from our executor ID
+        target_agent = self._extract_agent_name_from_executor_id()
 
-        request = await self._invoke_hook(conversation, agent_id)
-        if request is not None:
-            # Store the original response so we can continue after human input
-            request.metadata["_original_response"] = response
-            await ctx.request_info(request, str)
-        else:
-            # No human input needed, pass through the response
-            await ctx.send_message(response)
+        # Check if we should pause for this agent
+        if not self._should_pause_for_agent(target_agent):
+            logger.debug(f"Skipping request_info pause for agent {target_agent} (not in filter)")
+            await ctx.send_message(request)
+            return
+
+        conversation = list(request.messages or [])
+
+        input_request = AgentInputRequest(
+            target_agent_id=target_agent,
+            conversation=conversation,
+            instruction=None,  # Could be extended to include manager instruction
+            metadata={"_original_request": request, "_input_type": "AgentExecutorRequest"},
+        )
+        await ctx.request_info(input_request, str)
 
     @handler
-    async def check_for_input_concurrent(
+    async def intercept_conversation(
         self,
-        responses: list[AgentExecutorResponse],
-        ctx: WorkflowContext[list[AgentExecutorResponse], Any],
+        messages: list[ChatMessage],
+        ctx: WorkflowContext[list[ChatMessage], Any],
     ) -> None:
-        """Check if human input is needed after concurrent agents complete.
+        """Intercept conversation before agent runs (used by SequentialBuilder).
 
-        This handler is used by ConcurrentBuilder to check all parallel agent
-        outputs before aggregation. The hook is called with a merged view of
-        all agent conversations and agent_id=None.
+        SequentialBuilder passes list[ChatMessage] directly to agents. This handler
+        intercepts that flow and pauses for human input.
 
         Args:
-            responses: List of responses from all concurrent agents
-            ctx: Workflow context for sending messages or requesting info
+            messages: The conversation about to be sent to the agent
+            ctx: Workflow context for requesting info
         """
-        # Merge all conversations into a combined view for the hook
-        # Take the first response's conversation as base (they share user prompt)
-        # then append each agent's final assistant messages
+        # Determine the target agent from our executor ID
+        target_agent = self._extract_agent_name_from_executor_id()
+
+        # Check if we should pause for this agent
+        if not self._should_pause_for_agent(target_agent):
+            logger.debug(f"Skipping request_info pause for agent {target_agent} (not in filter)")
+            await ctx.send_message(messages)
+            return
+
+        input_request = AgentInputRequest(
+            target_agent_id=target_agent,
+            conversation=list(messages),
+            instruction=None,
+            metadata={"_original_messages": messages, "_input_type": "list[ChatMessage]"},
+        )
+        await ctx.request_info(input_request, str)
+
+    @handler
+    async def intercept_concurrent_requests(
+        self,
+        requests: list[AgentExecutorRequest],
+        ctx: WorkflowContext[list[AgentExecutorRequest], Any],
+    ) -> None:
+        """Intercept requests before concurrent agents run.
+
+        This handler is used by ConcurrentBuilder to get human input before
+        all parallel agents execute.
+
+        Args:
+            requests: List of requests for all concurrent agents
+            ctx: Workflow context for requesting info
+        """
+        # Combine conversations for display
         combined_conversation: list[ChatMessage] = []
-        if responses:
-            # Use the first response's full conversation as the base
-            first_conv = responses[0].full_conversation or []
-            combined_conversation = list(first_conv)
+        if requests:
+            combined_conversation = list(requests[0].messages or [])
 
-            # For subsequent responses, just add their assistant messages to avoid
-            # duplicating the user prompt. Note: this is a simplified merge.
-            for resp in responses[1:]:
-                if resp.agent_run_response and resp.agent_run_response.messages:
-                    combined_conversation.extend(resp.agent_run_response.messages)
-
-        request = await self._invoke_hook(combined_conversation, None)
-        if request is not None:
-            # Store the original responses so we can continue after human input
-            request.metadata["_original_responses"] = responses
-            await ctx.request_info(request, str)
-        else:
-            # No human input needed, pass through the responses
-            await ctx.send_message(responses)
+        input_request = AgentInputRequest(
+            target_agent_id=None,  # Multiple agents
+            conversation=combined_conversation,
+            instruction=None,
+            metadata={"_original_requests": requests},
+        )
+        await ctx.request_info(input_request, str)
 
     @response_handler
-    async def handle_human_response(
+    async def handle_input_response(
         self,
-        original_request: HumanInputRequest,
+        original_request: AgentInputRequest,
         response: str,
-        ctx: WorkflowContext[AgentExecutorResponse, Any],
+        ctx: WorkflowContext[AgentExecutorRequest | list[ChatMessage], Any],
     ) -> None:
-        """Handle the human's response and continue the workflow.
+        """Handle the human input and forward the modified request to the agent.
 
-        Injects the human's response as a user message into the conversation
-        and forwards the modified AgentExecutorResponse to continue the workflow.
+        Injects the response as a user message into the conversation
+        and forwards the modified request to the agent.
 
         Args:
-            original_request: The HumanInputRequest that triggered the pause
-            response: The human's response text
+            original_request: The AgentInputRequest that triggered the pause
+            response: The human input text
             ctx: Workflow context for continuing the workflow
         """
-        # Check if this is from concurrent (list) or sequential (single) response
-        original_responses: list[AgentExecutorResponse] | None = original_request.metadata.get("_original_responses")
-        if original_responses is not None:
-            # Concurrent case: inject human response and forward list
-            human_message = ChatMessage(role=Role.USER, text=response)
+        human_message = ChatMessage(role=Role.USER, text=response)
 
-            # Add the human message to all responses' conversations
-            updated_responses: list[AgentExecutorResponse] = []
-            for orig_resp in original_responses:
-                conversation = list(orig_resp.full_conversation or [])
-                conversation.append(human_message)
-                updated_responses.append(
-                    AgentExecutorResponse(
-                        executor_id=orig_resp.executor_id,
-                        agent_run_response=orig_resp.agent_run_response,
-                        full_conversation=conversation,
+        # Handle concurrent case (list of AgentExecutorRequest)
+        original_requests: list[AgentExecutorRequest] | None = original_request.metadata.get("_original_requests")
+        if original_requests is not None:
+            updated_requests: list[AgentExecutorRequest] = []
+            for orig_req in original_requests:
+                messages = list(orig_req.messages or [])
+                messages.append(human_message)
+                updated_requests.append(
+                    AgentExecutorRequest(
+                        messages=messages,
+                        should_respond=orig_req.should_respond,
                     )
                 )
 
             logger.debug(
                 f"Human input received for concurrent workflow, "
-                f"continuing with {len(updated_responses)} updated responses"
+                f"continuing with {len(updated_requests)} updated requests"
             )
-            await ctx.send_message(updated_responses)  # type: ignore[arg-type]
+            await ctx.send_message(updated_requests)  # type: ignore[arg-type]
             return
 
-        # Sequential case: single response
-        original_response: AgentExecutorResponse | None = original_request.metadata.get("_original_response")
-        if original_response is None:
-            logger.error("Human input response handler missing original response in request metadata")
-            raise RuntimeError("Missing original response in HumanInputRequest metadata")
+        # Handle list[ChatMessage] case (SequentialBuilder)
+        original_messages: list[ChatMessage] | None = original_request.metadata.get("_original_messages")
+        if original_messages is not None:
+            messages = list(original_messages)
+            messages.append(human_message)
 
-        # Inject human response into the conversation
-        human_message = ChatMessage(role=Role.USER, text=response)
-        conversation = list(original_response.full_conversation or [])
-        conversation.append(human_message)
+            logger.debug(
+                f"Human input received for agent {original_request.target_agent_id}, "
+                f"forwarding conversation with steering context"
+            )
+            await ctx.send_message(messages)
+            return
 
-        # Create updated response with the human input included
-        updated_response = AgentExecutorResponse(
-            executor_id=original_response.executor_id,
-            agent_run_response=original_response.agent_run_response,
-            full_conversation=conversation,
-        )
+        # Handle AgentExecutorRequest case (GroupChatBuilder)
+        orig_request: AgentExecutorRequest | None = original_request.metadata.get("_original_request")
+        if orig_request is not None:
+            messages = list(orig_request.messages or [])
+            messages.append(human_message)
 
-        logger.debug(
-            f"Human input received for agent {original_response.executor_id}, "
-            f"continuing workflow with updated conversation"
-        )
-        await ctx.send_message(updated_response)
+            updated_request = AgentExecutorRequest(
+                messages=messages,
+                should_respond=orig_request.should_respond,
+            )
+
+            logger.debug(
+                f"Human input received for agent {original_request.target_agent_id}, "
+                f"forwarding request with steering context"
+            )
+            await ctx.send_message(updated_request)
+            return
+
+        logger.error("Input response handler missing original request/messages in metadata")
+        raise RuntimeError("Missing original request or messages in AgentInputRequest metadata")

@@ -117,10 +117,13 @@ class TestAgentInputRequest:
 class TestRequestInfoInterceptor:
     """Tests for RequestInfoInterceptor executor."""
 
-    def test_interceptor_creation(self):
-        """Test creating a RequestInfoInterceptor."""
-        interceptor = RequestInfoInterceptor()
-        assert interceptor.id == "request_info_interceptor"
+    def test_interceptor_creation_generates_unique_id(self):
+        """Test creating a RequestInfoInterceptor generates unique IDs."""
+        interceptor1 = RequestInfoInterceptor()
+        interceptor2 = RequestInfoInterceptor()
+        assert interceptor1.id.startswith("request_info_interceptor-")
+        assert interceptor2.id.startswith("request_info_interceptor-")
+        assert interceptor1.id != interceptor2.id
 
     def test_interceptor_with_custom_id(self):
         """Test creating a RequestInfoInterceptor with custom ID."""

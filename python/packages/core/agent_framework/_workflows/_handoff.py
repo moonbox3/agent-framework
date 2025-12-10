@@ -334,7 +334,7 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
             return None
         if source.startswith("request_info:"):
             return source[len("request_info:") :]
-        # Legacy support
+        # TODO(@moonbox3): Remove legacy prefix support in a separate PR (GA cleanup)
         if source.startswith("human_review:"):
             return source[len("human_review:") :]
         if source.startswith("human_input_interceptor:"):

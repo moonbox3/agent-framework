@@ -311,7 +311,7 @@ class ConcurrentBuilder:
         Note:
             Unlike SequentialBuilder and GroupChatBuilder, ConcurrentBuilder does not
             support per-agent filtering since all agents run in parallel and results
-            are collected together. The pause occurs once with all agent outputs combined.
+            are collected together. The pause occurs once with all agent outputs received.
 
         Returns:
             self: The builder instance for fluent chaining.
@@ -325,8 +325,8 @@ class ConcurrentBuilder:
         Wiring pattern:
         - Dispatcher (internal) fans out the input to all `participants`
         - Fan-in collects `AgentExecutorResponse` objects from all participants
-        - If human input hook is configured, the interceptor executor checks for input
-          before passing results to the aggregator
+        - If request info is enabled, the orchestration emits a request info event with outputs from all participants
+            before sending the outputs to the aggregator
         - Aggregator yields output and the workflow becomes idle. The output is either:
           - list[ChatMessage] (default aggregator: one user + one assistant per agent)
           - custom payload from the provided callback/executor

@@ -572,7 +572,7 @@ class GroupChatOrchestratorExecutor(BaseGroupChatOrchestrator):
             message: The participant's response message
             ctx: Workflow context for routing and output
             trailing_messages: Optional list of messages to inject after the participant's
-                message (e.g., human input from the human input hook)
+                message (e.g., additional input from the RequestInfoInterceptor)
         """
         if participant_name not in self._participants:
             raise ValueError(f"Received response from unknown participant '{participant_name}'.")

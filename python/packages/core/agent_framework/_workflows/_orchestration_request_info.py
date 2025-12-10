@@ -15,6 +15,7 @@ Key components:
 """
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -89,6 +90,9 @@ class AgentInputRequest:
 AgentResponseReviewRequest = AgentInputRequest
 
 
+DEFAULT_REQUEST_INFO_ID = "request_info_interceptor"
+
+
 class RequestInfoInterceptor(Executor):
     """Internal executor that pauses workflow for human input before agent runs.
 
@@ -107,17 +111,20 @@ class RequestInfoInterceptor(Executor):
 
     def __init__(
         self,
-        executor_id: str = "request_info_interceptor",
+        executor_id: str | None = None,
         agent_filter: set[str] | None = None,
     ) -> None:
         """Initialize the request info interceptor executor.
 
         Args:
-            executor_id: ID for this executor (default: "request_info_interceptor")
+            executor_id: ID for this executor. If None, generates a unique ID
+                        using the format "request_info_interceptor-<uuid4>".
             agent_filter: Optional set of agent/executor IDs to filter on.
                          If provided, only requests to these agents trigger a pause.
                          If None (default), all requests trigger a pause.
         """
+        if executor_id is None:
+            executor_id = f"{DEFAULT_REQUEST_INFO_ID}-{uuid.uuid4().hex[:8]}"
         super().__init__(executor_id)
         self._agent_filter = agent_filter
 
@@ -247,6 +254,7 @@ class RequestInfoInterceptor(Executor):
     async def handle_input_response(
         self,
         original_request: AgentInputRequest,
+        # TODO(@moonbox3): Extend to support other content types
         response: str,
         ctx: WorkflowContext[AgentExecutorRequest | list[ChatMessage], Any],
     ) -> None:
@@ -259,6 +267,9 @@ class RequestInfoInterceptor(Executor):
             original_request: The AgentInputRequest that triggered the pause
             response: The human input text
             ctx: Workflow context for continuing the workflow
+
+        TODO: Consider having each orchestration implement its own response handler
+              for more specialized behavior.
         """
         human_message = ChatMessage(role=Role.USER, text=response)
 

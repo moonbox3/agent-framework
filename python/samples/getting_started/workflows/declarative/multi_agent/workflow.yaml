@@ -1,0 +1,71 @@
+name: multi-agent-workflow
+description: Orchestrates multiple agents to perform research and summarization
+
+actions:
+  # Initialize the workflow
+  - kind: SetValue
+    id: init
+    displayName: Initialize workflow
+    path: turn.topic
+    value: =inputs.topic
+
+  # Announce the research start
+  - kind: SendActivity
+    id: announce_start
+    displayName: Announce research start
+    activity:
+      text: '=Concat("Starting research on: ", turn.topic)'
+
+  # Call the research agent
+  - kind: InvokeAzureAgent
+    id: research_agent
+    displayName: Call research agent
+    model:
+      configuration:
+        api_type: azure_openai
+        azure_endpoint: ${env:AZURE_OPENAI_ENDPOINT}
+        azure_deployment: ${env:AZURE_OPENAI_DEPLOYMENT}
+    prompt: '=Concat("Research the following topic thoroughly: ", turn.topic, ". Provide detailed information with facts and sources.")'
+    outputFormat:
+      variableName: turn.research_result
+    externalLoop:
+      when: true
+
+  # Show research progress
+  - kind: SendActivity
+    id: research_complete
+    displayName: Announce research complete
+    activity:
+      text: "Research phase complete. Now summarizing..."
+
+  # Call the summarization agent
+  - kind: InvokeAzureAgent
+    id: summary_agent
+    displayName: Call summary agent
+    model:
+      configuration:
+        api_type: azure_openai
+        azure_endpoint: ${env:AZURE_OPENAI_ENDPOINT}
+        azure_deployment: ${env:AZURE_OPENAI_DEPLOYMENT}
+    prompt: '=Concat("Summarize the following research in 3-5 bullet points: ", turn.research_result)'
+    outputFormat:
+      variableName: turn.summary
+    externalLoop:
+      when: true
+
+  # Output the summary
+  - kind: SendActivity
+    id: output_summary
+    displayName: Output final summary
+    activity:
+      text: '=Concat("## Research Summary for: ", turn.topic, "\n\n", turn.summary)'
+
+  # Store the results
+  - kind: SetValue
+    id: store_results
+    displayName: Store workflow results
+    path: workflow.outputs.result
+    value:
+      topic: =turn.topic
+      research: =turn.research_result
+      summary: =turn.summary

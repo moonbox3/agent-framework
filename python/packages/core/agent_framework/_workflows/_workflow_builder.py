@@ -225,6 +225,7 @@ class WorkflowBuilder:
         source: Executor | AgentProtocol,
         target: Executor | AgentProtocol,
         condition: Callable[[Any], bool] | None = None,
+        async_condition: Callable[[Any, Any], Any] | None = None,
     ) -> Self:
         """Add a directed edge between two executors.
 
@@ -236,6 +237,9 @@ class WorkflowBuilder:
             target: The target executor of the edge.
             condition: An optional condition function that determines whether the edge
                        should be traversed based on the message type.
+            async_condition: An optional async condition function that receives
+                       (message_data, shared_state) and determines whether the edge
+                       should be traversed. Takes precedence over condition when present.
 
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
@@ -282,7 +286,7 @@ class WorkflowBuilder:
         target_exec = self._maybe_wrap_agent(target)
         source_id = self._add_executor(source_exec)
         target_id = self._add_executor(target_exec)
-        self._edge_groups.append(SingleEdgeGroup(source_id, target_id, condition))  # type: ignore[call-arg]
+        self._edge_groups.append(SingleEdgeGroup(source_id, target_id, condition, async_condition=async_condition))  # type: ignore[call-arg]
         return self
 
     def add_fan_out_edges(

@@ -138,6 +138,19 @@ to configure which agents can route to which others with a fluent, type-safe API
 |---|---|---|
 | Concurrent with Visualization | [visualization/concurrent_with_visualization.py](./visualization/concurrent_with_visualization.py) | Fan-out/fan-in workflow with diagram export |
 
+### declarative
+
+YAML-based declarative workflows allow you to define multi-agent orchestration patterns without writing Python code.
+
+| Sample | File | Concepts |
+|---|---|---|
+| Simple Workflow | [declarative/simple_workflow/](./declarative/simple_workflow/) | Basic workflow with variable setting, conditionals, and loops |
+| Conditional Workflow | [declarative/conditional_workflow/](./declarative/conditional_workflow/) | Nested conditional branching based on user input |
+| Human-in-Loop | [declarative/human_in_loop/](./declarative/human_in_loop/) | Interactive workflows that request user input |
+| Multi-Agent | [declarative/multi_agent/](./declarative/multi_agent/) | Orchestrating multiple AI agents in sequence |
+
+See the [declarative workflows README](./declarative/README.md) for more details on YAML workflow syntax and available actions.
+
 ### resources
 
 - Sample text inputs used by certain workflows:

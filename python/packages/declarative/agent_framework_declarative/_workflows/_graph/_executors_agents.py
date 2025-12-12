@@ -55,7 +55,7 @@ class AgentResult:
 
 
 @dataclass
-class AgentExternalInputRequest:
+class ExternalInputRequest:
     """Request for external input during agent invocation.
 
     Emitted when externalLoop.when condition evaluates to true,
@@ -74,8 +74,8 @@ class AgentExternalInputRequest:
 
 
 @dataclass
-class AgentExternalInputResponse:
-    """Response to an AgentExternalInputRequest.
+class ExternalInputResponse:
+    """Response to an ExternalInputRequest.
 
     Provided by the caller to resume agent execution with new user input.
     This is the response type expected by the response_handler.
@@ -379,14 +379,14 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         all_messages: list[ChatMessage] = []
         tool_calls: list[FunctionCallContent] = []
 
-        # Get conversation history from state using the specified path
-        conversation_history: list[ChatMessage] = await state.get(messages_path) or []
-
-        # Add user input to conversation history
+        # Add user input to conversation history first (via state.append only)
         if input_text:
             user_message = ChatMessage(role="user", text=input_text)
-            conversation_history.append(user_message)
             await state.append(messages_path, user_message)
+
+        # Get conversation history from state AFTER adding user message
+        # Note: We get a fresh copy to avoid mutation issues
+        conversation_history: list[ChatMessage] = await state.get(messages_path) or []
 
         # Build messages list for agent (use history if available, otherwise just input)
         messages_for_agent: list[ChatMessage] | str = conversation_history if conversation_history else input_text
@@ -428,9 +428,14 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             assistant_message = ChatMessage(role="assistant", text=accumulated_response)
             await state.append(messages_path, assistant_message)
 
-        # Store results in state
+        # Store results in state - support both schema formats:
+        # - Graph mode: agent.response, agent.name
+        # - Interpreter mode: agent.text, agent.messages, agent.toolCalls
         await state.set("agent.response", accumulated_response)
         await state.set("agent.name", agent_name)
+        await state.set("agent.text", accumulated_response)
+        await state.set("agent.messages", all_messages if all_messages else [])
+        await state.set("agent.toolCalls", tool_calls if tool_calls else [])
 
         # Store System.LastMessage for externalLoop.when condition evaluation
         await state.set("system.LastMessage", {"Text": accumulated_response})
@@ -464,7 +469,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         """Handle the agent invocation with full .NET feature parity.
 
         When externalLoop.when is configured and evaluates to true after agent response,
-        this method emits an AgentExternalInputRequest via ctx.request_info() and returns.
+        this method emits an ExternalInputRequest via ctx.request_info() and returns.
         The workflow will yield, and when the caller provides a response via
         send_responses_streaming(), the handle_external_input_response handler
         will continue the loop.
@@ -554,7 +559,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 await ctx.shared_state.set(EXTERNAL_LOOP_STATE_KEY, loop_state)
 
                 # Emit request for external input - workflow will yield here
-                request = AgentExternalInputRequest(
+                request = ExternalInputRequest(
                     request_id=str(uuid.uuid4()),
                     agent_name=agent_name,
                     agent_response=accumulated_response,
@@ -563,7 +568,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                     function_calls=tool_calls,
                 )
                 logger.info(f"InvokeAzureAgent: yielding for external input (iteration {iteration})")
-                await ctx.request_info(request, AgentExternalInputResponse)
+                await ctx.request_info(request, ExternalInputResponse)
                 # Return without sending ActionComplete - workflow yields
                 return
 
@@ -573,11 +578,11 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
     @response_handler
     async def handle_external_input_response(
         self,
-        original_request: AgentExternalInputRequest,
-        response: AgentExternalInputResponse,
+        original_request: ExternalInputRequest,
+        response: ExternalInputResponse,
         ctx: WorkflowContext[ActionComplete, str],
     ) -> None:
-        """Handle response to an AgentExternalInputRequest and continue the loop.
+        """Handle response to an ExternalInputRequest and continue the loop.
 
         This is called when the workflow resumes after yielding for external input.
         It continues the agent invocation loop with the user's new input.
@@ -682,7 +687,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await ctx.shared_state.set(EXTERNAL_LOOP_STATE_KEY, loop_state)
 
             # Emit another request for external input
-            request = AgentExternalInputRequest(
+            request = ExternalInputRequest(
                 request_id=str(uuid.uuid4()),
                 agent_name=agent_name,
                 agent_response=accumulated_response,
@@ -691,7 +696,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 function_calls=tool_calls,
             )
             logger.info(f"InvokeAzureAgent: yielding for external input (iteration {iteration})")
-            await ctx.request_info(request, AgentExternalInputResponse)
+            await ctx.request_info(request, ExternalInputResponse)
             return
 
         logger.warning(f"InvokeAzureAgent: external loop exceeded max iterations ({max_iterations})")

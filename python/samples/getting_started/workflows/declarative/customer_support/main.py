@@ -27,11 +27,7 @@ from pathlib import Path
 
 from agent_framework import RequestInfoEvent, WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_declarative import WorkflowFactory
-from agent_framework_declarative._workflows._graph import (
-    AgentExternalInputRequest,
-    AgentExternalInputResponse,
-)
+from agent_framework_declarative import ExternalInputRequest, ExternalInputResponse, WorkflowFactory
 from azure.identity import AzureCliCredential
 from pydantic import BaseModel, Field
 from ticketing_plugin import TicketingPlugin
@@ -248,7 +244,7 @@ async def main():
         if pending_request_id:
             # Continue workflow with user response
             print(f"\n{YELLOW}WORKFLOW:{RESET} Restore\n")
-            response = AgentExternalInputResponse(user_input=user_input)
+            response = ExternalInputResponse(user_input=user_input)
             stream = workflow.send_responses_streaming({pending_request_id: response})
             pending_request_id = None
         else:
@@ -283,7 +279,7 @@ async def main():
                     else:
                         accumulated_response += str(data)
 
-            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExternalInputRequest):
+            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, ExternalInputRequest):
                 request = event.data
 
                 # The agent_response from the request contains the structured response

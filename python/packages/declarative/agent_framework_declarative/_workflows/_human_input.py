@@ -27,11 +27,14 @@ logger = get_logger("agent_framework.declarative.workflows.human_input")
 
 
 @dataclass
-class ExternalInputRequest(WorkflowEvent):
-    """Event emitted when the workflow needs external input.
+class QuestionRequest(WorkflowEvent):
+    """Event emitted when the workflow needs user input via Question action.
 
     When this event is yielded, the workflow execution should pause
-    and wait for external input to be provided via workflow.send_response().
+    and wait for user input to be provided via workflow.send_response().
+
+    This is used by the Question, RequestExternalInput, and WaitForInput
+    action handlers in the non-graph workflow path.
     """
 
     request_id: str
@@ -89,7 +92,7 @@ async def handle_question(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, N
           - Option B
         default: Option A  # optional default value
 
-    The handler emits an ExternalInputRequest and expects the workflow runner
+    The handler emits a QuestionRequest and expects the workflow runner
     to capture and provide the response before continuing.
     """
     question_id = ctx.action.get("id", "question")
@@ -121,7 +124,7 @@ async def handle_question(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, N
     logger.debug(f"Question: requesting input for {variable}")
 
     # Emit the request event
-    yield ExternalInputRequest(
+    yield QuestionRequest(
         request_id=question_id,
         prompt=str(evaluated_prompt) if evaluated_prompt else None,
         variable=variable,
@@ -179,7 +182,7 @@ async def handle_request_external_input(ctx: ActionContext) -> AsyncGenerator[Wo
     logger.debug(f"RequestExternalInput: requesting input for {variable}")
 
     # Emit the request event
-    yield ExternalInputRequest(
+    yield QuestionRequest(
         request_id=request_id,
         prompt=str(evaluated_prompt) if evaluated_prompt else None,
         variable=variable,
@@ -219,7 +222,7 @@ async def handle_wait_for_input(ctx: ActionContext) -> AsyncGenerator[WorkflowEv
 
     logger.debug(f"WaitForInput: waiting for {variable}")
 
-    yield ExternalInputRequest(
+    yield QuestionRequest(
         request_id=wait_id,
         prompt=str(evaluated_message) if evaluated_message else None,
         variable=variable,

@@ -21,7 +21,7 @@ from ._handlers import (
     WorkflowEvent,
     action_handler,
 )
-from ._human_input import ExternalInputRequest, ExternalLoopEvent
+from ._human_input import ExternalLoopEvent, QuestionRequest
 
 logger = get_logger("agent_framework.declarative.workflows.actions")
 
@@ -355,8 +355,8 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
                 # 3. Update state with input
                 # 4. Resume this generator
 
-                # For now, we request input via ExternalInputRequest
-                yield ExternalInputRequest(
+                # For now, we request input via QuestionRequest
+                yield QuestionRequest(
                     request_id=f"{action_id}_input_{iteration}",
                     prompt="Waiting for user input...",
                     variable="turn.userInput",

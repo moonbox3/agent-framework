@@ -7,37 +7,36 @@ This module provides the DeclarativeGraphBuilder which is analogous to
 action definitions and creates a proper workflow graph with:
 - Executor nodes for each action
 - Edges for sequential flow
-- Async state-aware edge conditions for If/Switch branching
+- Condition evaluator executors for If/Switch that ensure first-match semantics
 - Loop edges for foreach
 """
 
 import re
-from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from agent_framework._workflows import (
     Workflow,
     WorkflowBuilder,
 )
-from agent_framework._workflows._shared_state import SharedState
 
 from ._base import (
-    DECLARATIVE_STATE_KEY,
-    DeclarativeWorkflowState,
+    ConditionResult,
+    DeclarativeActionExecutor,
     LoopIterationResult,
 )
 from ._executors_agents import AGENT_ACTION_EXECUTORS, InvokeAzureAgentExecutor
 from ._executors_basic import BASIC_ACTION_EXECUTORS
 from ._executors_control_flow import (
     CONTROL_FLOW_EXECUTORS,
+    ELSE_BRANCH_INDEX,
+    ConditionGroupEvaluatorExecutor,
     ForeachInitExecutor,
     ForeachNextExecutor,
+    IfConditionEvaluatorExecutor,
     JoinExecutor,
+    SwitchEvaluatorExecutor,
 )
 from ._executors_human_input import HUMAN_INPUT_EXECUTORS
-
-# Type alias for async condition functions used in workflow edges
-ConditionFunc = Callable[[Any, SharedState], Awaitable[bool]]
 
 # Combined mapping of all action kinds to executor classes
 ALL_ACTION_EXECUTORS = {
@@ -46,6 +45,10 @@ ALL_ACTION_EXECUTORS = {
     **AGENT_ACTION_EXECUTORS,
     **HUMAN_INPUT_EXECUTORS,
 }
+
+# Action kinds that terminate control flow (no fall-through to successor)
+# These actions transfer control elsewhere and should not have sequential edges to the next action
+TERMINATOR_ACTIONS = frozenset({"Goto", "GotoAction", "BreakLoop", "ContinueLoop", "EndWorkflow", "EndDialog"})
 
 
 def _generate_semantic_id(action_def: dict[str, Any], kind: str) -> str | None:
@@ -239,63 +242,6 @@ def _extract_activity_slug(text: str) -> str:
     return "_".join(meaningful_words)
 
 
-def _create_condition_evaluator(condition_expr: str, negate: bool = False) -> ConditionFunc:
-    """Create an async condition function that evaluates a declarative expression.
-
-    Args:
-        condition_expr: The condition expression (e.g., "=turn.age < 13")
-        negate: If True, negate the result (for else branches)
-
-    Returns:
-        An async function (data, shared_state) -> bool
-    """
-
-    async def evaluate_condition(data: Any, shared_state: SharedState) -> bool:
-        # Get DeclarativeWorkflowState from shared state
-        try:
-            await shared_state.get(DECLARATIVE_STATE_KEY)
-        except KeyError:
-            # State not initialized - shouldn't happen but handle gracefully
-            return not negate  # Default to then branch
-
-        state = DeclarativeWorkflowState(shared_state)
-        result = await state.eval(condition_expr)
-        bool_result = bool(result)
-        return not bool_result if negate else bool_result
-
-    return evaluate_condition
-
-
-def _create_none_matched_condition(condition_exprs: list[str]) -> ConditionFunc:
-    """Create an async condition that returns True when none of the given conditions match.
-
-    Args:
-        condition_exprs: List of condition expressions that should all be False
-
-    Returns:
-        An async function (data, shared_state) -> bool
-    """
-
-    async def evaluate_none_matched(data: Any, shared_state: SharedState) -> bool:
-        # Get DeclarativeWorkflowState from shared state
-        try:
-            await shared_state.get(DECLARATIVE_STATE_KEY)
-        except KeyError:
-            return True  # Default to else branch if no state
-
-        state = DeclarativeWorkflowState(shared_state)
-
-        # Check that none of the conditions match
-        for condition_expr in condition_exprs:
-            result = await state.eval(condition_expr)
-            if bool(result):
-                return False  # A condition matched, so this default branch shouldn't trigger
-
-        return True  # No conditions matched
-
-    return evaluate_none_matched
-
-
 class DeclarativeGraphBuilder:
     """Builds a Workflow graph from declarative YAML actions.
 
@@ -435,7 +381,11 @@ class DeclarativeGraphBuilder:
             if prev_executor is not None:
                 self._add_sequential_edge(builder, prev_executor, executor)
 
-            prev_executor = executor
+            # Check if this action is a terminator (transfers control elsewhere)
+            # Terminators should not have fall-through edges to subsequent actions
+            action_kind = action_def.get("kind", "")
+            # Don't wire terminators to the next action - control flow ends there
+            prev_executor = None if action_kind in TERMINATOR_ACTIONS else executor
 
         # Store the chain for later reference
         if first_executor is not None:
@@ -523,9 +473,10 @@ class DeclarativeGraphBuilder:
     ) -> Any:
         """Create the graph structure for an If action.
 
-        An If action is implemented without condition evaluator or join executors.
-        Conditional edges evaluate expressions against workflow state.
-        Branch exits are tracked so they can be wired directly to the successor.
+        An If action is implemented with a condition evaluator executor that
+        outputs a ConditionResult. Edge conditions check the branch_index to
+        route to either the then or else branch. This ensures first-match
+        semantics (only one branch executes).
 
         Args:
             action_def: The If action definition
@@ -533,7 +484,7 @@ class DeclarativeGraphBuilder:
             parent_context: Context from parent
 
         Returns:
-            A structure representing the If with branch entries and exits
+            A structure representing the If with evaluator, branch entries and exits
         """
         action_id = action_def.get("id") or f"If_{self._action_index}"
         self._action_index += 1
@@ -554,6 +505,14 @@ class DeclarativeGraphBuilder:
             "parent_id": action_id,
         }
 
+        # Create the condition evaluator executor
+        evaluator = IfConditionEvaluatorExecutor(
+            action_def,
+            condition_expr,
+            id=f"{action_id}_eval",
+        )
+        self._executors[evaluator.id] = evaluator
+
         # Create then branch
         then_actions = action_def.get("then", action_def.get("actions", []))
         then_entry = self._create_executors_for_actions(then_actions, builder, branch_context)
@@ -567,9 +526,26 @@ class DeclarativeGraphBuilder:
             else_passthrough = JoinExecutor({"kind": "ElsePassthrough"}, id=f"{action_id}_else_pass")
             self._executors[else_passthrough.id] = else_passthrough
 
-        # Create async conditions
-        then_condition = _create_condition_evaluator(condition_expr, negate=False)
-        else_condition = _create_condition_evaluator(condition_expr, negate=True)
+        # Wire evaluator to branches with conditions that check ConditionResult.branch_index
+        # branch_index=0 means "then" branch, branch_index=-1 (ELSE_BRANCH_INDEX) means "else"
+        if then_entry:
+            builder.add_edge(
+                source=evaluator,
+                target=then_entry,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == 0,
+            )
+        if else_entry:
+            builder.add_edge(
+                source=evaluator,
+                target=else_entry,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+            )
+        elif else_passthrough:
+            builder.add_edge(
+                source=evaluator,
+                target=else_passthrough,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+            )
 
         # Get branch exit executors for later wiring to successor
         then_exit = self._get_branch_exit(then_entry)
@@ -586,11 +562,10 @@ class DeclarativeGraphBuilder:
         class IfStructure:
             def __init__(self) -> None:
                 self.id = action_id
+                self.evaluator = evaluator  # The entry point for this structure
                 self.then_entry = then_entry
                 self.else_entry = else_entry
-                self.else_passthrough = else_passthrough  # Passthrough when no else actions
-                self.then_condition = then_condition
-                self.else_condition = else_condition
+                self.else_passthrough = else_passthrough
                 self.branch_exits = branch_exits  # All exits that need wiring to successor
                 self._is_if_structure = True
 
@@ -604,12 +579,21 @@ class DeclarativeGraphBuilder:
     ) -> Any:
         """Create the graph structure for a Switch/ConditionGroup action.
 
-        Like If, Switch is implemented without evaluator or join executors.
-        Conditional edges evaluate each condition expression against workflow state.
-        Branch exits are tracked for wiring directly to successor.
+        Supports two schema formats:
+        1. ConditionGroup schema (matches .NET):
+           - conditions: list of {condition: expr, actions: [...]}
+           - elseActions: default actions
+
+        2. Switch schema (interpreter style):
+           - value: expression to match
+           - cases: list of {match: value, actions: [...]}
+           - default: default actions
+
+        Both use evaluator executors that output ConditionResult with branch_index
+        for first-match semantics.
 
         Args:
-            action_def: The Switch action definition
+            action_def: The Switch/ConditionGroup action definition
             builder: The workflow builder
             parent_context: Context from parent
 
@@ -619,46 +603,56 @@ class DeclarativeGraphBuilder:
         action_id = action_def.get("id") or f"Switch_{self._action_index}"
         self._action_index += 1
 
-        conditions = action_def.get("conditions", [])
-
         # Pass the Switch's ID as context for child action naming
         branch_context = {
             **(parent_context or {}),
             "parent_id": action_id,
         }
 
-        # Collect branches with their conditions and exits
-        branches: list[tuple[Any, Any]] = []  # (entry_executor, async_condition)
+        # Detect schema type:
+        # - If "cases" present: interpreter Switch schema (value/cases/default)
+        # - If "conditions" present: ConditionGroup schema (conditions/elseActions)
+        cases = action_def.get("cases", [])
+        conditions = action_def.get("conditions", [])
+
+        if cases:
+            # Interpreter Switch schema: value/cases/default
+            evaluator: DeclarativeActionExecutor = SwitchEvaluatorExecutor(
+                action_def,
+                cases,
+                id=f"{action_id}_eval",
+            )
+            branch_items = cases
+        else:
+            # ConditionGroup schema: conditions/elseActions
+            evaluator = ConditionGroupEvaluatorExecutor(
+                action_def,
+                conditions,
+                id=f"{action_id}_eval",
+            )
+            branch_items = conditions
+
+        self._executors[evaluator.id] = evaluator
+
+        # Collect branches and create executors for each
+        branch_entries: list[tuple[int, Any]] = []  # (branch_index, entry_executor)
         branch_exits: list[Any] = []  # All exits that need wiring to successor
-        matched_conditions: list[str] = []  # For building the "none matched" condition
 
-        for i, cond_item in enumerate(conditions):
-            condition_expr = cond_item.get("condition", "true")
-            # Normalize boolean conditions from YAML to PowerFx-style strings
-            if condition_expr is True:
-                condition_expr = "=true"
-            elif condition_expr is False:
-                condition_expr = "=false"
-            elif isinstance(condition_expr, str) and not condition_expr.startswith("="):
-                condition_expr = f"={condition_expr}"
-            matched_conditions.append(condition_expr)
-
-            branch_actions = cond_item.get("actions", [])
+        for i, item in enumerate(branch_items):
+            branch_actions = item.get("actions", [])
             # Use branch-specific context
             case_context = {**branch_context, "parent_id": f"{action_id}_case{i}"}
             branch_entry = self._create_executors_for_actions(branch_actions, builder, case_context)
 
             if branch_entry:
-                # Create async condition for this branch
-                branch_condition = _create_condition_evaluator(condition_expr, negate=False)
-                branches.append((branch_entry, branch_condition))
+                branch_entries.append((i, branch_entry))
                 # Track exit for later wiring
                 branch_exit = self._get_branch_exit(branch_entry)
                 if branch_exit:
                     branch_exits.append(branch_exit)
 
         # Handle else/default branch
-        # .NET uses "elseActions", Python fallback to "else" or "default"
+        # .NET uses "elseActions", interpreter uses "else" or "default"
         else_actions = action_def.get("elseActions", action_def.get("else", action_def.get("default", [])))
         default_entry = None
         default_passthrough = None
@@ -676,17 +670,40 @@ class DeclarativeGraphBuilder:
             self._executors[default_passthrough.id] = default_passthrough
             branch_exits.append(default_passthrough)
 
-        # Create default condition (none of the previous conditions matched)
-        default_condition = _create_none_matched_condition(matched_conditions)
+        # Wire evaluator to branches with conditions that check ConditionResult.branch_index
+        for branch_index, branch_entry in branch_entries:
+            # Capture branch_index in closure properly using a factory function for type inference
+            def make_branch_condition(expected: int) -> Any:
+                return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected
+
+            builder.add_edge(
+                source=evaluator,
+                target=branch_entry,
+                condition=make_branch_condition(branch_index),
+            )
+
+        # Wire evaluator to default/else branch
+        if default_entry:
+            builder.add_edge(
+                source=evaluator,
+                target=default_entry,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+            )
+        elif default_passthrough:
+            builder.add_edge(
+                source=evaluator,
+                target=default_passthrough,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+            )
 
         # Create a SwitchStructure to hold all the info needed for wiring
         class SwitchStructure:
             def __init__(self) -> None:
                 self.id = action_id
-                self.branches = branches
+                self.evaluator = evaluator  # The entry point for this structure
+                self.branch_entries = branch_entries
                 self.default_entry = default_entry
-                self.default_passthrough = default_passthrough  # Passthrough when no else actions
-                self.default_condition = default_condition
+                self.default_passthrough = default_passthrough
                 self.branch_exits = branch_exits  # All exits that need wiring to successor
                 self._is_switch_structure = True
 
@@ -899,99 +916,20 @@ class DeclarativeGraphBuilder:
         source: Any,
         target: Any,
     ) -> None:
-        """Wire a single source executor to a target (which may be a structure)."""
-        # Check if target is an IfStructure (needs conditional edges)
-        if getattr(target, "_is_if_structure", False):
-            # Wire from source to then branch with then_condition
-            if target.then_entry:
-                self._add_conditional_edge(builder, source, target.then_entry, target.then_condition)
-            # If no then entry, the condition just doesn't match - no edge needed
-            # (the else condition will handle it)
+        """Wire a single source executor to a target (which may be a structure).
 
-            # Wire from source to else branch with else_condition
-            if target.else_entry:
-                self._add_conditional_edge(builder, source, target.else_entry, target.else_condition)
-            elif target.else_passthrough:
-                # No else actions - wire to the passthrough executor for continuation
-                self._add_conditional_edge(builder, source, target.else_passthrough, target.else_condition)
-            # If neither else_entry nor else_passthrough, unmatched conditions have no destination
-
-        elif getattr(target, "_is_switch_structure", False):
-            # Wire from source to switch branches
-            for branch_entry, branch_condition in target.branches:
-                if branch_entry:
-                    self._add_conditional_edge(builder, source, branch_entry, branch_condition)
-
-            # Wire default/else branch
-            if target.default_entry:
-                self._add_conditional_edge(builder, source, target.default_entry, target.default_condition)
-            elif target.default_passthrough:
-                # No else actions - wire to the passthrough executor for continuation
-                self._add_conditional_edge(builder, source, target.default_passthrough, target.default_condition)
-            # If neither default_entry nor default_passthrough, unmatched conditions have no destination
+        For If/Switch structures, wire to the evaluator executor. The evaluator
+        handles condition evaluation and outputs ConditionResult, which is then
+        routed to the appropriate branch by edges created in _create_*_structure.
+        """
+        # Check if target is an IfStructure or SwitchStructure (wire to evaluator)
+        if getattr(target, "_is_if_structure", False) or getattr(target, "_is_switch_structure", False):
+            # Wire from source to the evaluator - the evaluator then routes to branches
+            builder.add_edge(source=source, target=target.evaluator)
 
         else:
             # Normal sequential edge to a regular executor
             builder.add_edge(source=source, target=target)
-
-    def _add_conditional_edge(
-        self,
-        builder: WorkflowBuilder,
-        source: Any,
-        target: Any,
-        condition: Any,
-    ) -> None:
-        """Add a conditional edge, handling nested structures.
-
-        If target is itself a structure (nested If/Switch), recursively wire
-        with combined conditions.
-        """
-        if getattr(target, "_is_if_structure", False):
-            # Nested If - need to combine conditions
-            # Source --[condition AND then_condition]--> then_entry
-            # Source --[condition AND else_condition]--> else_entry
-            combined_then = self._combine_conditions(condition, target.then_condition)
-            combined_else = self._combine_conditions(condition, target.else_condition)
-
-            if target.then_entry:
-                self._add_conditional_edge(builder, source, target.then_entry, combined_then)
-
-            if target.else_entry:
-                self._add_conditional_edge(builder, source, target.else_entry, combined_else)
-
-        elif getattr(target, "_is_switch_structure", False):
-            # Nested Switch - combine with each branch condition
-            for branch_entry, branch_condition in target.branches:
-                if branch_entry:
-                    combined = self._combine_conditions(condition, branch_condition)
-                    self._add_conditional_edge(builder, source, branch_entry, combined)
-
-            if target.default_entry:
-                combined_default = self._combine_conditions(condition, target.default_condition)
-                self._add_conditional_edge(builder, source, target.default_entry, combined_default)
-        else:
-            # Regular executor - just add the edge with condition
-            builder.add_edge(source=source, target=target, async_condition=condition)
-
-    def _combine_conditions(
-        self, outer_condition: ConditionFunc | None, inner_condition: ConditionFunc | None
-    ) -> ConditionFunc | None:
-        """Combine two async conditions with AND logic.
-
-        Returns a new async condition that evaluates both conditions.
-        """
-        if outer_condition is None:
-            return inner_condition
-        if inner_condition is None:
-            return outer_condition
-
-        async def combined_condition(data: Any, shared_state: SharedState) -> bool:
-            outer_result = await outer_condition(data, shared_state)
-            if not outer_result:
-                return False
-            return await inner_condition(data, shared_state)
-
-        return combined_condition
 
     def _get_branch_exit(self, branch_entry: Any) -> Any | None:
         """Get the exit executor of a branch.

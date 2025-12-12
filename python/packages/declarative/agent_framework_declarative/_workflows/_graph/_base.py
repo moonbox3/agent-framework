@@ -10,7 +10,7 @@ This module provides:
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agent_framework._workflows import (
     Executor,
@@ -68,11 +68,12 @@ class DeclarativeWorkflowState:
     async def get_state_data(self) -> dict[str, Any]:
         """Get the full state data dict from shared state."""
         try:
-            return await self._shared_state.get(DECLARATIVE_STATE_KEY)
+            result: dict[str, Any] = await self._shared_state.get(DECLARATIVE_STATE_KEY)
+            return result
         except KeyError:
             # Initialize if not present
             await self.initialize()
-            return await self._shared_state.get(DECLARATIVE_STATE_KEY)
+            return cast(dict[str, Any], await self._shared_state.get(DECLARATIVE_STATE_KEY))
 
     async def set_state_data(self, data: dict[str, Any]) -> None:
         """Set the full state data dict in shared state."""
@@ -93,6 +94,8 @@ class DeclarativeWorkflowState:
             path = "turn." + path[6:]
         elif path.startswith("System."):
             path = "system." + path[7:]
+        elif path.startswith("Workflow."):
+            path = "workflow." + path[9:]
         elif path.startswith("inputs."):
             path = "workflow.inputs." + path[7:]
 
@@ -157,6 +160,8 @@ class DeclarativeWorkflowState:
             path = "turn." + path[6:]
         elif path.startswith("System."):
             path = "system." + path[7:]
+        elif path.startswith("Workflow."):
+            path = "workflow." + path[9:]
         elif path.startswith("inputs."):
             path = "workflow.inputs." + path[7:]
 
@@ -421,6 +426,8 @@ class DeclarativeWorkflowState:
                 path = "turn." + formula[6:]
             elif formula.startswith("System."):
                 path = "system." + formula[7:]
+            elif formula.startswith("Workflow."):
+                path = "workflow." + formula[9:]
             elif formula.startswith("inputs."):
                 path = "workflow.inputs." + formula[7:]
             return await self.get(path)

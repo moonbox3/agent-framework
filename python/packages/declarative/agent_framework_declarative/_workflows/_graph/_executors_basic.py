@@ -233,6 +233,10 @@ class EmitEventExecutor(DeclarativeActionExecutor):
     """Executor for the EmitEvent action.
 
     Emits a custom event to the workflow event stream.
+
+    Supports two schema formats:
+    1. Graph mode: eventName, eventValue
+    2. Interpreter mode: event.name, event.data
     """
 
     @handler
@@ -244,8 +248,14 @@ class EmitEventExecutor(DeclarativeActionExecutor):
         """Handle the EmitEvent action."""
         state = await self._ensure_state_initialized(ctx, trigger)
 
-        event_name = self._action_def.get("eventName", "")
+        # Support both schema formats:
+        # - Graph mode: eventName, eventValue
+        # - Interpreter mode: event.name, event.data
+        event_def = self._action_def.get("event", {})
+        event_name = self._action_def.get("eventName") or event_def.get("name", "")
         event_value = self._action_def.get("eventValue")
+        if event_value is None:
+            event_value = event_def.get("data")
 
         if event_name:
             evaluated_name = await state.eval_if_expression(event_name)

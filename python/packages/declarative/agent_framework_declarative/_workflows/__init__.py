@@ -9,8 +9,8 @@ enabling multi-agent orchestration patterns like Foreach, conditionals, and agen
 from ._factory import DeclarativeWorkflowError, WorkflowFactory
 from ._handlers import ActionHandler, action_handler, get_action_handler
 from ._human_input import (
-    ExternalInputRequest,
     ExternalLoopEvent,
+    QuestionRequest,
     process_external_loop,
     validate_input_response,
 )
@@ -19,8 +19,8 @@ from ._state import WorkflowState
 __all__ = [
     "ActionHandler",
     "DeclarativeWorkflowError",
-    "ExternalInputRequest",
     "ExternalLoopEvent",
+    "QuestionRequest",
     "WorkflowFactory",
     "WorkflowState",
     "action_handler",

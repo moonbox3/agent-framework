@@ -6,7 +6,7 @@ import pytest
 
 from agent_framework_declarative._workflows._handlers import ActionContext, get_action_handler
 from agent_framework_declarative._workflows._human_input import (
-    ExternalInputRequest,
+    QuestionRequest,
     process_external_loop,
     validate_input_response,
 )
@@ -47,7 +47,7 @@ class TestQuestionHandler:
 
     @pytest.mark.asyncio
     async def test_question_emits_request_info_event(self):
-        """Test that Question handler emits ExternalInputRequest."""
+        """Test that Question handler emits QuestionRequest."""
         ctx = create_action_context({
             "kind": "Question",
             "id": "ask_name",
@@ -59,7 +59,7 @@ class TestQuestionHandler:
         events = [e async for e in handler(ctx)]
 
         assert len(events) == 1
-        assert isinstance(events[0], ExternalInputRequest)
+        assert isinstance(events[0], QuestionRequest)
         assert events[0].request_id == "ask_name"
         assert events[0].prompt == "What is your name?"
         assert events[0].variable == "Local.userName"
@@ -81,7 +81,7 @@ class TestQuestionHandler:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, ExternalInputRequest)
+        assert isinstance(event, QuestionRequest)
         assert event.choices == ["Option A", "Option B", "Option C"]
         assert event.default_value == "Option A"
 
@@ -129,7 +129,7 @@ class TestRequestExternalInputHandler:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, ExternalInputRequest)
+        assert isinstance(event, QuestionRequest)
         assert event.request_id == "get_approval"
         assert event.variable == "Local.approval"
         assert event.validation == {"timeout": 300}
@@ -153,7 +153,7 @@ class TestWaitForInputHandler:
 
         assert len(events) == 1
         event = events[0]
-        assert isinstance(event, ExternalInputRequest)
+        assert isinstance(event, QuestionRequest)
         assert event.request_id == "wait"
         assert event.prompt == "Waiting..."
 

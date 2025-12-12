@@ -3,13 +3,15 @@
 """Control flow executors for the graph-based declarative workflow system.
 
 Control flow in the graph-based system is handled differently than the interpreter:
-- If/Switch: Condition evaluation happens on edges via async conditions
+- If/Switch: Condition evaluation happens in a dedicated evaluator executor that
+  returns a ConditionResult with the first-matching branch index. Edge conditions
+  then check the branch_index to route to the correct branch. This ensures only
+  one branch executes (first-match semantics), matching the interpreter behavior.
 - Foreach: Loop iteration state managed in SharedState + loop edges
 - Goto: Edge to target action (handled by builder)
 - Break/Continue: Special signals for loop control
 
 The key insight is that control flow becomes GRAPH STRUCTURE, not executor logic.
-Conditions are evaluated on edges, not in separate executor nodes.
 """
 
 from typing import Any
@@ -22,6 +24,7 @@ from agent_framework._workflows import (
 from ._base import (
     ActionComplete,
     ActionTrigger,
+    ConditionResult,
     DeclarativeActionExecutor,
     LoopControl,
     LoopIterationResult,
@@ -29,6 +32,177 @@ from ._base import (
 
 # Keys for loop state in SharedState
 LOOP_STATE_KEY = "_declarative_loop_state"
+
+# Index value indicating the else/default branch
+ELSE_BRANCH_INDEX = -1
+
+
+class ConditionGroupEvaluatorExecutor(DeclarativeActionExecutor):
+    """Evaluates conditions for ConditionGroup/Switch and outputs the first-matching branch.
+
+    This executor implements first-match semantics by evaluating conditions sequentially
+    and outputting a ConditionResult with the index of the first matching branch.
+    Edge conditions downstream check this index to route to the correct branch.
+
+    This mirrors .NET's ConditionGroupExecutor.ExecuteAsync which returns the step ID
+    of the first matching condition.
+    """
+
+    def __init__(
+        self,
+        action_def: dict[str, Any],
+        conditions: list[dict[str, Any]],
+        *,
+        id: str | None = None,
+    ):
+        """Initialize the condition evaluator.
+
+        Args:
+            action_def: The ConditionGroup/Switch action definition
+            conditions: List of condition items, each with 'condition' and optional 'id'
+            id: Optional executor ID
+        """
+        super().__init__(action_def, id=id)
+        self._conditions = conditions
+
+    @handler
+    async def handle_action(
+        self,
+        trigger: Any,
+        ctx: WorkflowContext[ConditionResult],
+    ) -> None:
+        """Evaluate conditions and output the first matching branch index."""
+        state = await self._ensure_state_initialized(ctx, trigger)
+
+        # Evaluate conditions sequentially - first match wins
+        for index, cond_item in enumerate(self._conditions):
+            condition_expr = cond_item.get("condition")
+            if condition_expr is None:
+                continue
+
+            # Normalize boolean conditions
+            if condition_expr is True:
+                condition_expr = "=true"
+            elif condition_expr is False:
+                condition_expr = "=false"
+            elif isinstance(condition_expr, str) and not condition_expr.startswith("="):
+                condition_expr = f"={condition_expr}"
+
+            result = await state.eval(condition_expr)
+            if bool(result):
+                # First matching condition found
+                await ctx.send_message(ConditionResult(matched=True, branch_index=index, value=result))
+                return
+
+        # No condition matched - use else/default branch
+        await ctx.send_message(ConditionResult(matched=False, branch_index=ELSE_BRANCH_INDEX))
+
+
+class SwitchEvaluatorExecutor(DeclarativeActionExecutor):
+    """Evaluates a Switch action by matching a value against cases.
+
+    The Switch action uses a different schema than ConditionGroup:
+    - value: expression to evaluate once
+    - cases: list of {match: value_to_match, actions: [...]}
+    - default: default actions if no case matches
+
+    This evaluator evaluates the value expression once, then compares it
+    against each case's match value sequentially. First match wins.
+    """
+
+    def __init__(
+        self,
+        action_def: dict[str, Any],
+        cases: list[dict[str, Any]],
+        *,
+        id: str | None = None,
+    ):
+        """Initialize the switch evaluator.
+
+        Args:
+            action_def: The Switch action definition (contains 'value' expression)
+            cases: List of case items, each with 'match' and optional 'actions'
+            id: Optional executor ID
+        """
+        super().__init__(action_def, id=id)
+        self._cases = cases
+
+    @handler
+    async def handle_action(
+        self,
+        trigger: Any,
+        ctx: WorkflowContext[ConditionResult],
+    ) -> None:
+        """Evaluate the switch value and find the first matching case."""
+        state = await self._ensure_state_initialized(ctx, trigger)
+
+        value_expr = self._action_def.get("value")
+        if not value_expr:
+            # No value to switch on - use default
+            await ctx.send_message(ConditionResult(matched=False, branch_index=ELSE_BRANCH_INDEX))
+            return
+
+        # Evaluate the switch value once
+        switch_value = await state.eval_if_expression(value_expr)
+
+        # Compare against each case's match value
+        for index, case_item in enumerate(self._cases):
+            match_expr = case_item.get("match")
+            if match_expr is None:
+                continue
+
+            # Evaluate the match value
+            match_value = await state.eval_if_expression(match_expr)
+
+            if switch_value == match_value:
+                # Found matching case
+                await ctx.send_message(ConditionResult(matched=True, branch_index=index, value=switch_value))
+                return
+
+        # No case matched - use default branch
+        await ctx.send_message(ConditionResult(matched=False, branch_index=ELSE_BRANCH_INDEX))
+
+
+class IfConditionEvaluatorExecutor(DeclarativeActionExecutor):
+    """Evaluates a single If condition and outputs a ConditionResult.
+
+    This is simpler than ConditionGroupEvaluator - just evaluates one condition
+    and outputs branch_index=0 (then) or branch_index=-1 (else).
+    """
+
+    def __init__(
+        self,
+        action_def: dict[str, Any],
+        condition_expr: str,
+        *,
+        id: str | None = None,
+    ):
+        """Initialize the if condition evaluator.
+
+        Args:
+            action_def: The If action definition
+            condition_expr: The condition expression to evaluate
+            id: Optional executor ID
+        """
+        super().__init__(action_def, id=id)
+        self._condition_expr = condition_expr
+
+    @handler
+    async def handle_action(
+        self,
+        trigger: Any,
+        ctx: WorkflowContext[ConditionResult],
+    ) -> None:
+        """Evaluate the condition and output the result."""
+        state = await self._ensure_state_initialized(ctx, trigger)
+
+        result = await state.eval(self._condition_expr)
+        is_truthy = bool(result)
+
+        if is_truthy:
+            await ctx.send_message(ConditionResult(matched=True, branch_index=0, value=result))
+        else:
+            await ctx.send_message(ConditionResult(matched=False, branch_index=ELSE_BRANCH_INDEX, value=result))
 
 
 class ForeachInitExecutor(DeclarativeActionExecutor):
@@ -46,7 +220,12 @@ class ForeachInitExecutor(DeclarativeActionExecutor):
         """Initialize the loop and check for first item."""
         state = await self._ensure_state_initialized(ctx, trigger)
 
-        items_expr = self._action_def.get("itemsSource") or self._action_def.get("items")
+        # Support multiple schema formats:
+        # - Graph mode: itemsSource, items
+        # - Interpreter mode: source
+        items_expr = (
+            self._action_def.get("itemsSource") or self._action_def.get("items") or self._action_def.get("source")
+        )
         items_raw: Any = await state.eval_if_expression(items_expr) or []
 
         items: list[Any]
@@ -67,8 +246,22 @@ class ForeachInitExecutor(DeclarativeActionExecutor):
         # Check if we have items
         if items:
             # Set the iteration variable
-            item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item", "turn.item")
+            # Support multiple schema formats:
+            # - Graph mode: iteratorVariable, item (default "turn.item")
+            # - Interpreter mode: itemName (default "item", stored in turn scope)
+            item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item")
+            if not item_var:
+                # Interpreter mode: itemName defaults to "item", store in turn scope
+                item_name = self._action_def.get("itemName", "item")
+                item_var = f"turn.{item_name}"
+
+            # Support multiple schema formats for index:
+            # - Graph mode: indexVariable, index
+            # - Interpreter mode: indexName (default "index", stored in turn scope)
             index_var = self._action_def.get("indexVariable") or self._action_def.get("index")
+            if not index_var and "indexName" in self._action_def:
+                index_name = self._action_def.get("indexName", "index")
+                index_var = f"turn.{index_name}"
 
             await state.set(item_var, items[0])
             if index_var:
@@ -132,8 +325,22 @@ class ForeachNextExecutor(DeclarativeActionExecutor):
             await state.set_state_data(state_data)
 
             # Set the iteration variable
-            item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item", "turn.item")
+            # Support multiple schema formats:
+            # - Graph mode: iteratorVariable, item (default "turn.item")
+            # - Interpreter mode: itemName (default "item", stored in turn scope)
+            item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item")
+            if not item_var:
+                # Interpreter mode: itemName defaults to "item", store in turn scope
+                item_name = self._action_def.get("itemName", "item")
+                item_var = f"turn.{item_name}"
+
+            # Support multiple schema formats for index:
+            # - Graph mode: indexVariable, index
+            # - Interpreter mode: indexName (default "index", stored in turn scope)
             index_var = self._action_def.get("indexVariable") or self._action_def.get("index")
+            if not index_var and "indexName" in self._action_def:
+                index_name = self._action_def.get("indexName", "index")
+                index_var = f"turn.{index_name}"
 
             await state.set(item_var, items[current_index])
             if index_var:
@@ -277,12 +484,13 @@ class JoinExecutor(DeclarativeActionExecutor):
     """Executor that joins multiple branches back together.
 
     Used after If/Switch to merge control flow back to a single path.
+    Also used as passthrough nodes for else/default branches.
     """
 
     @handler
     async def handle_action(
         self,
-        trigger: dict[str, Any] | str | ActionTrigger | ActionComplete | LoopIterationResult,
+        trigger: dict[str, Any] | str | ActionTrigger | ActionComplete | ConditionResult | LoopIterationResult,
         ctx: WorkflowContext[ActionComplete],
     ) -> None:
         """Simply pass through to continue the workflow."""

@@ -72,8 +72,3 @@ actions:
 ### Human-in-Loop
 - `Question` - Request user input
 - `WaitForInput` - Pause for external input
-
-## Learn More
-
-- [Design Document](../../../../docs/design/declarative-python-workflows.md)
-- [Workflow Samples (YAML only)](../../../../workflow-samples/)

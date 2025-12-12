@@ -463,6 +463,11 @@ class WorkflowBuilder:
                        (message_data, shared_state) and determines whether the edge
                        should be traversed. Takes precedence over condition when present.
 
+            Note: If instances are provided for both source and target, they will be shared across
+                all workflow instances created from the built Workflow. To avoid this, consider
+                registering the executors and agents using `register_executor` and `register_agent`
+                and referencing them by factory name for lazy initialization instead.
+
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
 
@@ -510,17 +515,13 @@ class WorkflowBuilder:
                     .build()
                 )
         """
-        if not isinstance(source, str) or not isinstance(target, str):
-            logger.warning(
-                "Adding an edge with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instances. "
-                "Consider using a registered name for lazy initialization instead."
-            )
-
         if (isinstance(source, str) and not isinstance(target, str)) or (
             not isinstance(source, str) and isinstance(target, str)
         ):
-            raise ValueError("Both source and target must be either names (str) or Executor/AgentProtocol instances.")
+            raise ValueError(
+                "Both source and target must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
+            )
 
         if isinstance(source, str) and isinstance(target, str):
             # Both are names; defer resolution to build time
@@ -551,6 +552,11 @@ class WorkflowBuilder:
 
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
+
+        Note: If instances are provided for source and targets, they will be shared across
+              all workflow instances created from the built Workflow. To avoid this, consider
+              registering the executors and agents using `register_executor` and `register_agent`
+              and referencing them by factory name for lazy initialization instead.
 
         Example:
             .. code-block:: python
@@ -588,17 +594,13 @@ class WorkflowBuilder:
                     .build()
                 )
         """
-        if not isinstance(source, str) or any(not isinstance(t, str) for t in targets):
-            logger.warning(
-                "Adding fan-out edges with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instances. "
-                "Consider using registered names for lazy initialization instead."
-            )
-
         if (isinstance(source, str) and not all(isinstance(t, str) for t in targets)) or (
             not isinstance(source, str) and any(isinstance(t, str) for t in targets)
         ):
-            raise ValueError("Both source and targets must be either names (str) or Executor/AgentProtocol instances.")
+            raise ValueError(
+                "Both source and targets must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
+            )
 
         if isinstance(source, str) and all(isinstance(t, str) for t in targets):
             # Both are names; defer resolution to build time
@@ -629,7 +631,7 @@ class WorkflowBuilder:
         Each condition function will be evaluated in order, and the first one that returns True
         will determine which target executor receives the message.
 
-        The last case (the default case) will receive messages that fall through all conditions
+        The default case (if provided) will receive messages that fall through all conditions
         (i.e., no condition matched).
 
         Args:
@@ -638,6 +640,11 @@ class WorkflowBuilder:
 
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
+
+        Note: If instances are provided for source and case targets, they will be shared across
+              all workflow instances created from the built Workflow. To avoid this, consider
+              registering the executors and agents using `register_executor` and `register_agent`
+              and referencing them by factory name for lazy initialization instead.
 
         Example:
             .. code-block:: python
@@ -686,18 +693,12 @@ class WorkflowBuilder:
                     .build()
                 )
         """
-        if not isinstance(source, str) or not all(isinstance(case.target, str) for case in cases):
-            logger.warning(
-                "Adding a switch-case edge group with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instance. "
-                "Consider using a registered name for lazy initialization instead."
-            )
-
         if (isinstance(source, str) and not all(isinstance(case.target, str) for case in cases)) or (
             not isinstance(source, str) and any(isinstance(case.target, str) for case in cases)
         ):
             raise ValueError(
-                "Both source and case targets must be either names (str) or Executor/AgentProtocol instances."
+                "Both source and case targets must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
             )
 
         if isinstance(source, str) and all(isinstance(case.target, str) for case in cases):
@@ -741,11 +742,15 @@ class WorkflowBuilder:
             source: The source executor or registered name of the source factory for the edge group.
             targets: A list of target executors or registered names of the target factories for the edges.
             selection_func: A function that selects target executors for messages.
-                Takes (message, list[executor_id or registered target names]) and
-                returns list[executor_id or registered target names].
+                Takes (message, list[executor_id]) and returns list[executor_id].
 
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
+
+        Note: If instances are provided for source and targets, they will be shared across
+              all workflow instances created from the built Workflow. To avoid this, consider
+              registering the executors and agents using `register_executor` and `register_agent`
+              and referencing them by factory name for lazy initialization instead.
 
         Example:
             .. code-block:: python
@@ -800,17 +805,13 @@ class WorkflowBuilder:
                     .build()
                 )
         """
-        if not isinstance(source, str) or any(not isinstance(t, str) for t in targets):
-            logger.warning(
-                "Adding fan-out edges with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instances. "
-                "Consider using registered names for lazy initialization instead."
-            )
-
         if (isinstance(source, str) and not all(isinstance(t, str) for t in targets)) or (
             not isinstance(source, str) and any(isinstance(t, str) for t in targets)
         ):
-            raise ValueError("Both source and targets must be either names (str) or Executor/AgentProtocol instances.")
+            raise ValueError(
+                "Both source and targets must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
+            )
 
         if isinstance(source, str) and all(isinstance(t, str) for t in targets):
             # Both are names; defer resolution to build time
@@ -853,6 +854,11 @@ class WorkflowBuilder:
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
 
+        Note: If instances are provided for sources and target, they will be shared across
+              all workflow instances created from the built Workflow. To avoid this, consider
+              registering the executors and agents using `register_executor` and `register_agent`
+              and referencing them by factory name for lazy initialization instead.
+
         Example:
             .. code-block:: python
 
@@ -884,17 +890,13 @@ class WorkflowBuilder:
                     .build()
                 )
         """
-        if not all(isinstance(s, str) for s in sources) or not isinstance(target, str):
-            logger.warning(
-                "Adding fan-in edges with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instances. "
-                "Consider using registered names for lazy initialization instead."
-            )
-
         if (all(isinstance(s, str) for s in sources) and not isinstance(target, str)) or (
             not all(isinstance(s, str) for s in sources) and isinstance(target, str)
         ):
-            raise ValueError("Both sources and target must be either names (str) or Executor/AgentProtocol instances.")
+            raise ValueError(
+                "Both sources and target must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
+            )
 
         if all(isinstance(s, str) for s in sources) and isinstance(target, str):
             # Both are names; defer resolution to build time
@@ -916,13 +918,18 @@ class WorkflowBuilder:
         The output of each executor in the chain will be sent to the next executor in the chain.
         The input types of each executor must be compatible with the output types of the previous executor.
 
-        Circles in the chain are not allowed, meaning the chain cannot have two executors with the same ID.
+        Cycles in the chain are not allowed, meaning an executor cannot appear more than once in the chain.
 
         Args:
             executors: A list of executors or registered names of the executor factories to chain together.
 
         Returns:
             Self: The WorkflowBuilder instance for method chaining.
+
+        Note: If executor instances are provided, they will be shared across all workflow instances created
+              from the built Workflow. To avoid this, consider registering the executors and agents using
+              `register_executor` and `register_agent` and referencing them by factory name for lazy
+              initialization instead.
 
         Example:
             .. code-block:: python
@@ -963,16 +970,10 @@ class WorkflowBuilder:
         if len(executors) < 2:
             raise ValueError("At least two executors are required to form a chain.")
 
-        if not all(isinstance(e, str) for e in executors):
-            logger.warning(
-                "Adding a chain with Executor or AgentProtocol instances directly is not recommended, "
-                "because workflow instances created from the builder will share the same executor/agent instances. "
-                "Consider using registered names for lazy initialization instead."
-            )
-
         if not all(isinstance(e, str) for e in executors) and any(isinstance(e, str) for e in executors):
             raise ValueError(
-                "All executors in the chain must be either names (str) or Executor/AgentProtocol instances."
+                "All executors in the chain must be either registered factory names (str) "
+                "or Executor/AgentProtocol instances."
             )
 
         if all(isinstance(e, str) for e in executors):
@@ -981,7 +982,7 @@ class WorkflowBuilder:
                 self.add_edge(executors[i], executors[i + 1])
             return self
 
-        # Both are Executor/AgentProtocol instances; wrap and add now
+        # All are Executor/AgentProtocol instances; wrap and add now
         # Wrap each candidate first to ensure stable IDs before adding edges
         wrapped: list[Executor] = [self._maybe_wrap_agent(e) for e in executors]  # type: ignore[arg-type]
         for i in range(len(wrapped) - 1):

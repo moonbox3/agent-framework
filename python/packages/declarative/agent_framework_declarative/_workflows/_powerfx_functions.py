@@ -24,9 +24,11 @@ def message_text(messages: Any) -> str:
     Returns:
         The concatenated text content of all messages
 
-    Example:
-        >>> message_text([{"role": "assistant", "content": "Hello"}])
-        'Hello'
+    Examples:
+        .. code-block:: python
+
+            message_text([{"role": "assistant", "content": "Hello"}])
+            # Returns: 'Hello'
     """
     if messages is None:
         return ""
@@ -90,9 +92,11 @@ def user_message(text: str) -> dict[str, str]:
     Returns:
         A message dictionary with role 'user'
 
-    Example:
-        >>> user_message("Hello")
-        {'role': 'user', 'content': 'Hello'}
+    Examples:
+        .. code-block:: python
+
+            user_message("Hello")
+            # Returns: {'role': 'user', 'content': 'Hello'}
     """
     return {"role": "user", "content": str(text) if text else ""}
 
@@ -106,9 +110,11 @@ def assistant_message(text: str) -> dict[str, str]:
     Returns:
         A message dictionary with role 'assistant'
 
-    Example:
-        >>> assistant_message("Hello")
-        {'role': 'assistant', 'content': 'Hello'}
+    Examples:
+        .. code-block:: python
+
+            assistant_message("Hello")
+            # Returns: {'role': 'assistant', 'content': 'Hello'}
     """
     return {"role": "assistant", "content": str(text) if text else ""}
 
@@ -122,9 +128,11 @@ def system_message(text: str) -> dict[str, str]:
     Returns:
         A message dictionary with role 'system'
 
-    Example:
-        >>> system_message("You are a helpful assistant")
-        {'role': 'system', 'content': 'You are a helpful assistant'}
+    Examples:
+        .. code-block:: python
+
+            system_message("You are a helpful assistant")
+            # Returns: {'role': 'system', 'content': 'You are a helpful assistant'}
     """
     return {"role": "system", "content": str(text) if text else ""}
 

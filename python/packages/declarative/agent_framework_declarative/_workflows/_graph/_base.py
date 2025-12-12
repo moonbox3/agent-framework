@@ -672,7 +672,7 @@ class DeclarativeActionExecutor(Executor):
 
         if isinstance(trigger, dict):
             # Structured inputs - use directly
-            await state.initialize(trigger)
+            await state.initialize(trigger)  # type: ignore
         elif isinstance(trigger, str):
             # String input - wrap in dict
             await state.initialize({"input": trigger})

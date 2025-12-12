@@ -30,24 +30,66 @@ class WorkflowState:
     """Manages variables and state during declarative workflow execution.
 
     WorkflowState provides a unified interface for:
+
     - Reading workflow inputs (immutable after initialization)
     - Managing turn-scoped variables that persist across actions
     - Storing agent results and making them available to subsequent actions
     - Evaluating PowerFx expressions with the current state as context
 
     The state is organized into namespaces that mirror the .NET implementation:
+
     - workflow.inputs: Initial inputs to the workflow
     - workflow.outputs: Values to be returned from the workflow
     - turn: Variables that persist within the current workflow turn
     - agent: Results from the most recent agent invocation
     - conversation: Conversation history and messages
 
-    Example:
-        >>> state = WorkflowState(inputs={"query": "Hello"})
-        >>> state.set("turn.results", [])
-        >>> state.append("turn.results", "item1")
-        >>> state.eval("=Concat(workflow.inputs.query, ' World')")
-        'Hello World'
+    Examples:
+        .. code-block:: python
+
+            from agent_framework_declarative import WorkflowState
+
+            # Initialize with inputs
+            state = WorkflowState(inputs={"query": "Hello", "user_id": "123"})
+
+            # Access inputs (read-only)
+            query = state.get("workflow.inputs.query")  # "Hello"
+
+            # Set turn-scoped variables
+            state.set("turn.results", [])
+            state.append("turn.results", "item1")
+            state.append("turn.results", "item2")
+
+            # Set workflow outputs
+            state.set("workflow.outputs.response", "Completed")
+
+        .. code-block:: python
+
+            from agent_framework_declarative import WorkflowState
+
+            # PowerFx expression evaluation
+            state = WorkflowState(inputs={"name": "World"})
+            result = state.eval("=Concat('Hello ', workflow.inputs.name)")
+            # result: "Hello World"
+
+            # Non-PowerFx strings are returned as-is
+            plain = state.eval("Hello World")
+            # plain: "Hello World"
+
+        .. code-block:: python
+
+            from agent_framework_declarative import WorkflowState
+
+            # Working with agent results
+            state = WorkflowState()
+            state.set_agent_result(
+                text="The answer is 42.",
+                messages=[],
+                tool_calls=[],
+            )
+
+            # Access agent result in subsequent actions
+            response = state.get("agent.text")  # "The answer is 42."
     """
 
     def __init__(

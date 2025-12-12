@@ -41,15 +41,39 @@ class WorkflowFactory:
     Each YAML action becomes a real Executor node in the workflow graph,
     enabling checkpointing at action boundaries, visualization, and pause/resume.
 
-    Example:
-        >>> factory = WorkflowFactory()
-        >>> workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
-        >>> async for event in workflow.run_stream({"query": "Hello"}):
-        ...     print(event)
+    Examples:
+        .. code-block:: python
 
-        # With checkpointing enabled
-        >>> factory = WorkflowFactory(checkpoint_storage=FileCheckpointStorage(path))
-        >>> workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
+            from agent_framework.declarative import WorkflowFactory
+
+            # Basic usage: create workflow from YAML file
+            factory = WorkflowFactory()
+            workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
+
+            async for event in workflow.run_stream({"query": "Hello"}):
+                print(event)
+
+        .. code-block:: python
+
+            from agent_framework.declarative import WorkflowFactory
+            from agent_framework import FileCheckpointStorage
+
+            # With checkpointing for pause/resume support
+            storage = FileCheckpointStorage(path="./checkpoints")
+            factory = WorkflowFactory(checkpoint_storage=storage)
+            workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
+
+        .. code-block:: python
+
+            from agent_framework.azure import AzureOpenAIChatClient
+            from agent_framework.declarative import WorkflowFactory
+
+            # Pre-register agents for InvokeAzureAgent actions
+            chat_client = AzureOpenAIChatClient()
+            agent = chat_client.create_agent(name="MyAgent", instructions="You are helpful.")
+
+            factory = WorkflowFactory(agents={"MyAgent": agent})
+            workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
     """
 
     def __init__(
@@ -64,11 +88,44 @@ class WorkflowFactory:
         """Initialize the workflow factory.
 
         Args:
-            agent_factory: Optional AgentFactory for creating agents from definitions
-            agents: Optional pre-created agents by name
-            bindings: Optional function bindings for tool calls
-            env_file: Optional path to .env file for environment variables
-            checkpoint_storage: Optional checkpoint storage for pause/resume
+            agent_factory: Optional AgentFactory for creating agents from inline YAML definitions.
+            agents: Optional pre-created agents by name. These are looked up when processing
+                InvokeAzureAgent actions in the workflow YAML.
+            bindings: Optional function bindings for tool calls within workflow actions.
+            env_file: Optional path to .env file for environment variables used in agent creation.
+            checkpoint_storage: Optional checkpoint storage enabling pause/resume functionality.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.declarative import WorkflowFactory
+
+                # Minimal initialization
+                factory = WorkflowFactory()
+
+            .. code-block:: python
+
+                from agent_framework.azure import AzureOpenAIChatClient
+                from agent_framework.declarative import WorkflowFactory
+
+                # With pre-registered agents
+                client = AzureOpenAIChatClient()
+                agents = {
+                    "WriterAgent": client.create_agent(name="Writer", instructions="Write content."),
+                    "ReviewerAgent": client.create_agent(name="Reviewer", instructions="Review content."),
+                }
+                factory = WorkflowFactory(agents=agents)
+
+            .. code-block:: python
+
+                from agent_framework import FileCheckpointStorage
+                from agent_framework.declarative import WorkflowFactory
+
+                # With checkpoint storage for pause/resume
+                factory = WorkflowFactory(
+                    checkpoint_storage=FileCheckpointStorage("./checkpoints"),
+                    env_file=".env",
+                )
         """
         self._agent_factory = agent_factory or AgentFactory(env_file=env_file)
         self._agents: dict[str, Any] = dict(agents) if agents else {}
@@ -82,14 +139,36 @@ class WorkflowFactory:
         """Create a Workflow from a YAML file path.
 
         Args:
-            yaml_path: Path to the YAML workflow definition
+            yaml_path: Path to the YAML workflow definition file.
 
         Returns:
-            An executable Workflow object
+            An executable Workflow object with action nodes for each YAML action.
 
         Raises:
-            DeclarativeWorkflowError: If the YAML is invalid or cannot be parsed
-            FileNotFoundError: If the YAML file doesn't exist
+            DeclarativeWorkflowError: If the YAML is invalid or cannot be parsed.
+            FileNotFoundError: If the YAML file doesn't exist.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.declarative import WorkflowFactory
+
+                factory = WorkflowFactory()
+                workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
+
+                # Execute the workflow
+                async for event in workflow.run_stream({"input": "Hello"}):
+                    print(event)
+
+            .. code-block:: python
+
+                from pathlib import Path
+                from agent_framework.declarative import WorkflowFactory
+
+                # Using Path object
+                workflow_path = Path(__file__).parent / "workflows" / "customer_support.yaml"
+                factory = WorkflowFactory()
+                workflow = factory.create_workflow_from_yaml_path(workflow_path)
         """
         if not isinstance(yaml_path, Path):
             yaml_path = Path(yaml_path)
@@ -110,14 +189,62 @@ class WorkflowFactory:
         """Create a Workflow from a YAML string.
 
         Args:
-            yaml_content: The YAML workflow definition as a string
+            yaml_content: The YAML workflow definition as a string.
             base_path: Optional base path for resolving relative file references
+                in agent definitions.
 
         Returns:
-            An executable Workflow object
+            An executable Workflow object with action nodes for each YAML action.
 
         Raises:
-            DeclarativeWorkflowError: If the YAML is invalid or cannot be parsed
+            DeclarativeWorkflowError: If the YAML is invalid or cannot be parsed.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.declarative import WorkflowFactory
+
+                yaml_content = '''
+                kind: Workflow
+                trigger:
+                  kind: OnConversationStart
+                  id: greeting_workflow
+                  actions:
+                    - kind: SetVariable
+                      id: set_greeting
+                      variable: Local.Greeting
+                      value: "Hello, World!"
+                    - kind: SendActivity
+                      id: send_greeting
+                      activity: =Local.Greeting
+                '''
+
+                factory = WorkflowFactory()
+                workflow = factory.create_workflow_from_yaml(yaml_content)
+
+            .. code-block:: python
+
+                from pathlib import Path
+                from agent_framework.declarative import WorkflowFactory
+
+                # With base_path for resolving relative agent file references
+                yaml_content = '''
+                kind: Workflow
+                agents:
+                  MyAgent:
+                    file: ./agents/my_agent.yaml
+                trigger:
+                  actions:
+                    - kind: InvokeAzureAgent
+                      agent:
+                        name: MyAgent
+                '''
+
+                factory = WorkflowFactory()
+                workflow = factory.create_workflow_from_yaml(
+                    yaml_content,
+                    base_path=Path("./workflows"),
+                )
         """
         try:
             workflow_def = yaml.safe_load(yaml_content)
@@ -131,27 +258,64 @@ class WorkflowFactory:
         workflow_def: dict[str, Any],
         base_path: Path | None = None,
     ) -> Workflow:
-        """Create a Workflow from a parsed workflow definition.
+        """Create a Workflow from a parsed workflow definition dictionary.
+
+        This is the lowest-level creation method, useful when you already have
+        a parsed dictionary (e.g., from programmatic construction or custom parsing).
 
         Args:
-            workflow_def: The parsed workflow definition dictionary
+            workflow_def: The parsed workflow definition dictionary containing
+                'kind', 'trigger', 'actions', and optionally 'agents' keys.
             base_path: Optional base path for resolving relative file references
+                in agent definitions.
 
         Returns:
-            An executable Workflow object
+            An executable Workflow object with action nodes for each YAML action.
 
         Raises:
-            DeclarativeWorkflowError: If the definition is invalid
+            DeclarativeWorkflowError: If the definition is invalid or missing required fields.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.declarative import WorkflowFactory
+
+                # Programmatically construct a workflow definition
+                workflow_def = {
+                    "kind": "Workflow",
+                    "name": "my_workflow",
+                    "trigger": {
+                        "kind": "OnConversationStart",
+                        "id": "main_trigger",
+                        "actions": [
+                            {
+                                "kind": "SetVariable",
+                                "id": "init",
+                                "variable": "Local.Counter",
+                                "value": 0,
+                            },
+                            {
+                                "kind": "SendActivity",
+                                "id": "output",
+                                "activity": "Counter initialized",
+                            },
+                        ],
+                    },
+                }
+
+                factory = WorkflowFactory()
+                workflow = factory.create_workflow_from_definition(workflow_def)
         """
         # Validate the workflow definition
         self._validate_workflow_def(workflow_def)
 
         # Extract workflow metadata
         # Support both "name" field and trigger.id for workflow name
-        name = workflow_def.get("name")
+        name: str = workflow_def.get("name", "")
         if not name:
-            trigger = workflow_def.get("trigger", {})
-            name = trigger.get("id", "declarative_workflow") if isinstance(trigger, dict) else "declarative_workflow"
+            trigger: dict[str, Any] = workflow_def.get("trigger", {})
+            trigger_id = trigger.get("id", "declarative_workflow")
+            name = str(trigger_id) if trigger_id else "declarative_workflow"
         description = workflow_def.get("description")
 
         # Create agents from definitions
@@ -341,27 +505,87 @@ class WorkflowFactory:
         )
 
     def register_agent(self, name: str, agent: Any) -> "WorkflowFactory":
-        """Register an agent instance with the factory.
+        """Register an agent instance with the factory for use in workflows.
+
+        Registered agents are available to InvokeAzureAgent actions by name.
+        This method supports fluent chaining.
 
         Args:
-            name: The name to register the agent under
-            agent: The agent instance
+            name: The name to register the agent under. Must match the agent name
+                referenced in InvokeAzureAgent actions.
+            agent: The agent instance (typically a ChatAgent or similar).
 
         Returns:
-            Self for method chaining
+            Self for method chaining.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.azure import AzureOpenAIChatClient
+                from agent_framework.declarative import WorkflowFactory
+
+                client = AzureOpenAIChatClient()
+
+                # Method chaining to register multiple agents
+                factory = (
+                    WorkflowFactory()
+                    .register_agent(
+                        "Writer",
+                        client.create_agent(
+                            name="Writer",
+                            instructions="Write content.",
+                        ),
+                    )
+                    .register_agent(
+                        "Reviewer",
+                        client.create_agent(
+                            name="Reviewer",
+                            instructions="Review content.",
+                        ),
+                    )
+                )
+
+                workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
         """
         self._agents[name] = agent
         return self
 
     def register_binding(self, name: str, func: Any) -> "WorkflowFactory":
-        """Register a function binding with the factory.
+        """Register a function binding with the factory for use in workflow actions.
+
+        Bindings allow workflow actions to invoke Python functions by name.
+        This method supports fluent chaining.
 
         Args:
-            name: The name to register the function under
-            func: The function to bind
+            name: The name to register the function under.
+            func: The function to bind.
 
         Returns:
-            Self for method chaining
+            Self for method chaining.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework.declarative import WorkflowFactory
+
+
+                def get_weather(location: str) -> str:
+                    return f"Weather in {location}: Sunny, 72F"
+
+
+                def send_email(to: str, subject: str, body: str) -> bool:
+                    # Send email logic
+                    return True
+
+
+                # Register functions for use in workflow
+                factory = (
+                    WorkflowFactory()
+                    .register_binding("get_weather", get_weather)
+                    .register_binding("send_email", send_email)
+                )
+
+                workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
         """
         self._bindings[name] = func
         return self

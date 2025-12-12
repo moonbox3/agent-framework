@@ -76,6 +76,32 @@ class ExternalInputRequest:
 
     This is the request type used with ctx.request_info() to implement
     the Yield/Resume pattern for human-in-loop workflows.
+
+    Examples:
+        .. code-block:: python
+
+            from agent_framework import run_context
+            from agent_framework_declarative import (
+                ExternalInputRequest,
+                ExternalInputResponse,
+                WorkflowFactory,
+            )
+
+            factory = WorkflowFactory()
+            workflow = factory.create_workflow_from_yaml_path("hitl_workflow.yaml")
+
+
+            async def run_with_hitl():
+                # Set up external input handler
+                async def on_request(request: ExternalInputRequest) -> ExternalInputResponse:
+                    print(f"Agent '{request.agent_name}' needs input:")
+                    print(f"  Response: {request.agent_response}")
+                    user_input = input("Your response: ")
+                    return ExternalInputResponse(user_input=user_input)
+
+                async with run_context(request_handler=on_request) as ctx:
+                    async for event in workflow.run_stream(ctx=ctx):
+                        print(event)
     """
 
     request_id: str
@@ -92,6 +118,24 @@ class ExternalInputResponse:
 
     Provided by the caller to resume agent execution with new user input.
     This is the response type expected by the response_handler.
+
+    Examples:
+        .. code-block:: python
+
+            from agent_framework_declarative import ExternalInputResponse
+
+            # Basic response with user text input
+            response = ExternalInputResponse(user_input="Yes, please proceed with the order.")
+
+        .. code-block:: python
+
+            from agent_framework_declarative import ExternalInputResponse
+
+            # Response with additional message history
+            response = ExternalInputResponse(
+                user_input="Approved",
+                messages=[],  # Additional context messages if needed
+            )
     """
 
     user_input: str

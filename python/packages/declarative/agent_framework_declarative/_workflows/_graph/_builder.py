@@ -845,7 +845,7 @@ class DeclarativeGraphBuilder:
         for branch_index, branch_entry in branch_entries:
             # Capture branch_index in closure properly using a factory function for type inference
             def make_branch_condition(expected: int) -> Any:
-                return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected
+                return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected  # type: ignore
 
             branch_target = self._get_structure_entry(branch_entry)
             builder.add_edge(

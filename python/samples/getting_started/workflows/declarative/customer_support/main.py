@@ -319,7 +319,7 @@ async def main():
             break
 
         # Get next user input
-        user_input = input(f"\n{GREEN}INPUT:{RESET} ").strip()
+        user_input = input(f"\n{GREEN}INPUT:{RESET} ").strip()  # noqa: ASYNC250
         if not user_input:
             print("Exiting...")
             break

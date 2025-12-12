@@ -140,16 +140,18 @@ to configure which agents can route to which others with a fluent, type-safe API
 
 ### declarative
 
-YAML-based declarative workflows allow you to define multi-agent orchestration patterns without writing Python code.
+YAML-based declarative workflows allow you to define multi-agent orchestration patterns without writing Python code. See the [declarative workflows README](./declarative/README.md) for more details on YAML workflow syntax and available actions.
 
 | Sample | File | Concepts |
 |---|---|---|
-| Simple Workflow | [declarative/simple_workflow/](./declarative/simple_workflow/) | Basic workflow with variable setting, conditionals, and loops |
 | Conditional Workflow | [declarative/conditional_workflow/](./declarative/conditional_workflow/) | Nested conditional branching based on user input |
+| Customer Support | [declarative/customer_support/](./declarative/customer_support/) | Multi-agent customer support with routing |
+| Deep Research | [declarative/deep_research/](./declarative/deep_research/) | Research workflow with planning, searching, and synthesis |
+| Function Tools | [declarative/function_tools/](./declarative/function_tools/) | Invoking Python functions from declarative workflows |
 | Human-in-Loop | [declarative/human_in_loop/](./declarative/human_in_loop/) | Interactive workflows that request user input |
-| Multi-Agent | [declarative/multi_agent/](./declarative/multi_agent/) | Orchestrating multiple AI agents in sequence |
-
-See the [declarative workflows README](./declarative/README.md) for more details on YAML workflow syntax and available actions.
+| Marketing | [declarative/marketing/](./declarative/marketing/) | Marketing content generation workflow |
+| Simple Workflow | [declarative/simple_workflow/](./declarative/simple_workflow/) | Basic workflow with variable setting, conditionals, and loops |
+| Student Teacher | [declarative/student_teacher/](./declarative/student_teacher/) | Student-teacher interaction pattern |
 
 ### resources
 

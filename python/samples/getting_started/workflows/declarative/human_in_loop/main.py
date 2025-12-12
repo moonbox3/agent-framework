@@ -16,8 +16,7 @@ import asyncio
 from pathlib import Path
 
 from agent_framework import Workflow, WorkflowOutputEvent
-from agent_framework_declarative import WorkflowFactory
-from agent_framework_declarative._workflows import ExternalInputRequest
+from agent_framework_declarative import ExternalInputRequest, WorkflowFactory
 from agent_framework_declarative._workflows._handlers import TextOutputEvent
 
 

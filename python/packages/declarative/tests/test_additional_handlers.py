@@ -4,6 +4,8 @@
 
 import pytest
 
+import agent_framework_declarative._workflows._actions_basic  # noqa: F401
+import agent_framework_declarative._workflows._actions_control_flow  # noqa: F401
 from agent_framework_declarative._workflows._handlers import get_action_handler
 from agent_framework_declarative._workflows._state import WorkflowState
 
@@ -154,10 +156,10 @@ class TestCreateConversationHandler:
     """Tests for CreateConversation action handler."""
 
     @pytest.mark.asyncio
-    async def test_create_conversation_dotnet_style(self):
-        """Test creating a new conversation with .NET style output binding.
+    async def test_create_conversation_with_output_binding(self):
+        """Test creating a new conversation with output variable binding.
 
-        In .NET style, conversationId is the OUTPUT variable where the
+        The conversationId field specifies the OUTPUT variable where the
         auto-generated conversation ID is stored.
         """
         ctx = create_action_context({

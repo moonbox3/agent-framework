@@ -50,6 +50,36 @@ ALL_ACTION_EXECUTORS = {
 # These actions transfer control elsewhere and should not have sequential edges to the next action
 TERMINATOR_ACTIONS = frozenset({"Goto", "GotoAction", "BreakLoop", "ContinueLoop", "EndWorkflow", "EndDialog"})
 
+# Required fields for specific action kinds (schema validation)
+# Each action needs at least one of the listed fields (checked with alternates)
+ACTION_REQUIRED_FIELDS: dict[str, list[str]] = {
+    "SetValue": ["path"],
+    "SetVariable": ["variable"],
+    "AppendValue": ["path", "value"],
+    "SendActivity": ["activity"],
+    "InvokeAzureAgent": ["agent"],
+    "Goto": ["target"],
+    "GotoAction": ["actionId"],
+    "Foreach": ["items", "actions"],
+    "If": ["condition"],
+    "Switch": ["value"],  # Switch can use value/cases or conditions (ConditionGroup style)
+    "ConditionGroup": ["conditions"],
+    "RequestHumanInput": ["variable"],
+    "WaitForHumanInput": ["variable"],
+    "EmitEvent": ["event"],
+}
+
+# Alternate field names that satisfy required field requirements
+# Key: "ActionKind.field", Value: list of alternates that satisfy the requirement
+ACTION_ALTERNATE_FIELDS: dict[str, list[str]] = {
+    "SetValue.path": ["variable"],
+    "Goto.target": ["actionId"],
+    "GotoAction.actionId": ["target"],
+    "InvokeAzureAgent.agent": ["agentName"],
+    "Foreach.items": ["itemsSource", "source"],  # source is used in some schemas
+    "Switch.value": ["conditions"],  # Switch can be condition-based instead of value-based
+}
+
 
 def _generate_semantic_id(action_def: dict[str, Any], kind: str) -> str | None:
     """Generate a semantic ID from the action's content.
@@ -269,6 +299,7 @@ class DeclarativeGraphBuilder:
         workflow_id: str | None = None,
         agents: dict[str, Any] | None = None,
         checkpoint_storage: Any | None = None,
+        validate: bool = True,
     ):
         """Initialize the builder.
 
@@ -277,6 +308,7 @@ class DeclarativeGraphBuilder:
             workflow_id: Optional ID for the workflow (defaults to name from YAML)
             agents: Registry of agent instances by name (for InvokeAzureAgent actions)
             checkpoint_storage: Optional checkpoint storage for pause/resume support
+            validate: Whether to validate the workflow definition before building (default: True)
         """
         self._yaml_def = yaml_definition
         self._workflow_id = workflow_id or yaml_definition.get("name", "declarative_workflow")
@@ -285,6 +317,8 @@ class DeclarativeGraphBuilder:
         self._agents = agents or {}  # Agent registry for agent executors
         self._checkpoint_storage = checkpoint_storage
         self._pending_gotos: list[tuple[Any, str]] = []  # (goto_executor, target_id)
+        self._validate = validate
+        self._seen_explicit_ids: set[str] = set()  # Track explicit IDs for duplicate detection
 
     def build(self) -> Workflow:
         """Build the workflow graph.
@@ -293,7 +327,7 @@ class DeclarativeGraphBuilder:
             A Workflow instance with all executors wired together
 
         Raises:
-            ValueError: If no actions are defined (empty workflow)
+            ValueError: If no actions are defined (empty workflow), or validation fails
         """
         builder = WorkflowBuilder(name=self._workflow_id)
 
@@ -305,6 +339,10 @@ class DeclarativeGraphBuilder:
         if not actions:
             # Empty workflow - raise an error since we need at least one executor
             raise ValueError("Cannot build workflow with no actions. At least one action is required.")
+
+        # Validate workflow definition before building
+        if self._validate:
+            self._validate_workflow(actions)
 
         # First pass: create all executors
         entry_executor = self._create_executors_for_actions(actions, builder)
@@ -331,17 +369,146 @@ class DeclarativeGraphBuilder:
 
         return builder.build()
 
+    def _validate_workflow(self, actions: list[dict[str, Any]]) -> None:
+        """Validate the workflow definition before building.
+
+        Performs:
+        - Schema validation (required fields for action types)
+        - Duplicate explicit action ID detection
+        - Circular goto reference detection
+
+        Args:
+            actions: List of action definitions to validate
+
+        Raises:
+            ValueError: If validation fails
+        """
+        seen_ids: set[str] = set()
+        goto_targets: list[tuple[str, str | None]] = []  # (target_id, source_id)
+        defined_ids: set[str] = set()
+
+        # Collect all defined IDs and validate each action
+        self._validate_actions_recursive(actions, seen_ids, goto_targets, defined_ids)
+
+        # Check for circular goto chains (A -> B -> A)
+        # Build a simple graph of goto targets
+        self._validate_no_circular_gotos(goto_targets, defined_ids)
+
+    def _validate_actions_recursive(
+        self,
+        actions: list[dict[str, Any]],
+        seen_ids: set[str],
+        goto_targets: list[tuple[str, str | None]],
+        defined_ids: set[str],
+    ) -> None:
+        """Recursively validate actions and collect metadata.
+
+        Args:
+            actions: List of action definitions
+            seen_ids: Set of seen explicit IDs (for duplicate detection)
+            goto_targets: List of (target_id, source_id) tuples for goto validation
+            defined_ids: Set of all defined action IDs
+        """
+        for action_def in actions:
+            kind = action_def.get("kind", "")
+
+            # Check for duplicate explicit IDs
+            explicit_id = action_def.get("id")
+            if explicit_id:
+                if explicit_id in seen_ids:
+                    raise ValueError(f"Duplicate action ID '{explicit_id}'. Action IDs must be unique.")
+                seen_ids.add(explicit_id)
+                defined_ids.add(explicit_id)
+
+            # Schema validation: check required fields
+            required_fields = ACTION_REQUIRED_FIELDS.get(kind, [])
+            for field in required_fields:
+                if field not in action_def and not self._has_alternate_field(action_def, kind, field):
+                    raise ValueError(f"Action '{kind}' is missing required field '{field}'. Action: {action_def}")
+
+            # Collect goto targets for circular reference detection
+            if kind in ("Goto", "GotoAction"):
+                target = action_def.get("target") or action_def.get("actionId")
+                if target:
+                    goto_targets.append((target, explicit_id))
+
+            # Recursively validate nested actions
+            if kind == "If":
+                then_actions = action_def.get("then", action_def.get("actions", []))
+                if then_actions:
+                    self._validate_actions_recursive(then_actions, seen_ids, goto_targets, defined_ids)
+                else_actions = action_def.get("else", [])
+                if else_actions:
+                    self._validate_actions_recursive(else_actions, seen_ids, goto_targets, defined_ids)
+
+            elif kind in ("Switch", "ConditionGroup"):
+                cases = action_def.get("cases", action_def.get("conditions", []))
+                for case in cases:
+                    case_actions = case.get("actions", [])
+                    if case_actions:
+                        self._validate_actions_recursive(case_actions, seen_ids, goto_targets, defined_ids)
+                else_actions = action_def.get("elseActions", action_def.get("else", action_def.get("default", [])))
+                if else_actions:
+                    self._validate_actions_recursive(else_actions, seen_ids, goto_targets, defined_ids)
+
+            elif kind == "Foreach":
+                body_actions = action_def.get("actions", [])
+                if body_actions:
+                    self._validate_actions_recursive(body_actions, seen_ids, goto_targets, defined_ids)
+
+    def _has_alternate_field(self, action_def: dict[str, Any], kind: str, field: str) -> bool:
+        """Check if an action has an alternate field that satisfies the requirement.
+
+        Some actions support multiple field names for the same purpose.
+
+        Args:
+            action_def: The action definition
+            kind: The action kind
+            field: The required field name
+
+        Returns:
+            True if an alternate field exists
+        """
+        key = f"{kind}.{field}"
+        return any(alt in action_def for alt in ACTION_ALTERNATE_FIELDS.get(key, []))
+
+    def _validate_no_circular_gotos(
+        self,
+        goto_targets: list[tuple[str, str | None]],
+        defined_ids: set[str],
+    ) -> None:
+        """Validate that there are no problematic circular goto chains.
+
+        Note: Some circular references are valid (e.g., loop-back patterns).
+        This checks for direct self-references only as a basic validation.
+
+        Args:
+            goto_targets: List of (target_id, source_id) tuples
+            defined_ids: Set of defined action IDs
+        """
+        for target_id, source_id in goto_targets:
+            # Check for direct self-reference
+            if source_id and target_id == source_id:
+                raise ValueError(
+                    f"Action '{source_id}' has a direct self-referencing Goto, which would cause an infinite loop."
+                )
+
     def _resolve_pending_gotos(self, builder: WorkflowBuilder) -> None:
         """Resolve pending goto edges after all executors are created.
 
         Creates edges from goto executors to their target executors.
+
+        Raises:
+            ValueError: If a goto target references an action ID that does not exist.
         """
         for goto_executor, target_id in self._pending_gotos:
             target_executor = self._executors.get(target_id)
             if target_executor:
                 # Create edge from goto to target
                 builder.add_edge(source=goto_executor, target=target_executor)
-            # If target not found, the goto effectively becomes a no-op (workflow ends)
+            else:
+                available_ids = list(self._executors.keys())
+                raise ValueError(f"Goto target '{target_id}' not found. Available action IDs: {available_ids}")
 
     def _create_executors_for_actions(
         self,
@@ -528,16 +695,19 @@ class DeclarativeGraphBuilder:
 
         # Wire evaluator to branches with conditions that check ConditionResult.branch_index
         # branch_index=0 means "then" branch, branch_index=-1 (ELSE_BRANCH_INDEX) means "else"
+        # For nested If/Switch structures, wire to the evaluator (entry point)
         if then_entry:
+            then_target = self._get_structure_entry(then_entry)
             builder.add_edge(
                 source=evaluator,
-                target=then_entry,
+                target=then_target,
                 condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == 0,
             )
         if else_entry:
+            else_target = self._get_structure_entry(else_entry)
             builder.add_edge(
                 source=evaluator,
-                target=else_entry,
+                target=else_target,
                 condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif else_passthrough:
@@ -671,22 +841,25 @@ class DeclarativeGraphBuilder:
             branch_exits.append(default_passthrough)
 
         # Wire evaluator to branches with conditions that check ConditionResult.branch_index
+        # For nested If/Switch structures, wire to the evaluator (entry point)
         for branch_index, branch_entry in branch_entries:
             # Capture branch_index in closure properly using a factory function for type inference
             def make_branch_condition(expected: int) -> Any:
                 return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected
 
+            branch_target = self._get_structure_entry(branch_entry)
             builder.add_edge(
                 source=evaluator,
-                target=branch_entry,
+                target=branch_target,
                 condition=make_branch_condition(branch_index),
             )
 
         # Wire evaluator to default/else branch
         if default_entry:
+            default_target = self._get_structure_entry(default_entry)
             builder.add_edge(
                 source=evaluator,
-                target=default_entry,
+                target=default_target,
                 condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif default_passthrough:
@@ -757,10 +930,13 @@ class DeclarativeGraphBuilder:
         body_entry = self._create_executors_for_actions(body_actions, builder, loop_context)
 
         if body_entry:
+            # For nested If/Switch structures, wire to the evaluator (entry point)
+            body_target = self._get_structure_entry(body_entry)
+
             # Init -> body (when has_next=True)
             builder.add_edge(
                 source=init_executor,
-                target=body_entry,
+                target=body_target,
                 condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
@@ -772,7 +948,7 @@ class DeclarativeGraphBuilder:
             # Next -> body (when has_next=True, loop back)
             builder.add_edge(
                 source=next_executor,
-                target=body_entry,
+                target=body_target,
                 condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
@@ -831,7 +1007,11 @@ class DeclarativeGraphBuilder:
         builder: WorkflowBuilder,
         parent_context: dict[str, Any] | None = None,
     ) -> Any | None:
-        """Create a break executor for loop control."""
+        """Create a break executor for loop control.
+
+        Raises:
+            ValueError: If BreakLoop is used outside of a loop.
+        """
         from ._executors_control_flow import BreakLoopExecutor
 
         if parent_context and "loop_next_executor" in parent_context:
@@ -847,7 +1027,7 @@ class DeclarativeGraphBuilder:
 
             return executor
 
-        return None
+        raise ValueError("BreakLoop action can only be used inside a Foreach loop")
 
     def _create_continue_executor(
         self,
@@ -855,7 +1035,11 @@ class DeclarativeGraphBuilder:
         builder: WorkflowBuilder,
         parent_context: dict[str, Any] | None = None,
     ) -> Any | None:
-        """Create a continue executor for loop control."""
+        """Create a continue executor for loop control.
+
+        Raises:
+            ValueError: If ContinueLoop is used outside of a loop.
+        """
         from ._executors_control_flow import ContinueLoopExecutor
 
         if parent_context and "loop_next_executor" in parent_context:
@@ -870,6 +1054,8 @@ class DeclarativeGraphBuilder:
             builder.add_edge(source=executor, target=loop_next)
 
             return executor
+
+        raise ValueError("ContinueLoop action can only be used inside a Foreach loop")
 
         return None
 
@@ -931,6 +1117,21 @@ class DeclarativeGraphBuilder:
             # Normal sequential edge to a regular executor
             builder.add_edge(source=source, target=target)
 
+    def _get_structure_entry(self, entry: Any) -> Any:
+        """Get the entry point executor for a structure or regular executor.
+
+        For If/Switch structures, returns the evaluator. For regular executors,
+        returns the executor itself.
+
+        Args:
+            entry: An executor or structure
+
+        Returns:
+            The entry point executor
+        """
+        is_structure = getattr(entry, "_is_if_structure", False) or getattr(entry, "_is_switch_structure", False)
+        return entry.evaluator if is_structure else entry
+
     def _get_branch_exit(self, branch_entry: Any) -> Any | None:
         """Get the exit executor of a branch.
 
@@ -948,9 +1149,6 @@ class DeclarativeGraphBuilder:
 
         # Get the chain of executors in this branch
         chain = getattr(branch_entry, "_chain_executors", [branch_entry])
-
-        if not chain:
-            return None
 
         last_executor = chain[-1]
 

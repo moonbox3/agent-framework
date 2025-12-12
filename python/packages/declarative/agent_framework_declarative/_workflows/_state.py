@@ -419,6 +419,41 @@ class WorkflowState:
             except (ValueError, TypeError):
                 return formula
 
+        # Handle multiplication
+        if " * " in formula:
+            parts = formula.split(" * ", 1)
+            left = self._eval_simple(parts[0].strip())
+            right = self._eval_simple(parts[1].strip())
+            # Treat None as 0 for arithmetic (PowerFx behavior)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            try:
+                return float(left) * float(right)
+            except (ValueError, TypeError):
+                return formula
+
+        # Handle division with div-by-zero protection
+        if " / " in formula:
+            parts = formula.split(" / ", 1)
+            left = self._eval_simple(parts[0].strip())
+            right = self._eval_simple(parts[1].strip())
+            # Treat None as 0 for arithmetic (PowerFx behavior)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            try:
+                right_float = float(right)
+                if right_float == 0:
+                    # PowerFx returns Error for division by zero; we return None (Blank)
+                    logger.warning(f"Division by zero in expression: {formula}")
+                    return None
+                return float(left) / right_float
+            except (ValueError, TypeError):
+                return formula
+
         # Handle string literals
         if (formula.startswith('"') and formula.endswith('"')) or (formula.startswith("'") and formula.endswith("'")):
             return formula[1:-1]

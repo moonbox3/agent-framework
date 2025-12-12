@@ -12,11 +12,7 @@ from typing import Annotated, Any
 
 from agent_framework import FileCheckpointStorage, RequestInfoEvent, WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_declarative import WorkflowFactory
-from agent_framework_declarative._workflows._graph import (
-    AgentExternalInputRequest,
-    AgentExternalInputResponse,
-)
+from agent_framework_declarative import ExternalInputRequest, ExternalInputResponse, WorkflowFactory
 from azure.identity import AzureCliCredential
 from pydantic import Field
 
@@ -89,7 +85,7 @@ async def main():
 
     while True:
         if pending_request_id:
-            response = AgentExternalInputResponse(user_input=user_input)
+            response = ExternalInputResponse(user_input=user_input)
             stream = workflow.send_responses_streaming({pending_request_id: response})
         else:
             stream = workflow.run_stream({"userInput": user_input})
@@ -103,7 +99,7 @@ async def main():
                     print("MenuAgent: ", end="")
                     first_response = False
                 print(event.data, end="", flush=True)
-            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExternalInputRequest):
+            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, ExternalInputRequest):
                 pending_request_id = event.request_id
 
         print()

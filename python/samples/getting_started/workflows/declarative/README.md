@@ -1,8 +1,4 @@
-# Declarative Workflows Samples
-
-This directory contains samples demonstrating how to use declarative YAML workflows with the Python Agent Framework.
-
-## Overview
+# Declarative Workflows
 
 Declarative workflows allow you to define multi-agent orchestration patterns in YAML, including:
 - Variable manipulation and state management
@@ -10,17 +6,7 @@ Declarative workflows allow you to define multi-agent orchestration patterns in 
 - Agent invocations
 - Human-in-the-loop patterns
 
-## Samples
-
-| Sample | Description |
-|--------|-------------|
-| [simple_workflow](./simple_workflow/) | Basic workflow with variable setting, conditionals, and loops |
-| [conditional_workflow](./conditional_workflow/) | Nested conditional branching based on user input |
-| [human_in_loop](./human_in_loop/) | Interactive workflows that request user input |
-| [multi_agent](./multi_agent/) | Orchestrating multiple AI agents in sequence |
-| [student_teacher](./student_teacher/) | Iterative two-agent conversation with loop control |
-| [marketing](./marketing/) | Sequential multi-agent pipeline (Analyst, Writer, Editor) |
-| [function_tools](./function_tools/) | Agent with function tools in interactive loop |
+See the [main workflows README](../README.md#declarative) for the list of available samples.
 
 ## Prerequisites
 

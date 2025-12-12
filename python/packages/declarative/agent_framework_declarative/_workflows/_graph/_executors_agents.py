@@ -42,6 +42,19 @@ TOOL_REGISTRY_KEY = "_tool_registry"
 EXTERNAL_LOOP_STATE_KEY = "_external_loop_state"
 
 
+class AgentInvocationError(Exception):
+    """Raised when an agent invocation fails.
+
+    Attributes:
+        agent_name: Name of the agent that failed
+        message: Error description
+    """
+
+    def __init__(self, agent_name: str, message: str) -> None:
+        self.agent_name = agent_name
+        super().__init__(f"Agent '{agent_name}' invocation failed: {message}")
+
+
 @dataclass
 class AgentResult:
     """Result from an agent invocation."""
@@ -104,6 +117,7 @@ class ExternalLoopState:
     result_property: str | None
     auto_send: bool
     messages_path: str = "conversation.messages"
+    max_iterations: int = 100
 
 
 def _map_variable_to_path(variable: str) -> str:
@@ -198,17 +212,17 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         agent_name = self._action_def.get("agentName")
         return str(agent_name) if isinstance(agent_name, str) else None
 
-    def _get_input_config(self) -> tuple[dict[str, Any], Any, str | None]:
+    def _get_input_config(self) -> tuple[dict[str, Any], Any, str | None, int]:
         """Parse input configuration.
 
         Returns:
-            Tuple of (arguments dict, messages expression, externalLoop.when expression)
+            Tuple of (arguments dict, messages expression, externalLoop.when expression, maxIterations)
         """
         input_config = self._action_def.get("input", {})
 
         if not isinstance(input_config, dict):
             # Simple input - treat as message directly
-            return {}, input_config, None
+            return {}, input_config, None, 100
 
         input_dict = cast(dict[str, Any], input_config)
         arguments: dict[str, Any] = cast(dict[str, Any], input_dict.get("arguments", {}))
@@ -216,12 +230,17 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
 
         # Extract external loop configuration
         external_loop_when: str | None = None
+        max_iterations: int = 100  # Default safety limit
         external_loop = input_dict.get("externalLoop")
         if isinstance(external_loop, dict):
-            when_val = cast(dict[str, Any], external_loop).get("when")
+            loop_dict = cast(dict[str, Any], external_loop)
+            when_val = loop_dict.get("when")
             external_loop_when = str(when_val) if when_val is not None else None
+            max_iter_val = loop_dict.get("maxIterations")
+            if max_iter_val is not None:
+                max_iterations = int(max_iter_val)
 
-        return arguments, messages, external_loop_when
+        return arguments, messages, external_loop_when, max_iterations
 
     def _get_output_config(self) -> tuple[str | None, str | None, str | None, bool]:
         """Parse output configuration.
@@ -483,7 +502,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await ctx.send_message(ActionComplete())
             return
 
-        arguments, messages_expr, external_loop_when = self._get_input_config()
+        arguments, messages_expr, external_loop_when, max_iterations = self._get_input_config()
         messages_var, response_obj_var, result_property, auto_send = self._get_output_config()
 
         # Get conversation-specific messages path if conversationId is specified
@@ -508,8 +527,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await state.set("agent.error", error_msg)
             if result_property:
                 await state.set(result_property, {"error": error_msg})
-            await ctx.send_message(ActionComplete())
-            return
+            raise AgentInvocationError(agent_name, "not found in registry")
 
         iteration = 0
 
@@ -526,13 +544,14 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 auto_send=auto_send,
                 messages_path=messages_path,
             )
+        except AgentInvocationError:
+            raise  # Re-raise our own errors
         except Exception as e:
             logger.error(f"InvokeAzureAgent: error invoking agent '{agent_name}': {e}")
             await state.set("agent.error", str(e))
             if result_property:
                 await state.set(result_property, {"error": str(e)})
-            await ctx.send_message(ActionComplete())
-            return
+            raise AgentInvocationError(agent_name, str(e)) from e
 
         # Check external loop condition
         if external_loop_when:
@@ -555,6 +574,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                     result_property=result_property,
                     auto_send=auto_send,
                     messages_path=messages_path,
+                    max_iterations=max_iterations,
                 )
                 await ctx.shared_state.set(EXTERNAL_LOOP_STATE_KEY, loop_state)
 
@@ -600,7 +620,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         agent_name = loop_state.agent_name
         iteration = loop_state.iteration
         external_loop_when = loop_state.external_loop_when
-        max_iterations = 100
+        max_iterations = loop_state.max_iterations
 
         # Get the user's new input
         input_text = response.user_input
@@ -637,8 +657,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
 
         if agent is None:
             logger.error(f"InvokeAzureAgent: agent '{agent_name}' not found during loop resumption")
-            await ctx.send_message(ActionComplete())
-            return
+            raise AgentInvocationError(agent_name, "not found during loop resumption")
 
         try:
             accumulated_response, all_messages, tool_calls = await self._invoke_agent_and_store_results(
@@ -653,11 +672,12 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 auto_send=loop_state.auto_send,
                 messages_path=loop_state.messages_path,
             )
+        except AgentInvocationError:
+            raise  # Re-raise our own errors
         except Exception as e:
             logger.error(f"InvokeAzureAgent: error invoking agent '{agent_name}' during loop: {e}")
             await state.set("agent.error", str(e))
-            await ctx.send_message(ActionComplete())
-            return
+            raise AgentInvocationError(agent_name, str(e)) from e
 
         # Re-evaluate the condition AFTER the agent responds
         # This is critical: the agent's response may have set NeedsTicket=true or IsResolved=true

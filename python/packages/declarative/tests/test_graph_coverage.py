@@ -4,15 +4,6 @@
 # pyright: reportPrivateUsage=false, reportUnknownVariableType=false
 # pyright: reportGeneralTypeIssues=false
 
-"""Tests to improve coverage for graph-based declarative workflow components.
-
-Targets low-coverage areas:
-- _executors_agents.py (33% -> target 80%+)
-- _executors_basic.py (50% -> target 90%+)
-- _base.py (56% -> target 85%+)
-- _executors_control_flow.py (69% -> target 90%+)
-"""
-
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -80,7 +71,7 @@ class TestDeclarativeWorkflowStateExtended:
     """Extended tests for DeclarativeWorkflowState covering uncovered code paths."""
 
     async def test_get_with_local_namespace(self, mock_shared_state):
-        """Test .NET Local. namespace mapping."""
+        """Test Local. namespace mapping."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
         await state.set("turn.myVar", "value123")
@@ -90,7 +81,7 @@ class TestDeclarativeWorkflowStateExtended:
         assert result == "value123"
 
     async def test_get_with_system_namespace(self, mock_shared_state):
-        """Test .NET System. namespace mapping."""
+        """Test System. namespace mapping."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
         await state.set("system.ConversationId", "conv-123")
@@ -99,7 +90,7 @@ class TestDeclarativeWorkflowStateExtended:
         assert result == "conv-123"
 
     async def test_get_with_workflow_namespace(self, mock_shared_state):
-        """Test .NET Workflow. namespace mapping."""
+        """Test Workflow. namespace mapping."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
 
@@ -161,7 +152,7 @@ class TestDeclarativeWorkflowStateExtended:
         assert result == "test"
 
     async def test_set_with_local_namespace(self, mock_shared_state):
-        """Test .NET Local. namespace mapping for set."""
+        """Test Local. namespace mapping for set."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
@@ -170,7 +161,7 @@ class TestDeclarativeWorkflowStateExtended:
         assert result == "value123"
 
     async def test_set_with_system_namespace(self, mock_shared_state):
-        """Test .NET System. namespace mapping for set."""
+        """Test System. namespace mapping for set."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
@@ -354,11 +345,14 @@ class TestDeclarativeWorkflowStateExtended:
 
     async def test_eval_float_literal(self, mock_shared_state):
         """Test float literal evaluation."""
+        from decimal import Decimal
+
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
         result = await state.eval("=3.14")
-        assert result == 3.14
+        # Accepts both float (Python fallback) and Decimal (pythonnet/PowerFx)
+        assert result == 3.14 or result == Decimal("3.14")
 
     async def test_eval_variable_reference_with_namespace_mappings(self, mock_shared_state):
         """Test variable reference with various namespace mappings."""
@@ -797,10 +791,11 @@ class TestAgentExecutorsCoverage:
         }
         executor = InvokeAzureAgentExecutor(action_def)
 
-        args, messages, external_loop = executor._get_input_config()
+        args, messages, external_loop, max_iterations = executor._get_input_config()
         assert args == {}
         assert messages == "simple string input"
         assert external_loop is None
+        assert max_iterations == 100  # Default
 
     async def test_agent_executor_get_input_config_full(self, mock_context, mock_shared_state):
         """Test input config parsing with full structured input."""
@@ -814,15 +809,16 @@ class TestAgentExecutorsCoverage:
             "input": {
                 "arguments": {"param1": "=turn.value"},
                 "messages": "=conversation.messages",
-                "externalLoop": {"when": "=turn.needsMore"},
+                "externalLoop": {"when": "=turn.needsMore", "maxIterations": 50},
             },
         }
         executor = InvokeAzureAgentExecutor(action_def)
 
-        args, messages, external_loop = executor._get_input_config()
+        args, messages, external_loop, max_iterations = executor._get_input_config()
         assert args == {"param1": "=turn.value"}
         assert messages == "=conversation.messages"
         assert external_loop == "=turn.needsMore"
+        assert max_iterations == 50
 
     async def test_agent_executor_get_output_config_simple(self, mock_context, mock_shared_state):
         """Test output config parsing with simple resultProperty."""
@@ -844,7 +840,7 @@ class TestAgentExecutorsCoverage:
         assert auto_send is True
 
     async def test_agent_executor_get_output_config_full(self, mock_context, mock_shared_state):
-        """Test output config parsing with full .NET style output."""
+        """Test output config parsing with full structured output."""
         from agent_framework_declarative._workflows._graph._executors_agents import (
             InvokeAzureAgentExecutor,
         )
@@ -1891,8 +1887,9 @@ class TestAgentExternalLoopCoverage:
         assert request.agent_name == "TestAgent"
 
     async def test_agent_executor_agent_error_handling(self, mock_context, mock_shared_state):
-        """Test agent executor handles agent errors gracefully."""
+        """Test agent executor raises AgentInvocationError on failure."""
         from agent_framework_declarative._workflows._graph._executors_agents import (
+            AgentInvocationError,
             InvokeAzureAgentExecutor,
         )
 
@@ -1910,9 +1907,13 @@ class TestAgentExternalLoopCoverage:
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
 
-        await executor.handle_action(ActionTrigger(), mock_context)
+        with pytest.raises(AgentInvocationError) as exc_info:
+            await executor.handle_action(ActionTrigger(), mock_context)
 
-        # Should store error and complete
+        assert "TestAgent" in str(exc_info.value)
+        assert "Agent failed" in str(exc_info.value)
+
+        # Should still store error in state before raising
         error = await state.get("agent.error")
         assert "Agent failed" in error
         result = await state.get("turn.result")
@@ -2048,10 +2049,11 @@ class TestPowerFxFunctionsCoverage:
         await state.set("turn.items", ["a", "b", "c"])
 
         result = await state.eval("=First(turn.items)")
-        assert result == "a"
+        # Accepts raw value (Python fallback) or record (pythonnet/PowerFx)
+        assert result == "a" or result == {"Value": "a"}
 
         result = await state.eval("=Last(turn.items)")
-        assert result == "c"
+        assert result == "c" or result == {"Value": "c"}
 
     async def test_eval_find_function(self, mock_shared_state):
         """Test Find function."""
@@ -2416,6 +2418,25 @@ class TestBuilderControlFlowCreation:
         executor = graph_builder._create_goto_reference(action_def, wb, None)
         assert executor is None
 
+    def test_goto_invalid_target_raises_error(self):
+        """Test that goto to non-existent target raises ValueError."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [
+                {"kind": "SendActivity", "id": "action1", "activity": {"text": "Hello"}},
+                {"kind": "GotoAction", "target": "non_existent_action"},
+            ],
+        }
+        builder = DeclarativeGraphBuilder(yaml_def)
+
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "non_existent_action" in str(exc_info.value)
+        assert "not found" in str(exc_info.value)
+
     def test_create_break_executor(self):
         """Test creating a break executor within a loop context."""
         from agent_framework import WorkflowBuilder
@@ -2448,7 +2469,7 @@ class TestBuilderControlFlowCreation:
         assert executor.id == "break_test"
 
     def test_create_break_executor_no_loop_context(self):
-        """Test creating a break executor without loop context returns None."""
+        """Test creating a break executor without loop context raises ValueError."""
         from agent_framework import WorkflowBuilder
 
         from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
@@ -2461,12 +2482,15 @@ class TestBuilderControlFlowCreation:
             "kind": "BreakLoop",
         }
 
-        # No parent_context or no loop_next_executor in context
-        executor = graph_builder._create_break_executor(action_def, wb, None)
-        assert executor is None
+        # No parent_context should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            graph_builder._create_break_executor(action_def, wb, None)
+        assert "BreakLoop action can only be used inside a Foreach loop" in str(exc_info.value)
 
-        executor = graph_builder._create_break_executor(action_def, wb, {})
-        assert executor is None
+        # Empty context should also raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            graph_builder._create_break_executor(action_def, wb, {})
+        assert "BreakLoop action can only be used inside a Foreach loop" in str(exc_info.value)
 
     def test_create_continue_executor(self):
         """Test creating a continue executor within a loop context."""
@@ -2500,7 +2524,7 @@ class TestBuilderControlFlowCreation:
         assert executor.id == "continue_test"
 
     def test_create_continue_executor_no_loop_context(self):
-        """Test creating a continue executor without loop context returns None."""
+        """Test creating a continue executor without loop context raises ValueError."""
         from agent_framework import WorkflowBuilder
 
         from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
@@ -2513,8 +2537,10 @@ class TestBuilderControlFlowCreation:
             "kind": "ContinueLoop",
         }
 
-        executor = graph_builder._create_continue_executor(action_def, wb, None)
-        assert executor is None
+        # No parent_context should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            graph_builder._create_continue_executor(action_def, wb, None)
+        assert "ContinueLoop action can only be used inside a Foreach loop" in str(exc_info.value)
 
 
 class TestBuilderEdgeWiring:
@@ -2682,9 +2708,10 @@ class TestAgentExecutorExternalLoop:
         assert isinstance(call_args, ActionComplete)
 
     async def test_handle_external_input_response_agent_not_found(self, mock_context, mock_shared_state):
-        """Test handling external input when agent not found during resumption."""
+        """Test handling external input raises error when agent not found during resumption."""
         from agent_framework_declarative._workflows._graph._executors_agents import (
             EXTERNAL_LOOP_STATE_KEY,
+            AgentInvocationError,
             ExternalInputRequest,
             ExternalInputResponse,
             ExternalLoopState,
@@ -2718,11 +2745,268 @@ class TestAgentExecutorExternalLoop:
         )
         response = ExternalInputResponse(user_input="continue")
 
-        await executor.handle_external_input_response(original_request, response, mock_context)
+        with pytest.raises(AgentInvocationError) as exc_info:
+            await executor.handle_external_input_response(original_request, response, mock_context)
 
-        # Should send ActionComplete due to agent not found
-        from agent_framework_declarative._workflows._graph import ActionComplete
+        assert "NonExistentAgent" in str(exc_info.value)
+        assert "not found during loop resumption" in str(exc_info.value)
 
-        mock_context.send_message.assert_called()
-        call_args = mock_context.send_message.call_args[0][0]
-        assert isinstance(call_args, ActionComplete)
+
+class TestBuilderValidation:
+    """Tests for builder validation features (P1 fixes)."""
+
+    def test_duplicate_explicit_action_id_raises_error(self):
+        """Test that duplicate explicit action IDs are detected."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [
+                {"id": "my_action", "kind": "SendActivity", "activity": {"text": "First"}},
+                {"id": "my_action", "kind": "SendActivity", "activity": {"text": "Second"}},
+            ],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "Duplicate action ID 'my_action'" in str(exc_info.value)
+
+    def test_duplicate_id_in_nested_actions(self):
+        """Test duplicate ID detection in nested If/Switch branches."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [
+                {
+                    "kind": "If",
+                    "condition": "=true",
+                    "then": [{"id": "shared_id", "kind": "SendActivity", "activity": {"text": "Then"}}],
+                    "else": [{"id": "shared_id", "kind": "SendActivity", "activity": {"text": "Else"}}],
+                }
+            ],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "Duplicate action ID 'shared_id'" in str(exc_info.value)
+
+    def test_missing_required_field_sendactivity(self):
+        """Test that missing required fields are detected."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"kind": "SendActivity"}],  # Missing 'activity' field
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "SendActivity" in str(exc_info.value)
+        assert "missing required field" in str(exc_info.value)
+        assert "activity" in str(exc_info.value)
+
+    def test_missing_required_field_setvalue(self):
+        """Test SetValue without path raises error."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"kind": "SetValue", "value": "test"}],  # Missing 'path' field
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "SetValue" in str(exc_info.value)
+        assert "path" in str(exc_info.value)
+
+    def test_setvalue_accepts_alternate_variable_field(self):
+        """Test SetValue accepts 'variable' as alternate to 'path'."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"kind": "SetValue", "variable": {"path": "turn.x"}, "value": "test"}],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        # Should not raise - 'variable' is accepted as alternate
+        workflow = builder.build()
+        assert workflow is not None
+
+    def test_missing_required_field_foreach(self):
+        """Test Foreach without items raises error."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"kind": "Foreach", "actions": [{"kind": "SendActivity", "activity": {"text": "Hi"}}]}],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "Foreach" in str(exc_info.value)
+        assert "items" in str(exc_info.value)
+
+    def test_self_referencing_goto_raises_error(self):
+        """Test that a goto referencing itself is detected."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"id": "loop", "kind": "Goto", "target": "loop"}],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "loop" in str(exc_info.value)
+        assert "self-referencing" in str(exc_info.value)
+
+    def test_validation_can_be_disabled(self):
+        """Test that validation can be disabled for early schema/duplicate checks.
+
+        Note: Even with validation disabled, the underlying WorkflowBuilder may
+        still catch duplicates during graph construction. This flag disables
+        our upfront validation pass but not runtime checks.
+        """
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        # Test with missing required field - validation disabled should skip our check
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [{"kind": "SendActivity"}],  # Missing 'activity' - normally caught by validation
+        }
+
+        # With validation disabled, our upfront check is skipped
+        builder = DeclarativeGraphBuilder(yaml_def, validate=False)
+        # The workflow may still fail for other reasons, but our validation pass is skipped
+        # In this case, it should succeed because SendActivityExecutor handles missing fields gracefully
+        workflow = builder.build()
+        assert workflow is not None
+
+    def test_validation_in_switch_branches(self):
+        """Test validation catches issues in Switch branches."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [
+                {
+                    "kind": "Switch",
+                    "value": "=turn.choice",
+                    "cases": [
+                        {
+                            "match": "a",
+                            "actions": [{"id": "dup", "kind": "SendActivity", "activity": {"text": "A"}}],
+                        },
+                        {
+                            "match": "b",
+                            "actions": [{"id": "dup", "kind": "SendActivity", "activity": {"text": "B"}}],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "Duplicate action ID 'dup'" in str(exc_info.value)
+
+    def test_validation_in_foreach_body(self):
+        """Test validation catches issues in Foreach body."""
+        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+
+        yaml_def = {
+            "name": "test_workflow",
+            "actions": [
+                {
+                    "kind": "Foreach",
+                    "items": "=turn.items",
+                    "actions": [{"kind": "SendActivity"}],  # Missing 'activity'
+                }
+            ],
+        }
+
+        builder = DeclarativeGraphBuilder(yaml_def)
+        with pytest.raises(ValueError) as exc_info:
+            builder.build()
+
+        assert "SendActivity" in str(exc_info.value)
+        assert "activity" in str(exc_info.value)
+
+
+class TestExpressionEdgeCases:
+    """Tests for expression evaluation edge cases (P1 fixes)."""
+
+    async def test_division_by_zero_returns_none(self, mock_shared_state):
+        """Test that division by zero returns None (Blank)."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("turn.x", 10)
+        await state.set("turn.y", 0)
+
+        result = await state.eval("=turn.x / turn.y")
+        assert result is None  # PowerFx returns Blank/Error for div by zero
+
+    async def test_division_with_valid_values(self, mock_shared_state):
+        """Test normal division works correctly."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("turn.x", 10)
+        await state.set("turn.y", 4)
+
+        result = await state.eval("=turn.x / turn.y")
+        assert result == 2.5
+
+    async def test_multiplication_with_none_as_zero(self, mock_shared_state):
+        """Test multiplication treats None as 0."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("turn.x", 5)
+        # turn.y is not set
+
+        result = await state.eval("=turn.x * turn.y")
+        assert result == 0  # 5 * 0 = 0
+
+    async def test_multiplication_normal(self, mock_shared_state):
+        """Test normal multiplication."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("turn.x", 6)
+        await state.set("turn.y", 7)
+
+        result = await state.eval("=turn.x * turn.y")
+        assert result == 42
+
+    async def test_division_with_none_numerator(self, mock_shared_state):
+        """Test division with None numerator returns 0."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("turn.y", 5)
+        # turn.x is not set (None)
+
+        result = await state.eval("=turn.x / turn.y")
+        assert result == 0  # 0 / 5 = 0
+
+    async def test_division_both_none_returns_none(self, mock_shared_state):
+        """Test division with both operands None returns None (div by zero)."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        # Neither turn.x nor turn.y are set
+
+        result = await state.eval("=turn.x / turn.y")
+        assert result is None  # 0 / 0 = Blank

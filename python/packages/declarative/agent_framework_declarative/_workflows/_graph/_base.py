@@ -218,6 +218,9 @@ class DeclarativeWorkflowState:
 
         If the path doesn't exist, creates a new list with the value.
 
+        Note: This operation is not atomic. In concurrent scenarios, use explicit
+        locking or consider using atomic operations at the storage layer.
+
         Args:
             path: Dot-notated path to a list
             value: The value to append
@@ -399,6 +402,13 @@ class DeclarativeWorkflowState:
                 if op == " * ":
                     return left * right
                 if op == " / ":
+                    # Division by zero protection - return None (Blank in PowerFx)
+                    if right == 0:
+                        from agent_framework import get_logger
+
+                        logger = get_logger("agent_framework.declarative.workflows")
+                        logger.warning(f"Division by zero in expression: {formula}")
+                        return None
                     return left / right
 
         # Handle string literals

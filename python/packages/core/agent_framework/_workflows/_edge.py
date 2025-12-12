@@ -283,7 +283,7 @@ class Case:
     """
 
     condition: Callable[[Any], bool]
-    target: Executor
+    target: Executor | str
 
 
 @dataclass
@@ -306,7 +306,7 @@ class Default:
             assert fallback.target.id == "dead_letter"
     """
 
-    target: Executor
+    target: Executor | str
 
 
 @dataclass(init=False)

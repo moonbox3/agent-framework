@@ -302,7 +302,8 @@ class WorkflowBuilder:
 
             If multiple names are provided, the same factory function will be registered under each name.
 
-            ...code-block:: python
+            .. code-block:: python
+
                 from agent_framework import WorkflowBuilder, Executor, WorkflowContext, handler
 
 
@@ -315,7 +316,7 @@ class WorkflowBuilder:
                 # Register the same executor factory under multiple names
                 workflow = (
                     WorkflowBuilder()
-                    .register_executor(lambda: CustomExecutor(id="logger"), name=["ExecutorA", "ExecutorB"])
+                    .register_executor(lambda: LoggerExecutor(id="logger"), name=["ExecutorA", "ExecutorB"])
                     .set_start_executor("ExecutorA")
                     .add_edge("ExecutorA", "ExecutorB")
                     .build()

@@ -1417,6 +1417,9 @@ class FunctionResultContent(BaseContent):
         call_id: The identifier of the function call for which this is the result.
         result: The result of the function call, or a generic error message if the function call failed.
         exception: An exception that occurred if the function call failed.
+        terminate_loop: If True, signals that the function invocation loop should terminate
+            immediately without calling the LLM again. This is set when middleware sets
+            context.terminate=True during function execution.
         type: The type of content, which is always "function_result" for this class.
         annotations: Optional annotations associated with the content.
         additional_properties: Optional additional properties associated with the content.
@@ -1447,6 +1450,7 @@ class FunctionResultContent(BaseContent):
         call_id: str,
         result: Any | None = None,
         exception: Exception | None = None,
+        terminate_loop: bool = False,
         annotations: Sequence[Annotations | MutableMapping[str, Any]] | None = None,
         additional_properties: dict[str, Any] | None = None,
         raw_representation: Any | None = None,
@@ -1458,6 +1462,7 @@ class FunctionResultContent(BaseContent):
             call_id: The identifier of the function call for which this is the result.
             result: The result of the function call, or a generic error message if the function call failed.
             exception: An exception that occurred if the function call failed.
+            terminate_loop: If True, signals the function invocation loop to terminate immediately.
             annotations: Optional annotations associated with the content.
             additional_properties: Optional additional properties associated with the content.
             raw_representation: Optional raw representation of the content.
@@ -1472,6 +1477,7 @@ class FunctionResultContent(BaseContent):
         self.call_id = call_id
         self.result = result
         self.exception = exception
+        self.terminate_loop = terminate_loop
         self.type: Literal["function_result"] = "function_result"
 
 

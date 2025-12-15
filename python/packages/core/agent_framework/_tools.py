@@ -1467,6 +1467,7 @@ async def _auto_invoke_function(
         return FunctionResultContent(
             call_id=function_call_content.call_id,
             result=function_result,
+            terminate_loop=middleware_context.terminate,
         )
     except Exception as exc:
         message = "Error: Function failed."
@@ -1695,12 +1696,8 @@ def _handle_function_calls_response(
                 prepare_messages,
             )
 
-            # Extract and merge function middleware from chat client with kwargs pipeline
-            extract_and_merge_function_middleware(self, **kwargs)
-
-            # Extract the middleware pipeline before calling the underlying function
-            # because the underlying function may not preserve it in kwargs
-            stored_middleware_pipeline = kwargs.get("_function_middleware_pipeline")
+            # Extract and merge function middleware from chat client with kwargs
+            stored_middleware_pipeline = extract_and_merge_function_middleware(self, kwargs)
 
             # Get the config for function invocation (not part of ChatClientProtocol, hence getattr)
             config: FunctionInvocationConfiguration | None = getattr(self, "function_invocation_configuration", None)
@@ -1798,6 +1795,21 @@ def _handle_function_calls_response(
                         # the function calls are already in the response, so we just continue
                         return response
 
+                    # Check if any function result signals loop termination (middleware set context.terminate=True)
+                    # This allows middleware to short-circuit the tool loop without another LLM call
+                    if any(
+                        getattr(fcr, "terminate_loop", False)
+                        for fcr in function_call_results
+                        if isinstance(fcr, FunctionResultContent)
+                    ):
+                        # Add tool results to response and return immediately without calling LLM again
+                        result_message = ChatMessage(role="tool", contents=function_call_results)
+                        response.messages.append(result_message)
+                        if fcc_messages:
+                            for msg in reversed(fcc_messages):
+                                response.messages.insert(0, msg)
+                        return response
+
                     if any(
                         fcr.exception is not None
                         for fcr in function_call_results
@@ -1890,12 +1902,8 @@ def _handle_function_calls_streaming_response(
                 prepare_messages,
             )
 
-            # Extract and merge function middleware from chat client with kwargs pipeline
-            extract_and_merge_function_middleware(self, **kwargs)
-
-            # Extract the middleware pipeline before calling the underlying function
-            # because the underlying function may not preserve it in kwargs
-            stored_middleware_pipeline = kwargs.get("_function_middleware_pipeline")
+            # Extract and merge function middleware from chat client with kwargs
+            stored_middleware_pipeline = extract_and_merge_function_middleware(self, kwargs)
 
             # Get the config for function invocation (not part of ChatClientProtocol, hence getattr)
             config: FunctionInvocationConfiguration | None = getattr(self, "function_invocation_configuration", None)
@@ -2003,6 +2011,17 @@ def _handle_function_calls_streaming_response(
                         return
                     if any(isinstance(fccr, FunctionCallContent) for fccr in function_call_results):
                         # the function calls were already yielded.
+                        return
+
+                    # Check if any function result signals loop termination (middleware set context.terminate=True)
+                    # This allows middleware to short-circuit the tool loop without another LLM call
+                    if any(
+                        getattr(fcr, "terminate_loop", False)
+                        for fcr in function_call_results
+                        if isinstance(fcr, FunctionResultContent)
+                    ):
+                        # Yield tool results and return immediately without calling LLM again
+                        yield ChatResponseUpdate(contents=function_call_results, role="tool")
                         return
 
                     if any(

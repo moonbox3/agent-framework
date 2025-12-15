@@ -350,9 +350,54 @@ class AgentFactory:
                 factory = AgentFactory()
                 agent = factory.create_agent_from_yaml(yaml_content)
         """
-        prompt_agent = agent_schema_dispatch(yaml.safe_load(yaml_str))
+        return self.create_agent_from_dict(yaml.safe_load(yaml_str))
+
+    def create_agent_from_dict(self, agent_def: dict[str, Any]) -> ChatAgent:
+        """Create a ChatAgent from a dictionary definition.
+
+        This method does the following things:
+
+        1. Converts the dictionary into an AgentSchema object.
+        2. Validates that the loaded object is a PromptAgent.
+        3. Creates the appropriate ChatClient based on the model provider and apiType.
+        4. Parses the tools, options, and response format from the PromptAgent.
+        5. Creates and returns a ChatAgent instance with the configured properties.
+
+        Args:
+            agent_def: Dictionary representation of a PromptAgent.
+
+        Returns:
+            The `ChatAgent` instance created from the dictionary.
+
+        Raises:
+            DeclarativeLoaderError: If the dictionary does not represent a PromptAgent.
+            ProviderLookupError: If the provider type is unknown or unsupported.
+            ValueError: If a ReferenceConnection cannot be resolved.
+            ModuleNotFoundError: If the required module for the provider type cannot be imported.
+            AttributeError: If the required class for the provider type cannot be found in the module.
+
+        Examples:
+            .. code-block:: python
+
+                from agent_framework_declarative import AgentFactory
+
+                agent_def = {
+                    "kind": "Prompt",
+                    "name": "TranslationAgent",
+                    "description": "Translates text between languages",
+                    "instructions": "You are a translation assistant.",
+                    "model": {
+                        "id": "gpt-4o",
+                        "provider": "AzureOpenAI",
+                    },
+                }
+
+                factory = AgentFactory()
+                agent = factory.create_agent_from_dict(agent_def)
+        """
+        prompt_agent = agent_schema_dispatch(agent_def)
         if not isinstance(prompt_agent, PromptAgent):
-            raise DeclarativeLoaderError("Only yaml definitions for a PromptAgent are supported for agent creation.")
+            raise DeclarativeLoaderError("Only definitions for a PromptAgent are supported for agent creation.")
 
         # Step 1: Create the ChatClient
         client = self._get_client(prompt_agent)

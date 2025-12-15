@@ -12,7 +12,7 @@ Demonstrates conditional branching based on age input.
 import asyncio
 from pathlib import Path
 
-from agent_framework_declarative import WorkflowFactory
+from agent_framework.declarative import WorkflowFactory
 
 
 async def main():

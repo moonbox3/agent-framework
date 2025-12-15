@@ -24,7 +24,7 @@ from pathlib import Path
 
 from agent_framework import WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_declarative import WorkflowFactory
+from agent_framework.declarative import WorkflowFactory
 from azure.identity import AzureCliCredential
 
 STUDENT_INSTRUCTIONS = """You are a curious math student working on understanding mathematical concepts.

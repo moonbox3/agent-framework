@@ -16,7 +16,9 @@ from typing import Any, cast
 
 import yaml
 from agent_framework import get_logger
+from agent_framework._agents import AgentProtocol
 from agent_framework._workflows import (
+    AgentExecutor,
     CheckpointStorage,
     Workflow,
 )
@@ -80,7 +82,7 @@ class WorkflowFactory:
         self,
         *,
         agent_factory: AgentFactory | None = None,
-        agents: Mapping[str, Any] | None = None,
+        agents: Mapping[str, AgentProtocol | AgentExecutor] | None = None,
         bindings: Mapping[str, Any] | None = None,
         env_file: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
@@ -128,7 +130,7 @@ class WorkflowFactory:
                 )
         """
         self._agent_factory = agent_factory or AgentFactory(env_file=env_file)
-        self._agents: dict[str, Any] = dict(agents) if agents else {}
+        self._agents: dict[str, AgentProtocol | AgentExecutor] = dict(agents) if agents else {}
         self._bindings: dict[str, Any] = dict(bindings) if bindings else {}
         self._checkpoint_storage = checkpoint_storage
 
@@ -319,7 +321,7 @@ class WorkflowFactory:
         description = workflow_def.get("description")
 
         # Create agents from definitions
-        agents = dict(self._agents)
+        agents: dict[str, AgentProtocol | AgentExecutor] = dict(self._agents)
         agent_defs = workflow_def.get("agents", {})
 
         for agent_name, agent_def in agent_defs.items():
@@ -343,7 +345,7 @@ class WorkflowFactory:
         workflow_def: dict[str, Any],
         name: str,
         description: str | None,
-        agents: dict[str, Any],
+        agents: dict[str, AgentProtocol | AgentExecutor],
     ) -> Workflow:
         """Create workflow from definition.
 
@@ -487,9 +489,7 @@ class WorkflowFactory:
 
         # Check if it's an inline agent definition
         if "kind" in agent_def:
-            # Convert to YAML and use AgentFactory
-            yaml_str = yaml.dump(agent_def)
-            return self._agent_factory.create_agent_from_yaml(yaml_str)
+            return self._agent_factory.create_agent_from_dict(agent_def)
 
         # Handle connection-based agent (like Azure AI agents)
         if "connection" in agent_def:
@@ -504,7 +504,7 @@ class WorkflowFactory:
             f"Invalid agent definition. Expected 'file', 'kind', or 'connection': {agent_def}"
         )
 
-    def register_agent(self, name: str, agent: Any) -> "WorkflowFactory":
+    def register_agent(self, name: str, agent: AgentProtocol | AgentExecutor) -> "WorkflowFactory":
         """Register an agent instance with the factory for use in workflows.
 
         Registered agents are available to InvokeAzureAgent actions by name.

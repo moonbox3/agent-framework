@@ -1798,9 +1798,7 @@ def _handle_function_calls_response(
                     # Check if any function result signals loop termination (middleware set context.terminate=True)
                     # This allows middleware to short-circuit the tool loop without another LLM call
                     if any(
-                        getattr(fcr, "terminate_loop", False)
-                        for fcr in function_call_results
-                        if isinstance(fcr, FunctionResultContent)
+                        fcr.terminate_loop for fcr in function_call_results if isinstance(fcr, FunctionResultContent)
                     ):
                         # Add tool results to response and return immediately without calling LLM again
                         result_message = ChatMessage(role="tool", contents=function_call_results)
@@ -2016,9 +2014,7 @@ def _handle_function_calls_streaming_response(
                     # Check if any function result signals loop termination (middleware set context.terminate=True)
                     # This allows middleware to short-circuit the tool loop without another LLM call
                     if any(
-                        getattr(fcr, "terminate_loop", False)
-                        for fcr in function_call_results
-                        if isinstance(fcr, FunctionResultContent)
+                        fcr.terminate_loop for fcr in function_call_results if isinstance(fcr, FunctionResultContent)
                     ):
                         # Yield tool results and return immediately without calling LLM again
                         yield ChatResponseUpdate(contents=function_call_results, role="tool")

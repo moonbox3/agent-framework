@@ -130,12 +130,42 @@ def _clone_chat_agent(agent: ChatAgent) -> ChatAgent:
 
 @dataclass
 class HandoffUserInputRequest:
-    """Request message emitted when the workflow needs fresh user input."""
+    """Request message emitted when the workflow needs fresh user input.
+
+    Note: The conversation field is intentionally excluded from checkpoint serialization
+    to prevent duplication. The conversation is preserved in the coordinator's state
+    and will be reconstructed on restore. See issue #2667.
+    """
 
     conversation: list[ChatMessage]
     awaiting_agent_id: str
     prompt: str
     source_executor_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict, excluding conversation to prevent checkpoint duplication.
+
+        The conversation is already preserved in the workflow coordinator's state.
+        Including it here would cause duplicate messages when restoring from checkpoint.
+        """
+        return {
+            "awaiting_agent_id": self.awaiting_agent_id,
+            "prompt": self.prompt,
+            "source_executor_id": self.source_executor_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HandoffUserInputRequest":
+        """Deserialize from dict, initializing conversation as empty.
+
+        The conversation will be reconstructed from the coordinator's state on restore.
+        """
+        return cls(
+            conversation=[],
+            awaiting_agent_id=data["awaiting_agent_id"],
+            prompt=data["prompt"],
+            source_executor_id=data["source_executor_id"],
+        )
 
 
 @dataclass
@@ -439,9 +469,35 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         message: _ConversationWithUserInput,
         ctx: WorkflowContext[AgentExecutorRequest, list[ChatMessage]],
     ) -> None:
-        """Receive full conversation with new user input from gateway, update history, trim for agent."""
-        # Update authoritative conversation
-        self._conversation = list(message.full_conversation)
+        """Receive user input from gateway, update history, and route to agent.
+
+        The message.full_conversation may contain:
+        - Full conversation history + new user messages (normal flow)
+        - Only new user messages (post-checkpoint-restore flow, see issue #2667)
+
+        We detect the post-restore case by checking if the incoming messages are a
+        subset of new user messages only. In that case, we append to the existing
+        conversation rather than replacing it.
+        """
+        incoming = message.full_conversation
+
+        # Detect post-restore case: incoming contains only new user messages
+        # In normal flow, incoming would include the full conversation history
+        # After restore, HandoffUserInputRequest.conversation is empty, so gateway
+        # sends only the new user messages
+        if self._conversation and incoming:
+            # Check if incoming appears to be just new messages (all USER role, shorter than existing)
+            all_user_messages = all(msg.role == Role.USER for msg in incoming)
+            is_subset = len(incoming) < len(self._conversation) or (len(incoming) == 1 and len(self._conversation) > 1)
+            if all_user_messages and is_subset:
+                # Post-restore: append new user messages to existing conversation
+                self._conversation.extend(incoming)
+            else:
+                # Normal flow: replace with full conversation
+                self._conversation = list(incoming)
+        else:
+            # No existing conversation or empty incoming: use whatever we have
+            self._conversation = list(incoming) if incoming else self._conversation
 
         # Reset autonomous turn counter on new user input
         self._autonomous_turns = 0
@@ -626,15 +682,24 @@ class _UserInputGateway(Executor):
         response: object,
         ctx: WorkflowContext[_ConversationWithUserInput],
     ) -> None:
-        """Convert user input responses back into chat messages and resume the workflow."""
-        # Reconstruct full conversation with new user input
-        conversation = list(original_request.conversation)
-        user_messages = _as_user_messages(response)
-        conversation.extend(user_messages)
+        """Convert user input responses back into chat messages and resume the workflow.
 
-        # Send full conversation back to coordinator (not trimmed)
-        # Coordinator will update its authoritative history and trim for agent
-        message = _ConversationWithUserInput(full_conversation=conversation)
+        After checkpoint restore, original_request.conversation will be empty (not serialized
+        to prevent duplication - see issue #2667). In this case, we send only the new user
+        messages and let the coordinator append them to its already-restored conversation.
+        """
+        user_messages = _as_user_messages(response)
+
+        if original_request.conversation:
+            # Normal flow: have conversation history from the original request
+            conversation = list(original_request.conversation)
+            conversation.extend(user_messages)
+            message = _ConversationWithUserInput(full_conversation=conversation)
+        else:
+            # Post-restore flow: conversation was not serialized, send only new user messages
+            # The coordinator will append these to its already-restored conversation
+            message = _ConversationWithUserInput(full_conversation=user_messages)
+
         await ctx.send_message(message, target_id="handoff-coordinator")
 
 

@@ -1409,18 +1409,10 @@ async def _auto_invoke_function(
     parsed_args: dict[str, Any] = dict(function_call_content.parse_arguments() or {})
 
     # Filter out internal framework kwargs before passing to tools.
-    # This includes middleware infrastructure, chat options, tool configuration, and other
-    # framework-specific parameters that should not be forwarded to external tools.
-    framework_kwargs_to_filter = {
-        "_function_middleware_pipeline",
-        "middleware",
-        "chat_options",
-        "tools",
-        "tool_choice",
-        "thread",
-    }
     runtime_kwargs: dict[str, Any] = {
-        key: value for key, value in (custom_args or {}).items() if key not in framework_kwargs_to_filter
+        key: value
+        for key, value in (custom_args or {}).items()
+        if key not in {"_function_middleware_pipeline", "middleware"}
     }
     try:
         args = tool.input_model.model_validate(parsed_args)

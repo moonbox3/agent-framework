@@ -16,10 +16,6 @@ results, including error states, token usage, costs, and other arbitrary
 metadata through the _meta field of CallToolResult objects.
 """
 
-import logging
-
-logging.basicConfig(level=logging.DEBUG)
-
 
 async def mcp_tools_on_run_level() -> None:
     """Example showing MCP tools defined when running the agent."""

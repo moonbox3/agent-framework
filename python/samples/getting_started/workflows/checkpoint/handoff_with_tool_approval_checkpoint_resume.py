@@ -310,7 +310,7 @@ async def main() -> None:
 
     # Enable INFO logging to see workflow progress
     logging.basicConfig(
-        level=logging.WARNING,
+        level=logging.INFO,
         format="[%(levelname)s] %(name)s: %(message)s",
     )
 

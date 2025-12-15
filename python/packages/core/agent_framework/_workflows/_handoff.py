@@ -170,9 +170,17 @@ class HandoffUserInputRequest:
 
 @dataclass
 class _ConversationWithUserInput:
-    """Internal message carrying full conversation + new user messages from gateway to coordinator."""
+    """Internal message carrying full conversation + new user messages from gateway to coordinator.
+
+    Attributes:
+        full_conversation: The conversation messages to process.
+        is_post_restore: If True, indicates this message was created after a checkpoint restore.
+            The coordinator should append these messages to its existing conversation rather
+            than replacing it. This prevents duplicate messages (see issue #2667).
+    """
 
     full_conversation: list[ChatMessage] = field(default_factory=lambda: [])  # type: ignore[misc]
+    is_post_restore: bool = False
 
 
 @dataclass
@@ -475,28 +483,18 @@ class _HandoffCoordinator(BaseGroupChatOrchestrator):
         - Full conversation history + new user messages (normal flow)
         - Only new user messages (post-checkpoint-restore flow, see issue #2667)
 
-        We detect the post-restore case by checking if the incoming messages are a
-        subset of new user messages only. In that case, we append to the existing
-        conversation rather than replacing it.
+        The gateway sets message.is_post_restore=True when resuming after a checkpoint
+        restore. In that case, we append the new messages to the existing conversation
+        rather than replacing it.
         """
         incoming = message.full_conversation
 
-        # Detect post-restore case: incoming contains only new user messages
-        # In normal flow, incoming would include the full conversation history
-        # After restore, HandoffUserInputRequest.conversation is empty, so gateway
-        # sends only the new user messages
-        if self._conversation and incoming:
-            # Check if incoming appears to be just new messages (all USER role, shorter than existing)
-            all_user_messages = all(msg.role == Role.USER for msg in incoming)
-            is_subset = len(incoming) < len(self._conversation) or (len(incoming) == 1 and len(self._conversation) > 1)
-            if all_user_messages and is_subset:
-                # Post-restore: append new user messages to existing conversation
-                self._conversation.extend(incoming)
-            else:
-                # Normal flow: replace with full conversation
-                self._conversation = list(incoming)
+        if message.is_post_restore and self._conversation:
+            # Post-restore: append new user messages to existing conversation
+            # The coordinator already has its conversation restored from checkpoint
+            self._conversation.extend(incoming)
         else:
-            # No existing conversation or empty incoming: use whatever we have
+            # Normal flow: replace with full conversation
             self._conversation = list(incoming) if incoming else self._conversation
 
         # Reset autonomous turn counter on new user input
@@ -694,11 +692,11 @@ class _UserInputGateway(Executor):
             # Normal flow: have conversation history from the original request
             conversation = list(original_request.conversation)
             conversation.extend(user_messages)
-            message = _ConversationWithUserInput(full_conversation=conversation)
+            message = _ConversationWithUserInput(full_conversation=conversation, is_post_restore=False)
         else:
             # Post-restore flow: conversation was not serialized, send only new user messages
             # The coordinator will append these to its already-restored conversation
-            message = _ConversationWithUserInput(full_conversation=user_messages)
+            message = _ConversationWithUserInput(full_conversation=user_messages, is_post_restore=True)
 
         await ctx.send_message(message, target_id="handoff-coordinator")
 

@@ -1063,8 +1063,11 @@ async def test_coordinator_handle_user_input_post_restore():
     mock_ctx = MagicMock()
     mock_ctx.send_message = AsyncMock()
 
-    # Simulate post-restore: only new user message (as sent by gateway after restore)
-    incoming = _ConversationWithUserInput(full_conversation=[ChatMessage(role=Role.USER, text="I need shipping help")])
+    # Simulate post-restore: only new user message with explicit flag
+    incoming = _ConversationWithUserInput(
+        full_conversation=[ChatMessage(role=Role.USER, text="I need shipping help")],
+        is_post_restore=True,
+    )
 
     # Handle the user input
     await coordinator.handle_user_input(incoming, mock_ctx)
@@ -1106,13 +1109,14 @@ async def test_coordinator_handle_user_input_normal_flow():
     mock_ctx = MagicMock()
     mock_ctx.send_message = AsyncMock()
 
-    # Normal flow: full conversation including new user message
+    # Normal flow: full conversation including new user message (is_post_restore=False by default)
     incoming = _ConversationWithUserInput(
         full_conversation=[
             ChatMessage(role=Role.USER, text="Hello"),
             ChatMessage(role=Role.ASSISTANT, text="Hi!"),
             ChatMessage(role=Role.USER, text="New message"),
-        ]
+        ],
+        is_post_restore=False,
     )
 
     # Handle the user input
@@ -1123,3 +1127,55 @@ async def test_coordinator_handle_user_input_normal_flow():
     assert coordinator._conversation[0].text == "Hello"
     assert coordinator._conversation[1].text == "Hi!"
     assert coordinator._conversation[2].text == "New message"
+
+
+async def test_coordinator_handle_user_input_multiple_consecutive_user_messages():
+    """Test that multiple consecutive USER messages in normal flow are handled correctly.
+
+    This is a regression test for the edge case where a user submits multiple consecutive
+    USER messages. The explicit is_post_restore flag ensures this doesn't get incorrectly
+    detected as a post-restore scenario.
+    """
+    from unittest.mock import AsyncMock
+
+    from agent_framework._workflows._handoff import _HandoffCoordinator
+
+    # Create a coordinator with existing conversation
+    coordinator = _HandoffCoordinator(
+        starting_agent_id="triage",
+        specialist_ids={"specialist_a": "specialist_a"},
+        input_gateway_id="gateway",
+        termination_condition=lambda conv: False,
+        id="test-coordinator",
+    )
+
+    # Set existing conversation with 4 messages
+    coordinator._conversation = [
+        ChatMessage(role=Role.USER, text="Original message 1"),
+        ChatMessage(role=Role.ASSISTANT, text="Response 1"),
+        ChatMessage(role=Role.USER, text="Original message 2"),
+        ChatMessage(role=Role.ASSISTANT, text="Response 2"),
+    ]
+
+    # Create mock context
+    mock_ctx = MagicMock()
+    mock_ctx.send_message = AsyncMock()
+
+    # Normal flow: User sends multiple consecutive USER messages
+    # This should REPLACE the conversation, not append to it
+    incoming = _ConversationWithUserInput(
+        full_conversation=[
+            ChatMessage(role=Role.USER, text="New user message 1"),
+            ChatMessage(role=Role.USER, text="New user message 2"),
+        ],
+        is_post_restore=False,  # Explicit flag - this is normal flow
+    )
+
+    # Handle the user input
+    await coordinator.handle_user_input(incoming, mock_ctx)
+
+    # Verify conversation was REPLACED (not appended)
+    # Without the explicit flag, the old heuristic might incorrectly append
+    assert len(coordinator._conversation) == 2
+    assert coordinator._conversation[0].text == "New user message 1"
+    assert coordinator._conversation[1].text == "New user message 2"

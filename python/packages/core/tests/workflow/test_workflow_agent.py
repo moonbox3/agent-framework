@@ -386,6 +386,42 @@ class TestWorkflowAgent:
         assert result.messages[0].text == "response text"
         assert result.messages[0].author_name == "custom-author"
 
+    async def test_workflow_as_agent_yield_output_sets_raw_representation(self) -> None:
+        """Test that yield_output sets raw_representation with the original data."""
+
+        # A custom object to verify raw_representation preserves the original data
+        class CustomData:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __str__(self) -> str:
+                return f"CustomData({self.value})"
+
+        @executor
+        async def raw_yielding_executor(messages: list[ChatMessage], ctx: WorkflowContext) -> None:
+            # Yield different types of data
+            await ctx.yield_output("simple string")
+            await ctx.yield_output(TextContent(text="text content"))
+            custom = CustomData(42)
+            await ctx.yield_output(custom)
+
+        workflow = WorkflowBuilder().set_start_executor(raw_yielding_executor).build()
+        agent = workflow.as_agent("raw-test-agent")
+
+        updates: list[AgentRunResponseUpdate] = []
+        async for update in agent.run_stream("test"):
+            updates.append(update)
+
+        # Should have 3 updates
+        assert len(updates) == 3
+
+        # Verify raw_representation is set for each update
+        assert updates[0].raw_representation == "simple string"
+        assert isinstance(updates[1].raw_representation, TextContent)
+        assert updates[1].raw_representation.text == "text content"
+        assert isinstance(updates[2].raw_representation, CustomData)
+        assert updates[2].raw_representation.value == 42
+
     async def test_thread_conversation_history_included_in_workflow_run(self) -> None:
         """Test that conversation history from thread is included when running WorkflowAgent.
 

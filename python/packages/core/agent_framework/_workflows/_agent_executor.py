@@ -106,6 +106,11 @@ class AgentExecutor(Executor):
             return [AgentRunResponse]
         return []
 
+    @property
+    def description(self) -> str | None:
+        """Get the description of the underlying agent."""
+        return self._agent.description
+
     @handler
     async def run(
         self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse, AgentRunResponse]

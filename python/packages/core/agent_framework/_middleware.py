@@ -1405,13 +1405,17 @@ def use_chat_middleware(chat_client_class: type[TChatClient]) -> type[TChatClien
             call_middleware = kwargs.pop("middleware", None)
             instance_middleware = getattr(self, "middleware", None)
 
-            # Merge middleware from both sources, filtering for chat middleware only
-            all_middleware: list[ChatMiddleware | ChatMiddlewareCallable] = _merge_and_filter_chat_middleware(
-                instance_middleware, call_middleware
-            )
+            # Merge all middleware and separate by type
+            middleware = categorize_middleware(instance_middleware, call_middleware)
+            chat_middleware_list = middleware["chat"]
+            function_middleware_list = middleware["function"]
 
-            # If no middleware, use original method
-            if not all_middleware:
+            # Pass function middleware to function invocation system if present
+            if function_middleware_list:
+                kwargs["_function_middleware_pipeline"] = FunctionMiddlewarePipeline(function_middleware_list)
+
+            # If no chat middleware, use original method
+            if not chat_middleware_list:
                 async for update in original_get_streaming_response(self, messages, **kwargs):
                     yield update
                 return
@@ -1422,7 +1426,7 @@ def use_chat_middleware(chat_client_class: type[TChatClient]) -> type[TChatClien
             # Extract chat_options or create default
             chat_options = kwargs.pop("chat_options", ChatOptions())
 
-            pipeline = ChatMiddlewarePipeline(all_middleware)  # type: ignore[arg-type]
+            pipeline = ChatMiddlewarePipeline(chat_middleware_list)  # type: ignore[arg-type]
             context = ChatContext(
                 chat_client=self,
                 messages=prepare_messages(messages),

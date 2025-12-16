@@ -1183,8 +1183,8 @@ class MagenticOrchestratorExecutor(BaseGroupChatOrchestrator):
         logger.info("Magentic Orchestrator: Received start message")
 
         # Store run_kwargs in SharedState so agent executors can access them
-        if message.run_kwargs:
-            await context.set_shared_state(WORKFLOW_RUN_KWARGS_KEY, message.run_kwargs)
+        # Always store (even empty dict) so retrieval is deterministic
+        await context.set_shared_state(WORKFLOW_RUN_KWARGS_KEY, message.run_kwargs or {})
 
         self._context = MagenticContext(
             task=message.task,
@@ -2671,7 +2671,7 @@ class MagenticWorkflow:
             start_message = message
 
         # Attach kwargs to the start message
-        if kwargs and isinstance(start_message, _MagenticStartMessage):
+        if isinstance(start_message, _MagenticStartMessage):
             start_message.run_kwargs = kwargs
 
         async for event in self._workflow.run_stream(start_message):

@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Annotated, Any
 
-from agent_framework import SequentialBuilder, WorkflowOutputEvent, ai_function
+from agent_framework import ChatMessage, SequentialBuilder, WorkflowOutputEvent, ai_function
 from agent_framework.openai import OpenAIChatClient
 from pydantic import Field
 
@@ -120,7 +120,7 @@ async def main() -> None:
             output_data = event.data
             if isinstance(output_data, list):
                 for item in output_data:
-                    if hasattr(item, "text") and item.text:
+                    if isinstance(item, ChatMessage) and item.text:
                         print(f"\n[Final Answer]: {item.text}")
 
     print("\n" + "=" * 70)

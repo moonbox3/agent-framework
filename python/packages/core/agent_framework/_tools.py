@@ -1784,7 +1784,7 @@ def _handle_function_calls_response(
                     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
                     approved_function_results: list[Contents] = []
                     if approved_responses:
-                        approved_function_results, _ = await _try_execute_function_calls(
+                        results, _ = await _try_execute_function_calls(
                             custom_args=kwargs,
                             attempt_idx=attempt_idx,
                             function_calls=approved_responses,
@@ -1792,6 +1792,7 @@ def _handle_function_calls_response(
                             middleware_pipeline=stored_middleware_pipeline,
                             config=config,
                         )
+                        approved_function_results = list(results)
                         if any(
                             fcr.exception is not None
                             for fcr in approved_function_results
@@ -1979,7 +1980,7 @@ def _handle_function_calls_streaming_response(
                     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
                     approved_function_results: list[Contents] = []
                     if approved_responses:
-                        approved_function_results, _ = await _try_execute_function_calls(
+                        results, _ = await _try_execute_function_calls(
                             custom_args=kwargs,
                             attempt_idx=attempt_idx,
                             function_calls=approved_responses,
@@ -1987,6 +1988,7 @@ def _handle_function_calls_streaming_response(
                             middleware_pipeline=stored_middleware_pipeline,
                             config=config,
                         )
+                        approved_function_results = list(results)
                         if any(
                             fcr.exception is not None
                             for fcr in approved_function_results

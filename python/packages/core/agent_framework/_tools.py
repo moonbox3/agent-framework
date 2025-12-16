@@ -1348,6 +1348,35 @@ class FunctionInvocationConfiguration(SerializationMixin):
         self.include_detailed_errors = include_detailed_errors
 
 
+class FunctionExecutionResult:
+    """Internal wrapper pairing function output with loop control signals.
+
+    Function execution produces two distinct concerns: the semantic result (returned to
+    the LLM as FunctionResultContent) and control flow decisions (whether middleware
+    requested early termination). This wrapper keeps control signals out of user-facing
+    content types while allowing _try_execute_function_calls to communicate both.
+
+    Not exposed to users.
+
+    Attributes:
+        content: The FunctionResultContent or other content from the function execution.
+        terminate: If True, the function invocation loop should exit immediately without
+            another LLM call. Set when middleware sets context.terminate=True.
+    """
+
+    __slots__ = ("content", "terminate")
+
+    def __init__(self, content: "Contents", terminate: bool = False) -> None:
+        """Initialize FunctionExecutionResult.
+
+        Args:
+            content: The content from the function execution.
+            terminate: Whether to terminate the function calling loop.
+        """
+        self.content = content
+        self.terminate = terminate
+
+
 async def _auto_invoke_function(
     function_call_content: "FunctionCallContent | FunctionApprovalResponseContent",
     custom_args: dict[str, Any] | None = None,
@@ -1357,7 +1386,7 @@ async def _auto_invoke_function(
     sequence_index: int | None = None,
     request_index: int | None = None,
     middleware_pipeline: Any = None,  # Optional MiddlewarePipeline
-) -> "Contents":
+) -> "FunctionExecutionResult | Contents":
     """Invoke a function call requested by the agent, applying middleware that is defined.
 
     Args:
@@ -1372,7 +1401,8 @@ async def _auto_invoke_function(
         middleware_pipeline: Optional middleware pipeline to apply during execution.
 
     Returns:
-        A FunctionResultContent containing the result or exception.
+        A FunctionExecutionResult wrapping the content and terminate signal,
+        or a Contents object for approval/hosted tool scenarios.
 
     Raises:
         KeyError: If the requested function is not found in the tool map.
@@ -1392,10 +1422,12 @@ async def _auto_invoke_function(
         # Tool should exist because _try_execute_function_calls validates this
         if tool is None:
             exc = KeyError(f'Function "{function_call_content.name}" not found.')
-            return FunctionResultContent(
-                call_id=function_call_content.call_id,
-                result=f'Error: Requested function "{function_call_content.name}" not found.',
-                exception=exc,
+            return FunctionExecutionResult(
+                content=FunctionResultContent(
+                    call_id=function_call_content.call_id,
+                    result=f'Error: Requested function "{function_call_content.name}" not found.',
+                    exception=exc,
+                )
             )
     else:
         # Note: Unapproved tools (approved=False) are handled in _replace_approval_contents_with_results
@@ -1420,7 +1452,9 @@ async def _auto_invoke_function(
         message = "Error: Argument parsing failed."
         if config.include_detailed_errors:
             message = f"{message} Exception: {exc}"
-        return FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+        return FunctionExecutionResult(
+            content=FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+        )
 
     if not middleware_pipeline or (
         not hasattr(middleware_pipeline, "has_middlewares") and not middleware_pipeline.has_middlewares
@@ -1432,15 +1466,19 @@ async def _auto_invoke_function(
                 tool_call_id=function_call_content.call_id,
                 **runtime_kwargs if getattr(tool, "_forward_runtime_kwargs", False) else {},
             )
-            return FunctionResultContent(
-                call_id=function_call_content.call_id,
-                result=function_result,
+            return FunctionExecutionResult(
+                content=FunctionResultContent(
+                    call_id=function_call_content.call_id,
+                    result=function_result,
+                )
             )
         except Exception as exc:
             message = "Error: Function failed."
             if config.include_detailed_errors:
                 message = f"{message} Exception: {exc}"
-            return FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+            return FunctionExecutionResult(
+                content=FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+            )
     # Execute through middleware pipeline if available
     from ._middleware import FunctionInvocationContext
 
@@ -1464,16 +1502,20 @@ async def _auto_invoke_function(
             context=middleware_context,
             final_handler=final_function_handler,
         )
-        return FunctionResultContent(
-            call_id=function_call_content.call_id,
-            result=function_result,
-            terminate_loop=middleware_context.terminate,
+        return FunctionExecutionResult(
+            content=FunctionResultContent(
+                call_id=function_call_content.call_id,
+                result=function_result,
+            ),
+            terminate=middleware_context.terminate,
         )
     except Exception as exc:
         message = "Error: Function failed."
         if config.include_detailed_errors:
             message = f"{message} Exception: {exc}"
-        return FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+        return FunctionExecutionResult(
+            content=FunctionResultContent(call_id=function_call_content.call_id, result=message, exception=exc)
+        )
 
 
 def _get_tool_map(
@@ -1504,7 +1546,7 @@ async def _try_execute_function_calls(
     | Sequence[ToolProtocol | Callable[..., Any] | MutableMapping[str, Any]]",
     config: FunctionInvocationConfiguration,
     middleware_pipeline: Any = None,  # Optional MiddlewarePipeline to avoid circular imports
-) -> Sequence["Contents"]:
+) -> tuple[Sequence["Contents"], bool]:
     """Execute multiple function calls concurrently.
 
     Args:
@@ -1516,9 +1558,11 @@ async def _try_execute_function_calls(
         middleware_pipeline: Optional middleware pipeline to apply during execution.
 
     Returns:
-        A list of Contents containing the results of each function call,
-        or the approval requests if any function requires approval,
-        or the original function calls if any are declaration only.
+        A tuple of:
+        - A list of Contents containing the results of each function call,
+          or the approval requests if any function requires approval,
+          or the original function calls if any are declaration only.
+        - A boolean indicating whether to terminate the function calling loop.
     """
     from ._types import FunctionApprovalRequestContent, FunctionCallContent
 
@@ -1541,17 +1585,20 @@ async def _try_execute_function_calls(
             raise KeyError(f'Error: Requested function "{fcc.name}" not found.')
     if approval_needed:
         # approval can only be needed for Function Call Contents, not Approval Responses.
-        return [
-            FunctionApprovalRequestContent(id=fcc.call_id, function_call=fcc)
-            for fcc in function_calls
-            if isinstance(fcc, FunctionCallContent)
-        ]
+        return (
+            [
+                FunctionApprovalRequestContent(id=fcc.call_id, function_call=fcc)
+                for fcc in function_calls
+                if isinstance(fcc, FunctionCallContent)
+            ],
+            False,
+        )
     if declaration_only_flag:
         # return the declaration only tools to the user, since we cannot execute them.
-        return [fcc for fcc in function_calls if isinstance(fcc, FunctionCallContent)]
+        return ([fcc for fcc in function_calls if isinstance(fcc, FunctionCallContent)], False)
 
     # Run all function calls concurrently
-    return await asyncio.gather(*[
+    execution_results = await asyncio.gather(*[
         _auto_invoke_function(
             function_call_content=function_call,  # type: ignore[arg-type]
             custom_args=custom_args,
@@ -1563,6 +1610,20 @@ async def _try_execute_function_calls(
         )
         for seq_idx, function_call in enumerate(function_calls)
     ])
+
+    # Unpack FunctionExecutionResult wrappers and check for terminate signal
+    contents: list[Contents] = []
+    should_terminate = False
+    for result in execution_results:
+        if isinstance(result, FunctionExecutionResult):
+            contents.append(result.content)
+            if result.terminate:
+                should_terminate = True
+        else:
+            # Direct Contents (e.g., from hosted tools)
+            contents.append(result)
+
+    return (contents, should_terminate)
 
 
 def _update_conversation_id(kwargs: dict[str, Any], conversation_id: str | None) -> None:
@@ -1723,7 +1784,7 @@ def _handle_function_calls_response(
                     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
                     approved_function_results: list[Contents] = []
                     if approved_responses:
-                        approved_function_results = await _try_execute_function_calls(
+                        approved_function_results, _ = await _try_execute_function_calls(
                             custom_args=kwargs,
                             attempt_idx=attempt_idx,
                             function_calls=approved_responses,
@@ -1770,7 +1831,7 @@ def _handle_function_calls_response(
                 if function_calls and tools:
                     # Use the stored middleware pipeline instead of extracting from kwargs
                     # because kwargs may have been modified by the underlying function
-                    function_call_results: list[Contents] = await _try_execute_function_calls(
+                    function_call_results, should_terminate = await _try_execute_function_calls(
                         custom_args=kwargs,
                         attempt_idx=attempt_idx,
                         function_calls=function_calls,
@@ -1795,11 +1856,9 @@ def _handle_function_calls_response(
                         # the function calls are already in the response, so we just continue
                         return response
 
-                    # Check if any function result signals loop termination (middleware set context.terminate=True)
+                    # Check if middleware signaled to terminate the loop (context.terminate=True)
                     # This allows middleware to short-circuit the tool loop without another LLM call
-                    if any(
-                        fcr.terminate_loop for fcr in function_call_results if isinstance(fcr, FunctionResultContent)
-                    ):
+                    if should_terminate:
                         # Add tool results to response and return immediately without calling LLM again
                         result_message = ChatMessage(role="tool", contents=function_call_results)
                         response.messages.append(result_message)
@@ -1920,7 +1979,7 @@ def _handle_function_calls_streaming_response(
                     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
                     approved_function_results: list[Contents] = []
                     if approved_responses:
-                        approved_function_results = await _try_execute_function_calls(
+                        approved_function_results, _ = await _try_execute_function_calls(
                             custom_args=kwargs,
                             attempt_idx=attempt_idx,
                             function_calls=approved_responses,
@@ -1982,7 +2041,7 @@ def _handle_function_calls_streaming_response(
                 if function_calls and tools:
                     # Use the stored middleware pipeline instead of extracting from kwargs
                     # because kwargs may have been modified by the underlying function
-                    function_call_results: list[Contents] = await _try_execute_function_calls(
+                    function_call_results, should_terminate = await _try_execute_function_calls(
                         custom_args=kwargs,
                         attempt_idx=attempt_idx,
                         function_calls=function_calls,
@@ -2011,11 +2070,9 @@ def _handle_function_calls_streaming_response(
                         # the function calls were already yielded.
                         return
 
-                    # Check if any function result signals loop termination (middleware set context.terminate=True)
+                    # Check if middleware signaled to terminate the loop (context.terminate=True)
                     # This allows middleware to short-circuit the tool loop without another LLM call
-                    if any(
-                        fcr.terminate_loop for fcr in function_call_results if isinstance(fcr, FunctionResultContent)
-                    ):
+                    if should_terminate:
                         # Yield tool results and return immediately without calling LLM again
                         yield ChatResponseUpdate(contents=function_call_results, role="tool")
                         return

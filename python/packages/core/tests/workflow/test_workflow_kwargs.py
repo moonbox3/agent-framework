@@ -367,7 +367,7 @@ async def test_handoff_kwargs_flow_to_agents() -> None:
     workflow = (
         HandoffBuilder()
         .participants([agent1, agent2])
-        .set_coordinator("coordinator")
+        .set_coordinator(agent1)
         .with_interaction_mode("autonomous")
         .build()
     )

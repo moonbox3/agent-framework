@@ -309,6 +309,7 @@ class WorkflowAgent(BaseAgent):
                         response_id=response_id,
                         message_id=str(uuid.uuid4()),
                         created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                        raw_representation=data,
                     )
                 # Determine contents based on data type
                 if isinstance(data, BaseContent):

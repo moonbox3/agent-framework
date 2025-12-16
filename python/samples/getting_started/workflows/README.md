@@ -149,6 +149,8 @@ to configure which agents can route to which others with a fluent, type-safe API
 | Sample | File | Concepts |
 |---|---|---|
 | Shared States | [state-management/shared_states_with_agents.py](./state-management/shared_states_with_agents.py) | Store in shared state once and later reuse across agents |
+| Workflow Kwargs (Custom Context) | [state-management/workflow_kwargs.py](./state-management/workflow_kwargs.py) | Pass custom context (data, user tokens) via kwargs to `@ai_function` tools |
+
 
 ### visualization
 

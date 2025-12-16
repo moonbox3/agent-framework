@@ -11,6 +11,7 @@ from .._agents import AgentProtocol, ChatAgent
 from .._threads import AgentThread
 from .._types import AgentRunResponse, AgentRunResponseUpdate, ChatMessage
 from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
+from ._const import WORKFLOW_RUN_KWARGS_KEY
 from ._conversation_state import encode_chat_messages
 from ._events import (
     AgentRunEvent,
@@ -304,9 +305,12 @@ class AgentExecutor(Executor):
         Returns:
             The complete AgentRunResponse, or None if waiting for user input.
         """
+        run_kwargs: dict[str, Any] = await ctx.get_shared_state(WORKFLOW_RUN_KWARGS_KEY)
+
         response = await self._agent.run(
             self._cache,
             thread=self._agent_thread,
+            **run_kwargs,
         )
         await ctx.add_event(AgentRunEvent(self.id, response))
 
@@ -328,11 +332,14 @@ class AgentExecutor(Executor):
         Returns:
             The complete AgentRunResponse, or None if waiting for user input.
         """
+        run_kwargs: dict[str, Any] = await ctx.get_shared_state(WORKFLOW_RUN_KWARGS_KEY)
+
         updates: list[AgentRunResponseUpdate] = []
         user_input_requests: list[FunctionApprovalRequestContent] = []
         async for update in self._agent.run_stream(
             self._cache,
             thread=self._agent_thread,
+            **run_kwargs,
         ):
             updates.append(update)
             await ctx.add_event(AgentRunUpdateEvent(self.id, update))

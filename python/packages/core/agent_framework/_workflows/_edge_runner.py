@@ -112,11 +112,7 @@ class SingleEdgeRunner(EdgeRunner):
                     return False
 
                 if self._can_handle(self._edge.target_id, message):
-                    # Use async routing if edge has async condition, otherwise sync
-                    if self._edge.has_async_condition:
-                        route_result = await self._edge.should_route_async(message.data, shared_state)
-                    else:
-                        route_result = self._edge.should_route(message.data)
+                    route_result = await self._edge.should_route(message.data, shared_state)
 
                     if route_result:
                         span.set_attributes({
@@ -198,11 +194,7 @@ class FanOutEdgeRunner(EdgeRunner):
                     if message.target_id in selection_results:
                         edge = self._target_map.get(message.target_id)
                         if edge and self._can_handle(edge.target_id, message):
-                            # Use async routing if edge has async condition
-                            if edge.has_async_condition:
-                                route_result = await edge.should_route_async(message.data, shared_state)
-                            else:
-                                route_result = edge.should_route(message.data)
+                            route_result = await edge.should_route(message.data, shared_state)
 
                             if route_result:
                                 span.set_attributes({
@@ -236,11 +228,7 @@ class FanOutEdgeRunner(EdgeRunner):
                     for target_id in selection_results:
                         edge = self._target_map[target_id]
                         if self._can_handle(edge.target_id, message):
-                            # Use async routing if edge has async condition
-                            if edge.has_async_condition:
-                                route_result = await edge.should_route_async(message.data, shared_state)
-                            else:
-                                route_result = edge.should_route(message.data)
+                            route_result = await edge.should_route(message.data, shared_state)
                             if route_result:
                                 deliverable_edges.append(edge)
 

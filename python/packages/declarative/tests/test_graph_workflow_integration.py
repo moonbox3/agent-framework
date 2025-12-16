@@ -11,11 +11,11 @@ These tests verify:
 
 import pytest
 
-from agent_framework_declarative._workflows._factory import WorkflowFactory
-from agent_framework_declarative._workflows._graph import (
+from agent_framework_declarative._workflows import (
     ActionTrigger,
-    DeclarativeGraphBuilder,
+    DeclarativeWorkflowBuilder,
 )
+from agent_framework_declarative._workflows._factory import WorkflowFactory
 
 
 class TestGraphBasedWorkflowExecution:
@@ -33,7 +33,7 @@ class TestGraphBasedWorkflowExecution:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Run the workflow
@@ -65,7 +65,7 @@ class TestGraphBasedWorkflowExecution:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Run the workflow
@@ -95,7 +95,7 @@ class TestGraphBasedWorkflowExecution:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Run the workflow
@@ -138,7 +138,7 @@ class TestGraphBasedWorkflowExecution:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Run the workflow
@@ -220,7 +220,7 @@ class TestGraphWorkflowCheckpointing:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         _workflow = builder.build()  # noqa: F841
 
         # Verify multiple executors were created
@@ -240,7 +240,7 @@ class TestGraphWorkflowCheckpointing:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Verify all executors exist
@@ -274,7 +274,7 @@ class TestGraphWorkflowVisualization:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         # Verify the workflow was built
@@ -302,7 +302,7 @@ class TestGraphWorkflowStateManagement:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         events = await workflow.run(ActionTrigger())
@@ -323,7 +323,7 @@ class TestGraphWorkflowStateManagement:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         events = await workflow.run(ActionTrigger())

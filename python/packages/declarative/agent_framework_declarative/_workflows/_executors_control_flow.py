@@ -14,14 +14,14 @@ Control flow in the graph-based system is handled differently than the interpret
 The key insight is that control flow becomes GRAPH STRUCTURE, not executor logic.
 """
 
-from typing import Any
+from typing import Any, cast
 
 from agent_framework._workflows import (
     WorkflowContext,
     handler,
 )
 
-from ._base import (
+from ._declarative_base import (
     ActionComplete,
     ActionTrigger,
     ConditionResult,
@@ -235,7 +235,7 @@ class ForeachInitExecutor(DeclarativeActionExecutor):
 
         # Store loop state
         state_data = await state.get_state_data()
-        loop_states = state_data.setdefault(LOOP_STATE_KEY, {})
+        loop_states: dict[str, Any] = cast(dict[str, Any], state_data).setdefault(LOOP_STATE_KEY, {})
         loop_states[loop_id] = {
             "items": items,
             "index": 0,
@@ -308,7 +308,7 @@ class ForeachNextExecutor(DeclarativeActionExecutor):
 
         # Get loop state
         state_data = await state.get_state_data()
-        loop_states = state_data.get(LOOP_STATE_KEY, {})
+        loop_states: dict[str, Any] = cast(dict[str, Any], state_data).get(LOOP_STATE_KEY, {})
         loop_state = loop_states.get(loop_id)
 
         if not loop_state:
@@ -351,7 +351,9 @@ class ForeachNextExecutor(DeclarativeActionExecutor):
             )
         else:
             # Loop complete - clean up
-            del loop_states[loop_id]
+            loop_states_dict = cast(dict[str, Any], state_data).get(LOOP_STATE_KEY, {})
+            if loop_id in loop_states_dict:
+                del loop_states_dict[loop_id]
             await state.set_state_data(state_data)
 
             await ctx.send_message(LoopIterationResult(has_next=False))
@@ -368,7 +370,7 @@ class ForeachNextExecutor(DeclarativeActionExecutor):
         if control.action == "break":
             # Clean up loop state and signal done
             state_data = await state.get_state_data()
-            loop_states = state_data.get(LOOP_STATE_KEY, {})
+            loop_states: dict[str, Any] = cast(dict[str, Any], state_data).get(LOOP_STATE_KEY, {})
             if self._init_executor_id in loop_states:
                 del loop_states[self._init_executor_id]
                 await state.set_state_data(state_data)

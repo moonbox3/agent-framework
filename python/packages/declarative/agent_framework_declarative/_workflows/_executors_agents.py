@@ -27,7 +27,7 @@ from agent_framework._workflows import (
     response_handler,
 )
 
-from ._base import (
+from ._declarative_base import (
     ActionComplete,
     DeclarativeActionExecutor,
     DeclarativeWorkflowState,

@@ -10,7 +10,7 @@ This module provides:
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 from agent_framework._workflows import (
     Executor,
@@ -23,8 +23,73 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+
+class ConversationData(TypedDict):
+    """Structure for conversation-related state data.
+
+    Attributes:
+        messages: Active conversation messages for the current agent interaction.
+            This is the primary storage used by InvokeAgent actions.
+        history: Deprecated. Previously used as a separate history buffer, but
+            messages and history are now kept in sync. Use messages instead.
+    """
+
+    messages: list[Any]
+    history: list[Any]  # Deprecated: use messages instead
+
+
+class DeclarativeStateData(TypedDict, total=False):
+    """Structure for the declarative workflow state stored in SharedState.
+
+    This TypedDict defines the schema for workflow variables stored
+    under the DECLARATIVE_STATE_KEY in SharedState.
+
+    Attributes:
+        inputs: Initial workflow inputs (read-only after initialization).
+        outputs: Values to return from the workflow.
+        turn: Variables persisting within the current workflow turn.
+        system: System-level variables.
+        agent: Results from the most recent agent invocation.
+        conversation: Conversation history and messages.
+        custom: User-defined custom variables.
+        _declarative_loop_state: Internal loop iteration state (managed by ForeachExecutors).
+    """
+
+    inputs: dict[str, Any]
+    outputs: dict[str, Any]
+    turn: dict[str, Any]
+    system: dict[str, Any]
+    agent: dict[str, Any]
+    conversation: ConversationData
+    custom: dict[str, Any]
+    _declarative_loop_state: dict[str, Any]
+
+
 # Key used in SharedState to store declarative workflow variables
 DECLARATIVE_STATE_KEY = "_declarative_workflow_state"
+
+# Namespace prefix mappings from .NET style to Python style
+_NAMESPACE_MAPPINGS = {
+    "Local.": "turn.",
+    "System.": "system.",
+    "Workflow.": "workflow.",
+    "inputs.": "workflow.inputs.",
+}
+
+
+def _map_dotnet_namespace(path: str) -> str:
+    """Map .NET-style namespace prefixes to Python-style.
+
+    Args:
+        path: A dot-notated path like 'Local.value' or 'Workflow.inputs.query'
+
+    Returns:
+        The path with any .NET-style prefix converted to Python-style
+    """
+    for dotnet_prefix, python_prefix in _NAMESPACE_MAPPINGS.items():
+        if path.startswith(dotnet_prefix):
+            return python_prefix + path[len(dotnet_prefix) :]
+    return path
 
 
 class DeclarativeWorkflowState:
@@ -55,27 +120,28 @@ class DeclarativeWorkflowState:
         Args:
             inputs: Initial workflow inputs (become workflow.inputs.*)
         """
-        state_data: dict[str, Any] = {
+        state_data: DeclarativeStateData = {
             "inputs": dict(inputs) if inputs else {},
             "outputs": {},
             "turn": {},
+            "system": {},
             "agent": {},
             "conversation": {"messages": [], "history": []},
             "custom": {},
         }
         await self._shared_state.set(DECLARATIVE_STATE_KEY, state_data)
 
-    async def get_state_data(self) -> dict[str, Any]:
+    async def get_state_data(self) -> DeclarativeStateData:
         """Get the full state data dict from shared state."""
         try:
-            result: dict[str, Any] = await self._shared_state.get(DECLARATIVE_STATE_KEY)
+            result: DeclarativeStateData = await self._shared_state.get(DECLARATIVE_STATE_KEY)
             return result
         except KeyError:
             # Initialize if not present
             await self.initialize()
-            return cast(dict[str, Any], await self._shared_state.get(DECLARATIVE_STATE_KEY))
+            return cast(DeclarativeStateData, await self._shared_state.get(DECLARATIVE_STATE_KEY))
 
-    async def set_state_data(self, data: dict[str, Any]) -> None:
+    async def set_state_data(self, data: DeclarativeStateData) -> None:
         """Set the full state data dict in shared state."""
         await self._shared_state.set(DECLARATIVE_STATE_KEY, data)
 
@@ -156,14 +222,7 @@ class DeclarativeWorkflowState:
             ValueError: If attempting to set workflow.inputs (which is read-only)
         """
         # Map .NET style namespaces to Python style
-        if path.startswith("Local."):
-            path = "turn." + path[6:]
-        elif path.startswith("System."):
-            path = "system." + path[7:]
-        elif path.startswith("Workflow."):
-            path = "workflow." + path[9:]
-        elif path.startswith("inputs."):
-            path = "workflow.inputs." + path[7:]
+        path = _map_dotnet_namespace(path)
 
         state_data = await self.get_state_data()
         parts = path.split(".")
@@ -192,7 +251,7 @@ class DeclarativeWorkflowState:
         elif namespace == "agent":
             target = state_data.setdefault("agent", {})
         elif namespace == "conversation":
-            target = state_data.setdefault("conversation", {})
+            target = cast(dict[str, Any], state_data).setdefault("conversation", {})
         else:
             # Create or use custom namespace
             custom = state_data.setdefault("custom", {})
@@ -305,7 +364,7 @@ class DeclarativeWorkflowState:
 
     async def _eval_simple(self, formula: str) -> Any:
         """Simple expression evaluation fallback."""
-        from .._powerfx_functions import CUSTOM_FUNCTIONS
+        from ._powerfx_functions import CUSTOM_FUNCTIONS
 
         formula = formula.strip()
 
@@ -596,7 +655,7 @@ class LoopControl:
     This message is output by BreakLoopExecutor and ContinueLoopExecutor.
     """
 
-    action: str  # "break" or "continue"
+    action: Literal["break", "continue"]
 
 
 # Union type for any declarative action message - allows executors to accept

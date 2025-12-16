@@ -1,9 +1,10 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Human-in-loop executors for declarative workflows.
+"""External input executors for declarative workflows.
 
-These executors handle interactions that require human input, using the
-RequestInfo pattern to pause the workflow and wait for responses.
+These executors handle interactions that require external input (user questions,
+confirmations, etc.), using the RequestInfo pattern to pause the workflow and
+wait for responses.
 """
 
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from agent_framework._workflows import (
     handler,
 )
 
-from ._base import (
+from ._declarative_base import (
     ActionComplete,
     DeclarativeActionExecutor,
 )
@@ -30,7 +31,12 @@ class QuestionChoice:
 
 @dataclass
 class HumanInputRequest:
-    """Request for human input (triggers workflow pause)."""
+    """Request for human input (triggers workflow pause).
+
+    Used by QuestionExecutor and ConfirmationExecutor to signal that
+    user input is needed. The workflow will yield this request and
+    wait for a response.
+    """
 
     request_type: str
     message: str
@@ -252,7 +258,7 @@ class RequestExternalInputExecutor(DeclarativeActionExecutor):
 
 
 # Mapping of human input action kinds to executor classes
-HUMAN_INPUT_EXECUTORS: dict[str, type[DeclarativeActionExecutor]] = {
+EXTERNAL_INPUT_EXECUTORS: dict[str, type[DeclarativeActionExecutor]] = {
     "Question": QuestionExecutor,
     "Confirmation": ConfirmationExecutor,
     "WaitForInput": WaitForInputExecutor,

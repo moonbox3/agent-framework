@@ -24,7 +24,7 @@ from agent_framework._workflows import (
 )
 
 from .._loader import AgentFactory
-from ._graph import DeclarativeGraphBuilder
+from ._declarative_builder import DeclarativeWorkflowBuilder
 
 logger = get_logger("agent_framework.declarative.workflows")
 
@@ -77,6 +77,8 @@ class WorkflowFactory:
             factory = WorkflowFactory(agents={"MyAgent": agent})
             workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
     """
+
+    _agents: dict[str, AgentProtocol | AgentExecutor]
 
     def __init__(
         self,
@@ -369,7 +371,7 @@ class WorkflowFactory:
 
         # Build the graph-based workflow, passing agents for InvokeAzureAgent executors
         try:
-            graph_builder = DeclarativeGraphBuilder(
+            graph_builder = DeclarativeWorkflowBuilder(
                 normalized_def,
                 workflow_id=name,
                 agents=agents,

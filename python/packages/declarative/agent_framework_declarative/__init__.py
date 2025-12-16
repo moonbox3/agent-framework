@@ -3,8 +3,14 @@
 from importlib import metadata
 
 from ._loader import AgentFactory, DeclarativeLoaderError, ProviderLookupError, ProviderTypeMapping
-from ._workflows import DeclarativeWorkflowError, WorkflowFactory, WorkflowState
-from ._workflows._graph import AgentInvocationError, ExternalInputRequest, ExternalInputResponse
+from ._workflows import (
+    AgentInvocationError,
+    DeclarativeWorkflowError,
+    ExternalInputRequest,
+    ExternalInputResponse,
+    WorkflowFactory,
+    WorkflowState,
+)
 
 try:
     __version__ = metadata.version(__name__)

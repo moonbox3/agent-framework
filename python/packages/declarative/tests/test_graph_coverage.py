@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent_framework_declarative._workflows._graph import (
+from agent_framework_declarative._workflows import (
     ActionComplete,
     ActionTrigger,
     DeclarativeWorkflowState,
 )
-from agent_framework_declarative._workflows._graph._base import (
+from agent_framework_declarative._workflows._declarative_base import (
     ConditionResult,
     LoopControl,
     LoopIterationResult,
@@ -429,7 +429,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_set_variable_executor(self, mock_context, mock_shared_state):
         """Test SetVariableExecutor (distinct from SetValueExecutor)."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetVariableExecutor,
         )
 
@@ -449,7 +449,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_set_variable_executor_with_nested_variable(self, mock_context, mock_shared_state):
         """Test SetVariableExecutor with nested variable object."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetVariableExecutor,
         )
 
@@ -469,7 +469,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_set_text_variable_executor(self, mock_context, mock_shared_state):
         """Test SetTextVariableExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetTextVariableExecutor,
         )
 
@@ -490,7 +490,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_set_text_variable_with_none(self, mock_context, mock_shared_state):
         """Test SetTextVariableExecutor with None value converts to empty string."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetTextVariableExecutor,
         )
 
@@ -510,7 +510,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_set_multiple_variables_executor(self, mock_context, mock_shared_state):
         """Test SetMultipleVariablesExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetMultipleVariablesExecutor,
         )
 
@@ -534,7 +534,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_append_value_executor(self, mock_context, mock_shared_state):
         """Test AppendValueExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             AppendValueExecutor,
         )
 
@@ -555,7 +555,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_reset_variable_executor(self, mock_context, mock_shared_state):
         """Test ResetVariableExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             ResetVariableExecutor,
         )
 
@@ -575,7 +575,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_clear_all_variables_executor(self, mock_context, mock_shared_state):
         """Test ClearAllVariablesExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             ClearAllVariablesExecutor,
         )
 
@@ -594,7 +594,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_send_activity_with_dict_activity(self, mock_context, mock_shared_state):
         """Test SendActivityExecutor with dict activity containing text field."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SendActivityExecutor,
         )
 
@@ -613,7 +613,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_send_activity_with_string_activity(self, mock_context, mock_shared_state):
         """Test SendActivityExecutor with string activity."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SendActivityExecutor,
         )
 
@@ -631,7 +631,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_send_activity_with_expression(self, mock_context, mock_shared_state):
         """Test SendActivityExecutor evaluates expressions."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SendActivityExecutor,
         )
 
@@ -650,7 +650,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_emit_event_executor_graph_mode(self, mock_context, mock_shared_state):
         """Test EmitEventExecutor with graph-mode schema (eventName/eventValue)."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             EmitEventExecutor,
         )
 
@@ -672,7 +672,7 @@ class TestBasicExecutorsCoverage:
 
     async def test_emit_event_executor_interpreter_mode(self, mock_context, mock_shared_state):
         """Test EmitEventExecutor with interpreter-mode schema (event.name/event.data)."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             EmitEventExecutor,
         )
 
@@ -705,7 +705,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_map_variable_to_path_all_cases(self):
         """Test _map_variable_to_path with all namespace mappings."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             _map_variable_to_path,
         )
 
@@ -726,7 +726,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_agent_name_string(self, mock_context, mock_shared_state):
         """Test agent name extraction from simple string config."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -744,7 +744,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_agent_name_dict(self, mock_context, mock_shared_state):
         """Test agent name extraction from nested dict config."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -762,7 +762,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_agent_name_legacy(self, mock_context, mock_shared_state):
         """Test agent name extraction from agentName (legacy)."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -780,7 +780,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_input_config_simple(self, mock_context, mock_shared_state):
         """Test input config parsing with simple non-dict input."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -799,7 +799,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_input_config_full(self, mock_context, mock_shared_state):
         """Test input config parsing with full structured input."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -822,7 +822,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_output_config_simple(self, mock_context, mock_shared_state):
         """Test output config parsing with simple resultProperty."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -841,7 +841,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_get_output_config_full(self, mock_context, mock_shared_state):
         """Test output config parsing with full structured output."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -865,7 +865,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_build_input_text_from_string_messages(self, mock_context, mock_shared_state):
         """Test _build_input_text with string messages expression."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -881,7 +881,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_build_input_text_from_message_list(self, mock_context, mock_shared_state):
         """Test _build_input_text extracts text from message list."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -904,7 +904,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_build_input_text_from_message_with_text_attr(self, mock_context, mock_shared_state):
         """Test _build_input_text extracts text from message with text attribute."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -924,7 +924,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_build_input_text_fallback_chain(self, mock_context, mock_shared_state):
         """Test _build_input_text fallback chain when no messages expression."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -940,7 +940,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_build_input_text_from_system_last_message(self, mock_context, mock_shared_state):
         """Test _build_input_text falls back to system.LastMessage.Text."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -956,7 +956,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_missing_agent_name(self, mock_context, mock_shared_state):
         """Test agent executor with missing agent name logs warning."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -975,7 +975,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_with_working_agent(self, mock_context, mock_shared_state):
         """Test agent executor with a working mock agent."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -1015,7 +1015,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_with_agent_from_registry(self, mock_context, mock_shared_state):
         """Test agent executor retrieves agent from shared state registry."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             AGENT_REGISTRY_KEY,
             InvokeAzureAgentExecutor,
         )
@@ -1048,7 +1048,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_agent_executor_parses_json_response(self, mock_context, mock_shared_state):
         """Test agent executor parses JSON response into responseObject."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -1080,7 +1080,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_invoke_tool_executor_not_found(self, mock_context, mock_shared_state):
         """Test InvokeToolExecutor when tool not found."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeToolExecutor,
         )
 
@@ -1101,7 +1101,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_invoke_tool_executor_sync_tool(self, mock_context, mock_shared_state):
         """Test InvokeToolExecutor with synchronous tool."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             TOOL_REGISTRY_KEY,
             InvokeToolExecutor,
         )
@@ -1129,7 +1129,7 @@ class TestAgentExecutorsCoverage:
 
     async def test_invoke_tool_executor_async_tool(self, mock_context, mock_shared_state):
         """Test InvokeToolExecutor with asynchronous tool."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             TOOL_REGISTRY_KEY,
             InvokeToolExecutor,
         )
@@ -1166,7 +1166,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_with_source_alias(self, mock_context, mock_shared_state):
         """Test ForeachInitExecutor with 'source' alias (interpreter mode)."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ForeachInitExecutor,
         )
 
@@ -1192,7 +1192,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_next_continues_iteration(self, mock_context, mock_shared_state):
         """Test ForeachNextExecutor continues to next item."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             LOOP_STATE_KEY,
             ForeachNextExecutor,
         )
@@ -1228,7 +1228,7 @@ class TestControlFlowCoverage:
 
     async def test_switch_evaluator_with_value_cases(self, mock_context, mock_shared_state):
         """Test SwitchEvaluatorExecutor with value/cases schema."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             SwitchEvaluatorExecutor,
         )
 
@@ -1255,7 +1255,7 @@ class TestControlFlowCoverage:
 
     async def test_switch_evaluator_default_case(self, mock_context, mock_shared_state):
         """Test SwitchEvaluatorExecutor falls through to default."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             SwitchEvaluatorExecutor,
         )
 
@@ -1282,7 +1282,7 @@ class TestControlFlowCoverage:
 
     async def test_switch_evaluator_no_value(self, mock_context, mock_shared_state):
         """Test SwitchEvaluatorExecutor with no value defaults to else."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             SwitchEvaluatorExecutor,
         )
 
@@ -1301,7 +1301,7 @@ class TestControlFlowCoverage:
 
     async def test_join_executor_accepts_condition_result(self, mock_context, mock_shared_state):
         """Test JoinExecutor accepts ConditionResult as trigger."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             JoinExecutor,
         )
 
@@ -1319,7 +1319,7 @@ class TestControlFlowCoverage:
 
     async def test_break_loop_executor(self, mock_context, mock_shared_state):
         """Test BreakLoopExecutor emits LoopControl."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             BreakLoopExecutor,
         )
 
@@ -1337,7 +1337,7 @@ class TestControlFlowCoverage:
 
     async def test_continue_loop_executor(self, mock_context, mock_shared_state):
         """Test ContinueLoopExecutor emits LoopControl."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ContinueLoopExecutor,
         )
 
@@ -1355,7 +1355,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_next_no_loop_state(self, mock_context, mock_shared_state):
         """Test ForeachNextExecutor with missing loop state."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ForeachNextExecutor,
         )
 
@@ -1377,7 +1377,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_next_loop_complete(self, mock_context, mock_shared_state):
         """Test ForeachNextExecutor when loop is complete."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             LOOP_STATE_KEY,
             ForeachNextExecutor,
         )
@@ -1411,7 +1411,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_next_handle_break_control(self, mock_context, mock_shared_state):
         """Test ForeachNextExecutor handles break LoopControl."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             LOOP_STATE_KEY,
             ForeachNextExecutor,
         )
@@ -1445,7 +1445,7 @@ class TestControlFlowCoverage:
 
     async def test_foreach_next_handle_continue_control(self, mock_context, mock_shared_state):
         """Test ForeachNextExecutor handles continue LoopControl."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             LOOP_STATE_KEY,
             ForeachNextExecutor,
         )
@@ -1480,7 +1480,7 @@ class TestControlFlowCoverage:
 
     async def test_end_workflow_executor(self, mock_context, mock_shared_state):
         """Test EndWorkflowExecutor does not send continuation."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             EndWorkflowExecutor,
         )
 
@@ -1497,7 +1497,7 @@ class TestControlFlowCoverage:
 
     async def test_end_conversation_executor(self, mock_context, mock_shared_state):
         """Test EndConversationExecutor does not send continuation."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             EndConversationExecutor,
         )
 
@@ -1514,7 +1514,7 @@ class TestControlFlowCoverage:
 
     async def test_condition_group_evaluator_first_match(self, mock_context, mock_shared_state):
         """Test ConditionGroupEvaluatorExecutor returns first match."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ConditionGroupEvaluatorExecutor,
         )
 
@@ -1539,7 +1539,7 @@ class TestControlFlowCoverage:
 
     async def test_condition_group_evaluator_no_match(self, mock_context, mock_shared_state):
         """Test ConditionGroupEvaluatorExecutor with no matches."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ConditionGroupEvaluatorExecutor,
         )
 
@@ -1563,7 +1563,7 @@ class TestControlFlowCoverage:
 
     async def test_condition_group_evaluator_boolean_true_condition(self, mock_context, mock_shared_state):
         """Test ConditionGroupEvaluatorExecutor with boolean True condition."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             ConditionGroupEvaluatorExecutor,
         )
 
@@ -1586,7 +1586,7 @@ class TestControlFlowCoverage:
 
     async def test_if_condition_evaluator_true(self, mock_context, mock_shared_state):
         """Test IfConditionEvaluatorExecutor with true condition."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             IfConditionEvaluatorExecutor,
         )
 
@@ -1606,7 +1606,7 @@ class TestControlFlowCoverage:
 
     async def test_if_condition_evaluator_false(self, mock_context, mock_shared_state):
         """Test IfConditionEvaluatorExecutor with false condition."""
-        from agent_framework_declarative._workflows._graph._executors_control_flow import (
+        from agent_framework_declarative._workflows._executors_control_flow import (
             IfConditionEvaluatorExecutor,
         )
 
@@ -1635,7 +1635,7 @@ class TestDeclarativeActionExecutorBase:
 
     async def test_ensure_state_initialized_with_dict_input(self, mock_context, mock_shared_state):
         """Test _ensure_state_initialized with dict input."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetValueExecutor,
         )
 
@@ -1652,7 +1652,7 @@ class TestDeclarativeActionExecutorBase:
 
     async def test_ensure_state_initialized_with_string_input(self, mock_context, mock_shared_state):
         """Test _ensure_state_initialized with string input."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetValueExecutor,
         )
 
@@ -1668,7 +1668,7 @@ class TestDeclarativeActionExecutorBase:
 
     async def test_ensure_state_initialized_with_custom_object(self, mock_context, mock_shared_state):
         """Test _ensure_state_initialized with custom object converts to string."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetValueExecutor,
         )
 
@@ -1687,7 +1687,7 @@ class TestDeclarativeActionExecutorBase:
 
     async def test_executor_display_name_property(self, mock_context, mock_shared_state):
         """Test executor display_name property."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetValueExecutor,
         )
 
@@ -1703,7 +1703,7 @@ class TestDeclarativeActionExecutorBase:
 
     async def test_executor_action_def_property(self, mock_context, mock_shared_state):
         """Test executor action_def property."""
-        from agent_framework_declarative._workflows._graph._executors_basic import (
+        from agent_framework_declarative._workflows._executors_basic import (
             SetValueExecutor,
         )
 
@@ -1714,7 +1714,7 @@ class TestDeclarativeActionExecutorBase:
 
 
 # ---------------------------------------------------------------------------
-# Human Input Executors Tests - Covering _executors_human_input.py gaps
+# Human Input Executors Tests - Covering _executors_external_input.py gaps
 # ---------------------------------------------------------------------------
 
 
@@ -1723,7 +1723,7 @@ class TestHumanInputExecutorsCoverage:
 
     async def test_wait_for_input_executor_with_prompt(self, mock_context, mock_shared_state):
         """Test WaitForInputExecutor with prompt."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows._executors_external_input import (
             HumanInputRequest,
             WaitForInputExecutor,
         )
@@ -1752,7 +1752,7 @@ class TestHumanInputExecutorsCoverage:
 
     async def test_wait_for_input_executor_no_prompt(self, mock_context, mock_shared_state):
         """Test WaitForInputExecutor without prompt."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows._executors_external_input import (
             HumanInputRequest,
             WaitForInputExecutor,
         )
@@ -1776,7 +1776,7 @@ class TestHumanInputExecutorsCoverage:
 
     async def test_request_external_input_executor(self, mock_context, mock_shared_state):
         """Test RequestExternalInputExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows._executors_external_input import (
             HumanInputRequest,
             RequestExternalInputExecutor,
         )
@@ -1807,7 +1807,7 @@ class TestHumanInputExecutorsCoverage:
 
     async def test_question_executor_with_choices(self, mock_context, mock_shared_state):
         """Test QuestionExecutor with choices as dicts and strings."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows._executors_external_input import (
             HumanInputRequest,
             QuestionExecutor,
         )
@@ -1851,7 +1851,7 @@ class TestAgentExternalLoopCoverage:
 
     async def test_agent_executor_with_external_loop(self, mock_context, mock_shared_state):
         """Test agent executor with external loop that triggers."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             ExternalInputRequest,
             InvokeAzureAgentExecutor,
         )
@@ -1888,7 +1888,7 @@ class TestAgentExternalLoopCoverage:
 
     async def test_agent_executor_agent_error_handling(self, mock_context, mock_shared_state):
         """Test agent executor raises AgentInvocationError on failure."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             AgentInvocationError,
             InvokeAzureAgentExecutor,
         )
@@ -1921,7 +1921,7 @@ class TestAgentExternalLoopCoverage:
 
     async def test_agent_executor_string_result(self, mock_context, mock_shared_state):
         """Test agent executor with agent that returns string directly."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             InvokeAzureAgentExecutor,
         )
 
@@ -1949,7 +1949,7 @@ class TestAgentExternalLoopCoverage:
 
     async def test_invoke_tool_with_error(self, mock_context, mock_shared_state):
         """Test InvokeToolExecutor handles tool errors."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             TOOL_REGISTRY_KEY,
             InvokeToolExecutor,
         )
@@ -2098,256 +2098,6 @@ class TestPowerFxFunctionsCoverage:
 
 
 # ---------------------------------------------------------------------------
-# Builder semantic ID and slug tests - Covering _builder.py gaps
-# ---------------------------------------------------------------------------
-
-
-class TestBuilderSemanticId:
-    """Tests for _generate_semantic_id covering uncovered code paths."""
-
-    def test_generate_semantic_id_for_append_value(self):
-        """Test semantic ID generation for AppendValue action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "AppendValue",
-            "path": "turn.messages",
-            "value": {"role": "user", "text": "Hello"},
-        }
-        result = _generate_semantic_id(action_def, "AppendValue")
-        assert result == "append_messages"
-
-    def test_generate_semantic_id_for_append_value_nested_path(self):
-        """Test semantic ID generation for AppendValue with nested path."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "AppendValue",
-            "path": "workflow.context.items.collection",
-        }
-        result = _generate_semantic_id(action_def, "AppendValue")
-        assert result == "append_collection"
-
-    def test_generate_semantic_id_for_reset_variable(self):
-        """Test semantic ID generation for ResetVariable action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "ResetVariable",
-            "path": "turn.counter",
-        }
-        result = _generate_semantic_id(action_def, "ResetVariable")
-        assert result == "reset_counter"
-
-    def test_generate_semantic_id_for_reset_variable_with_variable_path(self):
-        """Test semantic ID generation for ResetVariable with nested variable path."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "ResetVariable",
-            "variable": {"path": "turn.state"},
-        }
-        result = _generate_semantic_id(action_def, "ResetVariable")
-        assert result == "reset_state"
-
-    def test_generate_semantic_id_for_delete_variable(self):
-        """Test semantic ID generation for DeleteVariable action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "DeleteVariable",
-            "path": "turn.temp",
-        }
-        result = _generate_semantic_id(action_def, "DeleteVariable")
-        assert result == "delete_temp"
-
-    def test_generate_semantic_id_for_request_human_input(self):
-        """Test semantic ID generation for RequestHumanInput action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "RequestHumanInput",
-            "prompt": "Please enter your email address",
-        }
-        result = _generate_semantic_id(action_def, "RequestHumanInput")
-        # _extract_activity_slug extracts meaningful words
-        assert result is not None
-        assert result.startswith("input_")
-
-    def test_generate_semantic_id_for_wait_for_human_input(self):
-        """Test semantic ID generation for WaitForHumanInput action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "WaitForHumanInput",
-            "variable": {"path": "turn.userResponse"},
-        }
-        result = _generate_semantic_id(action_def, "WaitForHumanInput")
-        assert result == "input_userresponse"
-
-    def test_generate_semantic_id_for_human_input_with_prompt_variable_fallback(self):
-        """Test semantic ID generation for HumanInput with no prompt but variable."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        # No prompt, but has variable
-        action_def = {
-            "kind": "RequestHumanInput",
-            "variable": {"path": "turn.feedback"},
-        }
-        result = _generate_semantic_id(action_def, "RequestHumanInput")
-        assert result == "input_feedback"
-
-    def test_generate_semantic_id_returns_none_for_no_matching_kind(self):
-        """Test semantic ID generation returns None for unknown kind."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "UnknownAction",
-            "someParam": "value",
-        }
-        result = _generate_semantic_id(action_def, "UnknownAction")
-        assert result is None
-
-    def test_generate_semantic_id_for_invoke_azure_agent(self):
-        """Test semantic ID generation for InvokeAzureAgent action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "InvokeAzureAgent",
-            "agent": "CustomerSupportAgent",
-        }
-        result = _generate_semantic_id(action_def, "InvokeAzureAgent")
-        assert result == "invoke_customersupportagent"
-
-    def test_generate_semantic_id_for_invoke_azure_agent_with_agent_name(self):
-        """Test semantic ID generation for InvokeAzureAgent with agentName property."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "InvokeAzureAgent",
-            "agentName": "SalesAgent",
-        }
-        result = _generate_semantic_id(action_def, "InvokeAzureAgent")
-        assert result == "invoke_salesagent"
-
-    def test_generate_semantic_id_for_send_activity(self):
-        """Test semantic ID generation for SendActivity action."""
-        from agent_framework_declarative._workflows._graph._builder import _generate_semantic_id
-
-        action_def = {
-            "kind": "SendActivity",
-            "activity": {"text": "Welcome to our customer service portal"},
-        }
-        result = _generate_semantic_id(action_def, "SendActivity")
-        assert result is not None
-        assert result.startswith("send_")
-
-
-class TestBuilderSlugify:
-    """Tests for _slugify function."""
-
-    def test_slugify_basic(self):
-        """Test basic slugify functionality."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("Hello World")
-        assert result == "hello_world"
-
-    def test_slugify_removes_expression_prefix(self):
-        """Test slugify removes = prefix."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("=turn.myVar")
-        assert result == "turn_myvar"
-
-    def test_slugify_limits_words(self):
-        """Test slugify limits to max_words."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("one two three four five", max_words=2)
-        assert result == "one_two"
-
-    def test_slugify_removes_special_characters(self):
-        """Test slugify removes special characters."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("hello@world!test#value")
-        assert result == "hello_world_test"
-
-    def test_slugify_filters_short_words(self):
-        """Test slugify filters out very short words except special ones."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        # Words with len > 1 are kept, plus 'a' and 'i' special cases
-        # max_words=3 applies before filtering
-        result = _slugify("a is the value")
-        # Takes first 3 words: ["a", "is", "the"], then filters:
-        # 'a' kept (special), 'is' kept (len 2 > 1), 'the' kept (len 3 > 1)
-        assert result == "a_is_the"
-
-    def test_slugify_empty_string(self):
-        """Test slugify with empty string."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("")
-        assert result == ""
-
-    def test_slugify_only_special_chars(self):
-        """Test slugify with only special characters."""
-        from agent_framework_declarative._workflows._graph._builder import _slugify
-
-        result = _slugify("!@#$%")
-        assert result == ""
-
-
-class TestBuilderExtractActivitySlug:
-    """Tests for _extract_activity_slug function."""
-
-    def test_extract_activity_slug_basic(self):
-        """Test basic activity slug extraction."""
-        from agent_framework_declarative._workflows._graph._builder import _extract_activity_slug
-
-        result = _extract_activity_slug("Here are your recommendations for today")
-        # 'recommendations' and 'today' are meaningful (>3 chars, not in skip list)
-        assert "recommendations" in result
-
-    def test_extract_activity_slug_skips_common_words(self):
-        """Test activity slug skips common filler words."""
-        from agent_framework_declarative._workflows._graph._builder import _extract_activity_slug
-
-        result = _extract_activity_slug("Welcome to your dashboard overview")
-        # 'welcome' is in skip list, 'your' is in skip list
-        # 'dashboard' and 'overview' should be meaningful
-        assert "dashboard" in result or "overview" in result
-
-    def test_extract_activity_slug_fallback_to_greeting_words(self):
-        """Test fallback when only greeting/common words present."""
-        from agent_framework_declarative._workflows._graph._builder import _extract_activity_slug
-
-        # All meaningful words are short or in skip list
-        # Should fall back to words > 2 chars not in greeting_set
-        result = _extract_activity_slug("Hello there how are you")
-        # 'there' might be caught in fallback
-        # This tests the fallback branch
-        assert result == "" or len(result) > 0
-
-    def test_extract_activity_slug_removes_punctuation(self):
-        """Test activity slug removes punctuation."""
-        from agent_framework_declarative._workflows._graph._builder import _extract_activity_slug
-
-        result = _extract_activity_slug("Process complete! Success achieved.")
-        assert "process" in result or "complete" in result or "success" in result
-
-    def test_extract_activity_slug_empty_after_filter(self):
-        """Test activity slug returns empty when all words filtered."""
-        from agent_framework_declarative._workflows._graph._builder import _extract_activity_slug
-
-        # All words are in skip list or too short
-        result = _extract_activity_slug("hi there")
-        assert result == ""
-
-
-# ---------------------------------------------------------------------------
 # Builder control flow tests - Covering Goto/Break/Continue creation
 # ---------------------------------------------------------------------------
 
@@ -2359,11 +2109,11 @@ class TestBuilderControlFlowCreation:
         """Test creating a goto reference executor."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         # Create builder with minimal yaml definition
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         action_def = {
@@ -2384,10 +2134,10 @@ class TestBuilderControlFlowCreation:
         """Test creating a goto with auto-generated ID."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         action_def = {
@@ -2404,10 +2154,10 @@ class TestBuilderControlFlowCreation:
         """Test creating a goto with no target returns None."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         action_def = {
@@ -2420,7 +2170,7 @@ class TestBuilderControlFlowCreation:
 
     def test_goto_invalid_target_raises_error(self):
         """Test that goto to non-existent target raises ValueError."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
@@ -2429,7 +2179,7 @@ class TestBuilderControlFlowCreation:
                 {"kind": "GotoAction", "target": "non_existent_action"},
             ],
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
 
         with pytest.raises(ValueError) as exc_info:
             builder.build()
@@ -2441,11 +2191,11 @@ class TestBuilderControlFlowCreation:
         """Test creating a break executor within a loop context."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_control_flow import ForeachNextExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_control_flow import ForeachNextExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         # Create a mock loop_next executor
@@ -2472,10 +2222,10 @@ class TestBuilderControlFlowCreation:
         """Test creating a break executor without loop context raises ValueError."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         action_def = {
@@ -2496,11 +2246,11 @@ class TestBuilderControlFlowCreation:
         """Test creating a continue executor within a loop context."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_control_flow import ForeachNextExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_control_flow import ForeachNextExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         # Create a mock loop_next executor
@@ -2527,10 +2277,10 @@ class TestBuilderControlFlowCreation:
         """Test creating a continue executor without loop context raises ValueError."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         action_def = {
@@ -2550,11 +2300,11 @@ class TestBuilderEdgeWiring:
         """Test wiring to an If structure routes to evaluator."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_basic import SendActivityExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_basic import SendActivityExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         # Create a mock source executor
@@ -2583,11 +2333,11 @@ class TestBuilderEdgeWiring:
         """Test wiring to a normal executor adds direct edge."""
         from agent_framework import WorkflowBuilder
 
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_basic import SendActivityExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_basic import SendActivityExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
         wb = WorkflowBuilder()
 
         source = SendActivityExecutor({"kind": "SendActivity", "activity": {"text": "source"}}, id="source")
@@ -2601,11 +2351,11 @@ class TestBuilderEdgeWiring:
 
     def test_collect_all_exits_for_nested_structure(self):
         """Test collecting all exits from nested structures."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_basic import SendActivityExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_basic import SendActivityExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
 
         # Create mock nested structure
         exit1 = SendActivityExecutor({"kind": "SendActivity", "activity": {"text": "exit1"}}, id="exit1")
@@ -2628,11 +2378,11 @@ class TestBuilderEdgeWiring:
 
     def test_collect_all_exits_for_simple_executor(self):
         """Test collecting exits from a simple executor."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_basic import SendActivityExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_basic import SendActivityExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
 
         executor = SendActivityExecutor({"kind": "SendActivity", "activity": {"text": "test"}}, id="test")
 
@@ -2643,11 +2393,11 @@ class TestBuilderEdgeWiring:
 
     def test_get_branch_exit_with_chain(self):
         """Test getting branch exit from a chain of executors."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
-        from agent_framework_declarative._workflows._graph._executors_basic import SendActivityExecutor
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
+        from agent_framework_declarative._workflows._executors_basic import SendActivityExecutor
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
 
         exec1 = SendActivityExecutor({"kind": "SendActivity", "activity": {"text": "1"}}, id="e1")
         exec2 = SendActivityExecutor({"kind": "SendActivity", "activity": {"text": "2"}}, id="e2")
@@ -2662,10 +2412,10 @@ class TestBuilderEdgeWiring:
 
     def test_get_branch_exit_none(self):
         """Test getting branch exit from None."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {"name": "test_workflow", "actions": []}
-        graph_builder = DeclarativeGraphBuilder(yaml_def)
+        graph_builder = DeclarativeWorkflowBuilder(yaml_def)
 
         exit_exec = graph_builder._get_branch_exit(None)
         assert exit_exec is None
@@ -2681,7 +2431,7 @@ class TestAgentExecutorExternalLoop:
 
     async def test_handle_external_input_response_no_state(self, mock_context, mock_shared_state):
         """Test handling external input response when loop state not found."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             ExternalInputRequest,
             ExternalInputResponse,
             InvokeAzureAgentExecutor,
@@ -2703,13 +2453,13 @@ class TestAgentExecutorExternalLoop:
         # Should send ActionComplete due to missing state
         mock_context.send_message.assert_called()
         call_args = mock_context.send_message.call_args[0][0]
-        from agent_framework_declarative._workflows._graph import ActionComplete
+        from agent_framework_declarative._workflows import ActionComplete
 
         assert isinstance(call_args, ActionComplete)
 
     async def test_handle_external_input_response_agent_not_found(self, mock_context, mock_shared_state):
         """Test handling external input raises error when agent not found during resumption."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows._executors_agents import (
             EXTERNAL_LOOP_STATE_KEY,
             AgentInvocationError,
             ExternalInputRequest,
@@ -2757,7 +2507,7 @@ class TestBuilderValidation:
 
     def test_duplicate_explicit_action_id_raises_error(self):
         """Test that duplicate explicit action IDs are detected."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
@@ -2767,7 +2517,7 @@ class TestBuilderValidation:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2775,7 +2525,7 @@ class TestBuilderValidation:
 
     def test_duplicate_id_in_nested_actions(self):
         """Test duplicate ID detection in nested If/Switch branches."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
@@ -2789,7 +2539,7 @@ class TestBuilderValidation:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2797,14 +2547,14 @@ class TestBuilderValidation:
 
     def test_missing_required_field_sendactivity(self):
         """Test that missing required fields are detected."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
             "actions": [{"kind": "SendActivity"}],  # Missing 'activity' field
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2814,14 +2564,14 @@ class TestBuilderValidation:
 
     def test_missing_required_field_setvalue(self):
         """Test SetValue without path raises error."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
             "actions": [{"kind": "SetValue", "value": "test"}],  # Missing 'path' field
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2830,28 +2580,28 @@ class TestBuilderValidation:
 
     def test_setvalue_accepts_alternate_variable_field(self):
         """Test SetValue accepts 'variable' as alternate to 'path'."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
             "actions": [{"kind": "SetValue", "variable": {"path": "turn.x"}, "value": "test"}],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         # Should not raise - 'variable' is accepted as alternate
         workflow = builder.build()
         assert workflow is not None
 
     def test_missing_required_field_foreach(self):
         """Test Foreach without items raises error."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
             "actions": [{"kind": "Foreach", "actions": [{"kind": "SendActivity", "activity": {"text": "Hi"}}]}],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2860,14 +2610,14 @@ class TestBuilderValidation:
 
     def test_self_referencing_goto_raises_error(self):
         """Test that a goto referencing itself is detected."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
             "actions": [{"id": "loop", "kind": "Goto", "target": "loop"}],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2881,7 +2631,7 @@ class TestBuilderValidation:
         still catch duplicates during graph construction. This flag disables
         our upfront validation pass but not runtime checks.
         """
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         # Test with missing required field - validation disabled should skip our check
         yaml_def = {
@@ -2890,7 +2640,7 @@ class TestBuilderValidation:
         }
 
         # With validation disabled, our upfront check is skipped
-        builder = DeclarativeGraphBuilder(yaml_def, validate=False)
+        builder = DeclarativeWorkflowBuilder(yaml_def, validate=False)
         # The workflow may still fail for other reasons, but our validation pass is skipped
         # In this case, it should succeed because SendActivityExecutor handles missing fields gracefully
         workflow = builder.build()
@@ -2898,7 +2648,7 @@ class TestBuilderValidation:
 
     def test_validation_in_switch_branches(self):
         """Test validation catches issues in Switch branches."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
@@ -2920,7 +2670,7 @@ class TestBuilderValidation:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 
@@ -2928,7 +2678,7 @@ class TestBuilderValidation:
 
     def test_validation_in_foreach_body(self):
         """Test validation catches issues in Foreach body."""
-        from agent_framework_declarative._workflows._graph._builder import DeclarativeGraphBuilder
+        from agent_framework_declarative._workflows._declarative_builder import DeclarativeWorkflowBuilder
 
         yaml_def = {
             "name": "test_workflow",
@@ -2941,7 +2691,7 @@ class TestBuilderValidation:
             ],
         }
 
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         with pytest.raises(ValueError) as exc_info:
             builder.build()
 

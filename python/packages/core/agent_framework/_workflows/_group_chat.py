@@ -213,7 +213,7 @@ class _GroupChatConfig:
 # region Default participant factory
 
 _GroupChatOrchestratorFactory: TypeAlias = Callable[[_GroupChatConfig], Executor]
-_InterceptorSpec: TypeAlias = tuple[Callable[[_GroupChatConfig], Executor], Callable[[Any], bool]]
+_InterceptorSpec: TypeAlias = tuple[Callable[[_GroupChatConfig], Executor], Callable[[Any, Any], bool]]
 
 
 def _default_participant_factory(
@@ -1701,7 +1701,7 @@ class GroupChatBuilder:
         self,
         handler: Callable[[_GroupChatConfig], Executor] | Executor,
         *,
-        condition: Callable[[Any], bool],
+        condition: Callable[[Any, Any], bool],
     ) -> "GroupChatBuilder":
         """Register an interceptor factory that creates executors for special requests.
 

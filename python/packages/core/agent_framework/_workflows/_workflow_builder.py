@@ -48,12 +48,12 @@ class _EdgeRegistration:
     Args:
         source: The registered source name.
         target: The registered target name.
-        condition: An optional condition function for the edge.
+        condition: An optional condition function `(data, shared_state) -> bool | Awaitable[bool]`.
     """
 
     source: str
     target: str
-    condition: Callable[[Any], bool] | None = None
+    condition: Callable[[Any, Any], bool | Any] | None = None
 
 
 @dataclass
@@ -446,8 +446,7 @@ class WorkflowBuilder:
         self,
         source: Executor | AgentProtocol | str,
         target: Executor | AgentProtocol | str,
-        condition: Callable[[Any], bool] | None = None,
-        async_condition: Callable[[Any, Any], Any] | None = None,
+        condition: Callable[[Any, Any], bool | Any] | None = None,
     ) -> Self:
         """Add a directed edge between two executors.
 
@@ -457,11 +456,10 @@ class WorkflowBuilder:
         Args:
             source: The source executor or registered name of the source factory for the edge.
             target: The target executor or registered name of the target factory for the edge.
-            condition: An optional condition function that determines whether the edge
-                       should be traversed based on the message type.
-            async_condition: An optional async condition function that receives
-                       (message_data, shared_state) and determines whether the edge
-                       should be traversed. Takes precedence over condition when present.
+            condition: An optional condition function `(data, shared_state) -> bool | Awaitable[bool]`
+                       that determines whether the edge should be traversed.
+                       For simple conditions that don't need shared state, you can ignore the
+                       second parameter: `lambda data, _: data["ready"]`.
 
             Note: If instances are provided for both source and target, they will be shared across
                 all workflow instances created from the built Workflow. To avoid this, consider
@@ -502,7 +500,7 @@ class WorkflowBuilder:
 
 
                 # With a condition
-                def only_large_numbers(msg: int) -> bool:
+                def only_large_numbers(msg: int, shared_state) -> bool:
                     return msg > 100
 
 
@@ -533,7 +531,7 @@ class WorkflowBuilder:
         target_exec = self._maybe_wrap_agent(target)  # type: ignore[arg-type]
         source_id = self._add_executor(source_exec)
         target_id = self._add_executor(target_exec)
-        self._edge_groups.append(SingleEdgeGroup(source_id, target_id, condition, async_condition=async_condition))  # type: ignore[call-arg]
+        self._edge_groups.append(SingleEdgeGroup(source_id, target_id, condition))
         return self
 
     def add_fan_out_edges(

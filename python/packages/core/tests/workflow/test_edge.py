@@ -137,9 +137,17 @@ def test_edge_can_handle():
     source = MockExecutor(id="source_executor")
     target = MockExecutor(id="target_executor")
 
+    _ = Edge(source_id=source.id, target_id=target.id)
+
+
+async def test_edge_should_route():
+    """Test edge should_route with no condition."""
+    source = MockExecutor(id="source_executor")
+    target = MockExecutor(id="target_executor")
+
     edge = Edge(source_id=source.id, target_id=target.id)
 
-    assert edge.should_route(MockMessage(data="test"))
+    assert await edge.should_route(MockMessage(data="test"), None)
 
 
 # endregion Edge
@@ -165,7 +173,7 @@ def test_single_edge_group_with_condition():
     source = MockExecutor(id="source_executor")
     target = MockExecutor(id="target_executor")
 
-    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x: x.data == "test")
+    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x, _: x.data == "test")
 
     assert edge_group.source_executor_ids == [source.id]
     assert edge_group.target_executor_ids == [target.id]
@@ -257,7 +265,7 @@ async def test_single_edge_group_send_message_with_condition_pass() -> None:
 
     executors: dict[str, Executor] = {source.id: source, target.id: target}
     # Create edge group with condition that passes when data == "test"
-    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x: x.data == "test")
+    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x, _: x.data == "test")
 
     edge_runner = create_edge_runner(edge_group, executors)
     shared_state = SharedState()
@@ -279,7 +287,7 @@ async def test_single_edge_group_send_message_with_condition_fail() -> None:
 
     executors: dict[str, Executor] = {source.id: source, target.id: target}
     # Create edge group with condition that passes when data == "test"
-    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x: x.data == "test")
+    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x, _: x.data == "test")
 
     edge_runner = create_edge_runner(edge_group, executors)
     shared_state = SharedState()
@@ -350,7 +358,7 @@ async def test_single_edge_group_tracing_condition_failure(span_exporter) -> Non
     target = MockExecutor(id="target_executor")
 
     executors: dict[str, Executor] = {source.id: source, target.id: target}
-    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x: x.data == "pass")
+    edge_group = SingleEdgeGroup(source_id=source.id, target_id=target.id, condition=lambda x, _: x.data == "pass")
 
     edge_runner = create_edge_runner(edge_group, executors)
     shared_state = SharedState()

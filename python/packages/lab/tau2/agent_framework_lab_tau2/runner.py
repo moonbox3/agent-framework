@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import uuid
-from typing import cast
+from typing import Any, cast
 
 from agent_framework._agents import ChatAgent
 from agent_framework._types import AgentRunResponse, ChatMessage, Role
@@ -109,7 +109,7 @@ class TaskRunner:
             f"termination_reason={self.termination_reason}, full_reward_info={self.full_reward_info})"
         )
 
-    def should_not_stop(self, response: AgentExecutorResponse) -> bool:
+    def should_not_stop(self, response: AgentExecutorResponse, _: Any) -> bool:
         """Based on the response, check whether we should or not stop the conversation."""
         # Determine who sent this based on executor_id
         is_from_agent = response.executor_id == ASSISTANT_AGENT_ID

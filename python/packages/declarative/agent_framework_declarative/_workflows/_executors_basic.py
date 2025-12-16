@@ -13,7 +13,7 @@ from agent_framework._workflows import (
     handler,
 )
 
-from ._base import (
+from ._declarative_base import (
     ActionComplete,
     DeclarativeActionExecutor,
 )

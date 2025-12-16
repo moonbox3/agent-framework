@@ -6,23 +6,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent_framework_declarative._workflows._graph import (
+from agent_framework_declarative._workflows import (
     ALL_ACTION_EXECUTORS,
     DECLARATIVE_STATE_KEY,
     ActionComplete,
     ActionTrigger,
-    DeclarativeGraphBuilder,
+    DeclarativeWorkflowBuilder,
     DeclarativeWorkflowState,
-)
-from agent_framework_declarative._workflows._graph._base import (
+    ForeachInitExecutor,
     LoopIterationResult,
-)
-from agent_framework_declarative._workflows._graph._executors_basic import (
     SendActivityExecutor,
     SetValueExecutor,
-)
-from agent_framework_declarative._workflows._graph._executors_control_flow import (
-    ForeachInitExecutor,
 )
 
 
@@ -252,8 +246,8 @@ class TestDeclarativeActionExecutor:
         assert message.has_next is False
 
 
-class TestDeclarativeGraphBuilder:
-    """Tests for DeclarativeGraphBuilder."""
+class TestDeclarativeWorkflowBuilder:
+    """Tests for DeclarativeWorkflowBuilder."""
 
     def test_all_action_executors_available(self):
         """Test that all expected action types have executors."""
@@ -273,7 +267,7 @@ class TestDeclarativeGraphBuilder:
     def test_build_empty_workflow(self):
         """Test building a workflow with no actions raises an error."""
         yaml_def = {"name": "empty_workflow", "actions": []}
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
 
         with pytest.raises(ValueError, match="Cannot build workflow with no actions"):
             builder.build()
@@ -287,7 +281,7 @@ class TestDeclarativeGraphBuilder:
                 {"kind": "SetValue", "id": "set_count", "path": "turn.count", "value": 1},
             ],
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         assert workflow is not None
@@ -313,7 +307,7 @@ class TestDeclarativeGraphBuilder:
                 },
             ],
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         assert workflow is not None
@@ -340,7 +334,7 @@ class TestDeclarativeGraphBuilder:
                 },
             ],
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         assert workflow is not None
@@ -378,7 +372,7 @@ class TestDeclarativeGraphBuilder:
                 },
             ],
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
 
         assert workflow is not None
@@ -425,7 +419,7 @@ class TestAgentExecutors:
     @pytest.mark.asyncio
     async def test_invoke_agent_not_found(self, mock_context, mock_shared_state):
         """Test InvokeAzureAgentExecutor raises error when agent not found."""
-        from agent_framework_declarative._workflows._graph._executors_agents import (
+        from agent_framework_declarative._workflows import (
             AgentInvocationError,
             InvokeAzureAgentExecutor,
         )
@@ -482,7 +476,7 @@ class TestHumanInputExecutors:
     @pytest.mark.asyncio
     async def test_question_executor(self, mock_context, mock_shared_state):
         """Test QuestionExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows import (
             HumanInputRequest,
             QuestionExecutor,
         )
@@ -511,7 +505,7 @@ class TestHumanInputExecutors:
     @pytest.mark.asyncio
     async def test_confirmation_executor(self, mock_context, mock_shared_state):
         """Test ConfirmationExecutor."""
-        from agent_framework_declarative._workflows._graph._executors_human_input import (
+        from agent_framework_declarative._workflows import (
             ConfirmationExecutor,
             HumanInputRequest,
         )

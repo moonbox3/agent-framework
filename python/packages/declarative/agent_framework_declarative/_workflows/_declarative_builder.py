@@ -2,7 +2,7 @@
 
 """Builder that transforms declarative YAML into a workflow graph.
 
-This module provides the DeclarativeGraphBuilder which is analogous to
+This module provides the DeclarativeWorkflowBuilder which is analogous to
 .NET's WorkflowActionVisitor + WorkflowElementWalker. It walks the YAML
 action definitions and creates a proper workflow graph with:
 - Executor nodes for each action
@@ -11,15 +11,14 @@ action definitions and creates a proper workflow graph with:
 - Loop edges for foreach
 """
 
-import re
-from typing import Any, cast
+from typing import Any
 
 from agent_framework._workflows import (
     Workflow,
     WorkflowBuilder,
 )
 
-from ._base import (
+from ._declarative_base import (
     ConditionResult,
     DeclarativeActionExecutor,
     LoopIterationResult,
@@ -36,14 +35,14 @@ from ._executors_control_flow import (
     JoinExecutor,
     SwitchEvaluatorExecutor,
 )
-from ._executors_human_input import HUMAN_INPUT_EXECUTORS
+from ._executors_external_input import EXTERNAL_INPUT_EXECUTORS
 
 # Combined mapping of all action kinds to executor classes
 ALL_ACTION_EXECUTORS = {
     **BASIC_ACTION_EXECUTORS,
     **CONTROL_FLOW_EXECUTORS,
     **AGENT_ACTION_EXECUTORS,
-    **HUMAN_INPUT_EXECUTORS,
+    **EXTERNAL_INPUT_EXECUTORS,
 }
 
 # Action kinds that terminate control flow (no fall-through to successor)
@@ -81,198 +80,7 @@ ACTION_ALTERNATE_FIELDS: dict[str, list[str]] = {
 }
 
 
-def _generate_semantic_id(action_def: dict[str, Any], kind: str) -> str | None:
-    """Generate a semantic ID from the action's content.
-
-    Derives a meaningful identifier from the action's primary properties rather
-    than using generic index-based naming. Returns None if no semantic name
-    can be derived.
-
-    Args:
-        action_def: The action definition from YAML
-        kind: The action kind (e.g., "SetValue", "SendActivity")
-
-    Returns:
-        A semantic ID string, or None if no semantic name can be derived
-    """
-    # SetValue/SetVariable: use the value being set
-    if kind in ("SetValue", "SetVariable", "SetTextVariable"):
-        value = action_def.get("value") or action_def.get("text")
-        if value and isinstance(value, str) and not value.startswith("="):
-            # Simple value like "child", "teenager", "adult"
-            slug = _slugify(value)
-            if slug:
-                return f"set_{slug}"
-
-        # Try to derive from path (e.g., turn.category -> set_category)
-        path = action_def.get("path") or action_def.get("variable", {}).get("path")
-        if path and isinstance(path, str):
-            # Extract last segment: "turn.category" -> "category"
-            last_segment = path.split(".")[-1]
-            slug = _slugify(last_segment)
-            if slug:
-                return f"set_{slug}"
-
-    # SendActivity: extract meaningful words from text
-    if kind == "SendActivity":
-        activity: dict[str, Any] | Any = action_def.get("activity", {})
-        text: str | None = None
-        if isinstance(activity, dict):
-            activity_dict: dict[str, Any] = cast(dict[str, Any], activity)
-            text_val = activity_dict.get("text")
-            text = str(text_val) if text_val else None
-        if text and isinstance(text, str):
-            slug = _extract_activity_slug(text)
-            if slug:
-                return f"send_{slug}"
-
-    # InvokeAzureAgent: use agent name
-    if kind == "InvokeAzureAgent":
-        agent = action_def.get("agent") or action_def.get("agentName")
-        if agent and isinstance(agent, str):
-            slug = _slugify(agent)
-            if slug:
-                return f"invoke_{slug}"
-
-    # AppendValue: use the path
-    if kind == "AppendValue":
-        path = action_def.get("path")
-        if path and isinstance(path, str):
-            last_segment = path.split(".")[-1]
-            slug = _slugify(last_segment)
-            if slug:
-                return f"append_{slug}"
-
-    # ResetVariable: use the path
-    if kind in ("ResetVariable", "DeleteVariable"):
-        path = action_def.get("path") or action_def.get("variable", {}).get("path")
-        if path and isinstance(path, str):
-            last_segment = path.split(".")[-1]
-            slug = _slugify(last_segment)
-            if slug:
-                prefix = "reset" if kind == "ResetVariable" else "delete"
-                return f"{prefix}_{slug}"
-
-    # HumanInput actions: use prompt or variable
-    if kind in ("RequestHumanInput", "WaitForHumanInput"):
-        prompt = action_def.get("prompt")
-        if prompt and isinstance(prompt, str):
-            slug = _extract_activity_slug(prompt)
-            if slug:
-                return f"input_{slug}"
-        variable = action_def.get("variable", {}).get("path")
-        if variable and isinstance(variable, str):
-            slug = _slugify(variable.split(".")[-1])
-            if slug:
-                return f"input_{slug}"
-
-    return None
-
-
-def _slugify(text: str, max_words: int = 3) -> str:
-    """Convert text to a slug suitable for an ID.
-
-    Args:
-        text: The text to slugify
-        max_words: Maximum number of words to include
-
-    Returns:
-        A lowercase, underscore-separated slug
-    """
-    # Remove expression prefix if present
-    if text.startswith("="):
-        text = text[1:]
-
-    # Convert to lowercase and extract words
-    text = text.lower()
-    # Replace non-alphanumeric with spaces
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    # Split and take first N words
-    words = text.split()[:max_words]
-    # Filter out very short words (articles, etc.) except meaningful ones
-    words = [w for w in words if len(w) > 1 or w in ("a", "i")]
-
-    if not words:
-        return ""
-
-    return "_".join(words)
-
-
-def _extract_activity_slug(text: str) -> str:
-    """Extract a meaningful slug from activity text.
-
-    Focuses on finding the most distinctive content words.
-
-    Args:
-        text: The activity text
-
-    Returns:
-        A slug representing the key content
-    """
-    # Words to skip - common greeting/filler words
-    skip_words = {
-        "welcome",
-        "hello",
-        "hi",
-        "hey",
-        "there",
-        "dear",
-        "greetings",
-        "here",
-        "are",
-        "some",
-        "our",
-        "the",
-        "for",
-        "and",
-        "you",
-        "your",
-        "have",
-        "been",
-        "with",
-        "this",
-        "that",
-        "these",
-        "those",
-        "check",
-        "out",
-        "enjoy",
-        "fun",
-        "cool",
-        "great",
-        "things",
-        "activities",
-    }
-
-    text = text.lower()
-    # Remove punctuation
-    text = str(re.sub(r"[^a-z0-9\s]+", " ", text))
-    words: list[str] = text.split()
-
-    # Find distinctive words (not in skip list, longer than 3 chars)
-    meaningful_words: list[str] = []
-    for word in words:
-        if word not in skip_words and len(word) > 3:
-            meaningful_words.append(word)
-            if len(meaningful_words) >= 2:
-                break
-
-    if not meaningful_words:
-        # Fall back to any word longer than 2 chars not in greeting set
-        greeting_set = {"welcome", "hello", "hi", "hey", "there", "dear", "greetings"}
-        for word in words:
-            if len(word) > 2 and word not in greeting_set:
-                meaningful_words.append(word)
-                if len(meaningful_words) >= 2:
-                    break
-
-    if not meaningful_words:
-        return ""
-
-    return "_".join(meaningful_words)
-
-
-class DeclarativeGraphBuilder:
+class DeclarativeWorkflowBuilder:
     """Builds a Workflow graph from declarative YAML actions.
 
     This builder transforms declarative action definitions into a proper
@@ -289,7 +97,7 @@ class DeclarativeGraphBuilder:
                 {"kind": "SetValue", "path": "turn.count", "value": 0},
             ]
         }
-        builder = DeclarativeGraphBuilder(yaml_def)
+        builder = DeclarativeWorkflowBuilder(yaml_def)
         workflow = builder.build()
     """
 
@@ -601,25 +409,13 @@ class DeclarativeGraphBuilder:
             return None
 
         # Create the executor with ID
-        # Priority: explicit ID > semantic ID > fallback index-based ID
+        # Priority: explicit ID from YAML > index-based ID (matches .NET behavior)
         explicit_id = action_def.get("id")
         if explicit_id:
             action_id = explicit_id
         else:
-            # Try to generate a semantic ID from action content
-            semantic_id = _generate_semantic_id(action_def, kind)
-            if semantic_id:
-                # Ensure uniqueness by checking if ID already exists
-                base_id = semantic_id
-                suffix = 0
-                while semantic_id in self._executors:
-                    suffix += 1
-                    semantic_id = f"{base_id}_{suffix}"
-                action_id = semantic_id
-            else:
-                # Fallback to index-based ID
-                parent_id = (parent_context or {}).get("parent_id")
-                action_id = f"{parent_id}_{kind}_{self._action_index}" if parent_id else f"{kind}_{self._action_index}"
+            parent_id = (parent_context or {}).get("parent_id")
+            action_id = f"{parent_id}_{kind}_{self._action_index}" if parent_id else f"{kind}_{self._action_index}"
         self._action_index += 1
 
         # Pass agents to agent-related executors
@@ -701,20 +497,20 @@ class DeclarativeGraphBuilder:
             builder.add_edge(
                 source=evaluator,
                 target=then_target,
-                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == 0,
+                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == 0,
             )
         if else_entry:
             else_target = self._get_structure_entry(else_entry)
             builder.add_edge(
                 source=evaluator,
                 target=else_target,
-                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif else_passthrough:
             builder.add_edge(
                 source=evaluator,
                 target=else_passthrough,
-                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
 
         # Get branch exit executors for later wiring to successor
@@ -845,7 +641,7 @@ class DeclarativeGraphBuilder:
         for branch_index, branch_entry in branch_entries:
             # Capture branch_index in closure properly using a factory function for type inference
             def make_branch_condition(expected: int) -> Any:
-                return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected  # type: ignore
+                return lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == expected  # type: ignore
 
             branch_target = self._get_structure_entry(branch_entry)
             builder.add_edge(
@@ -860,13 +656,13 @@ class DeclarativeGraphBuilder:
             builder.add_edge(
                 source=evaluator,
                 target=default_target,
-                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif default_passthrough:
             builder.add_edge(
                 source=evaluator,
                 target=default_passthrough,
-                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
 
         # Create a SwitchStructure to hold all the info needed for wiring
@@ -937,7 +733,7 @@ class DeclarativeGraphBuilder:
             builder.add_edge(
                 source=init_executor,
                 target=body_target,
-                condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
+                condition=lambda msg, _: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
             # Body exit -> Next (get all exits from body and wire to next_executor)
@@ -949,21 +745,21 @@ class DeclarativeGraphBuilder:
             builder.add_edge(
                 source=next_executor,
                 target=body_target,
-                condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
+                condition=lambda msg, _: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
         # Init -> join (when has_next=False, empty collection)
         builder.add_edge(
             source=init_executor,
             target=join_executor,
-            condition=lambda msg: isinstance(msg, LoopIterationResult) and not msg.has_next,
+            condition=lambda msg, _: isinstance(msg, LoopIterationResult) and not msg.has_next,
         )
 
         # Next -> join (when has_next=False, loop complete)
         builder.add_edge(
             source=next_executor,
             target=join_executor,
-            condition=lambda msg: isinstance(msg, LoopIterationResult) and not msg.has_next,
+            condition=lambda msg, _: isinstance(msg, LoopIterationResult) and not msg.has_next,
         )
 
         init_executor._exit_executor = join_executor  # type: ignore[attr-defined]
@@ -1056,8 +852,6 @@ class DeclarativeGraphBuilder:
             return executor
 
         raise ValueError("ContinueLoop action can only be used inside a Foreach loop")
-
-        return None
 
     def _add_sequential_edge(
         self,

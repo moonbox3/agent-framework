@@ -112,7 +112,7 @@ class SingleEdgeRunner(EdgeRunner):
                     return False
 
                 if self._can_handle(self._edge.target_id, message):
-                    route_result = await self._edge.should_route(message.data, shared_state)
+                    route_result = await self._edge.should_route(message.data)
 
                     if route_result:
                         span.set_attributes({
@@ -194,7 +194,7 @@ class FanOutEdgeRunner(EdgeRunner):
                     if message.target_id in selection_results:
                         edge = self._target_map.get(message.target_id)
                         if edge and self._can_handle(edge.target_id, message):
-                            route_result = await edge.should_route(message.data, shared_state)
+                            route_result = await edge.should_route(message.data)
 
                             if route_result:
                                 span.set_attributes({
@@ -228,7 +228,7 @@ class FanOutEdgeRunner(EdgeRunner):
                     for target_id in selection_results:
                         edge = self._target_map[target_id]
                         if self._can_handle(edge.target_id, message):
-                            route_result = await edge.should_route(message.data, shared_state)
+                            route_result = await edge.should_route(message.data)
                             if route_result:
                                 deliverable_edges.append(edge)
 

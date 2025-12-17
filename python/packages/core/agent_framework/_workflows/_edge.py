@@ -5,18 +5,17 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, TypeAlias
+from typing import Any, ClassVar, TypeAlias, TypeVar
 
 from ._const import INTERNAL_SOURCE_ID
 from ._executor import Executor
 from ._model_utils import DictConvertible, encode_value
-from ._shared_state import SharedState
 
 logger = logging.getLogger(__name__)
 
 # Type alias for edge condition functions.
-# Conditions receive (data, shared_state) and return bool (sync or async).
-EdgeCondition: TypeAlias = Callable[[Any, SharedState | None], bool | Awaitable[bool]]
+# Conditions receive the message data and return bool (sync or async).
+EdgeCondition: TypeAlias = Callable[[Any], bool | Awaitable[bool]]
 
 
 def _extract_function_name(func: Callable[..., Any]) -> str:
@@ -77,24 +76,13 @@ class Edge(DictConvertible):
     serialising the edge down to primitives we can reconstruct the topology of
     a workflow irrespective of the original Python process.
 
-    Edge conditions receive `(data, shared_state)` and return a boolean (sync or async).
-    This unified signature provides consistent access to workflow state for all conditions.
+    Edge conditions receive the message data and return a boolean (sync or async).
 
     Examples:
         .. code-block:: python
 
-            # Simple data-only condition (shared_state can be ignored)
-            edge = Edge(source_id="ingest", target_id="score", condition=lambda data, state: data["ready"])
-            assert await edge.should_route({"ready": True}, None) is True
-
-
-            # State-aware condition
-            async def check_threshold(data, shared_state):
-                threshold = await shared_state.get("threshold")
-                return data["score"] > threshold
-
-
-            edge = Edge(source_id="score", target_id="output", condition=check_threshold)
+            edge = Edge(source_id="ingest", target_id="score", condition=lambda data: data["ready"])
+            assert await edge.should_route({"ready": True}) is True
     """
 
     ID_SEPARATOR: ClassVar[str] = "->"
@@ -121,7 +109,7 @@ class Edge(DictConvertible):
         target_id:
             Canonical identifier of the downstream executor instance.
         condition:
-            Optional predicate that receives `(data, shared_state)` and returns
+            Optional predicate that receives the message data and returns
             `True` when the edge should be traversed. Can be sync or async.
             When omitted, the edge is unconditionally active.
         condition_name:
@@ -132,7 +120,7 @@ class Edge(DictConvertible):
         Examples:
             .. code-block:: python
 
-                edge = Edge("fetch", "parse", condition=lambda data, state: data.is_valid)
+                edge = Edge("fetch", "parse", condition=lambda data: data.is_valid)
                 assert edge.source_id == "fetch"
                 assert edge.target_id == "parse"
         """
@@ -172,8 +160,8 @@ class Edge(DictConvertible):
         """
         return self._condition is not None
 
-    async def should_route(self, data: Any, shared_state: SharedState | None) -> bool:
-        """Evaluate the edge predicate against payload and shared state.
+    async def should_route(self, data: Any) -> bool:
+        """Evaluate the edge predicate against payload.
 
         When the edge was defined without an explicit predicate the method
         returns `True`, signalling an unconditional routing rule. Otherwise the
@@ -181,11 +169,10 @@ class Edge(DictConvertible):
         this edge. Any exception raised by the callable is deliberately allowed
         to surface to the caller to avoid masking logic bugs.
 
-        The condition receives `(data, shared_state)` and may be sync or async.
+        The condition receives the message data and may be sync or async.
 
         Args:
             data: The message payload
-            shared_state: The workflow's shared state (may be None for simple conditions)
 
         Returns:
             True if the edge should be traversed, False otherwise.
@@ -193,13 +180,13 @@ class Edge(DictConvertible):
         Examples:
             .. code-block:: python
 
-                edge = Edge("stage1", "stage2", condition=lambda data, state: data["score"] > 0.8)
-                assert await edge.should_route({"score": 0.9}, None) is True
-                assert await edge.should_route({"score": 0.4}, None) is False
+                edge = Edge("stage1", "stage2", condition=lambda data: data["score"] > 0.8)
+                assert await edge.should_route({"score": 0.9}) is True
+                assert await edge.should_route({"score": 0.4}) is False
         """
         if self._condition is None:
             return True
-        result = self._condition(data, shared_state)
+        result = self._condition(data)
         if inspect.isawaitable(result):
             return bool(await result)
         return bool(result)
@@ -321,6 +308,8 @@ class EdgeGroup(DictConvertible):
 
     from builtins import type as builtin_type
 
+    _T_EdgeGroup = TypeVar("_T_EdgeGroup", bound="EdgeGroup")
+
     _TYPE_REGISTRY: ClassVar[dict[str, builtin_type["EdgeGroup"]]] = {}
 
     def __init__(
@@ -403,7 +392,7 @@ class EdgeGroup(DictConvertible):
         }
 
     @classmethod
-    def register(cls, subclass: builtin_type["EdgeGroup"]) -> builtin_type["EdgeGroup"]:
+    def register(cls, subclass: builtin_type[_T_EdgeGroup]) -> builtin_type[_T_EdgeGroup]:
         """Register a subclass so deserialisation can recover the right type.
 
         Registration is typically performed via the decorator syntax applied to
@@ -492,7 +481,7 @@ class SingleEdgeGroup(EdgeGroup):
         Args:
             source_id: The source executor ID.
             target_id: The target executor ID.
-            condition: Optional condition function `(data, shared_state) -> bool | Awaitable[bool]`.
+            condition: Optional condition function `(data) -> bool | Awaitable[bool]`.
             id: Optional explicit ID for the edge group.
 
         Examples:

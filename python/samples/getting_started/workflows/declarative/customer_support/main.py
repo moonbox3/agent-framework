@@ -27,7 +27,11 @@ from pathlib import Path
 
 from agent_framework import RequestInfoEvent, WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework_declarative import ExternalInputRequest, ExternalInputResponse, WorkflowFactory
+from agent_framework.declarative import (
+    AgentExternalInputRequest,
+    AgentExternalInputResponse,
+    WorkflowFactory,
+)
 from azure.identity import AzureCliCredential
 from pydantic import BaseModel, Field
 from ticketing_plugin import TicketingPlugin
@@ -152,7 +156,7 @@ class EscalationResponse(BaseModel):
     UserMessage: str = Field(description="A natural language message to the user.")
 
 
-async def main():
+async def main() -> None:
     """Run the customer support workflow."""
     # Create ticketing plugin
     plugin = TicketingPlugin()
@@ -244,7 +248,7 @@ async def main():
         if pending_request_id:
             # Continue workflow with user response
             print(f"\n{YELLOW}WORKFLOW:{RESET} Restore\n")
-            response = ExternalInputResponse(user_input=user_input)
+            response = AgentExternalInputResponse(user_input=user_input)
             stream = workflow.send_responses_streaming({pending_request_id: response})
             pending_request_id = None
         else:
@@ -279,7 +283,7 @@ async def main():
                     else:
                         accumulated_response += str(data)
 
-            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, ExternalInputRequest):
+            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExternalInputRequest):
                 request = event.data
 
                 # The agent_response from the request contains the structured response

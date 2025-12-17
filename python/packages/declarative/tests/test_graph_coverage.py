@@ -175,7 +175,7 @@ class TestDeclarativeWorkflowStateExtended:
         await state.initialize()
 
         await state.set("workflow.outputs.result", "done")
-        outputs = await state.get_outputs()
+        outputs = await state.get("workflow.outputs")
         assert outputs.get("result") == "done"
 
     async def test_set_workflow_inputs_raises_error(self, mock_shared_state):
@@ -1647,7 +1647,7 @@ class TestDeclarativeActionExecutorBase:
 
         # State should have been initialized with the dict
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get_inputs()
+        inputs = await state.get("workflow.inputs")
         assert inputs == {"custom": "input"}
 
     async def test_ensure_state_initialized_with_string_input(self, mock_context, mock_shared_state):
@@ -1663,7 +1663,7 @@ class TestDeclarativeActionExecutorBase:
         await executor.handle_action("string trigger", mock_context)
 
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get_inputs()
+        inputs = await state.get("workflow.inputs")
         assert inputs == {"input": "string trigger"}
 
     async def test_ensure_state_initialized_with_custom_object(self, mock_context, mock_shared_state):
@@ -1682,7 +1682,7 @@ class TestDeclarativeActionExecutorBase:
         await executor.handle_action(CustomObj(), mock_context)
 
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get_inputs()
+        inputs = await state.get("workflow.inputs")
         assert inputs == {"input": "custom string"}
 
     async def test_executor_display_name_property(self, mock_context, mock_shared_state):
@@ -1724,7 +1724,7 @@ class TestHumanInputExecutorsCoverage:
     async def test_wait_for_input_executor_with_prompt(self, mock_context, mock_shared_state):
         """Test WaitForInputExecutor with prompt."""
         from agent_framework_declarative._workflows._executors_external_input import (
-            HumanInputRequest,
+            ExternalInputRequest,
             WaitForInputExecutor,
         )
 
@@ -1741,19 +1741,19 @@ class TestHumanInputExecutorsCoverage:
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        # Should yield prompt first, then request
-        assert mock_context.yield_output.call_count == 2
-        # First call: prompt text
+        # Should yield prompt first, then call request_info
+        assert mock_context.yield_output.call_count == 1
         assert mock_context.yield_output.call_args_list[0][0][0] == "Please enter your name:"
-        # Second call: HumanInputRequest
-        request = mock_context.yield_output.call_args_list[1][0][0]
-        assert isinstance(request, HumanInputRequest)
+        # request_info call for ExternalInputRequest
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "user_input"
 
     async def test_wait_for_input_executor_no_prompt(self, mock_context, mock_shared_state):
         """Test WaitForInputExecutor without prompt."""
         from agent_framework_declarative._workflows._executors_external_input import (
-            HumanInputRequest,
+            ExternalInputRequest,
             WaitForInputExecutor,
         )
 
@@ -1768,16 +1768,17 @@ class TestHumanInputExecutorsCoverage:
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        # Should only yield the request (no prompt)
-        assert mock_context.yield_output.call_count == 1
-        request = mock_context.yield_output.call_args[0][0]
-        assert isinstance(request, HumanInputRequest)
+        # Should not yield output (no prompt), just call request_info
+        assert mock_context.yield_output.call_count == 0
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "user_input"
 
     async def test_request_external_input_executor(self, mock_context, mock_shared_state):
         """Test RequestExternalInputExecutor."""
         from agent_framework_declarative._workflows._executors_external_input import (
-            HumanInputRequest,
+            ExternalInputRequest,
             RequestExternalInputExecutor,
         )
 
@@ -1797,8 +1798,9 @@ class TestHumanInputExecutorsCoverage:
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        request = mock_context.yield_output.call_args[0][0]
-        assert isinstance(request, HumanInputRequest)
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "approval"
         assert request.message == "Please approve this request"
         assert request.metadata["priority"] == "high"
@@ -1808,7 +1810,7 @@ class TestHumanInputExecutorsCoverage:
     async def test_question_executor_with_choices(self, mock_context, mock_shared_state):
         """Test QuestionExecutor with choices as dicts and strings."""
         from agent_framework_declarative._workflows._executors_external_input import (
-            HumanInputRequest,
+            ExternalInputRequest,
             QuestionExecutor,
         )
 
@@ -1830,8 +1832,9 @@ class TestHumanInputExecutorsCoverage:
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        request = mock_context.yield_output.call_args[0][0]
-        assert isinstance(request, HumanInputRequest)
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "question"
         choices = request.metadata["choices"]
         assert len(choices) == 3
@@ -1852,7 +1855,7 @@ class TestAgentExternalLoopCoverage:
     async def test_agent_executor_with_external_loop(self, mock_context, mock_shared_state):
         """Test agent executor with external loop that triggers."""
         from agent_framework_declarative._workflows._executors_agents import (
-            ExternalInputRequest,
+            AgentExternalInputRequest,
             InvokeAzureAgentExecutor,
         )
 
@@ -1883,7 +1886,7 @@ class TestAgentExternalLoopCoverage:
         # Should request external input via request_info
         mock_context.request_info.assert_called_once()
         request = mock_context.request_info.call_args[0][0]
-        assert isinstance(request, ExternalInputRequest)
+        assert isinstance(request, AgentExternalInputRequest)
         assert request.agent_name == "TestAgent"
 
     async def test_agent_executor_agent_error_handling(self, mock_context, mock_shared_state):
@@ -2432,21 +2435,21 @@ class TestAgentExecutorExternalLoop:
     async def test_handle_external_input_response_no_state(self, mock_context, mock_shared_state):
         """Test handling external input response when loop state not found."""
         from agent_framework_declarative._workflows._executors_agents import (
-            ExternalInputRequest,
-            ExternalInputResponse,
+            AgentExternalInputRequest,
+            AgentExternalInputResponse,
             InvokeAzureAgentExecutor,
         )
 
         executor = InvokeAzureAgentExecutor({"kind": "InvokeAzureAgent", "agent": "TestAgent"})
 
         # No external loop state in shared_state
-        original_request = ExternalInputRequest(
+        original_request = AgentExternalInputRequest(
             request_id="req-1",
             agent_name="TestAgent",
             agent_response="Hello",
             iteration=1,
         )
-        response = ExternalInputResponse(user_input="hi there")
+        response = AgentExternalInputResponse(user_input="hi there")
 
         await executor.handle_external_input_response(original_request, response, mock_context)
 
@@ -2461,9 +2464,9 @@ class TestAgentExecutorExternalLoop:
         """Test handling external input raises error when agent not found during resumption."""
         from agent_framework_declarative._workflows._executors_agents import (
             EXTERNAL_LOOP_STATE_KEY,
+            AgentExternalInputRequest,
+            AgentExternalInputResponse,
             AgentInvocationError,
-            ExternalInputRequest,
-            ExternalInputResponse,
             ExternalLoopState,
             InvokeAzureAgentExecutor,
         )
@@ -2487,13 +2490,13 @@ class TestAgentExecutorExternalLoop:
 
         executor = InvokeAzureAgentExecutor({"kind": "InvokeAzureAgent", "agent": "NonExistentAgent"})
 
-        original_request = ExternalInputRequest(
+        original_request = AgentExternalInputRequest(
             request_id="req-1",
             agent_name="NonExistentAgent",
             agent_response="Hello",
             iteration=1,
         )
-        response = ExternalInputResponse(user_input="continue")
+        response = AgentExternalInputResponse(user_input="continue")
 
         with pytest.raises(AgentInvocationError) as exc_info:
             await executor.handle_external_input_response(original_request, response, mock_context)

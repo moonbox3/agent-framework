@@ -497,20 +497,20 @@ class DeclarativeWorkflowBuilder:
             builder.add_edge(
                 source=evaluator,
                 target=then_target,
-                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == 0,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == 0,
             )
         if else_entry:
             else_target = self._get_structure_entry(else_entry)
             builder.add_edge(
                 source=evaluator,
                 target=else_target,
-                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif else_passthrough:
             builder.add_edge(
                 source=evaluator,
                 target=else_passthrough,
-                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
 
         # Get branch exit executors for later wiring to successor
@@ -641,7 +641,7 @@ class DeclarativeWorkflowBuilder:
         for branch_index, branch_entry in branch_entries:
             # Capture branch_index in closure properly using a factory function for type inference
             def make_branch_condition(expected: int) -> Any:
-                return lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == expected  # type: ignore
+                return lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == expected  # type: ignore
 
             branch_target = self._get_structure_entry(branch_entry)
             builder.add_edge(
@@ -656,13 +656,13 @@ class DeclarativeWorkflowBuilder:
             builder.add_edge(
                 source=evaluator,
                 target=default_target,
-                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
         elif default_passthrough:
             builder.add_edge(
                 source=evaluator,
                 target=default_passthrough,
-                condition=lambda msg, _: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
+                condition=lambda msg: isinstance(msg, ConditionResult) and msg.branch_index == ELSE_BRANCH_INDEX,
             )
 
         # Create a SwitchStructure to hold all the info needed for wiring
@@ -733,7 +733,7 @@ class DeclarativeWorkflowBuilder:
             builder.add_edge(
                 source=init_executor,
                 target=body_target,
-                condition=lambda msg, _: isinstance(msg, LoopIterationResult) and msg.has_next,
+                condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
             # Body exit -> Next (get all exits from body and wire to next_executor)
@@ -745,21 +745,21 @@ class DeclarativeWorkflowBuilder:
             builder.add_edge(
                 source=next_executor,
                 target=body_target,
-                condition=lambda msg, _: isinstance(msg, LoopIterationResult) and msg.has_next,
+                condition=lambda msg: isinstance(msg, LoopIterationResult) and msg.has_next,
             )
 
         # Init -> join (when has_next=False, empty collection)
         builder.add_edge(
             source=init_executor,
             target=join_executor,
-            condition=lambda msg, _: isinstance(msg, LoopIterationResult) and not msg.has_next,
+            condition=lambda msg: isinstance(msg, LoopIterationResult) and not msg.has_next,
         )
 
         # Next -> join (when has_next=False, loop complete)
         builder.add_edge(
             source=next_executor,
             target=join_executor,
-            condition=lambda msg, _: isinstance(msg, LoopIterationResult) and not msg.has_next,
+            condition=lambda msg: isinstance(msg, LoopIterationResult) and not msg.has_next,
         )
 
         init_executor._exit_executor = join_executor  # type: ignore[attr-defined]

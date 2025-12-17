@@ -16,7 +16,7 @@ import asyncio
 from pathlib import Path
 
 from agent_framework import Workflow, WorkflowOutputEvent
-from agent_framework_declarative import ExternalInputRequest, WorkflowFactory
+from agent_framework.declarative import ExternalInputRequest, WorkflowFactory
 from agent_framework_declarative._workflows._handlers import TextOutputEvent
 
 
@@ -36,9 +36,10 @@ async def run_with_streaming(workflow: Workflow) -> None:
                 # 1. Display the prompt to the user
                 # 2. Wait for their response
                 # 3. Use the response to continue the workflow
-                print(f"[System] Input requested for: {data.variable}")
-                if data.prompt:
-                    print(f"[System] Prompt: {data.prompt}")
+                output_property = data.metadata.get("output_property", "unknown")
+                print(f"[System] Input requested for: {output_property}")
+                if data.message:
+                    print(f"[System] Prompt: {data.message}")
             else:
                 print(f"[Output]: {data}")
 
@@ -53,7 +54,7 @@ async def run_with_result(workflow: Workflow) -> None:
         print(f"  Output: {output}")
 
 
-async def main():
+async def main() -> None:
     """Run the human-in-loop workflow demonstrating both execution styles."""
     # Create a workflow factory
     factory = WorkflowFactory()

@@ -9,8 +9,9 @@ This module provides:
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from agent_framework._workflows import (
     Executor,
@@ -19,9 +20,6 @@ from agent_framework._workflows import (
 )
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 class ConversationData(TypedDict):
@@ -293,18 +291,6 @@ class DeclarativeWorkflowState:
             await self.set(path, existing_list)
         else:
             raise ValueError(f"Cannot append to non-list at path '{path}'")
-
-    async def get_inputs(self) -> dict[str, Any]:
-        """Get the workflow inputs."""
-        state_data = await self.get_state_data()
-        inputs: dict[str, Any] = state_data.get("inputs", {})
-        return inputs
-
-    async def get_outputs(self) -> dict[str, Any]:
-        """Get the workflow outputs."""
-        state_data = await self.get_state_data()
-        outputs: dict[str, Any] = state_data.get("outputs", {})
-        return outputs
 
     async def eval(self, expression: str) -> Any:
         """Evaluate a PowerFx expression with the current state.
@@ -709,7 +695,7 @@ class DeclarativeActionExecutor(Executor):
 
     async def _ensure_state_initialized(
         self,
-        ctx: WorkflowContext[Any, Any],
+        ctx: "WorkflowContext[Any, Any]",
         trigger: Any,
     ) -> DeclarativeWorkflowState:
         """Ensure declarative state is initialized.

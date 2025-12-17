@@ -120,7 +120,7 @@ class ManagerResponse(BaseModel):
     )
 
 
-async def main():
+async def main() -> None:
     """Run the deep research workflow."""
     # Create Azure OpenAI client
     chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())

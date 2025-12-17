@@ -68,7 +68,7 @@ class AgentResult:
 
 
 @dataclass
-class ExternalInputRequest:
+class AgentExternalInputRequest:
     """Request for external input during agent invocation.
 
     Emitted when externalLoop.when condition evaluates to true,
@@ -93,11 +93,11 @@ class ExternalInputRequest:
 
             async def run_with_hitl():
                 # Set up external input handler
-                async def on_request(request: ExternalInputRequest) -> ExternalInputResponse:
+                async def on_request(request: AgentExternalInputRequest) -> ExternalInputResponse:
                     print(f"Agent '{request.agent_name}' needs input:")
                     print(f"  Response: {request.agent_response}")
                     user_input = input("Your response: ")
-                    return ExternalInputResponse(user_input=user_input)
+                    return AgentExternalInputResponse(user_input=user_input)
 
                 async with run_context(request_handler=on_request) as ctx:
                     async for event in workflow.run_stream(ctx=ctx):
@@ -113,7 +113,7 @@ class ExternalInputRequest:
 
 
 @dataclass
-class ExternalInputResponse:
+class AgentExternalInputResponse:
     """Response to an ExternalInputRequest.
 
     Provided by the caller to resume agent execution with new user input.
@@ -125,14 +125,14 @@ class ExternalInputResponse:
             from agent_framework_declarative import ExternalInputResponse
 
             # Basic response with user text input
-            response = ExternalInputResponse(user_input="Yes, please proceed with the order.")
+            response = AgentExternalInputResponse(user_input="Yes, please proceed with the order.")
 
         .. code-block:: python
 
             from agent_framework_declarative import ExternalInputResponse
 
             # Response with additional message history
-            response = ExternalInputResponse(
+            response = AgentExternalInputResponse(
                 user_input="Approved",
                 messages=[],  # Additional context messages if needed
             )
@@ -623,7 +623,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 await ctx.shared_state.set(EXTERNAL_LOOP_STATE_KEY, loop_state)
 
                 # Emit request for external input - workflow will yield here
-                request = ExternalInputRequest(
+                request = AgentExternalInputRequest(
                     request_id=str(uuid.uuid4()),
                     agent_name=agent_name,
                     agent_response=accumulated_response,
@@ -632,7 +632,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                     function_calls=tool_calls,
                 )
                 logger.info(f"InvokeAzureAgent: yielding for external input (iteration {iteration})")
-                await ctx.request_info(request, ExternalInputResponse)
+                await ctx.request_info(request, AgentExternalInputResponse)
                 # Return without sending ActionComplete - workflow yields
                 return
 
@@ -642,8 +642,8 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
     @response_handler
     async def handle_external_input_response(
         self,
-        original_request: ExternalInputRequest,
-        response: ExternalInputResponse,
+        original_request: AgentExternalInputRequest,
+        response: AgentExternalInputResponse,
         ctx: WorkflowContext[ActionComplete, str],
     ) -> None:
         """Handle response to an ExternalInputRequest and continue the loop.
@@ -751,7 +751,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await ctx.shared_state.set(EXTERNAL_LOOP_STATE_KEY, loop_state)
 
             # Emit another request for external input
-            request = ExternalInputRequest(
+            request = AgentExternalInputRequest(
                 request_id=str(uuid.uuid4()),
                 agent_name=agent_name,
                 agent_response=accumulated_response,
@@ -760,7 +760,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 function_calls=tool_calls,
             )
             logger.info(f"InvokeAzureAgent: yielding for external input (iteration {iteration})")
-            await ctx.request_info(request, ExternalInputResponse)
+            await ctx.request_info(request, AgentExternalInputResponse)
             return
 
         logger.warning(f"InvokeAzureAgent: external loop exceeded max iterations ({max_iterations})")
@@ -820,12 +820,11 @@ class InvokeToolExecutor(DeclarativeActionExecutor):
         try:
             # Invoke the tool
             if callable(tool):
-                import inspect
+                from inspect import isawaitable
 
-                if inspect.iscoroutinefunction(tool):
-                    result = await tool(**params)
-                else:
-                    result = tool(**params)
+                result = tool(**params)
+                if isawaitable(result):
+                    result = await result
 
                 # Store result
                 if output_property:

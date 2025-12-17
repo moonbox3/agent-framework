@@ -81,7 +81,7 @@ class TestDeclarativeWorkflowState:
         assert name == "Alice"
 
         # Get all inputs
-        inputs = await state.get_inputs()
+        inputs = await state.get("workflow.inputs")
         assert inputs == {"name": "Alice", "age": 30}
 
     @pytest.mark.asyncio
@@ -452,6 +452,7 @@ class TestHumanInputExecutors:
         ctx.shared_state = mock_shared_state
         ctx.send_message = AsyncMock()
         ctx.yield_output = AsyncMock()
+        ctx.request_info = AsyncMock()
         return ctx
 
     @pytest.fixture
@@ -477,7 +478,7 @@ class TestHumanInputExecutors:
     async def test_question_executor(self, mock_context, mock_shared_state):
         """Test QuestionExecutor."""
         from agent_framework_declarative._workflows import (
-            HumanInputRequest,
+            ExternalInputRequest,
             QuestionExecutor,
         )
 
@@ -495,10 +496,10 @@ class TestHumanInputExecutors:
         # Execute
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        # Verify human input request was yielded
-        assert mock_context.yield_output.called
-        request = mock_context.yield_output.call_args_list[0][0][0]
-        assert isinstance(request, HumanInputRequest)
+        # Verify request_info was called with ExternalInputRequest
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "question"
         assert "What is your name?" in request.message
 
@@ -507,7 +508,7 @@ class TestHumanInputExecutors:
         """Test ConfirmationExecutor."""
         from agent_framework_declarative._workflows import (
             ConfirmationExecutor,
-            HumanInputRequest,
+            ExternalInputRequest,
         )
 
         state = DeclarativeWorkflowState(mock_shared_state)
@@ -525,9 +526,9 @@ class TestHumanInputExecutors:
         # Execute
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        # Verify confirmation request was yielded
-        assert mock_context.yield_output.called
-        request = mock_context.yield_output.call_args_list[0][0][0]
-        assert isinstance(request, HumanInputRequest)
+        # Verify request_info was called with ExternalInputRequest
+        mock_context.request_info.assert_called_once()
+        request = mock_context.request_info.call_args[0][0]
+        assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "confirmation"
         assert "continue" in request.message.lower()

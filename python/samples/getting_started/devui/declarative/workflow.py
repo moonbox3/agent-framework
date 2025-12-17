@@ -11,9 +11,9 @@ from pathlib import Path
 from agent_framework.declarative import WorkflowFactory
 from agent_framework.devui import serve
 
-_factory = WorkflowFactory()
-_workflow_path = Path(__file__).parent / "workflow.yaml"
-workflow = _factory.create_workflow_from_yaml_path(_workflow_path)
+factory = WorkflowFactory()
+workflow_path = Path(__file__).parent / "workflow.yaml"
+workflow = factory.create_workflow_from_yaml_path(workflow_path)
 
 
 def main():

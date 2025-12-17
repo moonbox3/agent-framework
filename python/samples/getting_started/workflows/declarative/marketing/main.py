@@ -48,7 +48,7 @@ EDITOR_INSTRUCTIONS = """You are a senior editor. Review and polish the marketin
 Return the final polished version."""
 
 
-async def main():
+async def main() -> None:
     """Run the marketing workflow with real Azure AI agents."""
     chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
 

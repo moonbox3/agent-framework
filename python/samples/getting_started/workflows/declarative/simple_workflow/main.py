@@ -8,7 +8,7 @@ from pathlib import Path
 from agent_framework.declarative import WorkflowFactory
 
 
-async def main():
+async def main() -> None:
     """Run the simple greeting workflow."""
     # Create a workflow factory
     factory = WorkflowFactory()

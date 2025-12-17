@@ -15,7 +15,7 @@ from pathlib import Path
 from agent_framework.declarative import WorkflowFactory
 
 
-async def main():
+async def main() -> None:
     """Run the conditional workflow with various age inputs."""
     # Create a workflow factory
     factory = WorkflowFactory()

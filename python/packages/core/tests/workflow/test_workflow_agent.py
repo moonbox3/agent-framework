@@ -422,6 +422,48 @@ class TestWorkflowAgent:
         assert isinstance(updates[2].raw_representation, CustomData)
         assert updates[2].raw_representation.value == 42
 
+    async def test_workflow_as_agent_yield_output_with_list_of_chat_messages(self) -> None:
+        """Test that yield_output with list[ChatMessage] extracts contents from all messages.
+
+        Note: TextContent items are coalesced by _finalize_response, so multiple text contents
+        become a single merged TextContent in the final response.
+        """
+
+        @executor
+        async def list_yielding_executor(messages: list[ChatMessage], ctx: WorkflowContext) -> None:
+            # Yield a list of ChatMessages (as SequentialBuilder does)
+            msg_list = [
+                ChatMessage(role=Role.USER, contents=[TextContent(text="first message")]),
+                ChatMessage(role=Role.ASSISTANT, contents=[TextContent(text="second message")]),
+                ChatMessage(
+                    role=Role.ASSISTANT,
+                    contents=[TextContent(text="third"), TextContent(text="fourth")],
+                ),
+            ]
+            await ctx.yield_output(msg_list)
+
+        workflow = WorkflowBuilder().set_start_executor(list_yielding_executor).build()
+        agent = workflow.as_agent("list-msg-agent")
+
+        # Verify streaming returns the update with all 4 contents before coalescing
+        updates: list[AgentRunResponseUpdate] = []
+        async for update in agent.run_stream("test"):
+            updates.append(update)
+
+        assert len(updates) == 1
+        assert len(updates[0].contents) == 4
+        texts = [c.text for c in updates[0].contents if isinstance(c, TextContent)]
+        assert texts == ["first message", "second message", "third", "fourth"]
+
+        # Verify run() coalesces text contents (expected behavior)
+        result = await agent.run("test")
+
+        assert isinstance(result, AgentRunResponse)
+        assert len(result.messages) == 1
+        # TextContent items are coalesced into one
+        assert len(result.messages[0].contents) == 1
+        assert result.messages[0].text == "first messagesecond messagethirdfourth"
+
     async def test_thread_conversation_history_included_in_workflow_run(self) -> None:
         """Test that conversation history from thread is included when running WorkflowAgent.
 

@@ -141,7 +141,8 @@ class WorkflowAgent(BaseAgent):
             checkpoint_storage: Runtime checkpoint storage. When provided with checkpoint_id,
                 used to load and restore the checkpoint. When provided without checkpoint_id,
                 enables checkpointing for this run.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments passed through to underlying workflow
+                and ai_function tools.
 
         Returns:
             The final workflow response as an AgentRunResponse.
@@ -153,7 +154,7 @@ class WorkflowAgent(BaseAgent):
         response_id = str(uuid.uuid4())
 
         async for update in self._run_stream_impl(
-            input_messages, response_id, thread, checkpoint_id, checkpoint_storage
+            input_messages, response_id, thread, checkpoint_id, checkpoint_storage, **kwargs
         ):
             response_updates.append(update)
 
@@ -187,7 +188,8 @@ class WorkflowAgent(BaseAgent):
             checkpoint_storage: Runtime checkpoint storage. When provided with checkpoint_id,
                 used to load and restore the checkpoint. When provided without checkpoint_id,
                 enables checkpointing for this run.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments passed through to underlying workflow
+                and ai_function tools.
 
         Yields:
             AgentRunResponseUpdate objects representing the workflow execution progress.
@@ -198,7 +200,7 @@ class WorkflowAgent(BaseAgent):
         response_id = str(uuid.uuid4())
 
         async for update in self._run_stream_impl(
-            input_messages, response_id, thread, checkpoint_id, checkpoint_storage
+            input_messages, response_id, thread, checkpoint_id, checkpoint_storage, **kwargs
         ):
             response_updates.append(update)
             yield update
@@ -216,6 +218,7 @@ class WorkflowAgent(BaseAgent):
         thread: AgentThread,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        **kwargs: Any,
     ) -> AsyncIterable[AgentRunResponseUpdate]:
         """Internal implementation of streaming execution.
 
@@ -225,6 +228,8 @@ class WorkflowAgent(BaseAgent):
             thread: The conversation thread containing message history.
             checkpoint_id: ID of checkpoint to restore from.
             checkpoint_storage: Runtime checkpoint storage.
+            **kwargs: Additional keyword arguments passed through to the underlying
+                workflow and ai_function tools.
 
         Yields:
             AgentRunResponseUpdate objects representing the workflow execution progress.
@@ -255,6 +260,7 @@ class WorkflowAgent(BaseAgent):
                 message=None,
                 checkpoint_id=checkpoint_id,
                 checkpoint_storage=checkpoint_storage,
+                **kwargs,
             )
         else:
             # Execute workflow with streaming (initial run or no function responses)
@@ -268,6 +274,7 @@ class WorkflowAgent(BaseAgent):
             event_stream = self.workflow.run_stream(
                 message=conversation_messages,
                 checkpoint_storage=checkpoint_storage,
+                **kwargs,
             )
 
         # Process events from the stream
@@ -295,13 +302,9 @@ class WorkflowAgent(BaseAgent):
                 return None
 
             case WorkflowOutputEvent(data=data, source_executor_id=source_executor_id):
-                # Convert workflow output to an agent response update.
-                # Handle different data types appropriately.
                 if isinstance(data, AgentRunResponseUpdate):
-                    # Already an update, pass through
                     return data
                 if isinstance(data, ChatMessage):
-                    # Convert ChatMessage to update
                     return AgentRunResponseUpdate(
                         contents=list(data.contents),
                         role=data.role,
@@ -311,15 +314,9 @@ class WorkflowAgent(BaseAgent):
                         created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                         raw_representation=data,
                     )
-                # Determine contents based on data type
-                if isinstance(data, BaseContent):
-                    # Already a content type (TextContent, ImageContent, etc.)
-                    contents: list[Contents] = [cast(Contents, data)]
-                elif isinstance(data, str):
-                    contents = [TextContent(text=data)]
-                else:
-                    # Fallback: convert to string representation
-                    contents = [TextContent(text=str(data))]
+                contents = self._extract_contents(data)
+                if not contents:
+                    return None
                 return AgentRunResponseUpdate(
                     contents=contents,
                     role=Role.ASSISTANT,
@@ -404,6 +401,18 @@ class WorkflowAgent(BaseAgent):
                     if bool(self.pending_requests):
                         raise AgentExecutionException("Unexpected content type while awaiting request info responses.")
         return function_responses
+
+    def _extract_contents(self, data: Any) -> list[Contents]:
+        """Recursively extract Contents from workflow output data."""
+        if isinstance(data, ChatMessage):
+            return list(data.contents)
+        if isinstance(data, list):
+            return [c for item in data for c in self._extract_contents(item)]
+        if isinstance(data, BaseContent):
+            return [cast(Contents, data)]
+        if isinstance(data, str):
+            return [TextContent(text=data)]
+        return [TextContent(text=str(data))]
 
     class _ResponseState(TypedDict):
         """State for grouping response updates by message_id."""

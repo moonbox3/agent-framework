@@ -26,6 +26,7 @@ from agent_framework import (
 )
 
 from ..exceptions import AgentExecutionException
+from ._agent_executor import AgentExecutor
 from ._checkpoint import CheckpointStorage
 from ._events import (
     AgentRunUpdateEvent,
@@ -293,15 +294,35 @@ class WorkflowAgent(BaseAgent):
 
         AgentRunUpdateEvent, RequestInfoEvent, and WorkflowOutputEvent are processed.
         Other workflow events are ignored as they are workflow-internal.
+
+        For AgentRunUpdateEvent from AgentExecutor instances, only events from executors
+        with output_response=True are converted to agent updates. This prevents agent
+        responses from executors that were not explicitly marked to surface their output.
+        Non-AgentExecutor executors that emit AgentRunUpdateEvent directly are allowed
+        through since they explicitly chose to emit the event.
         """
         match event:
-            case AgentRunUpdateEvent(data=update):
-                # Direct pass-through of update in an agent streaming event
+            case AgentRunUpdateEvent(data=update, executor_id=executor_id):
+                # For AgentExecutor instances, only pass through if output_response=True.
+                # Non-AgentExecutor executors that emit AgentRunUpdateEvent are allowed through.
+                executor = self.workflow.executors.get(executor_id)
+                if isinstance(executor, AgentExecutor) and not executor.output_response:
+                    return None
                 if update:
                     return update
                 return None
 
             case WorkflowOutputEvent(data=data, source_executor_id=source_executor_id):
+                # Convert workflow output to an agent response update.
+                # Handle different data types appropriately.
+
+                # Skip AgentRunResponse from AgentExecutor with output_response=True
+                # since streaming events already surfaced the content.
+                if isinstance(data, AgentRunResponse):
+                    executor = self.workflow.executors.get(source_executor_id)
+                    if isinstance(executor, AgentExecutor) and executor.output_response:
+                        return None
+
                 if isinstance(data, AgentRunResponseUpdate):
                     return data
                 if isinstance(data, ChatMessage):

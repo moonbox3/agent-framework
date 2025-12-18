@@ -1,11 +1,13 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import uuid
+from collections.abc import AsyncIterable
 from typing import Any
 
 import pytest
 
 from agent_framework import (
+    AgentProtocol,
     AgentRunResponse,
     AgentRunResponseUpdate,
     AgentRunUpdateEvent,
@@ -562,6 +564,142 @@ class TestWorkflowAgent:
         # The workflow should have created checkpoints
         checkpoints = await checkpoint_storage.list_checkpoints(workflow.id)
         assert len(checkpoints) > 0, "Checkpoints should have been created when checkpoint_storage is provided"
+
+    async def test_agent_executor_output_response_false_filters_streaming_events(self):
+        """Test that AgentExecutor with output_response=False does not surface streaming events."""
+
+        class MockAgent(AgentProtocol):
+            """Mock agent for testing."""
+
+            def __init__(self, name: str, response_text: str) -> None:
+                self._name = name
+                self._response_text = response_text
+                self._description: str | None = None
+
+            @property
+            def name(self) -> str | None:
+                return self._name
+
+            @property
+            def description(self) -> str | None:
+                return self._description
+
+            def get_new_thread(self) -> AgentThread:
+                return AgentThread()
+
+            async def run(self, messages: Any, *, thread: AgentThread | None = None, **kwargs: Any) -> AgentRunResponse:
+                return AgentRunResponse(
+                    messages=[ChatMessage(role=Role.ASSISTANT, text=self._response_text)],
+                    text=self._response_text,
+                )
+
+            async def run_stream(
+                self, messages: Any, *, thread: AgentThread | None = None, **kwargs: Any
+            ) -> AsyncIterable[AgentRunResponseUpdate]:
+                for word in self._response_text.split():
+                    yield AgentRunResponseUpdate(
+                        contents=[TextContent(text=word + " ")],
+                        role=Role.ASSISTANT,
+                        author_name=self._name,
+                    )
+
+        @executor
+        async def start_executor(messages: list[ChatMessage], ctx: WorkflowContext) -> None:
+            from agent_framework import AgentExecutorRequest
+
+            await ctx.yield_output("Start output")
+            await ctx.send_message(AgentExecutorRequest(messages=messages, should_respond=True))
+
+        # Build workflow: start -> agent1 (no output) -> agent2 (output_response=True)
+        workflow = (
+            WorkflowBuilder()
+            .register_executor(lambda: start_executor, "start")
+            .register_agent(lambda: MockAgent("agent1", "Agent1 output - should NOT appear"), "agent1")
+            .register_agent(
+                lambda: MockAgent("agent2", "Agent2 output - SHOULD appear"), "agent2", output_response=True
+            )
+            .set_start_executor("start")
+            .add_edge("start", "agent1")
+            .add_edge("agent1", "agent2")
+            .build()
+        )
+
+        agent = WorkflowAgent(workflow=workflow, name="Test Agent")
+        result = await agent.run("Test input")
+
+        # Collect all message texts
+        texts = [msg.text for msg in result.messages if msg.text]
+
+        # Start output should appear (from yield_output)
+        assert any("Start output" in t for t in texts), "Start output should appear"
+
+        # Agent1 output should NOT appear (output_response=False)
+        assert not any("Agent1" in t for t in texts), "Agent1 output should NOT appear"
+
+        # Agent2 output should appear (output_response=True)
+        assert any("Agent2" in t for t in texts), "Agent2 output should appear"
+
+    async def test_agent_executor_output_response_no_duplicate_from_workflow_output_event(self):
+        """Test that AgentExecutor with output_response=True does not duplicate content."""
+
+        class MockAgent(AgentProtocol):
+            """Mock agent for testing."""
+
+            def __init__(self, name: str, response_text: str) -> None:
+                self._name = name
+                self._response_text = response_text
+                self._description: str | None = None
+
+            @property
+            def name(self) -> str | None:
+                return self._name
+
+            @property
+            def description(self) -> str | None:
+                return self._description
+
+            def get_new_thread(self) -> AgentThread:
+                return AgentThread()
+
+            async def run(self, messages: Any, *, thread: AgentThread | None = None, **kwargs: Any) -> AgentRunResponse:
+                return AgentRunResponse(
+                    messages=[ChatMessage(role=Role.ASSISTANT, text=self._response_text)],
+                    text=self._response_text,
+                )
+
+            async def run_stream(
+                self, messages: Any, *, thread: AgentThread | None = None, **kwargs: Any
+            ) -> AsyncIterable[AgentRunResponseUpdate]:
+                yield AgentRunResponseUpdate(
+                    contents=[TextContent(text=self._response_text)],
+                    role=Role.ASSISTANT,
+                    author_name=self._name,
+                )
+
+        @executor
+        async def start_executor(messages: list[ChatMessage], ctx: WorkflowContext) -> None:
+            from agent_framework import AgentExecutorRequest
+
+            await ctx.send_message(AgentExecutorRequest(messages=messages, should_respond=True))
+
+        # Build workflow with single agent that has output_response=True
+        workflow = (
+            WorkflowBuilder()
+            .register_executor(lambda: start_executor, "start")
+            .register_agent(lambda: MockAgent("agent", "Unique response text"), "agent", output_response=True)
+            .set_start_executor("start")
+            .add_edge("start", "agent")
+            .build()
+        )
+
+        agent = WorkflowAgent(workflow=workflow, name="Test Agent")
+        result = await agent.run("Test input")
+
+        # Count occurrences of the unique response text
+        unique_text_count = sum(1 for msg in result.messages if msg.text and "Unique response text" in msg.text)
+
+        # Should appear exactly once (not duplicated from both streaming and WorkflowOutputEvent)
+        assert unique_text_count == 1, f"Response should appear exactly once, but appeared {unique_text_count} times"
 
 
 class TestWorkflowAgentMergeUpdates:

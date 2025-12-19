@@ -508,7 +508,7 @@ class DeclarativeWorkflowState:
         inputs_data = state_data.get("inputs", {})
         outputs_data = state_data.get("outputs", {})
 
-        return _make_powerfx_safe({
+        symbols: dict[str, Any] = {
             # .NET-style capitalized names (used in YAML workflows)
             "Workflow": {
                 "Inputs": inputs_data,
@@ -529,7 +529,9 @@ class DeclarativeWorkflowState:
             "system": system_data,
             # Custom namespaces
             **state_data.get("custom", {}),
-        })
+        }
+        result = _make_powerfx_safe(symbols)
+        return cast(dict[str, Any], result)
 
     async def eval_if_expression(self, value: Any) -> Any:
         """Evaluate a value if it's a PowerFx expression, otherwise return as-is."""

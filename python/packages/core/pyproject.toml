@@ -125,8 +125,3 @@ name = "agent_framework"
 [build-system]
 requires = ["flit-core >= 3.11,<4.0"]
 build-backend = "flit_core.buildapi"
-
-[dependency-groups]
-dev = [
-    "pyright>=1.1.407",
-]

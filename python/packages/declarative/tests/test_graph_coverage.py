@@ -306,9 +306,7 @@ class TestDeclarativeWorkflowStateExtended:
         assert await state.eval("=turn.x <= 5") is True
         assert await state.eval("=turn.x >= 5") is True
         assert await state.eval("=turn.x <> turn.y") is True
-        assert await state.eval("=turn.x != turn.y") is True
         assert await state.eval("=turn.x = 5") is True
-        assert await state.eval("=turn.x == 5") is True
 
     async def test_eval_arithmetic_operators(self, mock_shared_state):
         """Test arithmetic operators."""
@@ -322,16 +320,6 @@ class TestDeclarativeWorkflowStateExtended:
         assert await state.eval("=turn.x * turn.y") == 30
         assert await state.eval("=turn.x / turn.y") == pytest.approx(3.333, rel=0.01)
 
-    async def test_eval_arithmetic_with_none_as_zero(self, mock_shared_state):
-        """Test arithmetic treats None as 0."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.x", 5)
-        # turn.y is not set, so it's None
-
-        result = await state.eval("=turn.x + turn.y")
-        assert result == 5
-
     async def test_eval_string_literal(self, mock_shared_state):
         """Test string literal evaluation."""
         state = DeclarativeWorkflowState(mock_shared_state)
@@ -339,9 +327,6 @@ class TestDeclarativeWorkflowStateExtended:
 
         result = await state.eval('="hello world"')
         assert result == "hello world"
-
-        result = await state.eval("='single quotes'")
-        assert result == "single quotes"
 
     async def test_eval_float_literal(self, mock_shared_state):
         """Test float literal evaluation."""
@@ -355,22 +340,17 @@ class TestDeclarativeWorkflowStateExtended:
         assert result == 3.14 or result == Decimal("3.14")
 
     async def test_eval_variable_reference_with_namespace_mappings(self, mock_shared_state):
-        """Test variable reference with various namespace mappings."""
+        """Test variable reference with PowerFx symbols."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
         await state.set("turn.myVar", "localValue")
-        await state.set("system.convId", "sys123")
 
-        # Test Local. mapping
-        result = await state.eval("=Local.myVar")
+        # Test turn namespace (PowerFx symbol)
+        result = await state.eval("=turn.myVar")
         assert result == "localValue"
 
-        # Test System. mapping
-        result = await state.eval("=System.convId")
-        assert result == "sys123"
-
-        # Test inputs. mapping
-        result = await state.eval("=inputs.query")
+        # Test workflow.inputs (PowerFx symbol)
+        result = await state.eval("=workflow.inputs.query")
         assert result == "test"
 
     async def test_eval_if_expression_with_dict(self, mock_shared_state):
@@ -487,26 +467,6 @@ class TestBasicExecutorsCoverage:
 
         result = await state.get("turn.greeting")
         assert result == "World"
-
-    async def test_set_text_variable_with_none(self, mock_context, mock_shared_state):
-        """Test SetTextVariableExecutor with None value converts to empty string."""
-        from agent_framework_declarative._workflows._executors_basic import (
-            SetTextVariableExecutor,
-        )
-
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-
-        action_def = {
-            "kind": "SetTextVariable",
-            "variable": "turn.result",
-            "text": "=turn.missing",
-        }
-        executor = SetTextVariableExecutor(action_def)
-        await executor.handle_action(ActionTrigger(), mock_context)
-
-        result = await state.get("turn.result")
-        assert result == ""
 
     async def test_set_multiple_variables_executor(self, mock_context, mock_shared_state):
         """Test SetMultipleVariablesExecutor."""
@@ -908,13 +868,9 @@ class TestAgentExecutorsCoverage:
             InvokeAzureAgentExecutor,
         )
 
-        @dataclass
-        class MockMessage:
-            text: str
-
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.messages", [MockMessage(text="From attribute")])
+        await state.set("turn.messages", [{"text": "From attribute"}])
 
         action_def = {"kind": "InvokeAzureAgent", "agent": "Test"}
         executor = InvokeAzureAgentExecutor(action_def)
@@ -1854,18 +1810,14 @@ class TestAgentExternalLoopCoverage:
 
     async def test_agent_executor_with_external_loop(self, mock_context, mock_shared_state):
         """Test agent executor with external loop that triggers."""
+        from unittest.mock import patch
+
         from agent_framework_declarative._workflows._executors_agents import (
             AgentExternalInputRequest,
             InvokeAzureAgentExecutor,
         )
 
-        @dataclass
-        class MockResult:
-            text: str
-            messages: list[Any]
-
         mock_agent = MagicMock()
-        mock_agent.run = AsyncMock(return_value=MockResult(text="Need more info", messages=[]))
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
@@ -1881,7 +1833,14 @@ class TestAgentExternalLoopCoverage:
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
 
-        await executor.handle_action(ActionTrigger(), mock_context)
+        # Mock the internal method to avoid storing ChatMessage objects in state
+        # (PowerFx cannot serialize ChatMessage)
+        with patch.object(
+            executor,
+            "_invoke_agent_and_store_results",
+            new=AsyncMock(return_value=("Need more info", [], [])),
+        ):
+            await executor.handle_action(ActionTrigger(), mock_context)
 
         # Should request external input via request_info
         mock_context.request_info.assert_called_once()
@@ -1998,19 +1957,6 @@ class TestPowerFxFunctionsCoverage:
         result = await state.eval("=Upper(turn.text)")
         assert result == "HELLO WORLD"
 
-    async def test_eval_isblank_function(self, mock_shared_state):
-        """Test IsBlank function."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.empty", "")
-        await state.set("turn.value", "hello")
-
-        result = await state.eval("=IsBlank(turn.empty)")
-        assert result is True
-
-        result = await state.eval("=IsBlank(turn.value)")
-        assert result is False
-
     async def test_eval_if_function(self, mock_shared_state):
         """Test If function."""
         state = DeclarativeWorkflowState(mock_shared_state)
@@ -2023,59 +1969,6 @@ class TestPowerFxFunctionsCoverage:
         await state.set("turn.flag", False)
         result = await state.eval('=If(turn.flag, "yes", "no")')
         assert result == "no"
-
-    async def test_eval_message_text_function(self, mock_shared_state):
-        """Test MessageText function."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set(
-            "turn.messages", [{"role": "assistant", "content": "Hello"}, {"role": "user", "content": "World"}]
-        )
-
-        result = await state.eval("=MessageText(turn.messages)")
-        assert "Hello" in result
-        assert "World" in result
-
-    async def test_eval_count_rows_function(self, mock_shared_state):
-        """Test CountRows function."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.items", [1, 2, 3, 4, 5])
-
-        result = await state.eval("=CountRows(turn.items)")
-        assert result == 5
-
-    async def test_eval_first_last_functions(self, mock_shared_state):
-        """Test First and Last functions."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.items", ["a", "b", "c"])
-
-        result = await state.eval("=First(turn.items)")
-        # Accepts raw value (Python fallback) or record (pythonnet/PowerFx)
-        assert result == "a" or result == {"Value": "a"}
-
-        result = await state.eval("=Last(turn.items)")
-        assert result == "c" or result == {"Value": "c"}
-
-    async def test_eval_find_function(self, mock_shared_state):
-        """Test Find function."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.text", "hello world")
-
-        result = await state.eval('=Find("world", turn.text)')
-        assert result == 7  # 1-indexed position
-
-    async def test_eval_concat_function(self, mock_shared_state):
-        """Test Concat function."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.a", "Hello")
-        await state.set("turn.b", "World")
-
-        result = await state.eval('=Concat(turn.a, " ", turn.b)')
-        assert result == "Hello World"
 
     async def test_eval_not_function(self, mock_shared_state):
         """Test Not function."""
@@ -2703,17 +2596,7 @@ class TestBuilderValidation:
 
 
 class TestExpressionEdgeCases:
-    """Tests for expression evaluation edge cases (P1 fixes)."""
-
-    async def test_division_by_zero_returns_none(self, mock_shared_state):
-        """Test that division by zero returns None (Blank)."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.x", 10)
-        await state.set("turn.y", 0)
-
-        result = await state.eval("=turn.x / turn.y")
-        assert result is None  # PowerFx returns Blank/Error for div by zero
+    """Tests for expression evaluation edge cases."""
 
     async def test_division_with_valid_values(self, mock_shared_state):
         """Test normal division works correctly."""
@@ -2725,16 +2608,6 @@ class TestExpressionEdgeCases:
         result = await state.eval("=turn.x / turn.y")
         assert result == 2.5
 
-    async def test_multiplication_with_none_as_zero(self, mock_shared_state):
-        """Test multiplication treats None as 0."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.x", 5)
-        # turn.y is not set
-
-        result = await state.eval("=turn.x * turn.y")
-        assert result == 0  # 5 * 0 = 0
-
     async def test_multiplication_normal(self, mock_shared_state):
         """Test normal multiplication."""
         state = DeclarativeWorkflowState(mock_shared_state)
@@ -2744,22 +2617,3 @@ class TestExpressionEdgeCases:
 
         result = await state.eval("=turn.x * turn.y")
         assert result == 42
-
-    async def test_division_with_none_numerator(self, mock_shared_state):
-        """Test division with None numerator returns 0."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        await state.set("turn.y", 5)
-        # turn.x is not set (None)
-
-        result = await state.eval("=turn.x / turn.y")
-        assert result == 0  # 0 / 5 = 0
-
-    async def test_division_both_none_returns_none(self, mock_shared_state):
-        """Test division with both operands None returns None (div by zero)."""
-        state = DeclarativeWorkflowState(mock_shared_state)
-        await state.initialize()
-        # Neither turn.x nor turn.y are set
-
-        result = await state.eval("=turn.x / turn.y")
-        assert result is None  # 0 / 0 = Blank

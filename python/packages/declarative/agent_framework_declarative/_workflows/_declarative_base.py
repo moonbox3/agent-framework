@@ -6,6 +6,21 @@ This module provides:
 - DeclarativeWorkflowState: Manages workflow variables via SharedState
 - DeclarativeActionExecutor: Base class for action executors
 - Message types for inter-executor communication
+
+PowerFx Expression Evaluation
+-----------------------------
+The .NET version uses RecalcEngine with:
+1. Pre-registered custom functions (UserMessage, AgentMessage, MessageText)
+2. Typed schemas for variables defined at compile time
+3. UpdateVariable() to register mutable state with proper types
+
+The Python `powerfx` library only exposes eval() with runtime symbols, not
+the full RecalcEngine API. We work around this by:
+1. Pre-processing custom functions (UserMessage, MessageText) before PowerFx
+2. Gracefully handling undefined variable errors (returning None)
+3. Converting non-serializable objects to PowerFx-safe types at runtime
+
+See: dotnet/src/Microsoft.Agents.AI.Workflows.Declarative/PowerFx/
 """
 
 import logging
@@ -18,6 +33,7 @@ from agent_framework._workflows import (
     SharedState,
     WorkflowContext,
 )
+from powerfx import Engine
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +106,39 @@ def _map_dotnet_namespace(path: str) -> str:
     return path
 
 
+# Types that PowerFx can serialize directly
+_POWERFX_SAFE_TYPES = (str, int, float, bool, type(None))
+
+
+def _make_powerfx_safe(value: Any) -> Any:
+    """Convert a value to a PowerFx-serializable form.
+
+    PowerFx can only serialize primitive types, dicts, and lists.
+    Custom objects (like ChatMessage) must be converted to dicts or excluded.
+
+    Args:
+        value: Any Python value
+
+    Returns:
+        A PowerFx-safe representation of the value
+    """
+    if value is None or isinstance(value, _POWERFX_SAFE_TYPES):
+        return value
+
+    if isinstance(value, dict):
+        return {k: _make_powerfx_safe(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [_make_powerfx_safe(item) for item in value]
+
+    # Try to convert objects with __dict__ or dataclass-style attributes
+    if hasattr(value, "__dict__"):
+        return _make_powerfx_safe(vars(value))
+
+    # For other objects, try to convert to string representation
+    return str(value)
+
+
 class DeclarativeWorkflowState:
     """Manages workflow variables stored in SharedState.
 
@@ -122,7 +171,12 @@ class DeclarativeWorkflowState:
             "inputs": dict(inputs) if inputs else {},
             "outputs": {},
             "turn": {},
-            "system": {},
+            "system": {
+                "ConversationId": "default",
+                "LastMessage": {"Text": "", "Id": ""},
+                "LastMessageText": "",
+                "LastMessageId": "",
+            },
             "agent": {},
             "conversation": {"messages": [], "history": []},
             "custom": {},
@@ -298,11 +352,19 @@ class DeclarativeWorkflowState:
         Expressions starting with '=' are evaluated as PowerFx.
         Other strings are returned as-is.
 
+        Handles special custom functions not supported by PowerFx:
+        - UserMessage(text): Creates a user message dict from text
+        - MessageText(messages): Extracts text from the last message
+
         Args:
             expression: The expression to evaluate
 
         Returns:
-            The evaluated result
+            The evaluated result. Returns None if the expression references
+            undefined variables (matching legacy fallback parser behavior).
+
+        Raises:
+            ImportError: If the powerfx package is not installed.
         """
         if not expression:
             return expression
@@ -316,183 +378,91 @@ class DeclarativeWorkflowState:
         # Strip the leading '=' for evaluation
         formula = expression[1:]
 
-        # Try PowerFx evaluation if available
-        try:
-            from powerfx import Engine
+        # Handle custom functions not supported by PowerFx
+        result = await self._eval_custom_function(formula)
+        if result is not None:
+            return result
 
-            engine = Engine()
-            symbols = await self._to_powerfx_symbols()
+        engine = Engine()
+        symbols = await self._to_powerfx_symbols()
+        try:
             return engine.eval(formula, symbols=symbols)
-        except ImportError:
-            # powerfx package not installed - use simple fallback
-            logger.debug(f"PowerFx package not installed, using simple evaluation for: {formula}")
-        except Exception:
-            # PowerFx evaluation failed (syntax error, unsupported function, etc.)
-            # Fall back to simple evaluation which handles basic cases
-            logger.debug(f"PowerFx evaluation failed for '{formula}', falling back to simple evaluation")
+        except ValueError as e:
+            error_msg = str(e)
+            # Handle undefined variable errors gracefully by returning None
+            # This matches the behavior of the legacy fallback parser
+            if "isn't recognized" in error_msg or "Name isn't valid" in error_msg:
+                logger.debug(f"PowerFx: undefined variable in expression '{formula}', returning None")
+                return None
+            raise
 
-        # Fallback to simple evaluation
-        return await self._eval_simple(formula)
+    async def _eval_custom_function(self, formula: str) -> Any | None:
+        """Handle custom functions not supported by the Python PowerFx library.
 
-    async def _to_powerfx_symbols(self) -> dict[str, Any]:
-        """Convert the current state to a PowerFx symbols dictionary."""
-        state_data = await self.get_state_data()
-        return {
-            "workflow": {
-                "inputs": state_data.get("inputs", {}),
-                "outputs": state_data.get("outputs", {}),
-            },
-            "turn": state_data.get("turn", {}),
-            "agent": state_data.get("agent", {}),
-            "conversation": state_data.get("conversation", {}),
-            **state_data.get("custom", {}),
-        }
+        The standard PowerFx library supports these functions but the Python wrapper
+        may have limitations. We also handle Copilot Studio-specific dialects.
 
-    async def _eval_simple(self, formula: str) -> Any:
-        """Simple expression evaluation fallback."""
-        from ._powerfx_functions import CUSTOM_FUNCTIONS
+        Returns None if the formula is not a custom function call.
+        """
+        import re
 
-        formula = formula.strip()
+        # Concat/Concatenate - string concatenation
+        # In standard PowerFx, Concatenate is for strings, Concat is for tables.
+        # Copilot Studio uses Concat for strings, so we support both.
+        match = re.match(r"(?:Concat|Concatenate)\((.+)\)$", formula.strip())
+        if match:
+            args_str = match.group(1)
+            # Parse comma-separated arguments (handling nested parentheses)
+            args = self._parse_function_args(args_str)
+            evaluated_args = []
+            for arg in args:
+                arg = arg.strip()
+                if arg.startswith('"') and arg.endswith('"'):
+                    # String literal
+                    evaluated_args.append(arg[1:-1])
+                elif arg.startswith("'") and arg.endswith("'"):
+                    # Single-quoted string literal
+                    evaluated_args.append(arg[1:-1])
+                else:
+                    # Variable reference - evaluate it
+                    result = await self.eval(f"={arg}")
+                    evaluated_args.append(str(result) if result is not None else "")
+            return "".join(evaluated_args)
 
-        # Handle logical operators first (lowest precedence)
-        # Note: " And " and " Or " are case-sensitive in PowerFx
-        # We also handle common variations with newlines
-        for and_op in [" And ", "\n And ", " And\n", "\nAnd\n", "\nAnd ", " And\r\n", "\r\nAnd "]:
-            if and_op in formula:
-                # Split on first occurrence
-                idx = formula.find(and_op)
-                left_str = formula[:idx].strip()
-                right_str = formula[idx + len(and_op) :].strip()
-                left = await self._eval_simple(left_str)
-                right = await self._eval_simple(right_str)
-                return bool(left) and bool(right)
+        # UserMessage(expr) - creates a user message dict
+        match = re.match(r"UserMessage\((.+)\)$", formula.strip())
+        if match:
+            inner_expr = match.group(1).strip()
+            # Evaluate the inner expression
+            text = await self.eval(f"={inner_expr}")
+            return {"role": "user", "text": str(text) if text else ""}
 
-        for or_op in [" Or ", "\n Or ", " Or\n", "\nOr\n", "\nOr ", " Or\r\n", "\r\nOr "]:
-            if or_op in formula:
-                idx = formula.find(or_op)
-                left_str = formula[:idx].strip()
-                right_str = formula[idx + len(or_op) :].strip()
-                left = await self._eval_simple(left_str)
-                right = await self._eval_simple(right_str)
-                return bool(left) or bool(right)
+        # AgentMessage(expr) - creates an assistant message dict
+        match = re.match(r"AgentMessage\((.+)\)$", formula.strip())
+        if match:
+            inner_expr = match.group(1).strip()
+            text = await self.eval(f"={inner_expr}")
+            return {"role": "assistant", "text": str(text) if text else ""}
 
-        # Handle negation
-        if formula.startswith("!"):
-            inner = formula[1:].strip()
-            result = await self._eval_simple(inner)
-            return not bool(result)
+        # MessageText(expr) - extracts text from the last message
+        match = re.match(r"MessageText\((.+)\)$", formula.strip())
+        if match:
+            inner_expr = match.group(1).strip()
+            messages = await self.eval(f"={inner_expr}")
+            if isinstance(messages, list) and messages:
+                last_msg = messages[-1]
+                if isinstance(last_msg, dict):
+                    return last_msg.get("text", "")
+                if hasattr(last_msg, "text"):
+                    return last_msg.text
+            return ""
 
-        # Handle Not() function
-        if formula.startswith("Not(") and formula.endswith(")"):
-            inner = formula[4:-1].strip()
-            result = await self._eval_simple(inner)
-            return not bool(result)
-
-        # Handle function calls
-        for func_name, func in CUSTOM_FUNCTIONS.items():
-            if formula.startswith(f"{func_name}(") and formula.endswith(")"):
-                args_str = formula[len(func_name) + 1 : -1]
-                args = self._parse_function_args(args_str)
-                evaluated_args: list[Any] = []
-                for arg in args:
-                    if isinstance(arg, str):
-                        evaluated_args.append(await self._eval_simple(arg))
-                    else:
-                        evaluated_args.append(arg)
-                try:
-                    return func(*evaluated_args)
-                except Exception:
-                    return formula
-
-        # Handle comparison operators
-        # Support both PowerFx style (=) and Python style (==) for equality
-        for op in [" < ", " > ", " <= ", " >= ", " <> ", " != ", " == ", " = "]:
-            if op in formula:
-                parts = formula.split(op, 1)
-                left = await self._eval_simple(parts[0].strip())
-                right = await self._eval_simple(parts[1].strip())
-                if op == " < ":
-                    return left < right
-                if op == " > ":
-                    return left > right
-                if op == " <= ":
-                    return left <= right
-                if op == " >= ":
-                    return left >= right
-                if op == " <> " or op == " != ":
-                    return left != right
-                if op == " = " or op == " == ":
-                    return left == right
-
-        # Handle arithmetic operators (lower precedence than comparison)
-        for op in [" + ", " - ", " * ", " / "]:
-            if op in formula:
-                parts = formula.split(op, 1)
-                left = await self._eval_simple(parts[0].strip())
-                right = await self._eval_simple(parts[1].strip())
-                # Treat None as 0 for arithmetic (PowerFx behavior)
-                if left is None:
-                    left = 0
-                if right is None:
-                    right = 0
-                # Coerce Decimal to float for arithmetic
-                if hasattr(left, "__float__"):
-                    left = float(left)
-                if hasattr(right, "__float__"):
-                    right = float(right)
-                if op == " + ":
-                    return left + right
-                if op == " - ":
-                    return left - right
-                if op == " * ":
-                    return left * right
-                if op == " / ":
-                    # Division by zero protection - return None (Blank in PowerFx)
-                    if right == 0:
-                        from agent_framework import get_logger
-
-                        logger = get_logger("agent_framework.declarative.workflows")
-                        logger.warning(f"Division by zero in expression: {formula}")
-                        return None
-                    return left / right
-
-        # Handle string literals
-        if (formula.startswith('"') and formula.endswith('"')) or (formula.startswith("'") and formula.endswith("'")):
-            return formula[1:-1]
-
-        # Handle numeric literals
-        try:
-            if "." in formula:
-                return float(formula)
-            return int(formula)
-        except ValueError:
-            pass
-
-        # Handle boolean literals
-        if formula.lower() == "true":
-            return True
-        if formula.lower() == "false":
-            return False
-
-        # Handle variable references
-        if "." in formula:
-            path = formula
-            if formula.startswith("Local."):
-                path = "turn." + formula[6:]
-            elif formula.startswith("System."):
-                path = "system." + formula[7:]
-            elif formula.startswith("Workflow."):
-                path = "workflow." + formula[9:]
-            elif formula.startswith("inputs."):
-                path = "workflow.inputs." + formula[7:]
-            return await self.get(path)
-
-        return formula
+        return None
 
     def _parse_function_args(self, args_str: str) -> list[str]:
-        """Parse function arguments, handling nested parentheses."""
-        args: list[str] = []
-        current = ""
+        """Parse comma-separated function arguments, handling nested parentheses and strings."""
+        args = []
+        current = []
         depth = 0
         in_string = False
         string_char = None
@@ -501,27 +471,65 @@ class DeclarativeWorkflowState:
             if char in ('"', "'") and not in_string:
                 in_string = True
                 string_char = char
-                current += char
+                current.append(char)
             elif char == string_char and in_string:
                 in_string = False
                 string_char = None
-                current += char
+                current.append(char)
             elif char == "(" and not in_string:
                 depth += 1
-                current += char
+                current.append(char)
             elif char == ")" and not in_string:
                 depth -= 1
-                current += char
+                current.append(char)
             elif char == "," and depth == 0 and not in_string:
-                args.append(current.strip())
-                current = ""
+                args.append("".join(current).strip())
+                current = []
             else:
-                current += char
+                current.append(char)
 
-        if current.strip():
-            args.append(current.strip())
+        if current:
+            args.append("".join(current).strip())
 
         return args
+
+    async def _to_powerfx_symbols(self) -> dict[str, Any]:
+        """Convert the current state to a PowerFx symbols dictionary.
+
+        Includes both .NET-style capitalized names (System, Local, Workflow) and
+        lowercase aliases (system, turn, workflow) for compatibility with
+        declarative workflow YAML files and internal tests.
+        """
+        state_data = await self.get_state_data()
+        turn_data = state_data.get("turn", {})
+        agent_data = state_data.get("agent", {})
+        conversation_data = state_data.get("conversation", {})
+        system_data = state_data.get("system", {})
+        inputs_data = state_data.get("inputs", {})
+        outputs_data = state_data.get("outputs", {})
+
+        return _make_powerfx_safe({
+            # .NET-style capitalized names (used in YAML workflows)
+            "Workflow": {
+                "Inputs": inputs_data,
+                "Outputs": outputs_data,
+            },
+            "Local": turn_data,
+            "Agent": agent_data,
+            "Conversation": conversation_data,
+            "System": system_data,
+            # Lowercase aliases (used internally and in tests)
+            "workflow": {
+                "inputs": inputs_data,
+                "outputs": outputs_data,
+            },
+            "turn": turn_data,
+            "agent": agent_data,
+            "conversation": conversation_data,
+            "system": system_data,
+            # Custom namespaces
+            **state_data.get("custom", {}),
+        })
 
     async def eval_if_expression(self, value: Any) -> Any:
         """Evaluate a value if it's a PowerFx expression, otherwise return as-is."""

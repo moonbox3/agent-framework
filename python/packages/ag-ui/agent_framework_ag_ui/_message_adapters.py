@@ -2,6 +2,7 @@
 
 """Message format conversion between AG-UI and Agent Framework."""
 
+import json
 from typing import Any, cast
 
 from agent_framework import (
@@ -59,21 +60,65 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
             # Distinguish approval payloads from actual tool results
             is_approval = False
             if isinstance(result_content, str) and result_content:
-                import json as _json
-
                 try:
-                    parsed = _json.loads(result_content)
+                    parsed = json.loads(result_content)
                     is_approval = isinstance(parsed, dict) and "accepted" in parsed
                 except Exception:
                     is_approval = False
 
             if is_approval:
-                # Approval responses should be treated as user messages to trigger human-in-the-loop flow
-                chat_msg = ChatMessage(
-                    role=Role.USER,
-                    contents=[TextContent(text=str(result_content))],
-                    additional_properties={"is_tool_result": True, "tool_call_id": str(tool_call_id or "")},
-                )
+                # Look for the matching function call in previous messages to create
+                # a proper FunctionApprovalResponseContent. This enables the agent framework
+                # to execute the approved tool (fix for GitHub issue #3034).
+                parsed_approval = json.loads(result_content)
+                accepted = parsed_approval.get("accepted", False)
+
+                # Find the function call that matches this tool_call_id
+                matching_func_call = None
+                for prev_msg in result:
+                    role_val = prev_msg.role.value if hasattr(prev_msg.role, "value") else str(prev_msg.role)
+                    if role_val != "assistant":
+                        continue
+                    for content in prev_msg.contents or []:
+                        if isinstance(content, FunctionCallContent):
+                            if content.call_id == tool_call_id and content.name != "confirm_changes":
+                                matching_func_call = content
+                                break
+
+                if matching_func_call:
+                    # Remove any existing tool result for this call_id since the framework
+                    # will re-execute the tool after approval. Keeping old results causes
+                    # OpenAI API errors ("tool message must follow assistant with tool_calls").
+                    result = [
+                        m
+                        for m in result
+                        if not (
+                            (m.role.value if hasattr(m.role, "value") else str(m.role)) == "tool"
+                            and any(
+                                isinstance(c, FunctionResultContent) and c.call_id == tool_call_id
+                                for c in (m.contents or [])
+                            )
+                        )
+                    ]
+
+                    # Create FunctionApprovalResponseContent for the agent framework
+                    approval_response = FunctionApprovalResponseContent(
+                        approved=accepted,
+                        id=str(tool_call_id),
+                        function_call=matching_func_call,
+                    )
+                    chat_msg = ChatMessage(
+                        role=Role.USER,
+                        contents=[approval_response],
+                    )
+                else:
+                    # No matching function call found - this is likely a confirm_changes approval
+                    # Keep the old behavior for backwards compatibility
+                    chat_msg = ChatMessage(
+                        role=Role.USER,
+                        contents=[TextContent(text=str(result_content))],
+                        additional_properties={"is_tool_result": True, "tool_call_id": str(tool_call_id or "")},
+                    )
                 if "id" in msg:
                     chat_msg.message_id = msg["id"]
                 result.append(chat_msg)

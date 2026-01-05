@@ -6,7 +6,13 @@ import json
 import logging
 from typing import Any
 
-from agent_framework import ChatMessage, FunctionCallContent, FunctionResultContent, TextContent
+from agent_framework import (
+    ChatMessage,
+    FunctionApprovalResponseContent,
+    FunctionCallContent,
+    FunctionResultContent,
+    TextContent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +46,22 @@ def sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
             continue
 
         if role_value == "user":
+            # Check if this message contains FunctionApprovalResponseContent
+            # If so, the framework will handle tool execution - don't inject synthetic results
+            approval_call_ids: set[str] = set()
+            for content in msg.contents or []:
+                if isinstance(content, FunctionApprovalResponseContent):
+                    if content.function_call and content.function_call.call_id:
+                        approval_call_ids.add(str(content.function_call.call_id))
+
+            if approval_call_ids and pending_tool_call_ids:
+                # Remove approved call_ids from pending - the framework will execute them
+                pending_tool_call_ids -= approval_call_ids
+                logger.info(
+                    f"FunctionApprovalResponseContent found for call_ids={approval_call_ids} - "
+                    "framework will handle execution"
+                )
+
             if pending_confirm_changes_id:
                 user_text = ""
                 for content in msg.contents or []:

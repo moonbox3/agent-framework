@@ -425,7 +425,7 @@ class AzureAIClient(OpenAIBaseResponsesClient):
             # User messages (input_text) do NOT support annotations in Azure AI
             if "content" in new_item and isinstance(new_item["content"], list):
                 new_content: list[dict[str, Any] | Any] = []
-                for content_item in cast(list[Any], new_item["content"]):
+                for content_item in new_item["content"]:
                     if isinstance(content_item, dict):
                         new_content_item: dict[str, Any] = dict(content_item)
                         # Only add annotations to output_text (assistant content)

@@ -319,7 +319,9 @@ def test_azure_ai_client_transform_input_for_azure_ai(mock_project_client: Magic
     assert result[1]["type"] == "message"
 
     # Verify 'annotations' added ONLY to output_text (assistant) content, NOT input_text (user)
+    assert result[0]["content"][0]["type"] == "input_text"  # user content type preserved
     assert "annotations" not in result[0]["content"][0]  # user message - no annotations
+    assert result[1]["content"][0]["type"] == "output_text"  # assistant content type preserved
     assert result[1]["content"][0]["annotations"] == []  # assistant message - has annotations
 
     # Verify original fields preserved
@@ -365,7 +367,9 @@ def test_azure_ai_client_transform_input_handles_non_dict_content(mock_project_c
 
     result = client._transform_input_for_azure_ai(input_with_string_content)  # type: ignore
 
-    # Should handle gracefully without modification
+    # Should add 'type': 'message' at item level even with non-dict content
+    assert result[0]["type"] == "message"
+    # Non-dict content items should be preserved without modification
     assert result[0]["content"] == ["plain string content"]
 
 

@@ -405,10 +405,10 @@ class AzureAIClient(OpenAIBaseResponsesClient):
     def _transform_input_for_azure_ai(self, input_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Transform input items to match Azure AI Projects expected schema.
 
-        WORKAROUND: Azure AI Projects 'create responses' API expects a different schema
-        than OpenAI's Responses API. Specifically:
-        - Input items with 'role' need 'type': 'message' at item level
-        - Assistant message content items (output_text) need 'annotations' field
+        WORKAROUND: Azure AI Projects 'create responses' API expects a different schema than OpenAI's
+        Responses API. Azure requires 'type' at the item level, and requires 'annotations'
+        only for output_text content items (assistant messages), not for input_text content items
+        (user messages). This helper adapts the OpenAI-style input to the Azure schema.
 
         See: https://github.com/Azure/azure-sdk-for-python/issues/44493
         TODO(agent-framework#2926): Remove when Azure SDK aligns with OpenAI schema.

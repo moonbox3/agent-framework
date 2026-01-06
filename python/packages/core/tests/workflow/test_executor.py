@@ -184,8 +184,8 @@ async def test_executor_completed_event_contains_sent_messages():
         assert collector_completed.data is None
 
 
-async def test_executor_completed_event_none_when_no_messages_sent():
-    """Test that ExecutorCompletedEvent.data is None when no messages are sent."""
+async def test_executor_completed_event_includes_yielded_outputs():
+    """Test that ExecutorCompletedEvent.data includes yielded outputs."""
     from typing_extensions import Never
 
     from agent_framework import WorkflowOutputEvent
@@ -203,9 +203,10 @@ async def test_executor_completed_event_none_when_no_messages_sent():
 
     assert len(completed_events) == 1
     assert completed_events[0].executor_id == "yielder"
-    assert completed_events[0].data is None
+    # Yielded outputs are now included in ExecutorCompletedEvent.data
+    assert completed_events[0].data == ["TEST"]
 
-    # Verify the output was still yielded correctly
+    # Verify the output was also yielded as WorkflowOutputEvent
     output_events = [e for e in events if isinstance(e, WorkflowOutputEvent)]
     assert len(output_events) == 1
     assert output_events[0].data == "TEST"

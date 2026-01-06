@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import contextlib
+import copy
 import functools
 import inspect
 import logging
@@ -263,8 +264,9 @@ class Executor(RequestInfoMixin, DictConvertible):
             )
 
             # Invoke the handler with the message and context
+            # Use deepcopy to capture original input state before handler can mutate it
             with _framework_event_origin():
-                invoke_event = ExecutorInvokedEvent(self.id, message)
+                invoke_event = ExecutorInvokedEvent(self.id, copy.deepcopy(message))
             await context.add_event(invoke_event)
             try:
                 await handler(message, context)

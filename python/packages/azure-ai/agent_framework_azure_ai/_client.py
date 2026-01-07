@@ -356,7 +356,10 @@ class AzureAIClient(OpenAIBaseResponsesClient):
 
             # response_format is accessed from chat_options or additional_properties
             # since the base class excludes it from run_options
-            response_format = chat_options.response_format or chat_options.additional_properties.get("response_format")
+            if chat_options.response_format is not None:
+                response_format = chat_options.response_format
+            else:
+                response_format = chat_options.additional_properties.get("response_format")
             if response_format:
                 args["text"] = PromptAgentDefinitionText(format=self._create_text_format_config(response_format))
 

@@ -88,6 +88,7 @@ class AgentFrameworkEventBridge:
         self.tool_results: list[dict[str, Any]] = []  # Track tool results
         self.tool_calls_ended: set[str] = set()  # Track which tool calls have had ToolCallEndEvent emitted
         self.accumulated_text_content: str = ""  # Track accumulated text for final MessagesSnapshotEvent
+        self.messages_snapshot_emitted: bool = False  # Track snapshot emission to avoid duplicates
 
     async def from_agent_run_update(self, update: AgentRunResponseUpdate) -> list[BaseEvent]:
         """
@@ -452,6 +453,7 @@ class AgentFrameworkEventBridge:
             )
             logger.info(f"Emitting MessagesSnapshotEvent with {len(all_messages)} messages")
             events.append(messages_snapshot_event)
+            self.messages_snapshot_emitted = True
         return events
 
     def _emit_state_snapshot_and_confirmation(self) -> list[BaseEvent]:
@@ -552,6 +554,7 @@ class AgentFrameworkEventBridge:
         )
         logger.info(f"Emitting MessagesSnapshotEvent for confirm_changes with {len(all_messages)} messages")
         events.append(messages_snapshot_event)
+        self.messages_snapshot_emitted = True
 
         self.should_stop_after_confirm = True
         logger.info("Set flag to stop run after confirm_changes")

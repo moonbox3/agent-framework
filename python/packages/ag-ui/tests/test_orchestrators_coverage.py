@@ -385,8 +385,8 @@ async def test_state_context_injection() -> None:
     assert "banana" in system_messages[0].contents[0].text
 
 
-async def test_no_state_context_injection_with_tool_calls() -> None:
-    """Test state context is NOT injected if conversation has tool calls."""
+async def test_state_context_injection_with_tool_calls_and_input_state() -> None:
+    """Test state context is injected when state is provided, even with tool calls."""
     from agent_framework import ChatMessage, FunctionCallContent, FunctionResultContent, TextContent
 
     messages = [
@@ -420,13 +420,13 @@ async def test_no_state_context_injection_with_tool_calls() -> None:
     async for event in orchestrator.run(context):
         events.append(event)
 
-    # Should NOT inject state context system message since conversation has tool calls
+    # Should inject state context system message because input state is provided
     system_messages = [
         msg
         for msg in agent.messages_received
         if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "system"
     ]
-    assert len(system_messages) == 0
+    assert len(system_messages) == 1
 
 
 async def test_structured_output_processing() -> None:

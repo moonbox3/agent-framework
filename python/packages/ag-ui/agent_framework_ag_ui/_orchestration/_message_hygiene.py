@@ -50,7 +50,7 @@ def sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
             # If so, the framework will handle tool execution - don't inject synthetic results
             approval_call_ids: set[str] = set()
             for content in msg.contents or []:
-                if isinstance(content, FunctionApprovalResponseContent):
+                if type(content) is FunctionApprovalResponseContent:
                     if content.function_call and content.function_call.call_id:
                         approval_call_ids.add(str(content.function_call.call_id))
 
@@ -58,7 +58,7 @@ def sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                 # Remove approved call_ids from pending - the framework will execute them
                 pending_tool_call_ids -= approval_call_ids
                 logger.info(
-                    f"FunctionApprovalResponseContent found for call_ids={approval_call_ids} - "
+                    f"FunctionApprovalResponseContent found for call_ids={sorted(approval_call_ids)} - "
                     "framework will handle execution"
                 )
 

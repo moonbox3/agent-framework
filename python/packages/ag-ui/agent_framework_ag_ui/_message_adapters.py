@@ -37,6 +37,31 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
     Returns:
         List of Agent Framework ChatMessage objects
     """
+
+    def _update_tool_call_arguments(
+        raw_messages: list[dict[str, Any]],
+        tool_call_id: str,
+        modified_args: dict[str, Any],
+    ) -> None:
+        for raw_msg in raw_messages:
+            tool_calls = raw_msg.get("tool_calls") or raw_msg.get("toolCalls")
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                if str(tool_call.get("id", "")) != tool_call_id:
+                    continue
+                function_payload = tool_call.get("function")
+                if not isinstance(function_payload, dict):
+                    return
+                existing_args = function_payload.get("arguments")
+                if isinstance(existing_args, str):
+                    function_payload["arguments"] = json.dumps(modified_args)
+                else:
+                    function_payload["arguments"] = modified_args
+                return
+
     result: list[ChatMessage] = []
     for msg in messages:
         # Handle standard tool result messages early (role="tool") to preserve provider invariants
@@ -58,20 +83,31 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                 result_content = msg.get("result", "")
 
             # Distinguish approval payloads from actual tool results
-            is_approval = False
+            parsed: dict[str, Any] | None = None
             if isinstance(result_content, str) and result_content:
                 try:
-                    parsed = json.loads(result_content)
-                    is_approval = isinstance(parsed, dict) and "accepted" in parsed
+                    parsed_candidate = json.loads(result_content)
                 except Exception:
-                    is_approval = False
+                    parsed_candidate = None
+                if isinstance(parsed_candidate, dict):
+                    parsed = parsed_candidate
+            elif isinstance(result_content, dict):
+                parsed = result_content
+
+            is_approval = parsed is not None and "accepted" in parsed
 
             if is_approval:
                 # Look for the matching function call in previous messages to create
                 # a proper FunctionApprovalResponseContent. This enables the agent framework
                 # to execute the approved tool (fix for GitHub issue #3034).
-                parsed_approval = json.loads(result_content)
-                accepted = parsed_approval.get("accepted", False)
+                accepted = parsed.get("accepted", False) if parsed is not None else False
+                approval_payload_text = result_content if isinstance(result_content, str) else json.dumps(parsed)
+
+                # Log the full approval payload to debug modified arguments
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.info(f"Approval payload received: {parsed}")
 
                 # Find the function call that matches this tool_call_id
                 matching_func_call = None
@@ -101,11 +137,68 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                         )
                     ]
 
+                    # Check if the approval payload contains modified arguments
+                    # The UI sends back the modified state (e.g., deselected steps) in the approval payload
+                    modified_args = {k: v for k, v in parsed.items() if k != "accepted"} if parsed else {}
+                    state_args: dict[str, Any] | None = None
+                    if modified_args:
+                        original_args = matching_func_call.parse_arguments() or {}
+                        merged_args: dict[str, Any]
+                        if isinstance(original_args, dict) and original_args:
+                            merged_args = {**original_args, **modified_args}
+                        else:
+                            merged_args = dict(modified_args)
+
+                        if isinstance(modified_args.get("steps"), list):
+                            original_steps = original_args.get("steps") if isinstance(original_args, dict) else None
+                            if isinstance(original_steps, list):
+                                approved_steps = modified_args.get("steps") or []
+                                approved_by_description = {
+                                    step.get("description"): step
+                                    for step in approved_steps
+                                    if isinstance(step, dict) and step.get("description")
+                                }
+                                merged_steps: list[Any] = []
+                                for step in original_steps:
+                                    if not isinstance(step, dict):
+                                        merged_steps.append(step)
+                                        continue
+                                    description = step.get("description")
+                                    approved_step = approved_by_description.get(description)
+                                    status = (
+                                        approved_step.get("status")
+                                        if isinstance(approved_step, dict) and approved_step.get("status")
+                                        else "disabled"
+                                    )
+                                    updated_step = step.copy()
+                                    updated_step["status"] = status
+                                    merged_steps.append(updated_step)
+                                merged_args["steps"] = merged_steps
+                        state_args = merged_args
+
+                        # Keep the original tool call and AG-UI snapshot in sync with approved args.
+                        updated_args = (
+                            json.dumps(merged_args) if isinstance(matching_func_call.arguments, str) else merged_args
+                        )
+                        matching_func_call.arguments = updated_args
+                        _update_tool_call_arguments(messages, str(tool_call_id), merged_args)
+                        # Create a new FunctionCallContent with the modified arguments
+                        func_call_for_approval = FunctionCallContent(
+                            call_id=matching_func_call.call_id,
+                            name=matching_func_call.name,
+                            arguments=json.dumps(modified_args),
+                        )
+                        logger.info(f"Using modified arguments from approval: {modified_args}")
+                    else:
+                        # No modified arguments - use the original function call
+                        func_call_for_approval = matching_func_call
+
                     # Create FunctionApprovalResponseContent for the agent framework
                     approval_response = FunctionApprovalResponseContent(
                         approved=accepted,
                         id=str(tool_call_id),
-                        function_call=matching_func_call,
+                        function_call=func_call_for_approval,
+                        additional_properties={"ag_ui_state_args": state_args} if state_args else None,
                     )
                     chat_msg = ChatMessage(
                         role=Role.USER,
@@ -116,7 +209,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                     # Keep the old behavior for backwards compatibility
                     chat_msg = ChatMessage(
                         role=Role.USER,
-                        contents=[TextContent(text=str(result_content))],
+                        contents=[TextContent(text=approval_payload_text)],
                         additional_properties={"is_tool_result": True, "tool_call_id": str(tool_call_id or "")},
                     )
                 if "id" in msg:
@@ -367,6 +460,22 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
             normalized_msg["content"] = "".join(text_parts)
         elif content is None:
             normalized_msg["content"] = ""
+
+        tool_calls = normalized_msg.get("tool_calls") or normalized_msg.get("toolCalls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                function_payload = tool_call.get("function")
+                if not isinstance(function_payload, dict):
+                    continue
+                if "arguments" not in function_payload:
+                    continue
+                arguments = function_payload.get("arguments")
+                if arguments is None:
+                    function_payload["arguments"] = ""
+                elif not isinstance(arguments, str):
+                    function_payload["arguments"] = json.dumps(arguments)
 
         # Normalize tool_call_id to toolCallId for tool messages
         if normalized_msg.get("role") == "tool":

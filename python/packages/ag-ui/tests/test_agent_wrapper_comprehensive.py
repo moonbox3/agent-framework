@@ -634,7 +634,7 @@ async def test_suppressed_summary_with_document_state():
 
 async def test_function_approval_mode_executes_tool():
     """Test that function approval with approval_mode='always_require' sends the correct messages."""
-    from agent_framework import FunctionApprovalResponseContent, ai_function
+    from agent_framework import FunctionResultContent, ai_function
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     messages_received: list[Any] = []
@@ -706,27 +706,26 @@ async def test_function_approval_mode_executes_tool():
     assert len(run_started) == 1
     assert len(run_finished) == 1
 
-    # Verify that a FunctionApprovalResponseContent was created and sent to the agent
-    # This is the key fix - the orchestrator should create an approval response
-    approval_responses_found = False
+    # Verify that a FunctionResultContent was created and sent to the agent
+    # Approved tool calls are resolved before the model run.
+    tool_result_found = False
     for msg in messages_received:
         for content in msg.contents:
-            if isinstance(content, FunctionApprovalResponseContent):
-                approval_responses_found = True
-                assert content.approved is True
-                assert content.function_call.name == "get_datetime"
-                assert content.function_call.call_id == "call_get_datetime_123"
+            if isinstance(content, FunctionResultContent):
+                tool_result_found = True
+                assert content.call_id == "call_get_datetime_123"
+                assert content.result == "2025/12/01 12:00:00"
                 break
 
-    assert approval_responses_found, (
-        "FunctionApprovalResponseContent should be included in messages sent to agent. "
-        "This is required for the agent framework to execute the approved function."
+    assert tool_result_found, (
+        "FunctionResultContent should be included in messages sent to agent. "
+        "This is required for the model to see the approved tool execution result."
     )
 
 
 async def test_function_approval_mode_rejection():
     """Test that function approval rejection creates a rejection response."""
-    from agent_framework import FunctionApprovalResponseContent, ai_function
+    from agent_framework import FunctionResultContent, ai_function
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     messages_received: list[Any] = []
@@ -793,18 +792,17 @@ async def test_function_approval_mode_rejection():
     run_finished = [e for e in events if e.type == "RUN_FINISHED"]
     assert len(run_finished) == 1
 
-    # Verify that a FunctionApprovalResponseContent with approved=False was created
+    # Verify that a FunctionResultContent with rejection payload was created
     rejection_found = False
     for msg in messages_received:
         for content in msg.contents:
-            if isinstance(content, FunctionApprovalResponseContent):
+            if isinstance(content, FunctionResultContent):
                 rejection_found = True
-                assert content.approved is False
-                assert content.function_call.name == "delete_all_data"
-                assert content.function_call.call_id == "call_delete_123"
+                assert content.call_id == "call_delete_123"
+                assert content.result == "Error: Tool call invocation was rejected by user."
                 break
 
     assert rejection_found, (
-        "FunctionApprovalResponseContent with approved=False should be included in messages sent to agent. "
-        "This tells the agent framework that the tool was rejected."
+        "FunctionResultContent with rejection details should be included in messages sent to agent. "
+        "This tells the model that the tool was rejected."
     )

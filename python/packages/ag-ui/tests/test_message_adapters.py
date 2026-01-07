@@ -2,6 +2,8 @@
 
 """Tests for message adapters."""
 
+import json
+
 import pytest
 from agent_framework import ChatMessage, FunctionCallContent, Role, TextContent
 
@@ -66,6 +68,88 @@ def test_agui_tool_result_to_agent_framework():
     assert message.additional_properties is not None
     assert message.additional_properties.get("is_tool_result") is True
     assert message.additional_properties.get("tool_call_id") == "call_123"
+
+
+def test_agui_tool_approval_updates_tool_call_arguments():
+    """Tool approval updates matching tool call arguments for snapshots and agent context."""
+    messages_input = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "generate_task_steps",
+                        "arguments": {
+                            "steps": [
+                                {"description": "Boil water", "status": "enabled"},
+                                {"description": "Brew coffee", "status": "enabled"},
+                                {"description": "Serve coffee", "status": "enabled"},
+                            ]
+                        },
+                    },
+                }
+            ],
+            "id": "msg_1",
+        },
+        {
+            "role": "tool",
+            "content": json.dumps(
+                {
+                    "accepted": True,
+                    "steps": [
+                        {"description": "Boil water", "status": "enabled"},
+                        {"description": "Serve coffee", "status": "enabled"},
+                    ],
+                }
+            ),
+            "toolCallId": "call_123",
+            "id": "msg_2",
+        },
+    ]
+
+    messages = agui_messages_to_agent_framework(messages_input)
+
+    assert len(messages) == 2
+    assistant_msg = messages[0]
+    func_call = next(content for content in assistant_msg.contents if isinstance(content, FunctionCallContent))
+    assert func_call.arguments == {
+        "steps": [
+            {"description": "Boil water", "status": "enabled"},
+            {"description": "Brew coffee", "status": "disabled"},
+            {"description": "Serve coffee", "status": "enabled"},
+        ]
+    }
+    assert messages_input[0]["tool_calls"][0]["function"]["arguments"] == {
+        "steps": [
+            {"description": "Boil water", "status": "enabled"},
+            {"description": "Brew coffee", "status": "disabled"},
+            {"description": "Serve coffee", "status": "enabled"},
+        ]
+    }
+
+    from agent_framework import FunctionApprovalResponseContent
+
+    approval_msg = messages[1]
+    approval_content = next(
+        content for content in approval_msg.contents if isinstance(content, FunctionApprovalResponseContent)
+    )
+    assert approval_content.function_call.parse_arguments() == {
+        "steps": [
+            {"description": "Boil water", "status": "enabled"},
+            {"description": "Serve coffee", "status": "enabled"},
+        ]
+    }
+    assert approval_content.additional_properties is not None
+    assert approval_content.additional_properties.get("ag_ui_state_args") == {
+        "steps": [
+            {"description": "Boil water", "status": "enabled"},
+            {"description": "Brew coffee", "status": "disabled"},
+            {"description": "Serve coffee", "status": "enabled"},
+        ]
+    }
 
 
 def test_agui_multiple_messages_to_agent_framework():

@@ -450,11 +450,12 @@ class OpenAIBaseResponsesClient(OpenAIBase, BaseChatClient):
 
         # response format and text config (after additional_properties so user can pass text via additional_properties)
         # Check both chat_options.response_format and additional_properties for response_format
-        if chat_options.response_format is not None:
-            response_format = chat_options.response_format
-        else:
-            response_format = chat_options.additional_properties.get("response_format")
-        text_config = run_options.pop("text", None)
+        response_format: Any = (
+            chat_options.response_format
+            if chat_options.response_format is not None
+            else chat_options.additional_properties.get("response_format")
+        )
+        text_config: Any = run_options.pop("text", None)
         response_format, text_config = self._prepare_response_and_text_format(
             response_format=response_format, text_config=text_config
         )

@@ -62,7 +62,7 @@ async def test_human_in_the_loop_json_decode_error() -> None:
         agent=agent,
         config=AgentConfig(),
     )
-    context.set_messages(messages)
+    context.set_messages(messages, normalize=False)
 
     assert orchestrator.can_handle(context)
 

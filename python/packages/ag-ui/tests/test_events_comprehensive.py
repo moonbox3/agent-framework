@@ -284,14 +284,12 @@ async def test_empty_predict_state_config():
     assert "STATE_DELTA" not in event_types
     assert "STATE_SNAPSHOT" not in event_types
 
-    # Should have: ToolCallStart, ToolCallArgs, ToolCallEnd, ToolCallResult, MessagesSnapshot
-    # MessagesSnapshotEvent is emitted after tool results to track the conversation
+    # Should have: ToolCallStart, ToolCallArgs, ToolCallEnd, ToolCallResult
     assert event_types == [
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
         "TOOL_CALL_RESULT",
-        "MESSAGES_SNAPSHOT",
     ]
 
 

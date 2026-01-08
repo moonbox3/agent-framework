@@ -17,6 +17,10 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 from agent_framework import (
     AgentProtocol,
@@ -30,9 +34,9 @@ from agent_framework import (
 from agent_framework._middleware import extract_and_merge_function_middleware
 from agent_framework._tools import (
     FunctionInvocationConfiguration,
-    _collect_approval_responses,
-    _replace_approval_contents_with_results,
-    _try_execute_function_calls,
+    _collect_approval_responses,  # type: ignore
+    _replace_approval_contents_with_results,  # type: ignore
+    _try_execute_function_calls,  # type: ignore
 )
 
 from ._utils import convert_agui_tools_to_agent_framework, generate_event_id
@@ -70,6 +74,7 @@ class ExecutionContext:
 
         # Lazy-loaded properties
         self._messages = None
+        self._snapshot_messages = None
         self._last_message = None
         self._run_id: str | None = None
         self._thread_id: str | None = None
@@ -78,11 +83,26 @@ class ExecutionContext:
     def messages(self):
         """Get converted Agent Framework messages (lazy loaded)."""
         if self._messages is None:
-            from ._message_adapters import agui_messages_to_agent_framework
+            from ._message_adapters import normalize_agui_input_messages
 
             raw = self.input_data.get("messages", [])
-            self._messages = agui_messages_to_agent_framework(raw)
+            if not isinstance(raw, list):
+                raw = []
+            self._messages, self._snapshot_messages = normalize_agui_input_messages(raw)
         return self._messages
+
+    @property
+    def snapshot_messages(self) -> list[dict[str, Any]]:
+        """Get normalized AG-UI snapshot messages (lazy loaded)."""
+        if self._snapshot_messages is None:
+            if self._messages is None:
+                _ = self.messages
+            else:
+                from ._message_adapters import agent_framework_messages_to_agui, agui_messages_to_snapshot_format
+
+                raw_snapshot = agent_framework_messages_to_agui(self._messages)
+                self._snapshot_messages = agui_messages_to_snapshot_format(raw_snapshot)
+        return self._snapshot_messages or []
 
     @property
     def last_message(self):
@@ -279,8 +299,6 @@ class DefaultOrchestrator(Orchestrator):
             AG-UI events
         """
         from ._events import AgentFrameworkEventBridge
-        from ._message_adapters import agui_messages_to_snapshot_format
-        from ._orchestration._message_hygiene import deduplicate_messages, sanitize_tool_history
         from ._orchestration._state_manager import StateManager
         from ._orchestration._tooling import (
             collect_server_tools,
@@ -308,7 +326,6 @@ class DefaultOrchestrator(Orchestrator):
             predict_state_config=context.config.predict_state_config,
             current_state=current_state,
             skip_text_content=skip_text_content,
-            input_messages=context.input_data.get("messages", []),
             require_confirmation=context.config.require_confirmation,
         )
 
@@ -330,17 +347,18 @@ class DefaultOrchestrator(Orchestrator):
         if current_state:
             thread.metadata["current_state"] = current_state  # type: ignore[attr-defined]
 
-        raw_messages = context.messages or []
-        if not raw_messages:
+        provider_messages = context.messages or []
+        snapshot_messages = context.snapshot_messages
+        if not provider_messages:
             logger.warning("No messages provided in AG-UI input")
             yield event_bridge.create_run_finished_event()
             return
 
-        logger.info(f"Received {len(raw_messages)} raw messages from client")
-        for i, msg in enumerate(raw_messages):
+        logger.info(f"Received {len(provider_messages)} provider messages from client")
+        for i, msg in enumerate(provider_messages):
             role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
             msg_id = getattr(msg, "message_id", None)
-            logger.info(f"  Raw message {i}: role={role}, id={msg_id}")
+            logger.info(f"  Message {i}: role={role}, id={msg_id}")
             if hasattr(msg, "contents") and msg.contents:
                 for j, content in enumerate(msg.contents):
                     content_type = type(content).__name__
@@ -363,15 +381,12 @@ class DefaultOrchestrator(Orchestrator):
                     else:
                         logger.debug(f"    Content {j}: {content_type}")
 
-        sanitized_messages = sanitize_tool_history(raw_messages)
-        provider_messages = deduplicate_messages(sanitized_messages)
-
         if not provider_messages:
             logger.info("No provider-eligible messages after filtering; finishing run without invoking agent.")
             yield event_bridge.create_run_finished_event()
             return
 
-        logger.info(f"Processing {len(provider_messages)} provider messages after sanitization/deduplication")
+        logger.info(f"Processing {len(provider_messages)} provider messages after normalization")
         for i, msg in enumerate(provider_messages):
             role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
             logger.info(f"  Message {i}: role={role}")
@@ -394,6 +409,14 @@ class DefaultOrchestrator(Orchestrator):
                         )
                     else:
                         logger.info(f"    Content {j}: {content_type}")
+
+        pending_tool_calls: list[dict[str, Any]] = []
+        tool_calls_by_id: dict[str, dict[str, Any]] = {}
+        tool_results: list[dict[str, Any]] = []
+        tool_calls_ended: set[str] = set()
+        messages_snapshot_emitted = False
+        accumulated_text_content = ""
+        active_message_id: str | None = None
 
         # Check for FunctionApprovalResponseContent and emit updated state snapshot
         # This ensures the UI shows the approved state (e.g., 2 steps) not the original (3 steps)
@@ -596,6 +619,48 @@ class DefaultOrchestrator(Orchestrator):
 
             _replace_approval_contents_with_results(messages, fcc_todo, normalized_results)  # type: ignore
 
+        def _should_emit_tool_snapshot(tool_name: str | None) -> bool:
+            if not pending_tool_calls or not tool_results:
+                return False
+            if tool_name and context.config.predict_state_config and not context.config.require_confirmation:
+                for config in context.config.predict_state_config.values():
+                    if config["tool"] == tool_name:
+                        logger.info(
+                            f"Skipping intermediate MessagesSnapshotEvent for predictive tool '{tool_name}' "
+                            " - delaying until summary"
+                        )
+                        return False
+            return True
+
+        def _build_messages_snapshot() -> MessagesSnapshotEvent:
+            has_text_content = bool(accumulated_text_content)
+            all_messages = snapshot_messages.copy()
+
+            if pending_tool_calls:
+                tool_call_message_id = (
+                    active_message_id if not has_text_content and active_message_id else generate_event_id()
+                )
+                tool_call_message = {
+                    "id": tool_call_message_id,
+                    "role": "assistant",
+                    "tool_calls": pending_tool_calls.copy(),
+                }
+                all_messages.append(tool_call_message)
+
+            all_messages.extend(tool_results)
+
+            if has_text_content and active_message_id:
+                assistant_text_message = {
+                    "id": active_message_id,
+                    "role": "assistant",
+                    "content": accumulated_text_content,
+                }
+                all_messages.append(assistant_text_message)
+
+            return MessagesSnapshotEvent(
+                messages=all_messages,  # type: ignore[arg-type]
+            )
+
         await _resolve_approval_responses(messages_to_run, server_tools)
 
         async for update in context.agent.run_stream(messages_to_run, **run_kwargs):
@@ -608,6 +673,8 @@ class DefaultOrchestrator(Orchestrator):
                 if has_tool_call and not has_text:
                     tool_message_id = generate_event_id()
                     event_bridge.current_message_id = tool_message_id
+                    active_message_id = tool_message_id
+                    accumulated_text_content = ""
                     logger.info(
                         "[STREAM] Emitting TextMessageStartEvent for tool-only response message_id=%s",
                         tool_message_id,
@@ -616,8 +683,67 @@ class DefaultOrchestrator(Orchestrator):
             events = await event_bridge.from_agent_run_update(update)
             logger.info(f"[STREAM] Update #{update_count} produced {len(events)} events")
             for event in events:
+                if isinstance(event, TextMessageStartEvent):
+                    active_message_id = event.message_id
+                    accumulated_text_content = ""
+                elif isinstance(event, TextMessageContentEvent):
+                    accumulated_text_content += event.delta
+                elif isinstance(event, ToolCallStartEvent):
+                    tool_call_entry = tool_calls_by_id.get(event.tool_call_id)
+                    if tool_call_entry is None:
+                        tool_call_entry = {
+                            "id": event.tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": event.tool_call_name,
+                                "arguments": "",
+                            },
+                        }
+                        pending_tool_calls.append(tool_call_entry)
+                        tool_calls_by_id[event.tool_call_id] = tool_call_entry
+                    else:
+                        tool_call_entry["function"]["name"] = event.tool_call_name
+                elif isinstance(event, ToolCallArgsEvent):
+                    tool_call_entry = tool_calls_by_id.get(event.tool_call_id)
+                    if tool_call_entry is None:
+                        tool_call_entry = {
+                            "id": event.tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "",
+                                "arguments": "",
+                            },
+                        }
+                        pending_tool_calls.append(tool_call_entry)
+                        tool_calls_by_id[event.tool_call_id] = tool_call_entry
+                    tool_call_entry["function"]["arguments"] += event.delta
+                elif isinstance(event, ToolCallEndEvent):
+                    tool_calls_ended.add(event.tool_call_id)
+                elif isinstance(event, ToolCallResultEvent):
+                    tool_results.append(
+                        {
+                            "id": event.message_id,
+                            "role": "tool",
+                            "toolCallId": event.tool_call_id,
+                            "content": event.content,
+                        }
+                    )
                 logger.info(f"[STREAM] Yielding event: {type(event).__name__}")
                 yield event
+                if isinstance(event, ToolCallResultEvent):
+                    tool_name = tool_calls_by_id.get(event.tool_call_id, {}).get("function", {}).get("name")
+                    if _should_emit_tool_snapshot(tool_name):
+                        messages_snapshot_emitted = True
+                        messages_snapshot = _build_messages_snapshot()
+                        logger.info(f"[STREAM] Yielding event: {type(messages_snapshot).__name__}")
+                        yield messages_snapshot
+                elif isinstance(event, ToolCallEndEvent):
+                    tool_name = tool_calls_by_id.get(event.tool_call_id, {}).get("function", {}).get("name")
+                    if tool_name == "confirm_changes":
+                        messages_snapshot_emitted = True
+                        messages_snapshot = _build_messages_snapshot()
+                        logger.info(f"[STREAM] Yielding event: {type(messages_snapshot).__name__}")
+                        yield messages_snapshot
 
         logger.info(f"[STREAM] Agent stream completed. Total updates: {update_count}")
 
@@ -630,10 +756,8 @@ class DefaultOrchestrator(Orchestrator):
             yield event_bridge.create_run_finished_event()
             return
 
-        if event_bridge.pending_tool_calls:
-            pending_without_end = [
-                tc for tc in event_bridge.pending_tool_calls if tc.get("id") not in event_bridge.tool_calls_ended
-            ]
+        if pending_tool_calls:
+            pending_without_end = [tc for tc in pending_tool_calls if tc.get("id") not in tool_calls_ended]
             if pending_without_end:
                 logger.info(
                     "Found %s pending tool calls without end event - emitting ToolCallEndEvent",
@@ -642,8 +766,6 @@ class DefaultOrchestrator(Orchestrator):
                 for tool_call in pending_without_end:
                     tool_call_id = tool_call.get("id")
                     if tool_call_id:
-                        from ag_ui.core import ToolCallEndEvent
-
                         end_event = ToolCallEndEvent(tool_call_id=tool_call_id)
                         logger.info(f"Emitting ToolCallEndEvent for declaration-only tool call '{tool_call_id}'")
                         yield end_event
@@ -680,58 +802,55 @@ class DefaultOrchestrator(Orchestrator):
             logger.info(f"[FINALIZE] Emitting TextMessageEndEvent for message_id={event_bridge.current_message_id}")
             yield event_bridge.create_message_end_event(event_bridge.current_message_id)
 
-            has_text_content = bool(event_bridge.accumulated_text_content)
-            assistant_text_message = {
-                "id": event_bridge.current_message_id,
-                "role": "assistant",
-                "content": event_bridge.accumulated_text_content,
-            }
+            has_text_content = bool(accumulated_text_content)
+            all_messages = snapshot_messages.copy()
 
-            converted_input_messages = agui_messages_to_snapshot_format(event_bridge.input_messages)
-            all_messages = converted_input_messages.copy()
-
-            if event_bridge.pending_tool_calls:
+            if pending_tool_calls:
                 tool_call_message = {
                     "id": event_bridge.current_message_id if not has_text_content else generate_event_id(),
                     "role": "assistant",
-                    "tool_calls": event_bridge.pending_tool_calls.copy(),
+                    "tool_calls": pending_tool_calls.copy(),
                 }
                 all_messages.append(tool_call_message)
 
-            all_messages.extend(event_bridge.tool_results.copy())
-            if has_text_content:
-                all_messages.append(assistant_text_message)
+            all_messages.extend(tool_results)
+            if has_text_content and active_message_id:
+                all_messages.append(
+                    {
+                        "id": active_message_id,
+                        "role": "assistant",
+                        "content": accumulated_text_content,
+                    }
+                )
 
             messages_snapshot = MessagesSnapshotEvent(
                 messages=all_messages,  # type: ignore[arg-type]
             )
+            messages_snapshot_emitted = True
             logger.info(
-                "[FINALIZE] Emitting MessagesSnapshotEvent with %s messages (text content length: %s)",
-                len(all_messages),
-                len(event_bridge.accumulated_text_content),
+                f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(all_messages)} messages "
+                f"(text content length: {len(accumulated_text_content)})"
             )
             yield messages_snapshot
         else:
             logger.info("[FINALIZE] No current_message_id - skipping TextMessageEndEvent")
-            if not event_bridge.messages_snapshot_emitted and (
-                event_bridge.pending_tool_calls or event_bridge.tool_results
-            ):
-                converted_input_messages = agui_messages_to_snapshot_format(event_bridge.input_messages)
-                all_messages = converted_input_messages.copy()
+            if not messages_snapshot_emitted and (pending_tool_calls or tool_results):
+                all_messages = snapshot_messages.copy()
 
-                if event_bridge.pending_tool_calls:
+                if pending_tool_calls:
                     tool_call_message = {
                         "id": generate_event_id(),
                         "role": "assistant",
-                        "tool_calls": event_bridge.pending_tool_calls.copy(),
+                        "tool_calls": pending_tool_calls.copy(),
                     }
                     all_messages.append(tool_call_message)
 
-                all_messages.extend(event_bridge.tool_results.copy())
+                all_messages.extend(tool_results)
 
                 messages_snapshot = MessagesSnapshotEvent(
                     messages=all_messages,  # type: ignore[arg-type]
                 )
+                messages_snapshot_emitted = True
                 logger.info(f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(all_messages)} messages (tool-only)")
                 yield messages_snapshot
 

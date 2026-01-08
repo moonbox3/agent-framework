@@ -48,6 +48,7 @@ class AgentFrameworkEventBridge:
         current_state: dict[str, Any] | None = None,
         skip_text_content: bool = False,
         require_confirmation: bool = True,
+        approval_tool_name: str | None = None,
     ) -> None:
         """
         Initialize the event bridge.
@@ -71,6 +72,7 @@ class AgentFrameworkEventBridge:
         self.pending_state_updates: dict[str, Any] = {}  # Track updates from tool calls
         self.skip_text_content = skip_text_content
         self.require_confirmation = require_confirmation
+        self.approval_tool_name = approval_tool_name
 
         # For predictive state updates: accumulate streaming arguments
         self.streaming_tool_args: str = ""  # Accumulated JSON string
@@ -370,7 +372,14 @@ class AgentFrameworkEventBridge:
             self.current_tool_call_name = None
         return events
 
-    def _emit_confirm_changes_tool_call(self) -> list[BaseEvent]:
+    def _emit_confirm_changes_tool_call(self, function_call: FunctionCallContent | None = None) -> list[BaseEvent]:
+        """Emit a confirm_changes tool call for Dojo UI compatibility.
+
+        Args:
+            function_call: Optional function call that needs confirmation.
+                If provided, includes function info in the confirm_changes args
+                so Dojo UI can display what's being confirmed.
+        """
         events: list[BaseEvent] = []
         confirm_call_id = generate_event_id()
         logger.info("Emitting confirm_changes tool call for predictive update")
@@ -378,12 +387,31 @@ class AgentFrameworkEventBridge:
         confirm_start = ToolCallStartEvent(
             tool_call_id=confirm_call_id,
             tool_call_name="confirm_changes",
+            parent_message_id=self.current_message_id,
         )
         events.append(confirm_start)
 
+        # Include function info if this is for a function approval
+        # This helps Dojo UI display meaningful confirmation info
+        if function_call:
+            args_dict = {
+                "function_name": function_call.name,
+                "function_call_id": function_call.call_id,
+                "function_arguments": function_call.parse_arguments() or {},
+                "steps": [
+                    {
+                        "description": f"Execute {function_call.name}",
+                        "status": "enabled",
+                    }
+                ],
+            }
+            args_json = json.dumps(args_dict)
+        else:
+            args_json = "{}"
+
         confirm_args = ToolCallArgsEvent(
             tool_call_id=confirm_call_id,
-            delta="{}",
+            delta=args_json,
         )
         events.append(confirm_args)
 
@@ -391,6 +419,49 @@ class AgentFrameworkEventBridge:
             tool_call_id=confirm_call_id,
         )
         events.append(confirm_end)
+
+        self.should_stop_after_confirm = True
+        logger.info("Set flag to stop run after confirm_changes")
+        return events
+
+    def _emit_function_approval_tool_call(self, function_call: FunctionCallContent) -> list[BaseEvent]:
+        """Emit a tool call that can drive UI approval for function requests."""
+        tool_call_name = "confirm_changes"
+        if self.approval_tool_name and self.approval_tool_name != function_call.name:
+            tool_call_name = self.approval_tool_name
+
+        tool_call_id = generate_event_id()
+        tool_start = ToolCallStartEvent(
+            tool_call_id=tool_call_id,
+            tool_call_name=tool_call_name,
+            parent_message_id=self.current_message_id,
+        )
+        events: list[BaseEvent] = [tool_start]
+
+        args_dict = {
+            "function_name": function_call.name,
+            "function_call_id": function_call.call_id,
+            "function_arguments": function_call.parse_arguments() or {},
+            "steps": [
+                {
+                    "description": f"Execute {function_call.name}",
+                    "status": "enabled",
+                }
+            ],
+        }
+        args_json = json.dumps(args_dict)
+
+        events.append(
+            ToolCallArgsEvent(
+                tool_call_id=tool_call_id,
+                delta=args_json,
+            )
+        )
+        events.append(
+            ToolCallEndEvent(
+                tool_call_id=tool_call_id,
+            )
+        )
 
         self.should_stop_after_confirm = True
         logger.info("Set flag to stop run after confirm_changes")
@@ -445,6 +516,7 @@ class AgentFrameworkEventBridge:
             logger.info(f"Emitting ToolCallEndEvent for approval-required tool '{content.function_call.call_id}'")
             events.append(end_event)
 
+        # Emit the function_approval_request custom event for UI implementations that support it
         approval_event = CustomEvent(
             name="function_approval_request",
             value={
@@ -458,6 +530,14 @@ class AgentFrameworkEventBridge:
         )
         logger.info(f"Emitting function_approval_request custom event for '{content.function_call.name}'")
         events.append(approval_event)
+
+        # Emit a UI-friendly approval tool call for function approvals.
+        if self.require_confirmation:
+            events.extend(self._emit_function_approval_tool_call(content.function_call))
+
+        # Signal orchestrator to stop the run and wait for user approval response
+        self.should_stop_after_confirm = True
+        logger.info("Set flag to stop run - waiting for function approval response")
         return events
 
     def create_run_started_event(self) -> RunStartedEvent:

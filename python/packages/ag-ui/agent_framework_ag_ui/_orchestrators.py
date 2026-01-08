@@ -159,6 +159,34 @@ def _tool_calls_match_state(provider_messages: list[Any], state_manager: "StateM
     return True
 
 
+def _schema_has_steps(schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    steps_schema = properties.get("steps")
+    if not isinstance(steps_schema, dict):
+        return False
+    return steps_schema.get("type") == "array"
+
+
+def _select_approval_tool_name(client_tools: list[Any] | None) -> str | None:
+    if not client_tools:
+        return None
+    for tool in client_tools:
+        tool_name = getattr(tool, "name", None)
+        if not tool_name:
+            continue
+        params_fn = getattr(tool, "parameters", None)
+        if not callable(params_fn):
+            continue
+        schema = params_fn()
+        if _schema_has_steps(schema):
+            return str(tool_name)
+    return None
+
+
 def _select_messages_to_run(provider_messages: list[Any], state_manager: "StateManager") -> list[Any]:
     if not provider_messages:
         return []
@@ -238,6 +266,53 @@ def _collect_approved_state_snapshots(
                     events.append(StateSnapshotEvent(snapshot=current_state))
                     break
     return events
+
+
+def _latest_approval_response(messages: list[Any]) -> FunctionApprovalResponseContent | None:
+    if not messages:
+        return None
+    last_message = messages[-1]
+    for content in last_message.contents or []:
+        if type(content) is FunctionApprovalResponseContent:
+            return content
+    return None
+
+
+def _approval_steps(approval: FunctionApprovalResponseContent) -> list[Any]:
+    state_args: Any | None = None
+    if approval.additional_properties:
+        state_args = approval.additional_properties.get("ag_ui_state_args")
+    if isinstance(state_args, dict):
+        steps = state_args.get("steps")
+        if isinstance(steps, list):
+            return steps
+
+    if approval.function_call:
+        parsed_args = approval.function_call.parse_arguments()
+        if isinstance(parsed_args, dict):
+            steps = parsed_args.get("steps")
+            if isinstance(steps, list):
+                return steps
+
+    return []
+
+
+def _is_step_based_approval(
+    approval: FunctionApprovalResponseContent,
+    predict_state_config: dict[str, dict[str, str]],
+) -> bool:
+    steps = _approval_steps(approval)
+    if steps:
+        return True
+    if not approval.function_call:
+        return False
+    if not predict_state_config:
+        return False
+    tool_name = approval.function_call.name
+    for config in predict_state_config.values():
+        if config.get("tool") == tool_name and config.get("tool_argument") == "steps":
+            return True
+    return False
 
 
 class ExecutionContext:
@@ -504,6 +579,9 @@ class DefaultOrchestrator(Orchestrator):
             response_format = context.agent.chat_options.response_format
         skip_text_content = response_format is not None
 
+        client_tools = convert_agui_tools_to_agent_framework(context.input_data.get("tools"))
+        approval_tool_name = _select_approval_tool_name(client_tools)
+
         state_manager = StateManager(
             state_schema=context.config.state_schema,
             predict_state_config=context.config.predict_state_config,
@@ -518,6 +596,7 @@ class DefaultOrchestrator(Orchestrator):
             current_state=current_state,
             skip_text_content=skip_text_content,
             require_confirmation=context.config.require_confirmation,
+            approval_tool_name=approval_tool_name,
         )
 
         yield event_bridge.create_run_started_event()
@@ -592,7 +671,6 @@ class DefaultOrchestrator(Orchestrator):
 
         messages_to_run = _select_messages_to_run(provider_messages, state_manager)
 
-        client_tools = convert_agui_tools_to_agent_framework(context.input_data.get("tools"))
         logger.info(f"[TOOLS] Client sent {len(client_tools) if client_tools else 0} tools")
         if client_tools:
             for tool in client_tools:
@@ -707,7 +785,37 @@ class DefaultOrchestrator(Orchestrator):
                 messages=all_messages,  # type: ignore[arg-type]
             )
 
-        await _resolve_approval_responses(messages_to_run, server_tools)
+        # Use tools_param if available (includes client tools), otherwise fall back to server_tools
+        # This ensures both server tools AND client tools can be executed after approval
+        tools_for_approval = tools_param if tools_param is not None else server_tools
+        latest_approval = _latest_approval_response(messages_to_run)
+        await _resolve_approval_responses(messages_to_run, tools_for_approval)
+
+        if latest_approval and _is_step_based_approval(latest_approval, context.config.predict_state_config):
+            from ._confirmation_strategies import DefaultConfirmationStrategy
+
+            strategy = context.confirmation_strategy
+            if strategy is None:
+                strategy = DefaultConfirmationStrategy()
+
+            steps = _approval_steps(latest_approval)
+            if steps:
+                if latest_approval.approved:
+                    confirmation_message = strategy.on_approval_accepted(steps)
+                else:
+                    confirmation_message = strategy.on_approval_rejected(steps)
+            else:
+                if latest_approval.approved:
+                    confirmation_message = strategy.on_state_confirmed()
+                else:
+                    confirmation_message = strategy.on_state_rejected()
+
+            message_id = generate_event_id()
+            yield TextMessageStartEvent(message_id=message_id, role="assistant")
+            yield TextMessageContentEvent(message_id=message_id, delta=confirmation_message)
+            yield TextMessageEndEvent(message_id=message_id)
+            yield event_bridge.create_run_finished_event()
+            return
 
         async for update in context.agent.run_stream(messages_to_run, **run_kwargs):
             update_count += 1
@@ -772,7 +880,7 @@ class DefaultOrchestrator(Orchestrator):
         logger.info(f"[STREAM] Agent stream completed. Total updates: {update_count}")
 
         if event_bridge.should_stop_after_confirm:
-            logger.info("Stopping run after confirm_changes - waiting for user response")
+            logger.info("Stopping run - waiting for user approval/confirmation response")
             if event_bridge.current_message_id:
                 logger.info(f"[CONFIRM] Emitting TextMessageEndEvent for message_id={event_bridge.current_message_id}")
                 yield event_bridge.create_message_end_event(event_bridge.current_message_id)

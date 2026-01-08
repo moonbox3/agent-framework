@@ -179,6 +179,155 @@ def test_agui_tool_approval_updates_tool_call_arguments():
     }
 
 
+def test_agui_tool_approval_from_confirm_changes_maps_to_function_call():
+    """Confirm_changes approvals map back to the original tool call when metadata is present."""
+    messages_input = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_tool",
+                    "type": "function",
+                    "function": {"name": "get_datetime", "arguments": {}},
+                },
+                {
+                    "id": "call_confirm",
+                    "type": "function",
+                    "function": {
+                        "name": "confirm_changes",
+                        "arguments": {"function_call_id": "call_tool"},
+                    },
+                },
+            ],
+            "id": "msg_1",
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({"accepted": True, "function_call_id": "call_tool"}),
+            "toolCallId": "call_confirm",
+            "id": "msg_2",
+        },
+    ]
+
+    messages = agui_messages_to_agent_framework(messages_input)
+
+    from agent_framework import FunctionApprovalResponseContent
+
+    approval_msg = messages[1]
+    approval_content = next(
+        content for content in approval_msg.contents if isinstance(content, FunctionApprovalResponseContent)
+    )
+
+    assert approval_content.function_call.call_id == "call_tool"
+    assert approval_content.function_call.name == "get_datetime"
+    assert approval_content.function_call.parse_arguments() == {}
+    assert messages_input[0]["tool_calls"][0]["function"]["arguments"] == {}
+
+
+def test_agui_tool_approval_from_confirm_changes_falls_back_to_sibling_call():
+    """Confirm_changes approvals map to the only sibling tool call when metadata is missing."""
+    messages_input = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_tool",
+                    "type": "function",
+                    "function": {"name": "get_datetime", "arguments": {}},
+                },
+                {
+                    "id": "call_confirm",
+                    "type": "function",
+                    "function": {"name": "confirm_changes", "arguments": {}},
+                },
+            ],
+            "id": "msg_1",
+        },
+        {
+            "role": "tool",
+            "content": json.dumps(
+                {
+                    "accepted": True,
+                    "steps": [{"description": "Approve get_datetime", "status": "enabled"}],
+                }
+            ),
+            "toolCallId": "call_confirm",
+            "id": "msg_2",
+        },
+    ]
+
+    messages = agui_messages_to_agent_framework(messages_input)
+
+    from agent_framework import FunctionApprovalResponseContent
+
+    approval_msg = messages[1]
+    approval_content = next(
+        content for content in approval_msg.contents if isinstance(content, FunctionApprovalResponseContent)
+    )
+
+    assert approval_content.function_call.call_id == "call_tool"
+    assert approval_content.function_call.name == "get_datetime"
+    assert approval_content.function_call.parse_arguments() == {}
+    assert messages_input[0]["tool_calls"][0]["function"]["arguments"] == {}
+
+
+def test_agui_tool_approval_from_generate_task_steps_maps_to_function_call():
+    """Approval tool payloads map to the referenced function call when function_call_id is present."""
+    messages_input = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_tool",
+                    "type": "function",
+                    "function": {"name": "get_datetime", "arguments": {}},
+                },
+                {
+                    "id": "call_steps",
+                    "type": "function",
+                    "function": {
+                        "name": "generate_task_steps",
+                        "arguments": {
+                            "function_name": "get_datetime",
+                            "function_call_id": "call_tool",
+                            "function_arguments": {},
+                            "steps": [{"description": "Execute get_datetime", "status": "enabled"}],
+                        },
+                    },
+                },
+            ],
+            "id": "msg_1",
+        },
+        {
+            "role": "tool",
+            "content": json.dumps(
+                {
+                    "accepted": True,
+                    "steps": [{"description": "Execute get_datetime", "status": "enabled"}],
+                }
+            ),
+            "toolCallId": "call_steps",
+            "id": "msg_2",
+        },
+    ]
+
+    messages = agui_messages_to_agent_framework(messages_input)
+
+    from agent_framework import FunctionApprovalResponseContent
+
+    approval_msg = messages[1]
+    approval_content = next(
+        content for content in approval_msg.contents if isinstance(content, FunctionApprovalResponseContent)
+    )
+
+    assert approval_content.function_call.call_id == "call_tool"
+    assert approval_content.function_call.name == "get_datetime"
+    assert approval_content.function_call.parse_arguments() == {}
+
+
 def test_agui_multiple_messages_to_agent_framework():
     """Test converting multiple AG-UI messages."""
     messages_input = [

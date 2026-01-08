@@ -75,10 +75,15 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
 
         if role_value == "user":
             approval_call_ids: set[str] = set()
+            approval_accepted: bool | None = None
             for content in msg.contents or []:
                 if type(content) is FunctionApprovalResponseContent:
                     if content.function_call and content.function_call.call_id:
                         approval_call_ids.add(str(content.function_call.call_id))
+                    if approval_accepted is None:
+                        approval_accepted = bool(content.approved)
+                    else:
+                        approval_accepted = approval_accepted and bool(content.approved)
 
             if approval_call_ids and pending_tool_call_ids:
                 pending_tool_call_ids -= approval_call_ids
@@ -86,6 +91,22 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                     f"FunctionApprovalResponseContent found for call_ids={sorted(approval_call_ids)} - "
                     "framework will handle execution"
                 )
+
+            if pending_confirm_changes_id and approval_accepted is not None:
+                logger.info(f"Injecting synthetic tool result for confirm_changes call_id={pending_confirm_changes_id}")
+                synthetic_result = ChatMessage(
+                    role="tool",
+                    contents=[
+                        FunctionResultContent(
+                            call_id=pending_confirm_changes_id,
+                            result="Confirmed" if approval_accepted else "Rejected",
+                        )
+                    ],
+                )
+                sanitized.append(synthetic_result)
+                if pending_tool_call_ids:
+                    pending_tool_call_ids.discard(pending_confirm_changes_id)
+                pending_confirm_changes_id = None
 
             if pending_confirm_changes_id:
                 user_text = ""
@@ -272,6 +293,84 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                     function_payload_dict["arguments"] = modified_args
                 return
 
+    def _find_matching_func_call(call_id: str) -> FunctionCallContent | None:
+        for prev_msg in result:
+            role_val = prev_msg.role.value if hasattr(prev_msg.role, "value") else str(prev_msg.role)
+            if role_val != "assistant":
+                continue
+            for content in prev_msg.contents or []:
+                if isinstance(content, FunctionCallContent):
+                    if content.call_id == call_id and content.name != "confirm_changes":
+                        return content
+        return None
+
+    def _parse_arguments(arguments: Any) -> dict[str, Any] | None:
+        if isinstance(arguments, dict):
+            return arguments
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    def _resolve_approval_call_id(tool_call_id: str, parsed_payload: dict[str, Any] | None) -> str | None:
+        if parsed_payload:
+            explicit_call_id = parsed_payload.get("function_call_id")
+            if explicit_call_id:
+                return str(explicit_call_id)
+
+        for prev_msg in result:
+            role_val = prev_msg.role.value if hasattr(prev_msg.role, "value") else str(prev_msg.role)
+            if role_val != "assistant":
+                continue
+            direct_call = None
+            confirm_call = None
+            sibling_calls: list[FunctionCallContent] = []
+            for content in prev_msg.contents or []:
+                if not isinstance(content, FunctionCallContent):
+                    continue
+                if content.call_id == tool_call_id:
+                    direct_call = content
+                if content.name == "confirm_changes" and content.call_id == tool_call_id:
+                    confirm_call = content
+                elif content.name != "confirm_changes":
+                    sibling_calls.append(content)
+
+            if direct_call:
+                direct_args = direct_call.parse_arguments() or {}
+                if isinstance(direct_args, dict):
+                    explicit_call_id = direct_args.get("function_call_id")
+                    if explicit_call_id:
+                        return str(explicit_call_id)
+
+            if not confirm_call:
+                continue
+
+            confirm_args = confirm_call.parse_arguments() or {}
+            if isinstance(confirm_args, dict):
+                explicit_call_id = confirm_args.get("function_call_id")
+                if explicit_call_id:
+                    return str(explicit_call_id)
+
+            if len(sibling_calls) == 1 and sibling_calls[0].call_id:
+                return str(sibling_calls[0].call_id)
+
+        return None
+
+    def _filter_modified_args(
+        modified_args: dict[str, Any],
+        original_args: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not modified_args:
+            return {}
+        if not isinstance(original_args, dict) or not original_args:
+            return {}
+        allowed_keys = set(original_args.keys())
+        return {key: value for key, value in modified_args.items() if key in allowed_keys}
+
     result: list[ChatMessage] = []
     for msg in messages:
         # Handle standard tool result messages early (role="tool") to preserve provider invariants
@@ -319,17 +418,11 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                 logger = logging.getLogger(__name__)
                 logger.info(f"Approval payload received: {parsed}")
 
-                # Find the function call that matches this tool_call_id
-                matching_func_call = None
-                for prev_msg in result:
-                    role_val = prev_msg.role.value if hasattr(prev_msg.role, "value") else str(prev_msg.role)
-                    if role_val != "assistant":
-                        continue
-                    for content in prev_msg.contents or []:
-                        if isinstance(content, FunctionCallContent):
-                            if content.call_id == tool_call_id and content.name != "confirm_changes":
-                                matching_func_call = content
-                                break
+                approval_call_id = tool_call_id
+                resolved_call_id = _resolve_approval_call_id(tool_call_id, parsed)
+                if resolved_call_id:
+                    approval_call_id = resolved_call_id
+                matching_func_call = _find_matching_func_call(approval_call_id)
 
                 if matching_func_call:
                     # Remove any existing tool result for this call_id since the framework
@@ -341,7 +434,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                         if not (
                             (m.role.value if hasattr(m.role, "value") else str(m.role)) == "tool"
                             and any(
-                                isinstance(c, FunctionResultContent) and c.call_id == tool_call_id
+                                isinstance(c, FunctionResultContent) and c.call_id == approval_call_id
                                 for c in (m.contents or [])
                             )
                         )
@@ -350,19 +443,21 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                     # Check if the approval payload contains modified arguments
                     # The UI sends back the modified state (e.g., deselected steps) in the approval payload
                     modified_args = {k: v for k, v in parsed.items() if k != "accepted"} if parsed else {}
+                    original_args = matching_func_call.parse_arguments()
+                    filtered_args = _filter_modified_args(modified_args, original_args)
                     state_args: dict[str, Any] | None = None
-                    if modified_args:
-                        original_args = matching_func_call.parse_arguments() or {}
+                    if filtered_args:
+                        original_args = original_args or {}
                         merged_args: dict[str, Any]
                         if isinstance(original_args, dict) and original_args:
-                            merged_args = {**original_args, **modified_args}
+                            merged_args = {**original_args, **filtered_args}
                         else:
-                            merged_args = dict(modified_args)
+                            merged_args = dict(filtered_args)
 
-                        if isinstance(modified_args.get("steps"), list):
+                        if isinstance(filtered_args.get("steps"), list):
                             original_steps = original_args.get("steps") if isinstance(original_args, dict) else None
                             if isinstance(original_steps, list):
-                                approved_steps_list: list[Any] = list(modified_args.get("steps") or [])
+                                approved_steps_list = list(filtered_args.get("steps") or [])
                                 approved_by_description: dict[str, dict[str, Any]] = {}
                                 for step_item in approved_steps_list:
                                     if isinstance(step_item, dict):
@@ -395,14 +490,14 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                             json.dumps(merged_args) if isinstance(matching_func_call.arguments, str) else merged_args
                         )
                         matching_func_call.arguments = updated_args
-                        _update_tool_call_arguments(messages, str(tool_call_id), merged_args)
+                        _update_tool_call_arguments(messages, str(approval_call_id), merged_args)
                         # Create a new FunctionCallContent with the modified arguments
                         func_call_for_approval = FunctionCallContent(
                             call_id=matching_func_call.call_id,
                             name=matching_func_call.name,
-                            arguments=json.dumps(modified_args),
+                            arguments=json.dumps(filtered_args),
                         )
-                        logger.info(f"Using modified arguments from approval: {modified_args}")
+                        logger.info(f"Using modified arguments from approval: {filtered_args}")
                     else:
                         # No modified arguments - use the original function call
                         func_call_for_approval = matching_func_call
@@ -410,7 +505,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                     # Create FunctionApprovalResponseContent for the agent framework
                     approval_response = FunctionApprovalResponseContent(
                         approved=accepted,
-                        id=str(tool_call_id),
+                        id=str(approval_call_id),
                         function_call=func_call_for_approval,
                         additional_properties={"ag_ui_state_args": state_args} if state_args else None,
                     )

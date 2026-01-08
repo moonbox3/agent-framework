@@ -231,7 +231,12 @@ async def test_function_approval_request_basic():
     """Test FunctionApprovalRequestContent conversion."""
     from agent_framework_ag_ui._events import AgentFrameworkEventBridge
 
-    bridge = AgentFrameworkEventBridge(run_id="test_run", thread_id="test_thread")
+    # Set require_confirmation=False to test just the function_approval_request event
+    bridge = AgentFrameworkEventBridge(
+        run_id="test_run",
+        thread_id="test_thread",
+        require_confirmation=False,
+    )
 
     func_call = FunctionCallContent(
         call_id="call_123",

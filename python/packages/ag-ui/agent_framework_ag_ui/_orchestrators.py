@@ -44,9 +44,200 @@ from ._utils import convert_agui_tools_to_agent_framework, generate_event_id
 if TYPE_CHECKING:
     from ._agent import AgentConfig
     from ._confirmation_strategies import ConfirmationStrategy
+    from ._events import AgentFrameworkEventBridge
+    from ._orchestration._state_manager import StateManager
 
 
 logger = logging.getLogger(__name__)
+
+
+def _role_value(message: Any) -> str:
+    role = getattr(message, "role", None)
+    if role is None:
+        return ""
+    if hasattr(role, "value"):
+        return str(role.value)
+    return str(role)
+
+
+def _pending_tool_call_ids(messages: list[Any]) -> set[str]:
+    pending_ids: set[str] = set()
+    resolved_ids: set[str] = set()
+    for msg in messages:
+        for content in msg.contents or []:
+            if isinstance(content, FunctionCallContent) and content.call_id:
+                pending_ids.add(str(content.call_id))
+            elif isinstance(content, FunctionResultContent) and content.call_id:
+                resolved_ids.add(str(content.call_id))
+    return pending_ids - resolved_ids
+
+
+def _is_state_context_message(message: Any) -> bool:
+    if _role_value(message) != "system":
+        return False
+    for content in message.contents or []:
+        if isinstance(content, TextContent) and content.text.startswith("Current state of the application:"):
+            return True
+    return False
+
+
+def _ensure_tool_call_entry(
+    tool_call_id: str,
+    tool_calls_by_id: dict[str, dict[str, Any]],
+    pending_tool_calls: list[dict[str, Any]],
+) -> dict[str, Any]:
+    entry = tool_calls_by_id.get(tool_call_id)
+    if entry is None:
+        entry = {
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "",
+                "arguments": "",
+            },
+        }
+        tool_calls_by_id[tool_call_id] = entry
+        pending_tool_calls.append(entry)
+    return entry
+
+
+def _tool_name_for_call_id(tool_calls_by_id: dict[str, dict[str, Any]], tool_call_id: str) -> str | None:
+    entry = tool_calls_by_id.get(tool_call_id)
+    if not entry:
+        return None
+    function = entry.get("function")
+    if not isinstance(function, dict):
+        return None
+    name = function.get("name")
+    return str(name) if name else None
+
+
+def _tool_calls_match_state(provider_messages: list[Any], state_manager: "StateManager") -> bool:
+    if not state_manager.predict_state_config or not state_manager.current_state:
+        return False
+
+    def _parse_args(arguments: Any) -> dict[str, Any] | None:
+        if isinstance(arguments, dict):
+            return arguments
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    for state_key, config in state_manager.predict_state_config.items():
+        tool_name = config["tool"]
+        tool_arg_name = config["tool_argument"]
+        tool_args: dict[str, Any] | None = None
+
+        for msg in reversed(provider_messages):
+            if _role_value(msg) != "assistant":
+                continue
+            for content in msg.contents or []:
+                if isinstance(content, FunctionCallContent) and content.name == tool_name:
+                    tool_args = _parse_args(content.arguments)
+                    break
+            if tool_args is not None:
+                break
+
+        if not tool_args:
+            return False
+
+        if tool_arg_name == "*":
+            state_value = tool_args
+        elif tool_arg_name in tool_args:
+            state_value = tool_args[tool_arg_name]
+        else:
+            return False
+
+        if state_manager.current_state.get(state_key) != state_value:
+            return False
+
+    return True
+
+
+def _select_messages_to_run(provider_messages: list[Any], state_manager: "StateManager") -> list[Any]:
+    if not provider_messages:
+        return []
+
+    is_new_user_turn = _role_value(provider_messages[-1]) == "user"
+    conversation_has_tool_calls = _tool_calls_match_state(provider_messages, state_manager)
+    state_context_msg = state_manager.state_context_message(
+        is_new_user_turn=is_new_user_turn, conversation_has_tool_calls=conversation_has_tool_calls
+    )
+    if not state_context_msg:
+        return list(provider_messages)
+
+    messages_to_run = [msg for msg in provider_messages if not _is_state_context_message(msg)]
+    if _pending_tool_call_ids(messages_to_run):
+        return messages_to_run
+
+    insert_index = len(messages_to_run) - 1 if is_new_user_turn else len(messages_to_run)
+    if insert_index < 0:
+        insert_index = 0
+    messages_to_run.insert(insert_index, state_context_msg)
+    return messages_to_run
+
+
+def _build_safe_metadata(thread_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not thread_metadata:
+        return {}
+    safe_metadata: dict[str, Any] = {}
+    for key, value in thread_metadata.items():
+        value_str = value if isinstance(value, str) else json.dumps(value)
+        if len(value_str) > 512:
+            value_str = value_str[:512]
+        safe_metadata[key] = value_str
+    return safe_metadata
+
+
+def _collect_approved_state_snapshots(
+    provider_messages: list[Any],
+    predict_state_config: dict[str, dict[str, str]],
+    current_state: dict[str, Any],
+    event_bridge: "AgentFrameworkEventBridge",
+) -> list[StateSnapshotEvent]:
+    if not predict_state_config:
+        return []
+
+    events: list[StateSnapshotEvent] = []
+    for msg in provider_messages:
+        if _role_value(msg) != "user":
+            continue
+        for content in msg.contents or []:
+            if type(content) is FunctionApprovalResponseContent:
+                if not content.function_call or not content.approved:
+                    continue
+                parsed_args = content.function_call.parse_arguments()
+                state_args = None
+                if content.additional_properties:
+                    state_args = content.additional_properties.get("ag_ui_state_args")
+                if not isinstance(state_args, dict):
+                    state_args = parsed_args
+                if not state_args:
+                    continue
+                for state_key, config in predict_state_config.items():
+                    if config["tool"] != content.function_call.name:
+                        continue
+                    tool_arg_name = config["tool_argument"]
+                    if tool_arg_name == "*":
+                        state_value = state_args
+                    elif isinstance(state_args, dict) and tool_arg_name in state_args:
+                        state_value = state_args[tool_arg_name]
+                    else:
+                        continue
+                    current_state[state_key] = state_value
+                    event_bridge.current_state[state_key] = state_value
+                    logger.info(
+                        f"Emitting StateSnapshotEvent for approved state key '{state_key}' "
+                        f"with {len(state_value) if isinstance(state_value, list) else 'N/A'} items"
+                    )
+                    events.append(StateSnapshotEvent(snapshot=current_state))
+                    break
+    return events
 
 
 class ExecutionContext:
@@ -356,7 +547,7 @@ class DefaultOrchestrator(Orchestrator):
 
         logger.info(f"Received {len(provider_messages)} provider messages from client")
         for i, msg in enumerate(provider_messages):
-            role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+            role = _role_value(msg)
             msg_id = getattr(msg, "message_id", None)
             logger.info(f"  Message {i}: role={role}, id={msg_id}")
             if hasattr(msg, "contents") and msg.contents:
@@ -381,35 +572,6 @@ class DefaultOrchestrator(Orchestrator):
                     else:
                         logger.debug(f"    Content {j}: {content_type}")
 
-        if not provider_messages:
-            logger.info("No provider-eligible messages after filtering; finishing run without invoking agent.")
-            yield event_bridge.create_run_finished_event()
-            return
-
-        logger.info(f"Processing {len(provider_messages)} provider messages after normalization")
-        for i, msg in enumerate(provider_messages):
-            role = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-            logger.info(f"  Message {i}: role={role}")
-            if hasattr(msg, "contents") and msg.contents:
-                for j, content in enumerate(msg.contents):
-                    content_type = type(content).__name__
-                    if isinstance(content, TextContent):
-                        logger.info(f"    Content {j}: {content_type} - text_length={len(content.text)}")
-                    elif isinstance(content, FunctionCallContent):
-                        arg_length = len(str(content.arguments)) if content.arguments else 0
-                        logger.info("    Content %s: %s - %s args_length=%s", j, content_type, content.name, arg_length)
-                    elif isinstance(content, FunctionResultContent):
-                        result_preview = type(content.result).__name__ if content.result is not None else "None"
-                        logger.info(
-                            "    Content %s: %s - call_id=%s, result_type=%s",
-                            j,
-                            content_type,
-                            content.call_id,
-                            result_preview,
-                        )
-                    else:
-                        logger.info(f"    Content {j}: {content_type}")
-
         pending_tool_calls: list[dict[str, Any]] = []
         tool_calls_by_id: dict[str, dict[str, Any]] = {}
         tool_results: list[dict[str, Any]] = []
@@ -420,128 +582,15 @@ class DefaultOrchestrator(Orchestrator):
 
         # Check for FunctionApprovalResponseContent and emit updated state snapshot
         # This ensures the UI shows the approved state (e.g., 2 steps) not the original (3 steps)
-        for msg in provider_messages:
-            role_value = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-            if role_value != "user":
-                continue
-            for content in msg.contents or []:
-                if type(content) is FunctionApprovalResponseContent:
-                    if content.function_call and content.approved:
-                        parsed_args = content.function_call.parse_arguments()
-                        state_args = None
-                        if content.additional_properties:
-                            state_args = content.additional_properties.get("ag_ui_state_args")
-                        if not isinstance(state_args, dict):
-                            state_args = parsed_args
-                        if state_args and context.config.predict_state_config:
-                            for state_key, config in context.config.predict_state_config.items():
-                                if config["tool"] == content.function_call.name:
-                                    tool_arg_name = config["tool_argument"]
-                                    if tool_arg_name == "*":
-                                        state_value = state_args
-                                    elif isinstance(state_args, dict) and tool_arg_name in state_args:
-                                        state_value = state_args[tool_arg_name]
-                                    else:
-                                        continue
-                                    # Update current_state and emit snapshot
-                                    current_state[state_key] = state_value
-                                    event_bridge.current_state[state_key] = state_value
-                                    logger.info(
-                                        f"Emitting StateSnapshotEvent for approved state key '{state_key}' "
-                                        f"with {len(state_value) if isinstance(state_value, list) else 'N/A'} items"
-                                    )
-                                    yield StateSnapshotEvent(snapshot=current_state)
-                                    break
+        for snapshot_evt in _collect_approved_state_snapshots(
+            provider_messages,
+            context.config.predict_state_config,
+            current_state,
+            event_bridge,
+        ):
+            yield snapshot_evt
 
-        messages_to_run: list[Any] = []
-        is_new_user_turn = False
-        if provider_messages:
-            last_msg = provider_messages[-1]
-            role_value = last_msg.role.value if hasattr(last_msg.role, "value") else str(last_msg.role)
-            is_new_user_turn = role_value == "user"
-
-        def _tool_calls_match_state() -> bool:
-            if not state_manager.predict_state_config or not state_manager.current_state:
-                return False
-
-            def _parse_args(arguments: Any) -> dict[str, Any] | None:
-                if isinstance(arguments, dict):
-                    return arguments
-                if isinstance(arguments, str):
-                    try:
-                        parsed = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        return None
-                    if isinstance(parsed, dict):
-                        return parsed
-                return None
-
-            for state_key, config in state_manager.predict_state_config.items():
-                tool_name = config["tool"]
-                tool_arg_name = config["tool_argument"]
-                tool_args: dict[str, Any] | None = None
-
-                for msg in reversed(provider_messages):
-                    role_value = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-                    if role_value != "assistant":
-                        continue
-                    for content in msg.contents or []:
-                        if isinstance(content, FunctionCallContent) and content.name == tool_name:
-                            tool_args = _parse_args(content.arguments)
-                            break
-                    if tool_args is not None:
-                        break
-
-                if not tool_args:
-                    return False
-
-                if tool_arg_name == "*":
-                    state_value = tool_args
-                elif tool_arg_name in tool_args:
-                    state_value = tool_args[tool_arg_name]
-                else:
-                    return False
-
-                if state_manager.current_state.get(state_key) != state_value:
-                    return False
-
-            return True
-
-        conversation_has_tool_calls = _tool_calls_match_state()
-
-        state_context_msg = state_manager.state_context_message(
-            is_new_user_turn=is_new_user_turn, conversation_has_tool_calls=conversation_has_tool_calls
-        )
-
-        def _is_state_context_message(message: Any) -> bool:
-            role_value = message.role.value if hasattr(message.role, "value") else str(message.role)
-            if role_value != "system":
-                return False
-            for content in message.contents or []:
-                if isinstance(content, TextContent) and content.text.startswith("Current state of the application:"):
-                    return True
-            return False
-
-        def _pending_tool_call_ids(messages: list[Any]) -> set[str]:
-            pending_ids: set[str] = set()
-            resolved_ids: set[str] = set()
-            for msg in messages:
-                for content in msg.contents or []:
-                    if isinstance(content, FunctionCallContent) and content.call_id:
-                        pending_ids.add(str(content.call_id))
-                    elif isinstance(content, FunctionResultContent) and content.call_id:
-                        resolved_ids.add(str(content.call_id))
-            return pending_ids - resolved_ids
-
-        if state_context_msg:
-            messages_to_run = [msg for msg in provider_messages if not _is_state_context_message(msg)]
-            if not _pending_tool_call_ids(messages_to_run):
-                insert_index = len(messages_to_run) - 1 if is_new_user_turn else len(messages_to_run)
-                if insert_index < 0:
-                    insert_index = 0
-                messages_to_run.insert(insert_index, state_context_msg)
-        else:
-            messages_to_run.extend(provider_messages)
+        messages_to_run = _select_messages_to_run(provider_messages, state_manager)
 
         client_tools = convert_agui_tools_to_agent_framework(context.input_data.get("tools"))
         logger.info(f"[TOOLS] Client sent {len(client_tools) if client_tools else 0} tools")
@@ -555,17 +604,11 @@ class DefaultOrchestrator(Orchestrator):
         register_additional_client_tools(context.agent, client_tools)
         tools_param = merge_tools(server_tools, client_tools)
 
-        all_updates: list[Any] = []
+        collect_updates = response_format is not None
+        all_updates: list[Any] | None = [] if collect_updates else None
         update_count = 0
         # Prepare metadata for chat client (Azure requires string values)
-        safe_metadata: dict[str, Any] = {}
-        thread_metadata = getattr(thread, "metadata", None)
-        if thread_metadata:
-            for key, value in thread_metadata.items():
-                value_str = value if isinstance(value, str) else json.dumps(value)
-                if len(value_str) > 512:
-                    value_str = value_str[:512]
-                safe_metadata[key] = value_str
+        safe_metadata = _build_safe_metadata(getattr(thread, "metadata", None))
 
         run_kwargs: dict[str, Any] = {
             "thread": thread,
@@ -632,14 +675,17 @@ class DefaultOrchestrator(Orchestrator):
                         return False
             return True
 
-        def _build_messages_snapshot() -> MessagesSnapshotEvent:
+        def _build_messages_snapshot(tool_message_id: str | None = None) -> MessagesSnapshotEvent:
             has_text_content = bool(accumulated_text_content)
             all_messages = snapshot_messages.copy()
 
             if pending_tool_calls:
-                tool_call_message_id = (
-                    active_message_id if not has_text_content and active_message_id else generate_event_id()
-                )
+                if tool_message_id and not has_text_content:
+                    tool_call_message_id = tool_message_id
+                else:
+                    tool_call_message_id = (
+                        active_message_id if not has_text_content and active_message_id else generate_event_id()
+                    )
                 tool_call_message = {
                     "id": tool_call_message_id,
                     "role": "assistant",
@@ -666,7 +712,8 @@ class DefaultOrchestrator(Orchestrator):
         async for update in context.agent.run_stream(messages_to_run, **run_kwargs):
             update_count += 1
             logger.info(f"[STREAM] Received update #{update_count} from agent")
-            all_updates.append(update)
+            if all_updates is not None:
+                all_updates.append(update)
             if event_bridge.current_message_id is None and update.contents:
                 has_tool_call = any(isinstance(content, FunctionCallContent) for content in update.contents)
                 has_text = any(isinstance(content, TextContent) for content in update.contents)
@@ -689,33 +736,10 @@ class DefaultOrchestrator(Orchestrator):
                 elif isinstance(event, TextMessageContentEvent):
                     accumulated_text_content += event.delta
                 elif isinstance(event, ToolCallStartEvent):
-                    tool_call_entry = tool_calls_by_id.get(event.tool_call_id)
-                    if tool_call_entry is None:
-                        tool_call_entry = {
-                            "id": event.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": event.tool_call_name,
-                                "arguments": "",
-                            },
-                        }
-                        pending_tool_calls.append(tool_call_entry)
-                        tool_calls_by_id[event.tool_call_id] = tool_call_entry
-                    else:
-                        tool_call_entry["function"]["name"] = event.tool_call_name
+                    tool_call_entry = _ensure_tool_call_entry(event.tool_call_id, tool_calls_by_id, pending_tool_calls)
+                    tool_call_entry["function"]["name"] = event.tool_call_name
                 elif isinstance(event, ToolCallArgsEvent):
-                    tool_call_entry = tool_calls_by_id.get(event.tool_call_id)
-                    if tool_call_entry is None:
-                        tool_call_entry = {
-                            "id": event.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": "",
-                                "arguments": "",
-                            },
-                        }
-                        pending_tool_calls.append(tool_call_entry)
-                        tool_calls_by_id[event.tool_call_id] = tool_call_entry
+                    tool_call_entry = _ensure_tool_call_entry(event.tool_call_id, tool_calls_by_id, pending_tool_calls)
                     tool_call_entry["function"]["arguments"] += event.delta
                 elif isinstance(event, ToolCallEndEvent):
                     tool_calls_ended.add(event.tool_call_id)
@@ -731,14 +755,14 @@ class DefaultOrchestrator(Orchestrator):
                 logger.info(f"[STREAM] Yielding event: {type(event).__name__}")
                 yield event
                 if isinstance(event, ToolCallResultEvent):
-                    tool_name = tool_calls_by_id.get(event.tool_call_id, {}).get("function", {}).get("name")
+                    tool_name = _tool_name_for_call_id(tool_calls_by_id, event.tool_call_id)
                     if _should_emit_tool_snapshot(tool_name):
                         messages_snapshot_emitted = True
                         messages_snapshot = _build_messages_snapshot()
                         logger.info(f"[STREAM] Yielding event: {type(messages_snapshot).__name__}")
                         yield messages_snapshot
                 elif isinstance(event, ToolCallEndEvent):
-                    tool_name = tool_calls_by_id.get(event.tool_call_id, {}).get("function", {}).get("name")
+                    tool_name = _tool_name_for_call_id(tool_calls_by_id, event.tool_call_id)
                     if tool_name == "confirm_changes":
                         messages_snapshot_emitted = True
                         messages_snapshot = _build_messages_snapshot()
@@ -770,7 +794,7 @@ class DefaultOrchestrator(Orchestrator):
                         logger.info(f"Emitting ToolCallEndEvent for declaration-only tool call '{tool_call_id}'")
                         yield end_event
 
-        if all_updates and response_format:
+        if response_format and all_updates:
             from agent_framework import AgentRunResponse
             from pydantic import BaseModel
 
@@ -802,56 +826,21 @@ class DefaultOrchestrator(Orchestrator):
             logger.info(f"[FINALIZE] Emitting TextMessageEndEvent for message_id={event_bridge.current_message_id}")
             yield event_bridge.create_message_end_event(event_bridge.current_message_id)
 
-            has_text_content = bool(accumulated_text_content)
-            all_messages = snapshot_messages.copy()
-
-            if pending_tool_calls:
-                tool_call_message = {
-                    "id": event_bridge.current_message_id if not has_text_content else generate_event_id(),
-                    "role": "assistant",
-                    "tool_calls": pending_tool_calls.copy(),
-                }
-                all_messages.append(tool_call_message)
-
-            all_messages.extend(tool_results)
-            if has_text_content and active_message_id:
-                all_messages.append(
-                    {
-                        "id": active_message_id,
-                        "role": "assistant",
-                        "content": accumulated_text_content,
-                    }
-                )
-
-            messages_snapshot = MessagesSnapshotEvent(
-                messages=all_messages,  # type: ignore[arg-type]
-            )
+            messages_snapshot = _build_messages_snapshot(tool_message_id=event_bridge.current_message_id)
             messages_snapshot_emitted = True
             logger.info(
-                f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(all_messages)} messages "
+                f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(messages_snapshot.messages)} messages "
                 f"(text content length: {len(accumulated_text_content)})"
             )
             yield messages_snapshot
         else:
             logger.info("[FINALIZE] No current_message_id - skipping TextMessageEndEvent")
             if not messages_snapshot_emitted and (pending_tool_calls or tool_results):
-                all_messages = snapshot_messages.copy()
-
-                if pending_tool_calls:
-                    tool_call_message = {
-                        "id": generate_event_id(),
-                        "role": "assistant",
-                        "tool_calls": pending_tool_calls.copy(),
-                    }
-                    all_messages.append(tool_call_message)
-
-                all_messages.extend(tool_results)
-
-                messages_snapshot = MessagesSnapshotEvent(
-                    messages=all_messages,  # type: ignore[arg-type]
-                )
+                messages_snapshot = _build_messages_snapshot()
                 messages_snapshot_emitted = True
-                logger.info(f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(all_messages)} messages (tool-only)")
+                logger.info(
+                    f"[FINALIZE] Emitting MessagesSnapshotEvent with {len(messages_snapshot.messages)} messages"
+                )
                 yield messages_snapshot
 
         logger.info("[FINALIZE] Emitting RUN_FINISHED event")

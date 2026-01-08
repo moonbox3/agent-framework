@@ -28,6 +28,19 @@ _FRAMEWORK_TO_AGUI_ROLE = {
     Role.SYSTEM: "system",
 }
 
+_ALLOWED_AGUI_ROLES = {"user", "assistant", "system", "tool"}
+
+
+def _normalize_agui_role(raw_role: Any) -> str:
+    if not isinstance(raw_role, str):
+        return "user"
+    role = raw_role.lower()
+    if role == "developer":
+        return "system"
+    if role in _ALLOWED_AGUI_ROLES:
+        return role
+    return "user"
+
 
 def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[ChatMessage]:
     """Convert AG-UI messages to Agent Framework format.
@@ -70,7 +83,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
     for msg in messages:
         # Handle standard tool result messages early (role="tool") to preserve provider invariants
         # This path maps AG‑UI tool messages to FunctionResultContent with the correct tool_call_id
-        role_str = msg.get("role", "user")
+        role_str = _normalize_agui_role(msg.get("role", "user"))
         if role_str == "tool":
             # Prefer explicit tool_call_id fields; fall back to backend fields only if necessary
             tool_call_id = msg.get("tool_call_id") or msg.get("toolCallId")
@@ -354,6 +367,7 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str
         if isinstance(msg, dict):
             # Always work on a copy to avoid mutating input
             normalized_msg = msg.copy()
+            normalized_msg["role"] = _normalize_agui_role(normalized_msg.get("role"))
             # Ensure ID exists
             if "id" not in normalized_msg:
                 normalized_msg["id"] = generate_event_id()
@@ -496,6 +510,7 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
                     function_payload_dict["arguments"] = json.dumps(arguments)
 
         # Normalize tool_call_id to toolCallId for tool messages
+        normalized_msg["role"] = _normalize_agui_role(normalized_msg.get("role"))
         if normalized_msg.get("role") == "tool":
             if "tool_call_id" in normalized_msg:
                 normalized_msg["toolCallId"] = normalized_msg["tool_call_id"]

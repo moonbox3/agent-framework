@@ -623,6 +623,10 @@ class DefaultOrchestrator(Orchestrator):
 
         if event_bridge.should_stop_after_confirm:
             logger.info("Stopping run after confirm_changes - waiting for user response")
+            if event_bridge.current_message_id:
+                logger.info(f"[CONFIRM] Emitting TextMessageEndEvent for message_id={event_bridge.current_message_id}")
+                yield event_bridge.create_message_end_event(event_bridge.current_message_id)
+                event_bridge.current_message_id = None
             yield event_bridge.create_run_finished_event()
             return
 

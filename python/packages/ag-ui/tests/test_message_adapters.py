@@ -10,6 +10,7 @@ from agent_framework import ChatMessage, FunctionCallContent, FunctionResultCont
 from agent_framework_ag_ui._message_adapters import (
     agent_framework_messages_to_agui,
     agui_messages_to_agent_framework,
+    agui_messages_to_snapshot_format,
     extract_text_from_contents,
 )
 
@@ -43,6 +44,32 @@ def test_agent_framework_to_agui_basic(sample_agent_framework_message):
     assert messages[0]["role"] == "user"
     assert messages[0]["content"] == "Hello"
     assert messages[0]["id"] == "msg-123"
+
+
+def test_agent_framework_to_agui_normalizes_dict_roles():
+    """Dict inputs normalize unknown roles for UI compatibility."""
+    messages = [
+        {"role": "developer", "content": "policy"},
+        {"role": "weird_role", "content": "payload"},
+    ]
+
+    converted = agent_framework_messages_to_agui(messages)
+
+    assert converted[0]["role"] == "system"
+    assert converted[1]["role"] == "user"
+
+
+def test_agui_snapshot_format_normalizes_roles():
+    """Snapshot normalization coerces roles into supported AG-UI values."""
+    messages = [
+        {"role": "Developer", "content": "policy"},
+        {"role": "unknown", "content": "payload"},
+    ]
+
+    normalized = agui_messages_to_snapshot_format(messages)
+
+    assert normalized[0]["role"] == "system"
+    assert normalized[1]["role"] == "user"
 
 
 def test_agui_tool_result_to_agent_framework():

@@ -433,14 +433,14 @@ class AgentFrameworkEventBridge:
                     break
 
         if should_emit_snapshot and not is_predictive_without_confirmation:
-            from ._message_adapters import agent_framework_messages_to_agui
+            from ._message_adapters import agui_messages_to_snapshot_format
 
             assistant_message = {
                 "id": generate_event_id(),
                 "role": "assistant",
                 "tool_calls": self.pending_tool_calls.copy(),
             }
-            converted_input_messages = agent_framework_messages_to_agui(self.input_messages)
+            converted_input_messages = agui_messages_to_snapshot_format(self.input_messages)
             all_messages = converted_input_messages + [assistant_message] + self.tool_results.copy()
 
             messages_snapshot_event = MessagesSnapshotEvent(
@@ -533,7 +533,7 @@ class AgentFrameworkEventBridge:
         )
         events.append(confirm_end)
 
-        from ._message_adapters import agent_framework_messages_to_agui
+        from ._message_adapters import agui_messages_to_snapshot_format
 
         assistant_message = {
             "id": generate_event_id(),
@@ -541,7 +541,7 @@ class AgentFrameworkEventBridge:
             "tool_calls": self.pending_tool_calls.copy(),
         }
 
-        converted_input_messages = agent_framework_messages_to_agui(self.input_messages)
+        converted_input_messages = agui_messages_to_snapshot_format(self.input_messages)
         all_messages = converted_input_messages + [assistant_message] + self.tool_results.copy()
 
         messages_snapshot_event = MessagesSnapshotEvent(

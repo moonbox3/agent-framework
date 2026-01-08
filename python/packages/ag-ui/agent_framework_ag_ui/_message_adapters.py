@@ -12,6 +12,7 @@ from agent_framework import (
     FunctionResultContent,
     Role,
     TextContent,
+    prepare_function_call_results,
 )
 
 # Role mapping constants
@@ -47,19 +48,22 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
             tool_calls = raw_msg.get("tool_calls") or raw_msg.get("toolCalls")
             if not isinstance(tool_calls, list):
                 continue
-            for tool_call in tool_calls:
+            tool_calls_list = cast(list[Any], tool_calls)
+            for tool_call in tool_calls_list:
                 if not isinstance(tool_call, dict):
                     continue
-                if str(tool_call.get("id", "")) != tool_call_id:
+                tool_call_dict = cast(dict[str, Any], tool_call)
+                if str(tool_call_dict.get("id", "")) != tool_call_id:
                     continue
-                function_payload = tool_call.get("function")
+                function_payload = tool_call_dict.get("function")
                 if not isinstance(function_payload, dict):
                     return
-                existing_args = function_payload.get("arguments")
+                function_payload_dict = cast(dict[str, Any], function_payload)
+                existing_args = function_payload_dict.get("arguments")
                 if isinstance(existing_args, str):
-                    function_payload["arguments"] = json.dumps(modified_args)
+                    function_payload_dict["arguments"] = json.dumps(modified_args)
                 else:
-                    function_payload["arguments"] = modified_args
+                    function_payload_dict["arguments"] = modified_args
                 return
 
     result: list[ChatMessage] = []
@@ -90,9 +94,9 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                 except Exception:
                     parsed_candidate = None
                 if isinstance(parsed_candidate, dict):
-                    parsed = parsed_candidate
+                    parsed = cast(dict[str, Any], parsed_candidate)
             elif isinstance(result_content, dict):
-                parsed = result_content
+                parsed = cast(dict[str, Any], result_content)
 
             is_approval = parsed is not None and "accepted" in parsed
 
@@ -152,25 +156,29 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                         if isinstance(modified_args.get("steps"), list):
                             original_steps = original_args.get("steps") if isinstance(original_args, dict) else None
                             if isinstance(original_steps, list):
-                                approved_steps = modified_args.get("steps") or []
-                                approved_by_description = {
-                                    step.get("description"): step
-                                    for step in approved_steps
-                                    if isinstance(step, dict) and step.get("description")
-                                }
+                                approved_steps_list: list[Any] = list(modified_args.get("steps") or [])
+                                approved_by_description: dict[str, dict[str, Any]] = {}
+                                for step_item in approved_steps_list:
+                                    if isinstance(step_item, dict):
+                                        step_item_dict = cast(dict[str, Any], step_item)
+                                        desc = step_item_dict.get("description")
+                                        if desc:
+                                            approved_by_description[str(desc)] = step_item_dict
                                 merged_steps: list[Any] = []
-                                for step in original_steps:
-                                    if not isinstance(step, dict):
-                                        merged_steps.append(step)
+                                original_steps_list = cast(list[Any], original_steps)
+                                for orig_step in original_steps_list:
+                                    if not isinstance(orig_step, dict):
+                                        merged_steps.append(orig_step)
                                         continue
-                                    description = step.get("description")
+                                    orig_step_dict = cast(dict[str, Any], orig_step)
+                                    description = str(orig_step_dict.get("description", ""))
                                     approved_step = approved_by_description.get(description)
-                                    status = (
-                                        approved_step.get("status")
-                                        if isinstance(approved_step, dict) and approved_step.get("status")
+                                    status: str = (
+                                        str(approved_step.get("status"))
+                                        if approved_step is not None and approved_step.get("status")
                                         else "disabled"
                                     )
-                                    updated_step = step.copy()
+                                    updated_step: dict[str, Any] = orig_step_dict.copy()
                                     updated_step["status"] = status
                                     merged_steps.append(updated_step)
                                 merged_args["steps"] = merged_steps
@@ -217,9 +225,19 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                 result.append(chat_msg)
                 continue
 
+            # Cast result_content to acceptable type for FunctionResultContent
+            func_result: str | dict[str, Any] | list[Any]
+            if isinstance(result_content, str):
+                func_result = result_content
+            elif isinstance(result_content, dict):
+                func_result = cast(dict[str, Any], result_content)
+            elif isinstance(result_content, list):
+                func_result = cast(list[Any], result_content)
+            else:
+                func_result = str(result_content)
             chat_msg = ChatMessage(
                 role=Role.TOOL,
-                contents=[FunctionResultContent(call_id=str(tool_call_id), result=result_content)],
+                contents=[FunctionResultContent(call_id=str(tool_call_id), result=func_result)],
             )
             if "id" in msg:
                 chat_msg.message_id = msg["id"]
@@ -375,13 +393,8 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str
             elif isinstance(content, FunctionResultContent):
                 # Tool result content - extract call_id and result
                 tool_result_call_id = content.call_id
-                # Serialize result to string
-                if isinstance(content.result, dict):
-                    import json
-
-                    content_text = json.dumps(content.result)  # type: ignore
-                elif content.result is not None:
-                    content_text = str(content.result)
+                # Serialize result to string using core utility
+                content_text = prepare_function_call_results(content.result)
 
         agui_msg: dict[str, Any] = {
             "id": msg.message_id if msg.message_id else generate_event_id(),  # Always include id
@@ -446,36 +459,41 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
         content = normalized_msg.get("content")
         if isinstance(content, list):
             # Convert content array format to simple string
-            text_parts = []
-            for item in content:
+            text_parts: list[str] = []
+            content_list = cast(list[Any], content)
+            for item in content_list:
                 if isinstance(item, dict):
+                    item_dict = cast(dict[str, Any], item)
                     # Convert 'input_text' to 'text' type
-                    if item.get("type") == "input_text":
-                        text_parts.append(item.get("text", ""))
-                    elif item.get("type") == "text":
-                        text_parts.append(item.get("text", ""))
+                    if item_dict.get("type") == "input_text":
+                        text_parts.append(str(item_dict.get("text", "")))
+                    elif item_dict.get("type") == "text":
+                        text_parts.append(str(item_dict.get("text", "")))
                     else:
                         # Other types - just extract text field if present
-                        text_parts.append(item.get("text", ""))
+                        text_parts.append(str(item_dict.get("text", "")))
             normalized_msg["content"] = "".join(text_parts)
         elif content is None:
             normalized_msg["content"] = ""
 
         tool_calls = normalized_msg.get("tool_calls") or normalized_msg.get("toolCalls")
         if isinstance(tool_calls, list):
-            for tool_call in tool_calls:
+            tool_calls_list = cast(list[Any], tool_calls)
+            for tool_call in tool_calls_list:
                 if not isinstance(tool_call, dict):
                     continue
-                function_payload = tool_call.get("function")
+                tool_call_dict = cast(dict[str, Any], tool_call)
+                function_payload = tool_call_dict.get("function")
                 if not isinstance(function_payload, dict):
                     continue
-                if "arguments" not in function_payload:
+                function_payload_dict = cast(dict[str, Any], function_payload)
+                if "arguments" not in function_payload_dict:
                     continue
-                arguments = function_payload.get("arguments")
+                arguments = function_payload_dict.get("arguments")
                 if arguments is None:
-                    function_payload["arguments"] = ""
+                    function_payload_dict["arguments"] = ""
                 elif not isinstance(arguments, str):
-                    function_payload["arguments"] = json.dumps(arguments)
+                    function_payload_dict["arguments"] = json.dumps(arguments)
 
         # Normalize tool_call_id to toolCallId for tool messages
         if normalized_msg.get("role") == "tool":

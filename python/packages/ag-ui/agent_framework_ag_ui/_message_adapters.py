@@ -16,33 +16,15 @@ from agent_framework import (
     prepare_function_call_results,
 )
 
-# Role mapping constants
-_AGUI_TO_FRAMEWORK_ROLE = {
-    "user": Role.USER,
-    "assistant": Role.ASSISTANT,
-    "system": Role.SYSTEM,
-}
-
-_FRAMEWORK_TO_AGUI_ROLE = {
-    Role.USER: "user",
-    Role.ASSISTANT: "assistant",
-    Role.SYSTEM: "system",
-}
-
-_ALLOWED_AGUI_ROLES = {"user", "assistant", "system", "tool"}
+from ._utils import (
+    AGUI_TO_FRAMEWORK_ROLE,
+    FRAMEWORK_TO_AGUI_ROLE,
+    get_role_value,
+    normalize_agui_role,
+    safe_json_parse,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_agui_role(raw_role: Any) -> str:
-    if not isinstance(raw_role, str):
-        return "user"
-    role = raw_role.lower()
-    if role == "developer":
-        return "system"
-    if role in _ALLOWED_AGUI_ROLES:
-        return role
-    return "user"
 
 
 def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
@@ -52,7 +34,7 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
     pending_confirm_changes_id: str | None = None
 
     for msg in messages:
-        role_value = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        role_value = get_role_value(msg)
 
         if role_value == "assistant":
             tool_ids = {
@@ -191,7 +173,7 @@ def _deduplicate_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     unique_messages: list[ChatMessage] = []
 
     for idx, msg in enumerate(messages):
-        role_value = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        role_value = get_role_value(msg)
 
         if role_value == "tool" and msg.contents and isinstance(msg.contents[0], FunctionResultContent):
             call_id = str(msg.contents[0].call_id)
@@ -305,16 +287,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
         return None
 
     def _parse_arguments(arguments: Any) -> dict[str, Any] | None:
-        if isinstance(arguments, dict):
-            return arguments
-        if isinstance(arguments, str):
-            try:
-                parsed = json.loads(arguments)
-            except json.JSONDecodeError:
-                return None
-            if isinstance(parsed, dict):
-                return parsed
-        return None
+        return safe_json_parse(arguments)
 
     def _resolve_approval_call_id(tool_call_id: str, parsed_payload: dict[str, Any] | None) -> str | None:
         if parsed_payload:
@@ -375,7 +348,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
     for msg in messages:
         # Handle standard tool result messages early (role="tool") to preserve provider invariants
         # This path maps AG‑UI tool messages to FunctionResultContent with the correct tool_call_id
-        role_str = _normalize_agui_role(msg.get("role", "user"))
+        role_str = normalize_agui_role(msg.get("role", "user"))
         if role_str == "tool":
             # Prefer explicit tool_call_id fields; fall back to backend fields only if necessary
             tool_call_id = msg.get("tool_call_id") or msg.get("toolCallId")
@@ -599,7 +572,7 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
 
         # No special handling required for assistant/plain messages here
 
-        role = _AGUI_TO_FRAMEWORK_ROLE.get(role_str, Role.USER)
+        role = AGUI_TO_FRAMEWORK_ROLE.get(role_str, Role.USER)
 
         # Check if this message contains function approvals
         if "function_approvals" in msg and msg["function_approvals"]:
@@ -655,7 +628,7 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str
         if isinstance(msg, dict):
             # Always work on a copy to avoid mutating input
             normalized_msg = msg.copy()
-            normalized_msg["role"] = _normalize_agui_role(normalized_msg.get("role"))
+            normalized_msg["role"] = normalize_agui_role(normalized_msg.get("role"))
             # Ensure ID exists
             if "id" not in normalized_msg:
                 normalized_msg["id"] = generate_event_id()
@@ -672,7 +645,7 @@ def agent_framework_messages_to_agui(messages: list[ChatMessage] | list[dict[str
             continue
 
         # Convert ChatMessage to AG-UI format
-        role = _FRAMEWORK_TO_AGUI_ROLE.get(msg.role, "user")
+        role = FRAMEWORK_TO_AGUI_ROLE.get(msg.role, "user")
 
         content_text = ""
         tool_calls: list[dict[str, Any]] = []
@@ -798,7 +771,7 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
                     function_payload_dict["arguments"] = json.dumps(arguments)
 
         # Normalize tool_call_id to toolCallId for tool messages
-        normalized_msg["role"] = _normalize_agui_role(normalized_msg.get("role"))
+        normalized_msg["role"] = normalize_agui_role(normalized_msg.get("role"))
         if normalized_msg.get("role") == "tool":
             if "tool_call_id" in normalized_msg:
                 normalized_msg["toolCallId"] = normalized_msg["tool_call_id"]

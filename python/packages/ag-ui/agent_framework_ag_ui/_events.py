@@ -32,7 +32,7 @@ from agent_framework import (
     prepare_function_call_results,
 )
 
-from ._utils import generate_event_id
+from ._utils import extract_state_from_tool_args, generate_event_id, safe_json_parse
 
 logger = logging.getLogger(__name__)
 
@@ -209,10 +209,8 @@ class AgentFrameworkEventBridge:
             self.current_tool_call_name,
         )
 
-        parsed_args = None
-        try:
-            parsed_args = json.loads(self.streaming_tool_args)
-        except json.JSONDecodeError:
+        parsed_args = safe_json_parse(self.streaming_tool_args)
+        if parsed_args is None:
             for state_key, config in self.predict_state_config.items():
                 if config["tool"] != self.current_tool_call_name:
                     continue
@@ -256,11 +254,8 @@ class AgentFrameworkEventBridge:
                     continue
                 tool_arg_name = config["tool_argument"]
 
-                if tool_arg_name == "*":
-                    state_value = parsed_args
-                elif tool_arg_name in parsed_args:
-                    state_value = parsed_args[tool_arg_name]
-                else:
+                state_value = extract_state_from_tool_args(parsed_args, tool_arg_name)
+                if state_value is None:
                     continue
 
                 if state_key not in self.last_emitted_state or self.last_emitted_state[state_key] != state_value:
@@ -493,12 +488,8 @@ class AgentFrameworkEventBridge:
                     tool_arg_name,
                 )
 
-                state_value: Any
-                if tool_arg_name == "*":
-                    state_value = parsed_args
-                elif tool_arg_name in parsed_args:
-                    state_value = parsed_args[tool_arg_name]
-                else:
+                state_value = extract_state_from_tool_args(parsed_args, tool_arg_name)
+                if state_value is None:
                     logger.warning(f"  Tool argument '{tool_arg_name}' not found in parsed args")
                     continue
 

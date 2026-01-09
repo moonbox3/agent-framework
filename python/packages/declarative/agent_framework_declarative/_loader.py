@@ -37,6 +37,7 @@ from ._models import (
     RemoteConnection,
     Tool,
     WebSearchTool,
+    _safe_mode_context,
     agent_schema_dispatch,
 )
 
@@ -165,7 +166,9 @@ class AgentFactory:
         client_kwargs: Mapping[str, Any] | None = None,
         additional_mappings: Mapping[str, ProviderTypeMapping] | None = None,
         default_provider: str = "AzureAIClient",
-        env_file: str | None = None,
+        safe_mode: bool = True,
+        env_file_path: str | None = None,
+        env_file_encoding: str | None = None,
     ) -> None:
         """Create the agent factory.
 
@@ -178,9 +181,35 @@ class AgentFactory:
             connections: An optional dictionary of connections to resolve ReferenceConnections.
             client_kwargs: An optional dictionary of keyword arguments to pass to chat client constructor.
             additional_mappings: An optional dictionary to extend the provider type to object mapping.
-            default_provider: The default provider used when model.provider is not specified.
-                Defaults to "AzureAIClient".
-            env_file: An optional path to a .env file to load environment variables from.
+                Should have the structure:
+
+                    ..code-block:: python
+
+                        additional_mappings = {
+                            "Provider.ApiType": {
+                                "package": "package.name",
+                                "name": "ClassName",
+                                "model_id_field": "field_name_in_constructor",
+                            },
+                            ...
+                        }
+
+                    Here, "Provider.ApiType" is the lookup key used when both provider and apiType are specified in the
+                    model, "Provider" is also allowed.
+                    Package refers to which model needs to be imported, Name is the class name of the ChatClientProtocol
+                    implementation, and model_id_field is the name of the field in the constructor
+                    that accepts the model.id value.
+            default_provider: The default provider used when model.provider is not specified,
+                default is "AzureAIClient".
+            safe_mode: Whether to run in safe mode, default is True.
+                When safe_mode is True, environment variables are not accessible in the powerfx expressions.
+                You can still use environment variables, but through the constructors of the classes.
+                Which means you must make sure you are using the standard env variable names of the classes
+                you are using and not custom ones and remove the powerfx statements that start with `=Env.`.
+                Only when you trust the source of your yaml files, you can set safe_mode to False
+                via the AgentFactory constructor.
+            env_file_path: The path to the .env file to load environment variables from.
+            env_file_encoding: The encoding of the .env file, defaults to 'utf-8'.
 
         Examples:
             .. code-block:: python
@@ -199,7 +228,7 @@ class AgentFactory:
                 client = AzureOpenAIChatClient()
                 factory = AgentFactory(
                     chat_client=client,
-                    env_file=".env",
+                    env_file_path=".env",
                 )
 
             .. code-block:: python
@@ -223,7 +252,8 @@ class AgentFactory:
         self.client_kwargs = client_kwargs or {}
         self.additional_mappings = additional_mappings or {}
         self.default_provider: str = default_provider
-        load_dotenv(dotenv_path=env_file)
+        self.safe_mode = safe_mode
+        load_dotenv(dotenv_path=env_file_path, encoding=env_file_encoding)
 
     def create_agent_from_yaml_path(self, yaml_path: str | Path) -> ChatAgent:
         """Create a ChatAgent from a YAML file path.
@@ -395,6 +425,8 @@ class AgentFactory:
                 factory = AgentFactory()
                 agent = factory.create_agent_from_dict(agent_def)
         """
+        # Set safe_mode context before parsing YAML to control PowerFx environment variable access
+        _safe_mode_context.set(self.safe_mode)
         prompt_agent = agent_schema_dispatch(agent_def)
         if not isinstance(prompt_agent, PromptAgent):
             raise DeclarativeLoaderError("Only definitions for a PromptAgent are supported for agent creation.")

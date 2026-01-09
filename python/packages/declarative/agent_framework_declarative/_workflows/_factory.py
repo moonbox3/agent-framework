@@ -131,7 +131,7 @@ class WorkflowFactory:
                     env_file=".env",
                 )
         """
-        self._agent_factory = agent_factory or AgentFactory(env_file=env_file)
+        self._agent_factory = agent_factory or AgentFactory(env_file_path=env_file)
         self._agents: dict[str, AgentProtocol | AgentExecutor] = dict(agents) if agents else {}
         self._bindings: dict[str, Any] = dict(bindings) if bindings else {}
         self._checkpoint_storage = checkpoint_storage

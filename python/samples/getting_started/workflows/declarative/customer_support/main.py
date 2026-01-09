@@ -22,6 +22,7 @@ The workflow:
 
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 
@@ -35,6 +36,8 @@ from agent_framework.declarative import (
 from azure.identity import AzureCliCredential
 from pydantic import BaseModel, Field
 from ticketing_plugin import TicketingPlugin
+
+logging.basicConfig(level=logging.ERROR)
 
 # ANSI color codes for output formatting
 CYAN = "\033[36m"

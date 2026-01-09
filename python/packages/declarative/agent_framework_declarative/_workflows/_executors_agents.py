@@ -35,6 +35,73 @@ from ._declarative_base import (
 
 logger = logging.getLogger(__name__)
 
+
+def _validate_conversation_history(messages: list[ChatMessage], agent_name: str) -> None:
+    """Validate that conversation history has matching tool calls and results.
+
+    This helps catch issues where tool call messages are stored without their
+    corresponding tool result messages, which would cause API errors.
+
+    Args:
+        messages: The conversation history to validate.
+        agent_name: Name of the agent for logging purposes.
+
+    Logs a warning if orphaned tool calls are found.
+    """
+    # Collect all tool call IDs and tool result IDs
+    tool_call_ids: set[str] = set()
+    tool_result_ids: set[str] = set()
+
+    for i, msg in enumerate(messages):
+        if not hasattr(msg, "contents") or msg.contents is None:
+            continue
+        for content in msg.contents:
+            if isinstance(content, FunctionCallContent) and content.call_id:
+                tool_call_ids.add(content.call_id)
+                logger.debug(
+                    "Agent '%s': Found tool call '%s' (id=%s) in message %d",
+                    agent_name,
+                    content.name,
+                    content.call_id,
+                    i,
+                )
+            elif isinstance(content, FunctionResultContent) and content.call_id:
+                tool_result_ids.add(content.call_id)
+                logger.debug(
+                    "Agent '%s': Found tool result for call_id=%s in message %d",
+                    agent_name,
+                    content.call_id,
+                    i,
+                )
+
+    # Find orphaned tool calls (calls without results)
+    orphaned_calls = tool_call_ids - tool_result_ids
+    if orphaned_calls:
+        logger.warning(
+            "Agent '%s': Conversation history has %d orphaned tool call(s) without results: %s. "
+            "Total messages: %d, tool calls: %d, tool results: %d",
+            agent_name,
+            len(orphaned_calls),
+            orphaned_calls,
+            len(messages),
+            len(tool_call_ids),
+            len(tool_result_ids),
+        )
+        # Log message structure for debugging
+        for i, msg in enumerate(messages):
+            role = getattr(msg, "role", "unknown")
+            content_types = []
+            if hasattr(msg, "contents") and msg.contents:
+                content_types = [type(c).__name__ for c in msg.contents]
+            logger.warning(
+                "Agent '%s': Message %d - role=%s, contents=%s",
+                agent_name,
+                i,
+                role,
+                content_types,
+            )
+
+
 # Keys for agent-related state
 AGENT_REGISTRY_KEY = "_agent_registry"
 TOOL_REGISTRY_KEY = "_tool_registry"
@@ -454,6 +521,10 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         # Build messages list for agent (use history if available, otherwise just input)
         messages_for_agent: list[ChatMessage] | str = conversation_history if conversation_history else input_text
 
+        # Validate conversation history before invoking agent
+        if isinstance(messages_for_agent, list) and messages_for_agent:
+            _validate_conversation_history(messages_for_agent, agent_name)
+
         # Use run() method to get properly structured messages (including tool calls and results)
         # This is critical for multi-turn conversations where tool calls must be followed
         # by their results in the message history
@@ -484,10 +555,31 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         # to maintain proper conversation state for the next agent invocation
         if all_messages:
             # Agent returned full message history - use it
-            for msg in all_messages:
+            logger.debug(
+                "Agent '%s': Storing %d messages to conversation history at '%s'",
+                agent_name,
+                len(all_messages),
+                messages_path,
+            )
+            for i, msg in enumerate(all_messages):
+                role = getattr(msg, "role", "unknown")
+                content_types = []
+                if hasattr(msg, "contents") and msg.contents:
+                    content_types = [type(c).__name__ for c in msg.contents]
+                logger.debug(
+                    "Agent '%s': Storing message %d - role=%s, contents=%s",
+                    agent_name,
+                    i,
+                    role,
+                    content_types,
+                )
                 await state.append(messages_path, msg)
         elif accumulated_response:
             # No messages returned, create a simple assistant message
+            logger.debug(
+                "Agent '%s': No messages in response, creating simple assistant message",
+                agent_name,
+            )
             assistant_message = ChatMessage(role="assistant", text=accumulated_response)
             await state.append(messages_path, assistant_message)
 
@@ -546,12 +638,15 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await ctx.send_message(ActionComplete())
             return
 
+        logger.debug("handle_action: starting agent '%s'", agent_name)
+
         arguments, messages_expr, external_loop_when, max_iterations = self._get_input_config()
         messages_var, response_obj_var, result_property, auto_send = self._get_output_config()
 
         # Get conversation-specific messages path if conversationId is specified
         conversation_id_expr = self._get_conversation_id()
         messages_path = await self._get_conversation_messages_path(state, conversation_id_expr)
+        logger.debug("handle_action: agent='%s', messages_path='%s'", agent_name, messages_path)
 
         # Build input
         input_text = await self._build_input_text(state, arguments, messages_expr)
@@ -651,6 +746,10 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         This is called when the workflow resumes after yielding for external input.
         It continues the agent invocation loop with the user's new input.
         """
+        logger.debug(
+            "handle_external_input_response: resuming with user_input='%s'",
+            response.user_input[:100] if response.user_input else None,
+        )
         state = self._get_state(ctx.shared_state)
 
         # Retrieve saved loop state
@@ -665,6 +764,14 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         iteration = loop_state.iteration
         external_loop_when = loop_state.external_loop_when
         max_iterations = loop_state.max_iterations
+        messages_path = loop_state.messages_path
+
+        logger.debug(
+            "handle_external_input_response: agent='%s', iteration=%d, messages_path='%s'",
+            agent_name,
+            iteration,
+            messages_path,
+        )
 
         # Get the user's new input
         input_text = response.user_input

@@ -225,13 +225,14 @@ class TestDeclarativeActionExecutor:
 
     @pytest.mark.asyncio
     async def test_foreach_init_empty(self, mock_context, mock_shared_state):
-        """Test ForeachInitExecutor with empty items."""
+        """Test ForeachInitExecutor with empty items list."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
+        # Use a literal empty list - no expression evaluation needed
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.empty",
+            "itemsSource": [],  # Direct empty list, not an expression
             "iteratorVariable": "turn.item",
         }
         executor = ForeachInitExecutor(action_def)

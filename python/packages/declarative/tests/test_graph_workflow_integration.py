@@ -119,13 +119,13 @@ class TestGraphBasedWorkflowExecution:
                     "id": "check_level",
                     "conditions": [
                         {
-                            "condition": "=turn.level == 1",
+                            "condition": "=turn.level = 1",
                             "actions": [
                                 {"kind": "SendActivity", "id": "level_1", "activity": {"text": "Level 1"}},
                             ],
                         },
                         {
-                            "condition": "=turn.level == 2",
+                            "condition": "=turn.level = 2",
                             "actions": [
                                 {"kind": "SendActivity", "id": "level_2", "activity": {"text": "Level 2"}},
                             ],

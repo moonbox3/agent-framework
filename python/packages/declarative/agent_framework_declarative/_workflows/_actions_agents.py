@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any, cast
 
 from agent_framework import get_logger
-from agent_framework._types import ChatMessage
+from agent_framework._types import AgentRunResponse, ChatMessage
 
 from ._handlers import (
     ActionContext,
@@ -48,31 +48,6 @@ def _build_messages_from_state(ctx: ActionContext) -> list[ChatMessage]:
         messages.extend(history)
 
     return messages
-
-
-def _extract_text_from_response(response: Any) -> str | None:
-    """Extract text content from an agent response.
-
-    Args:
-        response: The agent response object
-
-    Returns:
-        The text content, or None if not available
-    """
-    # Handle various response types
-    if hasattr(response, "text"):
-        text_val = response.text
-        return str(text_val) if text_val is not None else None
-    if hasattr(response, "content"):
-        content = response.content
-        if isinstance(content, str):
-            return content
-        if hasattr(content, "text"):
-            content_text = content.text
-            return str(content_text) if content_text is not None else None
-    if isinstance(response, str):
-        return response
-    return None
 
 
 @action_handler("InvokeAzureAgent")
@@ -178,7 +153,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
             if isinstance(evaluated_input, str):
                 messages.append(ChatMessage(role="user", text=evaluated_input))
             elif isinstance(evaluated_input, list):
-                for msg_item in evaluated_input:
+                for msg_item in evaluated_input:  # type: ignore
                     if isinstance(msg_item, str):
                         messages.append(ChatMessage(role="user", text=msg_item))
                     elif isinstance(msg_item, ChatMessage):
@@ -221,58 +196,61 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
         try:
             # Check if agent supports streaming
             if hasattr(agent, "run_stream"):
-                full_text = ""
-                all_messages: list[Any] = []
+                updates: list[Any] = []
                 tool_calls: list[Any] = []
 
                 async for chunk in agent.run_stream(messages):
-                    # Handle different chunk types
+                    updates.append(chunk)
+
+                    # Yield streaming events for text chunks
                     if hasattr(chunk, "text") and chunk.text:
-                        full_text += chunk.text
                         yield AgentStreamingChunkEvent(
                             agent_name=str(agent_name),
                             chunk=chunk.text,
                         )
 
-                    # Collect messages and tool calls
-                    if hasattr(chunk, "messages"):
-                        all_messages.extend(chunk.messages)
+                    # Collect tool calls
                     if hasattr(chunk, "tool_calls"):
                         tool_calls.extend(chunk.tool_calls)
 
+                # Build consolidated response from updates
+                response = AgentRunResponse.from_agent_run_response_updates(updates)
+                text = response.text
+                response_messages = response.messages
+
                 # Update state with result
                 ctx.state.set_agent_result(
-                    text=full_text,
-                    messages=all_messages,
+                    text=text,
+                    messages=response_messages,
                     tool_calls=tool_calls if tool_calls else None,
                 )
 
                 # Add to conversation history
-                if full_text:
-                    ctx.state.add_conversation_message(ChatMessage(role="assistant", text=full_text))
+                if text:
+                    ctx.state.add_conversation_message(ChatMessage(role="assistant", text=text))
 
                 # Store in output variables (.NET style)
                 if output_messages_var:
                     output_path_mapped = _map_variable_to_path(output_messages_var)
-                    ctx.state.set(output_path_mapped, all_messages if all_messages else full_text)
+                    ctx.state.set(output_path_mapped, response_messages if response_messages else text)
 
                 if output_response_obj_var:
                     output_path_mapped = _map_variable_to_path(output_response_obj_var)
                     # Try to parse as JSON if it looks like structured output
                     try:
-                        parsed = json.loads(full_text) if full_text else None
+                        parsed = json.loads(text) if text else None
                         ctx.state.set(output_path_mapped, parsed)
                     except (json.JSONDecodeError, TypeError):
-                        ctx.state.set(output_path_mapped, full_text)
+                        ctx.state.set(output_path_mapped, text)
 
                 # Store in output path (Python style)
                 if output_path:
-                    ctx.state.set(output_path, full_text)
+                    ctx.state.set(output_path, text)
 
                 yield AgentResponseEvent(
                     agent_name=str(agent_name),
-                    text=full_text,
-                    messages=all_messages,
+                    text=text,
+                    messages=response_messages,
                     tool_calls=tool_calls if tool_calls else None,
                 )
 
@@ -280,11 +258,8 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
                 # Non-streaming invocation
                 response = await agent.run(messages)
 
-                text = _extract_text_from_response(response)
-                response_messages_attr = getattr(response, "messages", None)
-                response_messages: list[Any] = []
-                if response_messages_attr:
-                    response_messages = list(response_messages_attr)
+                text = response.text
+                response_messages = response.messages
                 response_tool_calls: list[Any] | None = getattr(response, "tool_calls", None)
 
                 # Update state with result
@@ -443,38 +418,40 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
     # Invoke the agent
     try:
         if hasattr(agent, "run_stream"):
-            full_text = ""
-            all_messages: list[Any] = []
+            updates: list[Any] = []
 
             async for chunk in agent.run_stream(messages):
+                updates.append(chunk)
+
                 if hasattr(chunk, "text") and chunk.text:
-                    full_text += chunk.text
                     yield AgentStreamingChunkEvent(
                         agent_name=agent_name,
                         chunk=chunk.text,
                     )
 
-                if hasattr(chunk, "messages"):
-                    all_messages.extend(chunk.messages)
+            # Build consolidated response from updates
+            response = AgentRunResponse.from_agent_run_response_updates(updates)
+            text = response.text
+            response_messages = response.messages
 
-            ctx.state.set_agent_result(text=full_text, messages=all_messages)
+            ctx.state.set_agent_result(text=text, messages=response_messages)
 
-            if full_text:
-                ctx.state.add_conversation_message(ChatMessage(role="assistant", text=full_text))
+            if text:
+                ctx.state.add_conversation_message(ChatMessage(role="assistant", text=text))
 
             if output_path:
-                ctx.state.set(output_path, full_text)
+                ctx.state.set(output_path, text)
 
             yield AgentResponseEvent(
                 agent_name=agent_name,
-                text=full_text,
-                messages=all_messages,
+                text=text,
+                messages=response_messages,
             )
 
         elif hasattr(agent, "run"):
             response = await agent.run(messages)
-            text = _extract_text_from_response(response)
-            response_messages = getattr(response, "messages", [])
+            text = response.text
+            response_messages = response.messages
 
             ctx.state.set_agent_result(text=text, messages=response_messages)
 

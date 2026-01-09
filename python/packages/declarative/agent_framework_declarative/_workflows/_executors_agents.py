@@ -19,9 +19,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from agent_framework import ChatMessage
-from agent_framework._types import FunctionCallContent, FunctionResultContent
-from agent_framework._workflows import (
+from agent_framework import (
+    ChatMessage,
+    FunctionCallContent,
+    FunctionResultContent,
     WorkflowContext,
     handler,
     response_handler,
@@ -433,15 +434,15 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
                 return evaluated_input
             if isinstance(evaluated_input, list) and evaluated_input:
                 # Extract text from last message
-                last: Any = evaluated_input[-1]
+                last: Any = evaluated_input[-1]  # type: ignore
                 if isinstance(last, str):
                     return last
                 if isinstance(last, dict):
                     last_dict = cast(dict[str, Any], last)
                     content_val: Any = last_dict.get("content", last_dict.get("text", ""))
                     return str(content_val) if content_val else ""
-                if last is not None and hasattr(last, "text"):
-                    return str(getattr(last, "text", ""))
+                if last is not None and hasattr(last, "text"):  # type: ignore
+                    return str(getattr(last, "text", ""))  # type: ignore
             if evaluated_input:
                 return str(cast(Any, evaluated_input))
             return ""

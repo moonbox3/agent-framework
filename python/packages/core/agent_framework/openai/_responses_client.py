@@ -620,6 +620,9 @@ class OpenAIBaseResponsesClient(OpenAIBase, BaseChatClient):
                     return file_obj
                 return {}
             case FunctionCallContent():
+                if not content.call_id:
+                    logger.warning(f"FunctionCallContent missing call_id for function '{content.name}'")
+                    return {}
                 # Use fc_id from additional_properties if available, otherwise fallback to call_id
                 fc_id = call_id_to_id.get(content.call_id, content.call_id)
                 # OpenAI Responses API requires IDs to start with `fc_`

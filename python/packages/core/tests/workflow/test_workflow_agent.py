@@ -999,11 +999,12 @@ class TestWorkflowAgentMergeUpdates:
                 message_id="msg-2",
                 created_at="2024-01-01T12:00:01Z",
             ),
-            # Function result (no response_id - this was being placed at the end)
+            # Function result: no response_id previously caused this to go to global_dangling
+            # and be placed at the end (the bug); fix now correctly associates via call_id
             AgentRunResponseUpdate(
                 contents=[FunctionResultContent(call_id=call_id, result="Sunny, 72F")],
                 role=Role.TOOL,
-                response_id=None,  # Bug: no response_id causes this to go to global_dangling
+                response_id=None,
                 message_id="msg-3",
                 created_at="2024-01-01T12:00:02Z",
             ),

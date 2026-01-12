@@ -315,14 +315,14 @@ class WorkflowAgent(BaseAgent):
                     return update
                 return None
 
-            case WorkflowOutputEvent(data=data, source_executor_id=source_executor_id):
+            case WorkflowOutputEvent(data=data, executor_id=executor_id):
                 # Convert workflow output to an agent response update.
                 # Handle different data types appropriately.
 
                 # Skip AgentRunResponse from AgentExecutor with output_response=True
                 # since streaming events already surfaced the content.
                 if isinstance(data, AgentRunResponse):
-                    executor = self.workflow.executors.get(source_executor_id)
+                    executor = self.workflow.executors.get(executor_id)
                     if isinstance(executor, AgentExecutor) and executor.output_response:
                         return None
 
@@ -332,7 +332,7 @@ class WorkflowAgent(BaseAgent):
                     return AgentRunResponseUpdate(
                         contents=list(data.contents),
                         role=data.role,
-                        author_name=data.author_name or source_executor_id,
+                        author_name=data.author_name or executor_id,
                         response_id=response_id,
                         message_id=str(uuid.uuid4()),
                         created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
@@ -344,7 +344,7 @@ class WorkflowAgent(BaseAgent):
                 return AgentRunResponseUpdate(
                     contents=contents,
                     role=Role.ASSISTANT,
-                    author_name=source_executor_id,
+                    author_name=executor_id,
                     response_id=response_id,
                     message_id=str(uuid.uuid4()),
                     created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

@@ -463,12 +463,30 @@ class WorkflowAgent(BaseAgent):
             An AgentRunResponse with messages in processing order and aggregated metadata.
         """
         # PHASE 1: GROUP UPDATES BY RESPONSE_ID AND MESSAGE_ID
+        # First pass: build call_id -> response_id map from FunctionCallContent updates
+        call_id_to_response_id: dict[str, str] = {}
+        for u in updates:
+            if u.response_id:
+                for content in u.contents:
+                    if isinstance(content, FunctionCallContent) and content.call_id:
+                        call_id_to_response_id[content.call_id] = u.response_id
+
+        # Second pass: group updates, associating FunctionResultContent with their calls
         states: dict[str, WorkflowAgent._ResponseState] = {}
         global_dangling: list[AgentRunResponseUpdate] = []
 
         for u in updates:
-            if u.response_id:
-                state = states.setdefault(u.response_id, {"by_msg": {}, "dangling": []})
+            effective_response_id = u.response_id
+            # If no response_id, check if this is a FunctionResultContent that matches a call
+            if not effective_response_id:
+                for content in u.contents:
+                    if isinstance(content, FunctionResultContent) and content.call_id:
+                        effective_response_id = call_id_to_response_id.get(content.call_id)
+                        if effective_response_id:
+                            break
+
+            if effective_response_id:
+                state = states.setdefault(effective_response_id, {"by_msg": {}, "dangling": []})
                 by_msg = state["by_msg"]
                 dangling = state["dangling"]
                 if u.message_id:
@@ -569,6 +587,8 @@ class WorkflowAgent(BaseAgent):
                         raw_representations.append(cast_value)
 
         # PHASE 3: HANDLE GLOBAL DANGLING UPDATES (NO RESPONSE_ID)
+        # These are updates that couldn't be associated with any response_id
+        # (e.g., orphan FunctionResultContent with no matching FunctionCallContent)
         if global_dangling:
             flattened = AgentRunResponse.from_agent_run_response_updates(global_dangling)
             final_messages.extend(flattened.messages)

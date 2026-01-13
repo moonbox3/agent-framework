@@ -7,11 +7,12 @@ import sys
 from pathlib import Path
 
 from agent_framework import ChatAgent, ChatResponseUpdate, TextContent
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.params import Depends
 from fastapi.testclient import TestClient
 
+from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
-from agent_framework_ag_ui._endpoint import add_agent_framework_fastapi_endpoint
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils_test_ag_ui import StreamingChatClientStub, stream_from_updates
@@ -387,7 +388,7 @@ async def test_endpoint_with_dependencies_blocks_unauthorized():
     app = FastAPI()
     agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
 
-    async def require_api_key(x_api_key: str | None = None):
+    async def require_api_key(x_api_key: str | None = Header(None)):
         if x_api_key != "secret-key":
             raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -406,7 +407,7 @@ async def test_endpoint_with_dependencies_allows_authorized():
     app = FastAPI()
     agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
 
-    async def require_api_key(x_api_key: str | None = None):
+    async def require_api_key(x_api_key: str | None = Header(None)):
         if x_api_key != "secret-key":
             raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -418,7 +419,7 @@ async def test_endpoint_with_dependencies_allows_authorized():
     response = client.post(
         "/protected",
         json={"messages": [{"role": "user", "content": "Hello"}]},
-        params={"x_api_key": "secret-key"},
+        headers={"x-api-key": "secret-key"},
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"

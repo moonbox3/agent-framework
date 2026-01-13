@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from agent_framework import ChatAgent, ChatResponseUpdate, TextContent
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
@@ -380,3 +380,88 @@ async def test_endpoint_internal_error_handling():
 
     assert response.status_code == 200
     assert response.json() == {"error": "An internal error has occurred."}
+
+
+async def test_endpoint_with_dependencies_blocks_unauthorized():
+    """Test that endpoint blocks requests when authentication dependency fails."""
+    app = FastAPI()
+    agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
+
+    async def require_api_key(x_api_key: str | None = None):
+        if x_api_key != "secret-key":
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    add_agent_framework_fastapi_endpoint(app, agent, path="/protected", dependencies=[Depends(require_api_key)])
+
+    client = TestClient(app)
+
+    # Request without API key should be rejected
+    response = client.post("/protected", json={"messages": [{"role": "user", "content": "Hello"}]})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unauthorized"
+
+
+async def test_endpoint_with_dependencies_allows_authorized():
+    """Test that endpoint allows requests when authentication dependency passes."""
+    app = FastAPI()
+    agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
+
+    async def require_api_key(x_api_key: str | None = None):
+        if x_api_key != "secret-key":
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    add_agent_framework_fastapi_endpoint(app, agent, path="/protected", dependencies=[Depends(require_api_key)])
+
+    client = TestClient(app)
+
+    # Request with valid API key should succeed
+    response = client.post(
+        "/protected",
+        json={"messages": [{"role": "user", "content": "Hello"}]},
+        params={"x_api_key": "secret-key"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+
+async def test_endpoint_with_multiple_dependencies():
+    """Test that endpoint supports multiple dependencies."""
+    app = FastAPI()
+    agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
+
+    execution_order: list[str] = []
+
+    async def first_dependency():
+        execution_order.append("first")
+
+    async def second_dependency():
+        execution_order.append("second")
+
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/multi-deps",
+        dependencies=[Depends(first_dependency), Depends(second_dependency)],
+    )
+
+    client = TestClient(app)
+    response = client.post("/multi-deps", json={"messages": [{"role": "user", "content": "Hello"}]})
+
+    assert response.status_code == 200
+    assert "first" in execution_order
+    assert "second" in execution_order
+
+
+async def test_endpoint_without_dependencies_is_accessible():
+    """Test that endpoint without dependencies remains accessible (backward compatibility)."""
+    app = FastAPI()
+    agent = ChatAgent(name="test", instructions="Test agent", chat_client=build_chat_client())
+
+    # No dependencies parameter - should be accessible without auth
+    add_agent_framework_fastapi_endpoint(app, agent, path="/open")
+
+    client = TestClient(app)
+    response = client.post("/open", json={"messages": [{"role": "user", "content": "Hello"}]})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"

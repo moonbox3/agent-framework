@@ -62,9 +62,9 @@ async def handle_foreach(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, No
 
     # Iterate over the collection
     for index, item in enumerate(collection):
-        # Set loop variables in the turn scope
-        ctx.state.set(f"turn.{item_name}", item)
-        ctx.state.set(f"turn.{index_name}", index)
+        # Set loop variables in the Local scope
+        ctx.state.set(f"Local.{item_name}", item)
+        ctx.state.set(f"Local.{index_name}", index)
 
         # Execute nested actions
         try:
@@ -194,7 +194,7 @@ async def handle_repeat_until(ctx: ActionContext) -> AsyncGenerator[WorkflowEven
     iteration = 0
     while iteration < max_iterations:
         iteration += 1
-        ctx.state.set("turn.iteration", iteration)
+        ctx.state.set("Local.iteration", iteration)
 
         logger.debug(f"RepeatUntil: iteration {iteration}")
 
@@ -390,7 +390,7 @@ async def handle_end_conversation(ctx: ActionContext) -> AsyncGenerator[Workflow
     if conversation_id:
         evaluated_id = ctx.state.eval_if_expression(conversation_id)
     else:
-        evaluated_id = ctx.state.get("system.ConversationId")
+        evaluated_id = ctx.state.get("System.ConversationId")
 
     logger.debug(f"EndConversation: ending conversation {evaluated_id}{f' (reason: {reason})' if reason else ''}")
 

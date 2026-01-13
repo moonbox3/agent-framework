@@ -53,9 +53,9 @@ class TestDeclarativeWorkflowState:
         call_args = mock_shared_state.set.call_args
         assert call_args[0][0] == DECLARATIVE_STATE_KEY
         state_data = call_args[0][1]
-        assert state_data["inputs"] == {"query": "test"}
-        assert state_data["outputs"] == {}
-        assert state_data["turn"] == {}
+        assert state_data["Inputs"] == {"query": "test"}
+        assert state_data["Outputs"] == {}
+        assert state_data["Local"] == {}
 
     @pytest.mark.asyncio
     async def test_get_and_set_values(self, mock_shared_state):
@@ -64,10 +64,10 @@ class TestDeclarativeWorkflowState:
         await state.initialize()
 
         # Set a turn value
-        await state.set("turn.counter", 5)
+        await state.set("Local.counter", 5)
 
         # Get the value
-        result = await state.get("turn.counter")
+        result = await state.get("Local.counter")
         assert result == 5
 
     @pytest.mark.asyncio
@@ -77,11 +77,11 @@ class TestDeclarativeWorkflowState:
         await state.initialize({"name": "Alice", "age": 30})
 
         # Get via path
-        name = await state.get("workflow.inputs.name")
+        name = await state.get("Workflow.Inputs.name")
         assert name == "Alice"
 
         # Get all inputs
-        inputs = await state.get("workflow.inputs")
+        inputs = await state.get("Workflow.Inputs")
         assert inputs == {"name": "Alice", "age": 30}
 
     @pytest.mark.asyncio
@@ -91,13 +91,13 @@ class TestDeclarativeWorkflowState:
         await state.initialize()
 
         # Append to non-existent list creates it
-        await state.append("turn.items", "first")
-        result = await state.get("turn.items")
+        await state.append("Local.items", "first")
+        result = await state.get("Local.items")
         assert result == ["first"]
 
         # Append to existing list
-        await state.append("turn.items", "second")
-        result = await state.get("turn.items")
+        await state.append("Local.items", "second")
+        result = await state.get("Local.items")
         assert result == ["first", "second"]
 
     @pytest.mark.asyncio
@@ -166,7 +166,7 @@ class TestDeclarativeActionExecutor:
 
         action_def = {
             "kind": "SetValue",
-            "path": "turn.result",
+            "path": "Local.result",
             "value": "test value",
         }
         executor = SetValueExecutor(action_def)
@@ -203,12 +203,12 @@ class TestDeclarativeActionExecutor:
         """Test ForeachInitExecutor with items."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.items", ["a", "b", "c"])
+        await state.set("Local.items", ["a", "b", "c"])
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.items",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.items",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachInitExecutor(action_def)
 
@@ -233,7 +233,7 @@ class TestDeclarativeActionExecutor:
         action_def = {
             "kind": "Foreach",
             "itemsSource": [],  # Direct empty list, not an expression
-            "iteratorVariable": "turn.item",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachInitExecutor(action_def)
 
@@ -279,7 +279,7 @@ class TestDeclarativeWorkflowBuilder:
             "name": "simple_workflow",
             "actions": [
                 {"kind": "SendActivity", "id": "greet", "activity": {"text": "Hello!"}},
-                {"kind": "SetValue", "id": "set_count", "path": "turn.count", "value": 1},
+                {"kind": "SetValue", "id": "set_count", "path": "Local.count", "value": 1},
             ],
         }
         builder = DeclarativeWorkflowBuilder(yaml_def)
@@ -298,7 +298,7 @@ class TestDeclarativeWorkflowBuilder:
                 {
                     "kind": "If",
                     "id": "check_flag",
-                    "condition": "=turn.flag",
+                    "condition": "=Local.flag",
                     "then": [
                         {"kind": "SendActivity", "id": "say_yes", "activity": {"text": "Yes!"}},
                     ],
@@ -327,10 +327,10 @@ class TestDeclarativeWorkflowBuilder:
                 {
                     "kind": "Foreach",
                     "id": "process_items",
-                    "itemsSource": "=turn.items",
-                    "iteratorVariable": "turn.item",
+                    "itemsSource": "=Local.items",
+                    "iteratorVariable": "Local.item",
                     "actions": [
-                        {"kind": "SendActivity", "id": "show_item", "activity": {"text": "=turn.item"}},
+                        {"kind": "SendActivity", "id": "show_item", "activity": {"text": "=Local.item"}},
                     ],
                 },
             ],
@@ -355,13 +355,13 @@ class TestDeclarativeWorkflowBuilder:
                     "id": "check_status",
                     "conditions": [
                         {
-                            "condition": '=turn.status = "active"',
+                            "condition": '=Local.status = "active"',
                             "actions": [
                                 {"kind": "SendActivity", "id": "say_active", "activity": {"text": "Active"}},
                             ],
                         },
                         {
-                            "condition": '=turn.status = "pending"',
+                            "condition": '=Local.status = "pending"',
                             "actions": [
                                 {"kind": "SendActivity", "id": "say_pending", "activity": {"text": "Pending"}},
                             ],
@@ -489,7 +489,7 @@ class TestHumanInputExecutors:
         action_def = {
             "kind": "Question",
             "text": "What is your name?",
-            "property": "turn.name",
+            "property": "Local.name",
             "defaultValue": "Anonymous",
         }
         executor = QuestionExecutor(action_def)
@@ -518,7 +518,7 @@ class TestHumanInputExecutors:
         action_def = {
             "kind": "Confirmation",
             "text": "Do you want to continue?",
-            "property": "turn.confirmed",
+            "property": "Local.confirmed",
             "yesLabel": "Yes, continue",
             "noLabel": "No, stop",
         }
@@ -533,3 +533,176 @@ class TestHumanInputExecutors:
         assert isinstance(request, ExternalInputRequest)
         assert request.request_type == "confirmation"
         assert "continue" in request.message.lower()
+
+
+class TestExtractJsonFromResponse:
+    """Tests for the _extract_json_from_response helper function."""
+
+    def test_pure_json_object(self):
+        """Test parsing pure JSON object."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = '{"TicketId": "123", "Status": "pending"}'
+        result = _extract_json_from_response(text)
+        assert result == {"TicketId": "123", "Status": "pending"}
+
+    def test_pure_json_array(self):
+        """Test parsing pure JSON array."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = '["item1", "item2", "item3"]'
+        result = _extract_json_from_response(text)
+        assert result == ["item1", "item2", "item3"]
+
+    def test_json_in_markdown_code_block(self):
+        """Test extracting JSON from markdown code block."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = """Here's the response:
+```json
+{"TicketId": "456", "Summary": "Test ticket"}
+```
+"""
+        result = _extract_json_from_response(text)
+        assert result == {"TicketId": "456", "Summary": "Test ticket"}
+
+    def test_json_in_plain_code_block(self):
+        """Test extracting JSON from plain markdown code block."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = """The result:
+```
+{"Status": "complete"}
+```
+"""
+        result = _extract_json_from_response(text)
+        assert result == {"Status": "complete"}
+
+    def test_json_with_leading_text(self):
+        """Test extracting JSON with leading text."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = 'Here is the ticket information: {"TicketId": "789", "Priority": "high"}'
+        result = _extract_json_from_response(text)
+        assert result == {"TicketId": "789", "Priority": "high"}
+
+    def test_json_with_trailing_text(self):
+        """Test extracting JSON with trailing text."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = '{"IsResolved": true, "NeedsTicket": false} That is the status.'
+        result = _extract_json_from_response(text)
+        assert result == {"IsResolved": True, "NeedsTicket": False}
+
+    def test_nested_json_object(self):
+        """Test extracting nested JSON object."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = 'Result: {"outer": {"inner": {"value": 42}}}'
+        result = _extract_json_from_response(text)
+        assert result == {"outer": {"inner": {"value": 42}}}
+
+    def test_json_with_array_inside(self):
+        """Test extracting JSON with arrays inside."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = 'Data: {"items": ["a", "b", "c"], "count": 3}'
+        result = _extract_json_from_response(text)
+        assert result == {"items": ["a", "b", "c"], "count": 3}
+
+    def test_json_with_escaped_quotes(self):
+        """Test extracting JSON with escaped quotes in strings."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = r'Response: {"message": "He said \"hello\"", "valid": true}'
+        result = _extract_json_from_response(text)
+        assert result == {"message": 'He said "hello"', "valid": True}
+
+    def test_empty_string_returns_none(self):
+        """Test that empty string returns None."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        result = _extract_json_from_response("")
+        assert result is None
+
+    def test_whitespace_only_returns_none(self):
+        """Test that whitespace-only string returns None."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        result = _extract_json_from_response("   \n\t  ")
+        assert result is None
+
+    def test_no_json_raises_error(self):
+        """Test that text without JSON raises JSONDecodeError."""
+        import json
+
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        with pytest.raises(json.JSONDecodeError):
+            _extract_json_from_response("This is just plain text with no JSON")
+
+    def test_json_with_braces_in_string(self):
+        """Test JSON with braces inside string values."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = 'Info: {"template": "Hello {name}, your id is {id}"}'
+        result = _extract_json_from_response(text)
+        assert result == {"template": "Hello {name}, your id is {id}"}
+
+    def test_multiple_json_objects_returns_last(self):
+        """Test that multiple JSON objects returns the last one (final result)."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        # Simulates streaming agent output with partial then final result
+        text = '{"TicketId":"TBD","TicketSummary":"partial"}{"TicketId":"75178c95","TicketSummary":"final result"}'
+        result = _extract_json_from_response(text)
+        assert result == {"TicketId": "75178c95", "TicketSummary": "final result"}
+
+    def test_multiple_json_objects_with_different_schemas(self):
+        """Test multiple JSON objects with different structures returns the last."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        # First object is from one agent, second is from another
+        text = '{"IsResolved":false,"NeedsTicket":true}{"TicketId":"abc123","Summary":"Issue logged"}'
+        result = _extract_json_from_response(text)
+        assert result == {"TicketId": "abc123", "Summary": "Issue logged"}
+
+    def test_multiple_json_objects_with_text_between(self):
+        """Test multiple JSON objects separated by text."""
+        from agent_framework_declarative._workflows._executors_agents import (
+            _extract_json_from_response,
+        )
+
+        text = 'First: {"status": "pending"} then later: {"status": "complete", "id": 42}'
+        result = _extract_json_from_response(text)
+        assert result == {"status": "complete", "id": 42}

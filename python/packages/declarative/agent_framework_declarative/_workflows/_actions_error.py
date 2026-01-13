@@ -80,9 +80,9 @@ async def handle_try_catch(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, 
           - kind: ...  # actions to always execute (optional)
 
     In the catch block, the following variables are available:
-        turn.error.message: The error message
-        turn.error.code: The error code (if provided)
-        turn.error.type: The error type name
+        Local.error.message: The error message
+        Local.error.code: The error code (if provided)
+        Local.error.type: The error type name
     """
     try_actions = ctx.action.get("try", [])
     catch_actions = ctx.action.get("catch", [])
@@ -114,8 +114,8 @@ async def handle_try_catch(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, 
 
     # Execute catch block if error occurred
     if error_occurred and catch_actions:
-        # Set error info in turn scope
-        ctx.state.set("turn.error", error_info)
+        # Set error info in Local scope
+        ctx.state.set("Local.error", error_info)
 
         try:
             async for event in ctx.execute_actions(catch_actions, ctx.state):

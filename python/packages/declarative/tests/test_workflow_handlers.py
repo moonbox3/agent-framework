@@ -100,7 +100,7 @@ class TestSetValueHandler:
         """Test setting a simple value."""
         ctx = create_action_context({
             "kind": "SetValue",
-            "path": "turn.result",
+            "path": "Local.result",
             "value": "test value",
         })
 
@@ -108,7 +108,7 @@ class TestSetValueHandler:
         events = [e async for e in handler(ctx)]
 
         assert len(events) == 0  # SetValue doesn't emit events
-        assert ctx.state.get("turn.result") == "test value"
+        assert ctx.state.get("Local.result") == "test value"
 
     @pytest.mark.asyncio
     async def test_set_value_from_input(self):
@@ -116,7 +116,7 @@ class TestSetValueHandler:
         ctx = create_action_context(
             {
                 "kind": "SetValue",
-                "path": "turn.copy",
+                "path": "Local.copy",
                 "value": "literal",
             },
             inputs={"original": "from input"},
@@ -125,7 +125,7 @@ class TestSetValueHandler:
         handler = get_action_handler("SetValue")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.copy") == "literal"
+        assert ctx.state.get("Local.copy") == "literal"
 
 
 class TestAppendValueHandler:
@@ -136,29 +136,29 @@ class TestAppendValueHandler:
         """Test appending to a non-existent list creates it."""
         ctx = create_action_context({
             "kind": "AppendValue",
-            "path": "turn.results",
+            "path": "Local.results",
             "value": "item1",
         })
 
         handler = get_action_handler("AppendValue")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.results") == ["item1"]
+        assert ctx.state.get("Local.results") == ["item1"]
 
     @pytest.mark.asyncio
     async def test_append_to_existing_list(self):
         """Test appending to an existing list."""
         ctx = create_action_context({
             "kind": "AppendValue",
-            "path": "turn.results",
+            "path": "Local.results",
             "value": "item2",
         })
-        ctx.state.set("turn.results", ["item1"])
+        ctx.state.set("Local.results", ["item1"])
 
         handler = get_action_handler("AppendValue")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.results") == ["item1", "item2"]
+        assert ctx.state.get("Local.results") == ["item1", "item2"]
 
 
 class TestSendActivityHandler:
@@ -218,7 +218,7 @@ class TestForeachHandler:
             "actions": [
                 {
                     "kind": "AppendValue",
-                    "path": "turn.results",
+                    "path": "Local.results",
                     "value": "processed",
                 }
             ],
@@ -227,7 +227,7 @@ class TestForeachHandler:
         handler = get_action_handler("Foreach")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.results") == ["processed", "processed", "processed"]
+        assert ctx.state.get("Local.results") == ["processed", "processed", "processed"]
 
     @pytest.mark.asyncio
     async def test_foreach_sets_item_and_index(self):
@@ -245,8 +245,8 @@ class TestForeachHandler:
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
         # After iteration, the last item/index should be set
-        assert ctx.state.get("turn.item") == "y"
-        assert ctx.state.get("turn.idx") == 1
+        assert ctx.state.get("Local.item") == "y"
+        assert ctx.state.get("Local.idx") == 1
 
 
 class TestIfHandler:
@@ -259,17 +259,17 @@ class TestIfHandler:
             "kind": "If",
             "condition": True,
             "then": [
-                {"kind": "SetValue", "path": "turn.branch", "value": "then"},
+                {"kind": "SetValue", "path": "Local.branch", "value": "then"},
             ],
             "else": [
-                {"kind": "SetValue", "path": "turn.branch", "value": "else"},
+                {"kind": "SetValue", "path": "Local.branch", "value": "else"},
             ],
         })
 
         handler = get_action_handler("If")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.branch") == "then"
+        assert ctx.state.get("Local.branch") == "then"
 
     @pytest.mark.asyncio
     async def test_if_false_branch(self):
@@ -278,17 +278,17 @@ class TestIfHandler:
             "kind": "If",
             "condition": False,
             "then": [
-                {"kind": "SetValue", "path": "turn.branch", "value": "then"},
+                {"kind": "SetValue", "path": "Local.branch", "value": "then"},
             ],
             "else": [
-                {"kind": "SetValue", "path": "turn.branch", "value": "else"},
+                {"kind": "SetValue", "path": "Local.branch", "value": "else"},
             ],
         })
 
         handler = get_action_handler("If")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.branch") == "else"
+        assert ctx.state.get("Local.branch") == "else"
 
 
 class TestSwitchHandler:
@@ -303,20 +303,20 @@ class TestSwitchHandler:
             "cases": [
                 {
                     "match": "option1",
-                    "actions": [{"kind": "SetValue", "path": "turn.result", "value": "one"}],
+                    "actions": [{"kind": "SetValue", "path": "Local.result", "value": "one"}],
                 },
                 {
                     "match": "option2",
-                    "actions": [{"kind": "SetValue", "path": "turn.result", "value": "two"}],
+                    "actions": [{"kind": "SetValue", "path": "Local.result", "value": "two"}],
                 },
             ],
-            "default": [{"kind": "SetValue", "path": "turn.result", "value": "default"}],
+            "default": [{"kind": "SetValue", "path": "Local.result", "value": "default"}],
         })
 
         handler = get_action_handler("Switch")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "two"
+        assert ctx.state.get("Local.result") == "two"
 
     @pytest.mark.asyncio
     async def test_switch_default_case(self):
@@ -327,16 +327,16 @@ class TestSwitchHandler:
             "cases": [
                 {
                     "match": "option1",
-                    "actions": [{"kind": "SetValue", "path": "turn.result", "value": "one"}],
+                    "actions": [{"kind": "SetValue", "path": "Local.result", "value": "one"}],
                 },
             ],
-            "default": [{"kind": "SetValue", "path": "turn.result", "value": "default"}],
+            "default": [{"kind": "SetValue", "path": "Local.result", "value": "default"}],
         })
 
         handler = get_action_handler("Switch")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "default"
+        assert ctx.state.get("Local.result") == "default"
 
 
 class TestRepeatUntilHandler:
@@ -350,17 +350,17 @@ class TestRepeatUntilHandler:
             "condition": False,  # Will be evaluated each iteration
             "maxIterations": 3,
             "actions": [
-                {"kind": "SetValue", "path": "turn.count", "value": 1},
+                {"kind": "SetValue", "path": "Local.count", "value": 1},
             ],
         })
         # Set up a counter that will cause the loop to exit
-        ctx.state.set("turn.count", 0)
+        ctx.state.set("Local.count", 0)
 
         handler = get_action_handler("RepeatUntil")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
         # With condition=False (literal), it will run maxIterations times
-        assert ctx.state.get("turn.iteration") == 3
+        assert ctx.state.get("Local.iteration") == 3
 
 
 class TestTryCatchHandler:
@@ -372,17 +372,17 @@ class TestTryCatchHandler:
         ctx = create_action_context({
             "kind": "TryCatch",
             "try": [
-                {"kind": "SetValue", "path": "turn.result", "value": "success"},
+                {"kind": "SetValue", "path": "Local.result", "value": "success"},
             ],
             "catch": [
-                {"kind": "SetValue", "path": "turn.result", "value": "caught"},
+                {"kind": "SetValue", "path": "Local.result", "value": "caught"},
             ],
         })
 
         handler = get_action_handler("TryCatch")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "success"
+        assert ctx.state.get("Local.result") == "success"
 
     @pytest.mark.asyncio
     async def test_try_with_throw_exception(self):
@@ -393,16 +393,16 @@ class TestTryCatchHandler:
                 {"kind": "ThrowException", "message": "Test error", "code": "ERR001"},
             ],
             "catch": [
-                {"kind": "SetValue", "path": "turn.result", "value": "caught"},
+                {"kind": "SetValue", "path": "Local.result", "value": "caught"},
             ],
         })
 
         handler = get_action_handler("TryCatch")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "caught"
-        assert ctx.state.get("turn.error.message") == "Test error"
-        assert ctx.state.get("turn.error.code") == "ERR001"
+        assert ctx.state.get("Local.result") == "caught"
+        assert ctx.state.get("Local.error.message") == "Test error"
+        assert ctx.state.get("Local.error.code") == "ERR001"
 
     @pytest.mark.asyncio
     async def test_finally_always_executes(self):
@@ -410,15 +410,15 @@ class TestTryCatchHandler:
         ctx = create_action_context({
             "kind": "TryCatch",
             "try": [
-                {"kind": "SetValue", "path": "turn.try", "value": "ran"},
+                {"kind": "SetValue", "path": "Local.try", "value": "ran"},
             ],
             "finally": [
-                {"kind": "SetValue", "path": "turn.finally", "value": "ran"},
+                {"kind": "SetValue", "path": "Local.finally", "value": "ran"},
             ],
         })
 
         handler = get_action_handler("TryCatch")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.try") == "ran"
-        assert ctx.state.get("turn.finally") == "ran"
+        assert ctx.state.get("Local.try") == "ran"
+        assert ctx.state.get("Local.finally") == "ran"

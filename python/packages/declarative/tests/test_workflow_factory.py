@@ -39,7 +39,7 @@ actions: "not a list"
             factory.create_workflow_from_yaml("""
 name: test-workflow
 actions:
-  - path: turn.value
+  - path: Local.value
     value: test
 """)
 
@@ -50,7 +50,7 @@ actions:
 name: minimal-workflow
 actions:
   - kind: SetValue
-    path: turn.result
+    path: Local.result
     value: done
 """)
 
@@ -69,7 +69,7 @@ class TestWorkflowFactoryExecution:
 name: set-value-test
 actions:
   - kind: SetValue
-    path: turn.greeting
+    path: Local.greeting
     value: Hello
   - kind: SendActivity
     activity:
@@ -115,7 +115,7 @@ actions:
     itemName: fruit
     actions:
       - kind: AppendValue
-        path: turn.fruits
+        path: Local.fruits
         value: processed
 """)
 
@@ -188,12 +188,12 @@ class TestWorkflowFactoryFromPath:
 
     def test_load_from_file(self, tmp_path):
         """Test loading a workflow from a file."""
-        workflow_file = tmp_path / "workflow.yaml"
+        workflow_file = tmp_path / "Workflow.yaml"
         workflow_file.write_text("""
 name: file-workflow
 actions:
   - kind: SetValue
-    path: turn.loaded
+    path: Local.loaded
     value: true
 """)
 
@@ -217,7 +217,7 @@ actions:
   - kind: SetValue
     id: set_greeting
     displayName: Set the greeting message
-    path: turn.greeting
+    path: Local.greeting
     value: Hello
   - kind: SendActivity
     id: send_greeting
@@ -244,7 +244,7 @@ actions:
                 "kind": "SetValue",
                 "id": "test_action",
                 "displayName": "Test Action Display Name",
-                "path": "turn.value",
+                "path": "Local.value",
                 "value": "test",
             },
             execute_actions=lambda a, s: None,
@@ -266,7 +266,7 @@ actions:
             state=state,
             action={
                 "kind": "SetValue",
-                "path": "turn.value",
+                "path": "Local.value",
                 "value": "test",
             },
             execute_actions=lambda a, s: None,

@@ -32,17 +32,18 @@ class WorkflowState:
     WorkflowState provides a unified interface for:
 
     - Reading workflow inputs (immutable after initialization)
-    - Managing turn-scoped variables that persist across actions
+    - Managing Local-scoped variables that persist across actions
     - Storing agent results and making them available to subsequent actions
     - Evaluating PowerFx expressions with the current state as context
 
     The state is organized into namespaces that mirror the .NET implementation:
 
-    - workflow.inputs: Initial inputs to the workflow
-    - workflow.outputs: Values to be returned from the workflow
-    - turn: Variables that persist within the current workflow turn
-    - agent: Results from the most recent agent invocation
-    - conversation: Conversation history and messages
+    - Workflow.Inputs: Initial inputs to the workflow
+    - Workflow.Outputs: Values to be returned from the workflow
+    - Local: Variables that persist within the current workflow turn
+    - System: System-level variables (ConversationId, LastMessage, etc.)
+    - Agent: Results from the most recent agent invocation
+    - Conversation: Conversation history and messages
 
     Examples:
         .. code-block:: python
@@ -53,15 +54,15 @@ class WorkflowState:
             state = WorkflowState(inputs={"query": "Hello", "user_id": "123"})
 
             # Access inputs (read-only)
-            query = state.get("workflow.inputs.query")  # "Hello"
+            query = state.get("Workflow.Inputs.query")  # "Hello"
 
-            # Set turn-scoped variables
-            state.set("turn.results", [])
-            state.append("turn.results", "item1")
-            state.append("turn.results", "item2")
+            # Set Local-scoped variables
+            state.set("Local.results", [])
+            state.append("Local.results", "item1")
+            state.append("Local.results", "item2")
 
             # Set workflow outputs
-            state.set("workflow.outputs.response", "Completed")
+            state.set("Workflow.Outputs.response", "Completed")
 
         .. code-block:: python
 
@@ -69,7 +70,7 @@ class WorkflowState:
 
             # PowerFx expression evaluation
             state = WorkflowState(inputs={"name": "World"})
-            result = state.eval("=Concat('Hello ', workflow.inputs.name)")
+            result = state.eval("=Concat('Hello ', Workflow.Inputs.name)")
             # result: "Hello World"
 
             # Non-PowerFx strings are returned as-is
@@ -89,7 +90,7 @@ class WorkflowState:
             )
 
             # Access agent result in subsequent actions
-            response = state.get("agent.text")  # "The answer is 42."
+            response = state.get("Agent.text")  # "The answer is 42."
     """
 
     def __init__(
@@ -100,11 +101,17 @@ class WorkflowState:
 
         Args:
             inputs: Initial inputs to the workflow. These become available
-                   as workflow.inputs.* and are immutable after initialization.
+                   as Workflow.Inputs.* and are immutable after initialization.
         """
         self._inputs: dict[str, Any] = dict(inputs) if inputs else {}
-        self._turn: dict[str, Any] = {}
+        self._local: dict[str, Any] = {}
         self._outputs: dict[str, Any] = {}
+        self._system: dict[str, Any] = {
+            "ConversationId": "default",
+            "LastMessage": {"Text": "", "Id": ""},
+            "LastMessageText": "",
+            "LastMessageId": "",
+        }
         self._agent: dict[str, Any] = {}
         self._conversation: dict[str, Any] = {
             "messages": [],
@@ -123,9 +130,14 @@ class WorkflowState:
         return self._outputs
 
     @property
-    def turn(self) -> dict[str, Any]:
-        """Get the turn-scoped variables."""
-        return self._turn
+    def local(self) -> dict[str, Any]:
+        """Get the Local-scoped variables."""
+        return self._local
+
+    @property
+    def system(self) -> dict[str, Any]:
+        """Get the System-scoped variables."""
+        return self._system
 
     @property
     def agent(self) -> dict[str, Any]:
@@ -141,7 +153,7 @@ class WorkflowState:
         """Get a value from the state using a dot-notated path.
 
         Args:
-            path: Dot-notated path like 'turn.results' or 'workflow.inputs.query'
+            path: Dot-notated path like 'Local.results' or 'Workflow.Inputs.query'
             default: Default value if path doesn't exist
 
         Returns:
@@ -151,25 +163,26 @@ class WorkflowState:
         if not parts:
             return default
 
-        # Determine the namespace (case-insensitive to match .NET)
-        namespace = parts[0].lower()
+        namespace = parts[0]
         remaining = parts[1:]
 
-        # Handle workflow.inputs and workflow.outputs specially
-        if namespace == "workflow" and remaining:
-            sub_namespace = remaining[0].lower()
+        # Handle Workflow.Inputs and Workflow.Outputs specially
+        if namespace == "Workflow" and remaining:
+            sub_namespace = remaining[0]
             remaining = remaining[1:]
-            if sub_namespace == "inputs":
+            if sub_namespace == "Inputs":
                 obj: Any = self._inputs
-            elif sub_namespace == "outputs":
+            elif sub_namespace == "Outputs":
                 obj = self._outputs
             else:
                 return default
-        elif namespace == "turn":
-            obj = self._turn
-        elif namespace == "agent":
+        elif namespace == "Local":
+            obj = self._local
+        elif namespace == "System":
+            obj = self._system
+        elif namespace == "Agent":
             obj = self._agent
-        elif namespace == "conversation":
+        elif namespace == "Conversation":
             obj = self._conversation
         else:
             # Try custom namespace
@@ -195,40 +208,41 @@ class WorkflowState:
         """Set a value in the state using a dot-notated path.
 
         Args:
-            path: Dot-notated path like 'turn.results' or 'workflow.outputs.response'
+            path: Dot-notated path like 'Local.results' or 'Workflow.Outputs.response'
             value: The value to set
 
         Raises:
-            ValueError: If attempting to set workflow.inputs (which is read-only)
+            ValueError: If attempting to set Workflow.Inputs (which is read-only)
         """
         parts = path.split(".")
         if not parts:
             return
 
-        # Normalize namespace to lowercase for case-insensitive matching
-        namespace = parts[0].lower()
+        namespace = parts[0]
         remaining = parts[1:]
 
-        # Handle workflow.inputs and workflow.outputs specially
-        if namespace == "workflow":
+        # Handle Workflow.Inputs and Workflow.Outputs specially
+        if namespace == "Workflow":
             if not remaining:
-                raise ValueError("Cannot set 'workflow' directly; use 'workflow.outputs.*'")
-            sub_namespace = remaining[0].lower()
+                raise ValueError("Cannot set 'Workflow' directly; use 'Workflow.Outputs.*'")
+            sub_namespace = remaining[0]
             remaining = remaining[1:]
-            if sub_namespace == "inputs":
-                raise ValueError("Cannot modify workflow.inputs - they are read-only")
-            if sub_namespace == "outputs":
+            if sub_namespace == "Inputs":
+                raise ValueError("Cannot modify Workflow.Inputs - they are read-only")
+            if sub_namespace == "Outputs":
                 target = self._outputs
             else:
-                raise ValueError(f"Unknown workflow namespace: {sub_namespace}")
-        elif namespace == "turn":
-            target = self._turn
-        elif namespace == "agent":
+                raise ValueError(f"Unknown Workflow namespace: {sub_namespace}")
+        elif namespace == "Local":
+            target = self._local
+        elif namespace == "System":
+            target = self._system
+        elif namespace == "Agent":
             target = self._agent
-        elif namespace == "conversation":
+        elif namespace == "Conversation":
             target = self._conversation
         else:
-            # Create or use custom namespace (normalized to lowercase)
+            # Create or use custom namespace
             if namespace not in self._custom:
                 self._custom[namespace] = {}
             target = self._custom[namespace]
@@ -309,16 +323,27 @@ class WorkflowState:
         Returns:
             A dictionary suitable for passing to PowerFx Engine.eval()
         """
-        return {
-            "workflow": {
-                "inputs": dict(self._inputs),
-                "outputs": dict(self._outputs),
+        symbols = {
+            "Workflow": {
+                "Inputs": dict(self._inputs),
+                "Outputs": dict(self._outputs),
             },
-            "turn": dict(self._turn),
-            "agent": dict(self._agent),
-            "conversation": dict(self._conversation),
+            "Local": dict(self._local),
+            "System": dict(self._system),
+            "Agent": dict(self._agent),
+            "Conversation": dict(self._conversation),
+            # Also expose inputs at top level for backward compatibility with =inputs.X syntax
+            "inputs": dict(self._inputs),
             **self._custom,
         }
+        # Debug log the Local symbols to help diagnose type issues
+        if self._local:
+            for key, value in self._local.items():
+                logger.debug(
+                    f"PowerFx symbol Local.{key}: type={type(value).__name__}, "
+                    f"value_preview={str(value)[:100] if value else None}"
+                )
+        return symbols
 
     def eval(self, expression: str) -> Any:
         """Evaluate a PowerFx expression with the current state.
@@ -357,7 +382,7 @@ class WorkflowState:
         """Simple expression evaluation when PowerFx is not available.
 
         Supports:
-        - Variable references: Local.X, System.X, turn.x
+        - Variable references: Local.X, System.X, Workflow.Inputs.X
         - Simple function calls: IsBlank(x), Find(a, b), etc.
         - Simple comparisons: x < 4, x = "value"
         - Logical operators: And, Or, Not, ||, !
@@ -516,20 +541,12 @@ class WorkflowState:
 
         # Handle variable references
         if "." in formula:
-            # Map .NET style to Python style
-            path = formula
-            if formula.startswith("Local."):
-                path = "turn." + formula[6:]
-            elif formula.startswith("System."):
-                path = "system." + formula[7:]
-            elif formula.startswith("inputs."):
-                path = "workflow.inputs." + formula[7:]
             # For known namespaces, return None if not found (PowerFx semantics)
             # rather than the formula string
-            if path.startswith(("turn.", "workflow.", "agent.", "conversation.", "system.")):
-                return self.get(path)
+            if formula.startswith(("Local.", "Workflow.", "Agent.", "Conversation.", "System.")):
+                return self.get(formula)
             not_found = object()
-            value = self.get(path, default=not_found)
+            value = self.get(formula, default=not_found)
             if value is not not_found:
                 return value
 
@@ -596,12 +613,12 @@ class WorkflowState:
             return [self.eval_if_expression(item) for item in value]
         return value
 
-    def reset_turn(self) -> None:
-        """Reset turn-scoped variables for a new turn.
+    def reset_local(self) -> None:
+        """Reset Local-scoped variables for a new turn.
 
-        This clears the turn namespace while preserving other state.
+        This clears the Local namespace while preserving other state.
         """
-        self._turn.clear()
+        self._local.clear()
 
     def reset_agent(self) -> None:
         """Reset the agent result for a new agent invocation."""
@@ -617,7 +634,8 @@ class WorkflowState:
 
         new_state = WorkflowState()
         new_state._inputs = copy.copy(self._inputs)
-        new_state._turn = copy.copy(self._turn)
+        new_state._local = copy.copy(self._local)
+        new_state._system = copy.copy(self._system)
         new_state._outputs = copy.copy(self._outputs)
         new_state._agent = copy.copy(self._agent)
         new_state._conversation = copy.copy(self._conversation)

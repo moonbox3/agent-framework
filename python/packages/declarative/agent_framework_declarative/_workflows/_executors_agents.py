@@ -37,6 +37,140 @@ from ._declarative_base import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_json_from_response(text: str) -> Any:
+    r"""Extract and parse JSON from an agent response.
+
+    Agents often return JSON wrapped in markdown code blocks or with
+    explanatory text. This function attempts to extract and parse the
+    JSON content from various formats:
+
+    1. Pure JSON: {"key": "value"}
+    2. Markdown code block: ```json\n{"key": "value"}\n```
+    3. Markdown code block (no language): ```\n{"key": "value"}\n```
+    4. JSON with leading/trailing text: Here's the result: {"key": "value"}
+    5. Multiple JSON objects: Returns the LAST valid JSON object
+
+    When multiple JSON objects are present (e.g., streaming agent responses
+    that emit partial then final results), this returns the last complete
+    JSON object, which is typically the final/complete result.
+
+    Args:
+        text: The raw text response from an agent
+
+    Returns:
+        Parsed JSON as a Python dict/list, or None if parsing fails
+
+    Raises:
+        json.JSONDecodeError: If no valid JSON can be extracted
+    """
+    import re
+
+    if not text:
+        return None
+
+    text = text.strip()
+
+    if not text:
+        return None
+
+    # Try parsing as pure JSON first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code blocks: ```json ... ``` or ``` ... ```
+    # Use the last code block if there are multiple
+    code_block_patterns = [
+        r"```json\s*\n?(.*?)\n?```",  # ```json ... ```
+        r"```\s*\n?(.*?)\n?```",  # ``` ... ```
+    ]
+    for pattern in code_block_patterns:
+        matches = list(re.finditer(pattern, text, re.DOTALL))
+        if matches:
+            # Try the last match first (most likely to be the final result)
+            for match in reversed(matches):
+                try:
+                    return json.loads(match.group(1).strip())
+                except json.JSONDecodeError:
+                    continue
+
+    # Find ALL JSON objects {...} or arrays [...] in the text and return the last valid one
+    # This handles cases where agents stream multiple JSON objects (partial, then final)
+    all_json_objects: list[Any] = []
+
+    pos = 0
+    while pos < len(text):
+        # Find next { or [
+        json_start = -1
+        bracket_char = None
+        for i in range(pos, len(text)):
+            if text[i] == "{":
+                json_start = i
+                bracket_char = "{"
+                break
+            if text[i] == "[":
+                json_start = i
+                bracket_char = "["
+                break
+
+        if json_start < 0:
+            break  # No more JSON objects
+
+        # Find matching closing bracket
+        open_bracket = bracket_char
+        close_bracket = "}" if open_bracket == "{" else "]"
+        depth = 0
+        in_string = False
+        escape_next = False
+        found_end = False
+
+        for i in range(json_start, len(text)):
+            char = text[i]
+
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == "\\":
+                escape_next = True
+                continue
+
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == open_bracket:
+                depth += 1
+            elif char == close_bracket:
+                depth -= 1
+                if depth == 0:
+                    # Found the end
+                    potential_json = text[json_start : i + 1]
+                    try:
+                        parsed = json.loads(potential_json)
+                        all_json_objects.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    pos = i + 1
+                    found_end = True
+                    break
+
+        if not found_end:
+            # Malformed JSON, move past the start character
+            pos = json_start + 1
+
+    # Return the last valid JSON object (most likely to be the final/complete result)
+    if all_json_objects:
+        return all_json_objects[-1]
+
+    # Unable to extract JSON
+    raise json.JSONDecodeError("No valid JSON found in response", text, 0)
+
+
 def _validate_conversation_history(messages: list[ChatMessage], agent_name: str) -> None:
     """Validate that conversation history has matching tool calls and results.
 
@@ -228,28 +362,27 @@ class ExternalLoopState:
     response_obj_var: str | None
     result_property: str | None
     auto_send: bool
-    messages_path: str = "conversation.messages"
+    messages_path: str = "Conversation.messages"
     max_iterations: int = 100
 
 
-def _map_variable_to_path(variable: str) -> str:
-    """Map .NET-style variable names to state paths.
+def _normalize_variable_path(variable: str) -> str:
+    """Normalize variable names to ensure they have a scope prefix.
 
     Args:
         variable: Variable name like 'Local.X' or 'System.ConversationId'
 
     Returns:
-        State path like 'turn.X' or 'system.ConversationId'
+        The variable path with a scope prefix (defaults to Local if none provided)
     """
-    if variable.startswith("Local."):
-        return "turn." + variable[6:]
-    if variable.startswith("System."):
-        return "system." + variable[7:]
-    if variable.startswith("Workflow."):
-        return "workflow." + variable[9:]
-    if "." in variable:
+    if variable.startswith(("Local.", "System.", "Workflow.", "Agent.", "Conversation.")):
+        # Already has a proper namespace
         return variable
-    return "turn." + variable
+    if "." in variable:
+        # Has some namespace, use as-is
+        return variable
+    # Default to Local scope
+    return "Local." + variable
 
 
 class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
@@ -260,8 +393,8 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
     Python-style (simple):
         kind: InvokeAzureAgent
         agent: MenuAgent
-        input: =turn.userInput
-        resultProperty: turn.agentResponse
+        input: =Local.userInput
+        resultProperty: Local.agentResponse
 
     .NET-style (full featured):
         kind: InvokeAzureAgent
@@ -270,11 +403,11 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         conversationId: =System.ConversationId
         input:
           arguments:
-            param1: =turn.value1
+            param1: =Local.value1
             param2: literal value
-          messages: =conversation.messages
+          messages: =Conversation.messages
           externalLoop:
-            when: =turn.needsMoreInput
+            when: =Local.needsMoreInput
         output:
           messages: Local.ResponseMessages
           responseObject: Local.StructuredResponse
@@ -398,18 +531,18 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             conversation_id_expr: The conversationId expression from action definition
 
         Returns:
-            State path for messages (e.g., "conversation.messages" or "system.conversations.{id}.messages")
+            State path for messages (e.g., "Conversation.messages" or "System.conversations.{id}.messages")
         """
         if not conversation_id_expr:
-            return "conversation.messages"
+            return "Conversation.messages"
 
         # Evaluate the conversation ID expression
         evaluated_id = await state.eval_if_expression(conversation_id_expr)
         if not evaluated_id:
-            return "conversation.messages"
+            return "Conversation.messages"
 
         # Use conversation-specific messages path
-        return f"system.conversations.{evaluated_id}.messages"
+        return f"System.conversations.{evaluated_id}.messages"
 
     async def _build_input_text(self, state: Any, arguments: dict[str, Any], messages_expr: Any) -> str:
         """Build input text from arguments and messages.
@@ -448,20 +581,20 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             return ""
 
         # Fallback chain for implicit input (like .NET conversationId pattern):
-        # 1. turn.input / turn.userInput (explicit turn state)
-        # 2. system.LastMessage.Text (previous agent's response)
-        # 3. workflow.inputs (first agent gets workflow inputs)
-        input_text: str = str(await state.get("turn.input") or await state.get("turn.userInput") or "")
+        # 1. Local.input / Local.userInput (explicit turn state)
+        # 2. System.LastMessage.Text (previous agent's response)
+        # 3. Workflow.Inputs (first agent gets workflow inputs)
+        input_text: str = str(await state.get("Local.input") or await state.get("Local.userInput") or "")
         if not input_text:
-            # Try system.LastMessage.Text (used by external loop and agent chaining)
-            last_message: Any = await state.get("system.LastMessage")
+            # Try System.LastMessage.Text (used by external loop and agent chaining)
+            last_message: Any = await state.get("System.LastMessage")
             if isinstance(last_message, dict):
                 last_msg_dict = cast(dict[str, Any], last_message)
                 text_val: Any = last_msg_dict.get("Text", "")
                 input_text = str(text_val) if text_val else ""
         if not input_text:
             # Fall back to workflow inputs (for first agent in chain)
-            inputs: Any = await state.get("workflow.inputs")
+            inputs: Any = await state.get("Workflow.Inputs")
             if isinstance(inputs, dict):
                 inputs_dict = cast(dict[str, Any], inputs)
                 # If single input, use its value directly
@@ -487,7 +620,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         response_obj_var: str | None,
         result_property: str | None,
         auto_send: bool,
-        messages_path: str = "conversation.messages",
+        messages_path: str = "Conversation.messages",
     ) -> tuple[str, list[Any], list[Any]]:
         """Invoke agent and store results in state.
 
@@ -501,7 +634,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             response_obj_var: Output variable for parsed response object
             result_property: Output property for result
             auto_send: Whether to auto-send output to context
-            messages_path: State path for conversation messages (default: "conversation.messages")
+            messages_path: State path for conversation messages (default: "Conversation.messages")
 
         Returns:
             Tuple of (accumulated_response, all_messages, tool_calls)
@@ -585,29 +718,31 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             await state.append(messages_path, assistant_message)
 
         # Store results in state - support both schema formats:
-        # - Graph mode: agent.response, agent.name
-        # - Interpreter mode: agent.text, agent.messages, agent.toolCalls
-        await state.set("agent.response", accumulated_response)
-        await state.set("agent.name", agent_name)
-        await state.set("agent.text", accumulated_response)
-        await state.set("agent.messages", all_messages if all_messages else [])
-        await state.set("agent.toolCalls", tool_calls if tool_calls else [])
+        # - Graph mode: Agent.response, Agent.name
+        # - Interpreter mode: Agent.text, Agent.messages, Agent.toolCalls
+        await state.set("Agent.response", accumulated_response)
+        await state.set("Agent.name", agent_name)
+        await state.set("Agent.text", accumulated_response)
+        await state.set("Agent.messages", all_messages if all_messages else [])
+        await state.set("Agent.toolCalls", tool_calls if tool_calls else [])
 
         # Store System.LastMessage for externalLoop.when condition evaluation
-        await state.set("system.LastMessage", {"Text": accumulated_response})
+        await state.set("System.LastMessage", {"Text": accumulated_response})
 
         # Store in output variables (.NET style)
         if messages_var:
-            output_path = _map_variable_to_path(messages_var)
+            output_path = _normalize_variable_path(messages_var)
             await state.set(output_path, all_messages if all_messages else accumulated_response)
 
         if response_obj_var:
-            output_path = _map_variable_to_path(response_obj_var)
-            # Try to parse as JSON for structured output
+            output_path = _normalize_variable_path(response_obj_var)
+            # Try to extract and parse JSON from the response
             try:
-                parsed = json.loads(accumulated_response) if accumulated_response else None
+                parsed = _extract_json_from_response(accumulated_response) if accumulated_response else None
+                logger.debug(f"InvokeAzureAgent: parsed responseObject for '{output_path}': type={type(parsed)}")
                 await state.set(output_path, parsed)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"InvokeAzureAgent: failed to parse JSON for '{output_path}': {e}, storing as string")
                 await state.set(output_path, accumulated_response)
 
         # Store in result property (Python style)
@@ -664,7 +799,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         if agent is None:
             error_msg = f"Agent '{agent_name}' not found in registry"
             logger.error(f"InvokeAzureAgent: {error_msg}")
-            await state.set("agent.error", error_msg)
+            await state.set("Agent.error", error_msg)
             if result_property:
                 await state.set(result_property, {"error": error_msg})
             raise AgentInvocationError(agent_name, "not found in registry")
@@ -688,7 +823,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             raise  # Re-raise our own errors
         except Exception as e:
             logger.error(f"InvokeAzureAgent: error invoking agent '{agent_name}': {e}")
-            await state.set("agent.error", str(e))
+            await state.set("Agent.error", str(e))
             if result_property:
                 await state.set(result_property, {"error": str(e)})
             raise AgentInvocationError(agent_name, str(e)) from e
@@ -778,8 +913,8 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
         input_text = response.user_input
 
         # Store the user input in state for condition evaluation
-        await state.set("turn.userInput", input_text)
-        await state.set("system.LastMessage", {"Text": input_text})
+        await state.set("Local.userInput", input_text)
+        await state.set("System.LastMessage", {"Text": input_text})
 
         # Check if we should continue BEFORE invoking the agent
         # This matches .NET behavior where the condition checks the user's input
@@ -828,7 +963,7 @@ class InvokeAzureAgentExecutor(DeclarativeActionExecutor):
             raise  # Re-raise our own errors
         except Exception as e:
             logger.error(f"InvokeAzureAgent: error invoking agent '{agent_name}' during loop: {e}")
-            await state.set("agent.error", str(e))
+            await state.set("Agent.error", str(e))
             raise AgentInvocationError(agent_name, str(e)) from e
 
         # Re-evaluate the condition AFTER the agent responds

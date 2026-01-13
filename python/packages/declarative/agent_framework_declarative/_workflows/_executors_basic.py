@@ -187,9 +187,9 @@ class ClearAllVariablesExecutor(DeclarativeActionExecutor):
         """Handle the ClearAllVariables action."""
         state = await self._ensure_state_initialized(ctx, trigger)
 
-        # Get state data and clear turn variables
+        # Get state data and clear Local variables
         state_data = await state.get_state_data()
-        state_data["turn"] = {}
+        state_data["Local"] = {}
         await state.set_state_data(state_data)
 
         await ctx.send_message(ActionComplete())

@@ -26,6 +26,7 @@ See: dotnet/src/Microsoft.Agents.AI.Workflows.Declarative/PowerFx/
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal as _Decimal
 from typing import Any, Literal, TypedDict, cast
 
 from agent_framework._workflows import (
@@ -58,56 +59,34 @@ class DeclarativeStateData(TypedDict, total=False):
     This TypedDict defines the schema for workflow variables stored
     under the DECLARATIVE_STATE_KEY in SharedState.
 
-    Attributes:
-        inputs: Initial workflow inputs (read-only after initialization).
-        outputs: Values to return from the workflow.
-        turn: Variables persisting within the current workflow turn.
-        system: System-level variables.
-        agent: Results from the most recent agent invocation.
-        conversation: Conversation history and messages.
-        custom: User-defined custom variables.
+    Variable Scopes (matching .NET naming conventions):
+        Inputs: Initial workflow inputs (read-only after initialization).
+        Outputs: Values to return from the workflow.
+        Local: Variables persisting within the current workflow turn.
+        System: System-level variables (ConversationId, LastMessage, etc.).
+        Agent: Results from the most recent agent invocation.
+        Conversation: Conversation history and messages.
+        Custom: User-defined custom variables.
         _declarative_loop_state: Internal loop iteration state (managed by ForeachExecutors).
     """
 
-    inputs: dict[str, Any]
-    outputs: dict[str, Any]
-    turn: dict[str, Any]
-    system: dict[str, Any]
-    agent: dict[str, Any]
-    conversation: ConversationData
-    custom: dict[str, Any]
+    Inputs: dict[str, Any]
+    Outputs: dict[str, Any]
+    Local: dict[str, Any]
+    System: dict[str, Any]
+    Agent: dict[str, Any]
+    Conversation: ConversationData
+    Custom: dict[str, Any]
     _declarative_loop_state: dict[str, Any]
 
 
 # Key used in SharedState to store declarative workflow variables
 DECLARATIVE_STATE_KEY = "_declarative_workflow_state"
 
-# Namespace prefix mappings from .NET style to Python style
-_NAMESPACE_MAPPINGS = {
-    "Local.": "turn.",
-    "System.": "system.",
-    "Workflow.": "workflow.",
-    "inputs.": "workflow.inputs.",
-}
-
-
-def _map_dotnet_namespace(path: str) -> str:
-    """Map .NET-style namespace prefixes to Python-style.
-
-    Args:
-        path: A dot-notated path like 'Local.value' or 'Workflow.inputs.query'
-
-    Returns:
-        The path with any .NET-style prefix converted to Python-style
-    """
-    for dotnet_prefix, python_prefix in _NAMESPACE_MAPPINGS.items():
-        if path.startswith(dotnet_prefix):
-            return python_prefix + path[len(dotnet_prefix) :]
-    return path
-
 
 # Types that PowerFx can serialize directly
-_POWERFX_SAFE_TYPES = (str, int, float, bool, type(None))
+# Note: Decimal is included because PowerFx returns Decimal for numeric values
+_POWERFX_SAFE_TYPES = (str, int, float, bool, type(None), _Decimal)
 
 
 def _make_powerfx_safe(value: Any) -> Any:
@@ -145,12 +124,13 @@ class DeclarativeWorkflowState:
     This class provides the same interface as the interpreter-based WorkflowState
     but stores all data in SharedState for checkpointing support.
 
-    The state is organized into namespaces:
-    - workflow.inputs: Initial inputs (read-only)
-    - workflow.outputs: Values to return from workflow
-    - turn: Variables persisting within the workflow turn
-    - agent: Results from most recent agent invocation
-    - conversation: Conversation history
+    The state is organized into namespaces (matching .NET naming conventions):
+    - Workflow.Inputs: Initial inputs (read-only)
+    - Workflow.Outputs: Values to return from workflow
+    - Local: Variables persisting within the workflow turn
+    - System: System-level variables (ConversationId, LastMessage, etc.)
+    - Agent: Results from most recent agent invocation
+    - Conversation: Conversation history
     """
 
     def __init__(self, shared_state: SharedState):
@@ -165,21 +145,21 @@ class DeclarativeWorkflowState:
         """Initialize the declarative state with inputs.
 
         Args:
-            inputs: Initial workflow inputs (become workflow.inputs.*)
+            inputs: Initial workflow inputs (become Workflow.Inputs.*)
         """
         state_data: DeclarativeStateData = {
-            "inputs": dict(inputs) if inputs else {},
-            "outputs": {},
-            "turn": {},
-            "system": {
+            "Inputs": dict(inputs) if inputs else {},
+            "Outputs": {},
+            "Local": {},
+            "System": {
                 "ConversationId": "default",
                 "LastMessage": {"Text": "", "Id": ""},
                 "LastMessageText": "",
                 "LastMessageId": "",
             },
-            "agent": {},
-            "conversation": {"messages": [], "history": []},
-            "custom": {},
+            "Agent": {},
+            "Conversation": {"messages": [], "history": []},
+            "Custom": {},
         }
         await self._shared_state.set(DECLARATIVE_STATE_KEY, state_data)
 
@@ -201,22 +181,12 @@ class DeclarativeWorkflowState:
         """Get a value from the state using a dot-notated path.
 
         Args:
-            path: Dot-notated path like 'turn.results' or 'workflow.inputs.query'
+            path: Dot-notated path like 'Local.results' or 'Workflow.Inputs.query'
             default: Default value if path doesn't exist
 
         Returns:
             The value at the path, or default if not found
         """
-        # Map .NET style namespaces to Python style
-        if path.startswith("Local."):
-            path = "turn." + path[6:]
-        elif path.startswith("System."):
-            path = "system." + path[7:]
-        elif path.startswith("Workflow."):
-            path = "workflow." + path[9:]
-        elif path.startswith("inputs."):
-            path = "workflow.inputs." + path[7:]
-
         state_data = await self.get_state_data()
         parts = path.split(".")
         if not parts:
@@ -225,27 +195,27 @@ class DeclarativeWorkflowState:
         namespace = parts[0]
         remaining = parts[1:]
 
-        # Handle workflow.inputs and workflow.outputs specially
-        if namespace == "workflow" and remaining:
+        # Handle Workflow.Inputs and Workflow.Outputs specially
+        if namespace == "Workflow" and remaining:
             sub_namespace = remaining[0]
             remaining = remaining[1:]
-            if sub_namespace == "inputs":
-                obj: Any = state_data.get("inputs", {})
-            elif sub_namespace == "outputs":
-                obj = state_data.get("outputs", {})
+            if sub_namespace == "Inputs":
+                obj: Any = state_data.get("Inputs", {})
+            elif sub_namespace == "Outputs":
+                obj = state_data.get("Outputs", {})
             else:
                 return default
-        elif namespace == "turn":
-            obj = state_data.get("turn", {})
-        elif namespace == "system":
-            obj = state_data.get("system", {})
-        elif namespace == "agent":
-            obj = state_data.get("agent", {})
-        elif namespace == "conversation":
-            obj = state_data.get("conversation", {})
+        elif namespace == "Local":
+            obj = state_data.get("Local", {})
+        elif namespace == "System":
+            obj = state_data.get("System", {})
+        elif namespace == "Agent":
+            obj = state_data.get("Agent", {})
+        elif namespace == "Conversation":
+            obj = state_data.get("Conversation", {})
         else:
             # Try custom namespace
-            custom_data: dict[str, Any] = state_data.get("custom", {})
+            custom_data: dict[str, Any] = state_data.get("Custom", {})
             obj = custom_data.get(namespace, default)
             if obj is default:
                 return default
@@ -267,15 +237,12 @@ class DeclarativeWorkflowState:
         """Set a value in the state using a dot-notated path.
 
         Args:
-            path: Dot-notated path like 'turn.results' or 'workflow.outputs.response'
+            path: Dot-notated path like 'Local.results' or 'Workflow.Outputs.response'
             value: The value to set
 
         Raises:
-            ValueError: If attempting to set workflow.inputs (which is read-only)
+            ValueError: If attempting to set Workflow.Inputs (which is read-only)
         """
-        # Map .NET style namespaces to Python style
-        path = _map_dotnet_namespace(path)
-
         state_data = await self.get_state_data()
         parts = path.split(".")
         if not parts:
@@ -285,28 +252,28 @@ class DeclarativeWorkflowState:
         remaining = parts[1:]
 
         # Determine target dict
-        if namespace == "workflow":
+        if namespace == "Workflow":
             if not remaining:
-                raise ValueError("Cannot set 'workflow' directly; use 'workflow.outputs.*'")
+                raise ValueError("Cannot set 'Workflow' directly; use 'Workflow.Outputs.*'")
             sub_namespace = remaining[0]
             remaining = remaining[1:]
-            if sub_namespace == "inputs":
-                raise ValueError("Cannot modify workflow.inputs - they are read-only")
-            if sub_namespace == "outputs":
-                target = state_data.setdefault("outputs", {})
+            if sub_namespace == "Inputs":
+                raise ValueError("Cannot modify Workflow.Inputs - they are read-only")
+            if sub_namespace == "Outputs":
+                target = state_data.setdefault("Outputs", {})
             else:
-                raise ValueError(f"Unknown workflow namespace: {sub_namespace}")
-        elif namespace == "turn":
-            target = state_data.setdefault("turn", {})
-        elif namespace == "system":
-            target = state_data.setdefault("system", {})
-        elif namespace == "agent":
-            target = state_data.setdefault("agent", {})
-        elif namespace == "conversation":
-            target = cast(dict[str, Any], state_data).setdefault("conversation", {})
+                raise ValueError(f"Unknown Workflow namespace: {sub_namespace}")
+        elif namespace == "Local":
+            target = state_data.setdefault("Local", {})
+        elif namespace == "System":
+            target = state_data.setdefault("System", {})
+        elif namespace == "Agent":
+            target = state_data.setdefault("Agent", {})
+        elif namespace == "Conversation":
+            target = cast(dict[str, Any], state_data).setdefault("Conversation", {})
         else:
             # Create or use custom namespace
-            custom = state_data.setdefault("custom", {})
+            custom = state_data.setdefault("Custom", {})
             if namespace not in custom:
                 custom[namespace] = {}
             target = custom[namespace]
@@ -379,9 +346,14 @@ class DeclarativeWorkflowState:
         formula = expression[1:]
 
         # Handle custom functions not supported by PowerFx
+        # First check if the entire formula is a custom function
         result = await self._eval_custom_function(formula)
         if result is not None:
             return result
+
+        # Pre-process nested custom functions (e.g., Upper(MessageText(...)))
+        # Replace them with their evaluated results before sending to PowerFx
+        formula = await self._preprocess_custom_functions(formula)
 
         engine = Engine()
         symbols = await self._to_powerfx_symbols()
@@ -448,16 +420,147 @@ class DeclarativeWorkflowState:
         match = re.match(r"MessageText\((.+)\)$", formula.strip())
         if match:
             inner_expr = match.group(1).strip()
-            messages = await self.eval(f"={inner_expr}")
-            if isinstance(messages, list) and messages:
-                last_msg = messages[-1]
-                if isinstance(last_msg, dict):
-                    return last_msg.get("text", "")
-                if hasattr(last_msg, "text"):
-                    return last_msg.text
-            return ""
+            # Reuse the helper method for consistent text extraction
+            return await self._eval_and_replace_message_text(inner_expr)
 
         return None
+
+    async def _preprocess_custom_functions(self, formula: str) -> str:
+        """Pre-process custom functions nested inside other PowerFx functions.
+
+        Custom functions like MessageText() are not supported by the PowerFx engine.
+        When they appear nested inside other functions (e.g., Upper(MessageText(...))),
+        we need to evaluate them first and replace with the result.
+
+        For long strings (>500 chars), the result is stored in a temporary state variable
+        to avoid exceeding PowerFx's 1000 character expression limit. This is a limitation
+        of the Python PowerFx wrapper (powerfx package), which doesn't expose the
+        MaximumExpressionLength configuration that the .NET PowerFxConfig provides.
+        The .NET implementation defaults to 10,000 characters, while Python defaults to 1,000.
+
+        Args:
+            formula: The PowerFx formula to pre-process
+
+        Returns:
+            The formula with custom function calls replaced by their evaluated results
+        """
+        import re
+
+        # Threshold for storing in state vs embedding as literal.
+        # The Python PowerFx wrapper defaults to a 1000 char expression limit (vs 10,000 in .NET).
+        # We use 500 to leave room for the rest of the expression around the replaced value.
+        MAX_INLINE_LENGTH = 500
+
+        # Counter for generating unique temp variable names
+        temp_var_counter = 0
+
+        # Custom functions that need pre-processing: (regex pattern, handler)
+        custom_functions = [
+            (r"MessageText\(", self._eval_and_replace_message_text),
+        ]
+
+        for pattern, handler in custom_functions:
+            # Find all occurrences of the custom function
+            while True:
+                match = re.search(pattern, formula)
+                if not match:
+                    break
+
+                # Find the matching closing parenthesis
+                start = match.start()
+                paren_start = match.end() - 1  # Position of opening (
+                depth = 1
+                pos = paren_start + 1
+                in_string = False
+                escape_next = False
+
+                while pos < len(formula) and depth > 0:
+                    char = formula[pos]
+                    if escape_next:
+                        escape_next = False
+                        pos += 1
+                        continue
+                    if char == "\\":
+                        escape_next = True
+                        pos += 1
+                        continue
+                    if char == '"' and not escape_next:
+                        in_string = not in_string
+                    elif not in_string:
+                        if char == "(":
+                            depth += 1
+                        elif char == ")":
+                            depth -= 1
+                    pos += 1
+
+                if depth != 0:
+                    # Malformed expression, skip
+                    break
+
+                # Extract the inner expression (between parentheses)
+                end = pos
+                inner_expr = formula[paren_start + 1 : end - 1]
+
+                # Evaluate and get replacement
+                replacement = await handler(inner_expr)
+
+                # Replace in formula
+                if isinstance(replacement, str):
+                    if len(replacement) > MAX_INLINE_LENGTH:
+                        # Store long strings in a temp variable to avoid PowerFx expression limit
+                        temp_var_name = f"_TempMessageText{temp_var_counter}"
+                        temp_var_counter += 1
+                        await self.set(f"Local.{temp_var_name}", replacement)
+                        replacement_str = f"Local.{temp_var_name}"
+                        logger.debug(
+                            f"Stored long MessageText result ({len(replacement)} chars) "
+                            f"in temp variable {temp_var_name}"
+                        )
+                    else:
+                        # Short strings can be embedded directly
+                        escaped = replacement.replace('"', '""')
+                        replacement_str = f'"{escaped}"'
+                else:
+                    replacement_str = str(replacement) if replacement is not None else '""'
+
+                formula = formula[:start] + replacement_str + formula[end:]
+
+        return formula
+
+    async def _eval_and_replace_message_text(self, inner_expr: str) -> str:
+        """Evaluate MessageText() and return the text result.
+
+        Args:
+            inner_expr: The expression inside MessageText()
+
+        Returns:
+            The extracted text from the messages
+        """
+        messages: Any = await self.eval(f"={inner_expr}")
+        if isinstance(messages, list) and messages:
+            last_msg: Any = messages[-1]
+            if isinstance(last_msg, dict):
+                # Try "text" key first (simple dict format)
+                if "text" in last_msg:
+                    return str(last_msg["text"])
+                # Try extracting from "contents" (ChatMessage dict format)
+                # ChatMessage.text concatenates text from all TextContent items
+                contents = last_msg.get("contents", [])
+                if isinstance(contents, list):
+                    text_parts = []
+                    for content in contents:
+                        if isinstance(content, dict):
+                            # TextContent has a "text" key
+                            if content.get("type") == "text" or "text" in content:
+                                text_parts.append(str(content.get("text", "")))
+                        elif hasattr(content, "text"):
+                            text_parts.append(str(getattr(content, "text", "")))
+                    if text_parts:
+                        return " ".join(text_parts)
+                return ""
+            if hasattr(last_msg, "text"):
+                return str(getattr(last_msg, "text", ""))
+        return ""
 
     def _parse_function_args(self, args_str: str) -> list[str]:
         """Parse comma-separated function arguments, handling nested parentheses and strings."""
@@ -496,40 +599,39 @@ class DeclarativeWorkflowState:
     async def _to_powerfx_symbols(self) -> dict[str, Any]:
         """Convert the current state to a PowerFx symbols dictionary.
 
-        Includes both .NET-style capitalized names (System, Local, Workflow) and
-        lowercase aliases (system, turn, workflow) for compatibility with
-        declarative workflow YAML files and internal tests.
+        Uses .NET-style PascalCase names (System, Local, Workflow) matching
+        the .NET declarative workflow implementation.
         """
         state_data = await self.get_state_data()
-        turn_data = state_data.get("turn", {})
-        agent_data = state_data.get("agent", {})
-        conversation_data = state_data.get("conversation", {})
-        system_data = state_data.get("system", {})
-        inputs_data = state_data.get("inputs", {})
-        outputs_data = state_data.get("outputs", {})
+        local_data = state_data.get("Local", {})
+        agent_data = state_data.get("Agent", {})
+        conversation_data = state_data.get("Conversation", {})
+        system_data = state_data.get("System", {})
+        inputs_data = state_data.get("Inputs", {})
+        outputs_data = state_data.get("Outputs", {})
 
         symbols: dict[str, Any] = {
-            # .NET-style capitalized names (used in YAML workflows)
+            # .NET-style PascalCase names (matching .NET implementation)
             "Workflow": {
                 "Inputs": inputs_data,
                 "Outputs": outputs_data,
             },
-            "Local": turn_data,
+            "Local": local_data,
             "Agent": agent_data,
             "Conversation": conversation_data,
             "System": system_data,
-            # Lowercase aliases (used internally and in tests)
-            "workflow": {
-                "inputs": inputs_data,
-                "outputs": outputs_data,
-            },
-            "turn": turn_data,
-            "agent": agent_data,
-            "conversation": conversation_data,
-            "system": system_data,
+            # Also expose inputs at top level for backward compatibility with =inputs.X syntax
+            "inputs": inputs_data,
             # Custom namespaces
-            **state_data.get("custom", {}),
+            **state_data.get("Custom", {}),
         }
+        # Debug log the Local symbols to help diagnose type issues
+        if local_data:
+            for key, value in local_data.items():
+                logger.debug(
+                    f"PowerFx symbol Local.{key}: type={type(value).__name__}, "
+                    f"value_preview={str(value)[:100] if value else None}"
+                )
         result = _make_powerfx_safe(symbols)
         return cast(dict[str, Any], result)
 
@@ -562,13 +664,7 @@ class DeclarativeWorkflowState:
 
         async def replace_var(match: re.Match[str]) -> str:
             var_path: str = match.group(1)
-            # Map .NET style to Python style (Local.X -> turn.X)
-            path = var_path
-            if var_path.startswith("Local."):
-                path = "turn." + var_path[6:]
-            elif var_path.startswith("System."):
-                path = "system." + var_path[7:]
-            value = await self.get(path)
+            value = await self.get(var_path)
             return str(value) if value is not None else ""
 
         # Match {Variable.Path} patterns

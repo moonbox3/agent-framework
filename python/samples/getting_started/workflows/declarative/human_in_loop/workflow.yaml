@@ -15,7 +15,7 @@ actions:
     displayName: Ask for user name
     question:
       text: "What is your name?"
-    variable: turn.userName
+    variable: Local.userName
     default: "Demo User"
 
   # Personalized greeting
@@ -23,7 +23,7 @@ actions:
     id: personalized_greeting
     displayName: Send personalized greeting
     activity:
-      text: =Concat("Nice to meet you, ", turn.userName, "!")
+      text: =Concat("Nice to meet you, ", Local.userName, "!")
 
   # Ask how they're feeling
   - kind: Question
@@ -31,14 +31,14 @@ actions:
     displayName: Ask about feelings
     question:
       text: "How are you feeling today? (great/good/okay/not great)"
-    variable: turn.feeling
+    variable: Local.feeling
     default: "great"
 
   # Respond based on feeling
   - kind: If
     id: check_feeling
     displayName: Check user feeling
-    condition: =Or(turn.feeling = "great", turn.feeling = "good")
+    condition: =Or(Local.feeling = "great", Local.feeling = "good")
     then:
       - kind: SendActivity
         activity:
@@ -54,7 +54,7 @@ actions:
     displayName: Request feedback
     prompt:
       text: "Do you have any feedback for us?"
-    variable: turn.feedback
+    variable: Local.feedback
     default: "This workflow is great!"
 
   # Summary
@@ -62,14 +62,14 @@ actions:
     id: summary
     displayName: Send summary
     activity:
-      text: '=Concat("Thank you, ", turn.userName, "! Your feedback: ", turn.feedback)'
+      text: '=Concat("Thank you, ", Local.userName, "! Your feedback: ", Local.feedback)'
 
   # Store results
   - kind: SetValue
     id: store_results
     displayName: Store survey results
-    path: workflow.outputs.survey
+    path: Workflow.Outputs.survey
     value:
-      name: =turn.userName
-      feeling: =turn.feeling
-      feedback: =turn.feedback
+      name: =Local.userName
+      feeling: =Local.feeling
+      feedback: =Local.feedback

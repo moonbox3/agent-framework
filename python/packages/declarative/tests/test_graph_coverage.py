@@ -74,7 +74,7 @@ class TestDeclarativeWorkflowStateExtended:
         """Test Local. namespace mapping."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.myVar", "value123")
+        await state.set("Local.myVar", "value123")
 
         # Access via Local. namespace
         result = await state.get("Local.myVar")
@@ -84,7 +84,7 @@ class TestDeclarativeWorkflowStateExtended:
         """Test System. namespace mapping."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("system.ConversationId", "conv-123")
+        await state.set("System.ConversationId", "conv-123")
 
         result = await state.get("System.ConversationId")
         assert result == "conv-123"
@@ -94,7 +94,7 @@ class TestDeclarativeWorkflowStateExtended:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
 
-        result = await state.get("Workflow.inputs.query")
+        result = await state.get("Workflow.Inputs.query")
         assert result == "test"
 
     async def test_get_with_inputs_shorthand(self, mock_shared_state):
@@ -102,25 +102,25 @@ class TestDeclarativeWorkflowStateExtended:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
 
-        result = await state.get("inputs.query")
+        result = await state.get("Workflow.Inputs.query")
         assert result == "test"
 
     async def test_get_agent_namespace(self, mock_shared_state):
         """Test agent namespace access."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("agent.response", "Hello!")
+        await state.set("Agent.response", "Hello!")
 
-        result = await state.get("agent.response")
+        result = await state.get("Agent.response")
         assert result == "Hello!"
 
     async def test_get_conversation_namespace(self, mock_shared_state):
         """Test conversation namespace access."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("conversation.messages", [{"role": "user", "text": "hi"}])
+        await state.set("Conversation.messages", [{"role": "user", "text": "hi"}])
 
-        result = await state.get("conversation.messages")
+        result = await state.get("Conversation.messages")
         assert result == [{"role": "user", "text": "hi"}]
 
     async def test_get_custom_namespace(self, mock_shared_state):
@@ -130,7 +130,7 @@ class TestDeclarativeWorkflowStateExtended:
 
         # Set via direct state data manipulation to create custom namespace
         state_data = await state.get_state_data()
-        state_data["custom"] = {"myns": {"value": 42}}
+        state_data["Custom"] = {"myns": {"value": 42}}
         await state.set_state_data(state_data)
 
         result = await state.get("myns.value")
@@ -146,9 +146,9 @@ class TestDeclarativeWorkflowStateExtended:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.obj", MockObj(name="test", value=99))
+        await state.set("Local.obj", MockObj(name="test", value=99))
 
-        result = await state.get("turn.obj.name")
+        result = await state.get("Local.obj.name")
         assert result == "test"
 
     async def test_set_with_local_namespace(self, mock_shared_state):
@@ -157,7 +157,7 @@ class TestDeclarativeWorkflowStateExtended:
         await state.initialize()
 
         await state.set("Local.myVar", "value123")
-        result = await state.get("turn.myVar")
+        result = await state.get("Local.myVar")
         assert result == "value123"
 
     async def test_set_with_system_namespace(self, mock_shared_state):
@@ -166,7 +166,7 @@ class TestDeclarativeWorkflowStateExtended:
         await state.initialize()
 
         await state.set("System.ConversationId", "conv-456")
-        result = await state.get("system.ConversationId")
+        result = await state.get("System.ConversationId")
         assert result == "conv-456"
 
     async def test_set_workflow_outputs(self, mock_shared_state):
@@ -174,33 +174,33 @@ class TestDeclarativeWorkflowStateExtended:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        await state.set("workflow.outputs.result", "done")
-        outputs = await state.get("workflow.outputs")
+        await state.set("Workflow.Outputs.result", "done")
+        outputs = await state.get("Workflow.Outputs")
         assert outputs.get("result") == "done"
 
     async def test_set_workflow_inputs_raises_error(self, mock_shared_state):
-        """Test that setting workflow.inputs raises an error (read-only)."""
+        """Test that setting Workflow.Inputs raises an error (read-only)."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
 
-        with pytest.raises(ValueError, match="Cannot modify workflow.inputs"):
-            await state.set("workflow.inputs.query", "modified")
+        with pytest.raises(ValueError, match="Cannot modify Workflow.Inputs"):
+            await state.set("Workflow.Inputs.query", "modified")
 
     async def test_set_workflow_directly_raises_error(self, mock_shared_state):
-        """Test that setting 'workflow' directly raises an error."""
+        """Test that setting 'Workflow' directly raises an error."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        with pytest.raises(ValueError, match="Cannot set 'workflow' directly"):
-            await state.set("workflow", {})
+        with pytest.raises(ValueError, match="Cannot set 'Workflow' directly"):
+            await state.set("Workflow", {})
 
     async def test_set_unknown_workflow_subnamespace_raises_error(self, mock_shared_state):
         """Test unknown workflow sub-namespace raises error."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        with pytest.raises(ValueError, match="Unknown workflow namespace"):
-            await state.set("workflow.unknown.field", "value")
+        with pytest.raises(ValueError, match="Unknown Workflow namespace"):
+            await state.set("Workflow.unknown.field", "value")
 
     async def test_set_creates_custom_namespace(self, mock_shared_state):
         """Test setting value in custom namespace creates it."""
@@ -223,10 +223,10 @@ class TestDeclarativeWorkflowStateExtended:
         """Test appending to non-list raises error."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.scalar", "string value")
+        await state.set("Local.scalar", "string value")
 
         with pytest.raises(ValueError, match="Cannot append to non-list"):
-            await state.append("turn.scalar", "new item")
+            await state.append("Local.scalar", "new item")
 
     async def test_eval_empty_string(self, mock_shared_state):
         """Test evaluating empty string returns as-is."""
@@ -252,73 +252,73 @@ class TestDeclarativeWorkflowStateExtended:
         """Test simple And operator evaluation."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.a", True)
-        await state.set("turn.b", False)
+        await state.set("Local.a", True)
+        await state.set("Local.b", False)
 
-        result = await state.eval("=turn.a And turn.b")
+        result = await state.eval("=Local.a And Local.b")
         assert result is False
 
-        await state.set("turn.b", True)
-        result = await state.eval("=turn.a And turn.b")
+        await state.set("Local.b", True)
+        result = await state.eval("=Local.a And Local.b")
         assert result is True
 
     async def test_eval_simple_or_operator(self, mock_shared_state):
         """Test simple Or operator evaluation."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.a", True)
-        await state.set("turn.b", False)
+        await state.set("Local.a", True)
+        await state.set("Local.b", False)
 
-        result = await state.eval("=turn.a Or turn.b")
+        result = await state.eval("=Local.a Or Local.b")
         assert result is True
 
-        await state.set("turn.a", False)
-        result = await state.eval("=turn.a Or turn.b")
+        await state.set("Local.a", False)
+        result = await state.eval("=Local.a Or Local.b")
         assert result is False
 
     async def test_eval_negation(self, mock_shared_state):
         """Test negation (!) evaluation."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", True)
+        await state.set("Local.flag", True)
 
-        result = await state.eval("=!turn.flag")
+        result = await state.eval("=!Local.flag")
         assert result is False
 
     async def test_eval_not_function(self, mock_shared_state):
         """Test Not() function evaluation."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", True)
+        await state.set("Local.flag", True)
 
-        result = await state.eval("=Not(turn.flag)")
+        result = await state.eval("=Not(Local.flag)")
         assert result is False
 
     async def test_eval_comparison_operators(self, mock_shared_state):
         """Test comparison operators."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 5)
-        await state.set("turn.y", 10)
+        await state.set("Local.x", 5)
+        await state.set("Local.y", 10)
 
-        assert await state.eval("=turn.x < turn.y") is True
-        assert await state.eval("=turn.x > turn.y") is False
-        assert await state.eval("=turn.x <= 5") is True
-        assert await state.eval("=turn.x >= 5") is True
-        assert await state.eval("=turn.x <> turn.y") is True
-        assert await state.eval("=turn.x = 5") is True
+        assert await state.eval("=Local.x < Local.y") is True
+        assert await state.eval("=Local.x > Local.y") is False
+        assert await state.eval("=Local.x <= 5") is True
+        assert await state.eval("=Local.x >= 5") is True
+        assert await state.eval("=Local.x <> Local.y") is True
+        assert await state.eval("=Local.x = 5") is True
 
     async def test_eval_arithmetic_operators(self, mock_shared_state):
         """Test arithmetic operators."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 10)
-        await state.set("turn.y", 3)
+        await state.set("Local.x", 10)
+        await state.set("Local.y", 3)
 
-        assert await state.eval("=turn.x + turn.y") == 13
-        assert await state.eval("=turn.x - turn.y") == 7
-        assert await state.eval("=turn.x * turn.y") == 30
-        assert await state.eval("=turn.x / turn.y") == pytest.approx(3.333, rel=0.01)
+        assert await state.eval("=Local.x + Local.y") == 13
+        assert await state.eval("=Local.x - Local.y") == 7
+        assert await state.eval("=Local.x * Local.y") == 30
+        assert await state.eval("=Local.x / Local.y") == pytest.approx(3.333, rel=0.01)
 
     async def test_eval_string_literal(self, mock_shared_state):
         """Test string literal evaluation."""
@@ -343,40 +343,40 @@ class TestDeclarativeWorkflowStateExtended:
         """Test variable reference with PowerFx symbols."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"query": "test"})
-        await state.set("turn.myVar", "localValue")
+        await state.set("Local.myVar", "localValue")
 
-        # Test turn namespace (PowerFx symbol)
-        result = await state.eval("=turn.myVar")
+        # Test Local namespace (PowerFx symbol)
+        result = await state.eval("=Local.myVar")
         assert result == "localValue"
 
-        # Test workflow.inputs (PowerFx symbol)
-        result = await state.eval("=workflow.inputs.query")
+        # Test Workflow.Inputs (PowerFx symbol)
+        result = await state.eval("=Workflow.Inputs.query")
         assert result == "test"
 
     async def test_eval_if_expression_with_dict(self, mock_shared_state):
         """Test eval_if_expression recursively evaluates dicts."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.name", "Alice")
+        await state.set("Local.name", "Alice")
 
-        result = await state.eval_if_expression({"greeting": "=turn.name", "static": "hello"})
+        result = await state.eval_if_expression({"greeting": "=Local.name", "static": "hello"})
         assert result == {"greeting": "Alice", "static": "hello"}
 
     async def test_eval_if_expression_with_list(self, mock_shared_state):
         """Test eval_if_expression recursively evaluates lists."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 10)
+        await state.set("Local.x", 10)
 
-        result = await state.eval_if_expression(["=turn.x", "static", "=5"])
+        result = await state.eval_if_expression(["=Local.x", "static", "=5"])
         assert result == [10, "static", 5]
 
     async def test_interpolate_string_with_local_vars(self, mock_shared_state):
         """Test string interpolation with Local. variables."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.TicketId", "TKT-001")
-        await state.set("turn.TeamName", "Support")
+        await state.set("Local.TicketId", "TKT-001")
+        await state.set("Local.TeamName", "Support")
 
         result = await state.interpolate_string("Created ticket #{Local.TicketId} for team {Local.TeamName}")
         assert result == "Created ticket #TKT-001 for team Support"
@@ -385,7 +385,7 @@ class TestDeclarativeWorkflowStateExtended:
         """Test string interpolation with System. variables."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("system.ConversationId", "conv-789")
+        await state.set("System.ConversationId", "conv-789")
 
         result = await state.interpolate_string("Conversation: {System.ConversationId}")
         assert result == "Conversation: conv-789"
@@ -418,13 +418,13 @@ class TestBasicExecutorsCoverage:
 
         action_def = {
             "kind": "SetVariable",
-            "variable": "turn.result",
+            "variable": "Local.result",
             "value": "test value",
         }
         executor = SetVariableExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == "test value"
 
     async def test_set_variable_executor_with_nested_variable(self, mock_context, mock_shared_state):
@@ -438,13 +438,13 @@ class TestBasicExecutorsCoverage:
 
         action_def = {
             "kind": "SetVariable",
-            "variable": {"path": "turn.nested"},
+            "variable": {"path": "Local.nested"},
             "value": 42,
         }
         executor = SetVariableExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.nested")
+        result = await state.get("Local.nested")
         assert result == 42
 
     async def test_set_text_variable_executor(self, mock_context, mock_shared_state):
@@ -455,17 +455,17 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.name", "World")
+        await state.set("Local.name", "World")
 
         action_def = {
             "kind": "SetTextVariable",
-            "variable": "turn.greeting",
-            "text": "=turn.name",
+            "variable": "Local.greeting",
+            "text": "=Local.name",
         }
         executor = SetTextVariableExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.greeting")
+        result = await state.get("Local.greeting")
         assert result == "World"
 
     async def test_set_multiple_variables_executor(self, mock_context, mock_shared_state):
@@ -480,17 +480,17 @@ class TestBasicExecutorsCoverage:
         action_def = {
             "kind": "SetMultipleVariables",
             "assignments": [
-                {"variable": "turn.a", "value": 1},
-                {"variable": {"path": "turn.b"}, "value": 2},
-                {"path": "turn.c", "value": 3},
+                {"variable": "Local.a", "value": 1},
+                {"variable": {"path": "Local.b"}, "value": 2},
+                {"path": "Local.c", "value": 3},
             ],
         }
         executor = SetMultipleVariablesExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        assert await state.get("turn.a") == 1
-        assert await state.get("turn.b") == 2
-        assert await state.get("turn.c") == 3
+        assert await state.get("Local.a") == 1
+        assert await state.get("Local.b") == 2
+        assert await state.get("Local.c") == 3
 
     async def test_append_value_executor(self, mock_context, mock_shared_state):
         """Test AppendValueExecutor."""
@@ -500,17 +500,17 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.items", ["a"])
+        await state.set("Local.items", ["a"])
 
         action_def = {
             "kind": "AppendValue",
-            "path": "turn.items",
+            "path": "Local.items",
             "value": "b",
         }
         executor = AppendValueExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.items")
+        result = await state.get("Local.items")
         assert result == ["a", "b"]
 
     async def test_reset_variable_executor(self, mock_context, mock_shared_state):
@@ -521,16 +521,16 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.myVar", "some value")
+        await state.set("Local.myVar", "some value")
 
         action_def = {
             "kind": "ResetVariable",
-            "variable": "turn.myVar",
+            "variable": "Local.myVar",
         }
         executor = ResetVariableExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.myVar")
+        result = await state.get("Local.myVar")
         assert result is None
 
     async def test_clear_all_variables_executor(self, mock_context, mock_shared_state):
@@ -541,16 +541,16 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.a", 1)
-        await state.set("turn.b", 2)
+        await state.set("Local.a", 1)
+        await state.set("Local.b", 2)
 
         action_def = {"kind": "ClearAllVariables"}
         executor = ClearAllVariablesExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
 
         # Turn namespace should be cleared
-        assert await state.get("turn.a") is None
-        assert await state.get("turn.b") is None
+        assert await state.get("Local.a") is None
+        assert await state.get("Local.b") is None
 
     async def test_send_activity_with_dict_activity(self, mock_context, mock_shared_state):
         """Test SendActivityExecutor with dict activity containing text field."""
@@ -560,7 +560,7 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.name", "Alice")
+        await state.set("Local.name", "Alice")
 
         action_def = {
             "kind": "SendActivity",
@@ -597,11 +597,11 @@ class TestBasicExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.msg", "Dynamic message")
+        await state.set("Local.msg", "Dynamic message")
 
         action_def = {
             "kind": "SendActivity",
-            "activity": "=turn.msg",
+            "activity": "=Local.msg",
         }
         executor = SendActivityExecutor(action_def)
         await executor.handle_action(ActionTrigger(), mock_context)
@@ -663,26 +663,26 @@ class TestBasicExecutorsCoverage:
 class TestAgentExecutorsCoverage:
     """Tests for agent executors covering uncovered code paths."""
 
-    async def test_map_variable_to_path_all_cases(self):
-        """Test _map_variable_to_path with all namespace mappings."""
+    async def test_normalize_variable_path_all_cases(self):
+        """Test _normalize_variable_path with all namespace prefixes."""
         from agent_framework_declarative._workflows._executors_agents import (
-            _map_variable_to_path,
+            _normalize_variable_path,
         )
 
-        # Local. -> turn.
-        assert _map_variable_to_path("Local.MyVar") == "turn.MyVar"
+        # Local. -> Local. (unchanged)
+        assert _normalize_variable_path("Local.MyVar") == "Local.MyVar"
 
-        # System. -> system.
-        assert _map_variable_to_path("System.ConvId") == "system.ConvId"
+        # System. -> System. (unchanged)
+        assert _normalize_variable_path("System.ConvId") == "System.ConvId"
 
-        # Workflow. -> workflow.
-        assert _map_variable_to_path("Workflow.outputs.result") == "workflow.outputs.result"
+        # Workflow. -> Workflow. (unchanged)
+        assert _normalize_variable_path("Workflow.Outputs.result") == "Workflow.Outputs.result"
 
-        # Already has dots - pass through
-        assert _map_variable_to_path("turn.existing") == "turn.existing"
+        # Already has a namespace with dots - pass through
+        assert _normalize_variable_path("custom.existing") == "custom.existing"
 
-        # No namespace - default to turn.
-        assert _map_variable_to_path("simpleVar") == "turn.simpleVar"
+        # No namespace - default to Local.
+        assert _normalize_variable_path("simpleVar") == "Local.simpleVar"
 
     async def test_agent_executor_get_agent_name_string(self, mock_context, mock_shared_state):
         """Test agent name extraction from simple string config."""
@@ -767,17 +767,17 @@ class TestAgentExecutorsCoverage:
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
             "input": {
-                "arguments": {"param1": "=turn.value"},
+                "arguments": {"param1": "=Local.value"},
                 "messages": "=conversation.messages",
-                "externalLoop": {"when": "=turn.needsMore", "maxIterations": 50},
+                "externalLoop": {"when": "=Local.needsMore", "maxIterations": 50},
             },
         }
         executor = InvokeAzureAgentExecutor(action_def)
 
         args, messages, external_loop, max_iterations = executor._get_input_config()
-        assert args == {"param1": "=turn.value"}
+        assert args == {"param1": "=Local.value"}
         assert messages == "=conversation.messages"
-        assert external_loop == "=turn.needsMore"
+        assert external_loop == "=Local.needsMore"
         assert max_iterations == 50
 
     async def test_agent_executor_get_output_config_simple(self, mock_context, mock_shared_state):
@@ -789,14 +789,14 @@ class TestAgentExecutorsCoverage:
         action_def = {
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeAzureAgentExecutor(action_def)
 
         messages_var, response_obj, result_prop, auto_send = executor._get_output_config()
         assert messages_var is None
         assert response_obj is None
-        assert result_prop == "turn.result"
+        assert result_prop == "Local.result"
         assert auto_send is True
 
     async def test_agent_executor_get_output_config_full(self, mock_context, mock_shared_state):
@@ -811,7 +811,7 @@ class TestAgentExecutorsCoverage:
             "output": {
                 "messages": "Local.ResponseMessages",
                 "responseObject": "Local.ParsedResponse",
-                "property": "turn.result",
+                "property": "Local.result",
                 "autoSend": False,
             },
         }
@@ -820,7 +820,7 @@ class TestAgentExecutorsCoverage:
         messages_var, response_obj, result_prop, auto_send = executor._get_output_config()
         assert messages_var == "Local.ResponseMessages"
         assert response_obj == "Local.ParsedResponse"
-        assert result_prop == "turn.result"
+        assert result_prop == "Local.result"
         assert auto_send is False
 
     async def test_agent_executor_build_input_text_from_string_messages(self, mock_context, mock_shared_state):
@@ -831,12 +831,12 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.userInput", "Hello agent!")
+        await state.set("Local.userInput", "Hello agent!")
 
         action_def = {"kind": "InvokeAzureAgent", "agent": "Test"}
         executor = InvokeAzureAgentExecutor(action_def)
 
-        input_text = await executor._build_input_text(state, {}, "=turn.userInput")
+        input_text = await executor._build_input_text(state, {}, "=Local.userInput")
         assert input_text == "Hello agent!"
 
     async def test_agent_executor_build_input_text_from_message_list(self, mock_context, mock_shared_state):
@@ -848,7 +848,7 @@ class TestAgentExecutorsCoverage:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
         await state.set(
-            "conversation.messages",
+            "Conversation.messages",
             [
                 {"role": "user", "content": "First"},
                 {"role": "assistant", "content": "Response"},
@@ -859,7 +859,7 @@ class TestAgentExecutorsCoverage:
         action_def = {"kind": "InvokeAzureAgent", "agent": "Test"}
         executor = InvokeAzureAgentExecutor(action_def)
 
-        input_text = await executor._build_input_text(state, {}, "=conversation.messages")
+        input_text = await executor._build_input_text(state, {}, "=Conversation.messages")
         assert input_text == "Last message"
 
     async def test_agent_executor_build_input_text_from_message_with_text_attr(self, mock_context, mock_shared_state):
@@ -870,12 +870,12 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.messages", [{"text": "From attribute"}])
+        await state.set("Local.messages", [{"text": "From attribute"}])
 
         action_def = {"kind": "InvokeAzureAgent", "agent": "Test"}
         executor = InvokeAzureAgentExecutor(action_def)
 
-        input_text = await executor._build_input_text(state, {}, "=turn.messages")
+        input_text = await executor._build_input_text(state, {}, "=Local.messages")
         assert input_text == "From attribute"
 
     async def test_agent_executor_build_input_text_fallback_chain(self, mock_context, mock_shared_state):
@@ -902,7 +902,7 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("system.LastMessage", {"Text": "From last message"})
+        await state.set("System.LastMessage", {"Text": "From last message"})
 
         action_def = {"kind": "InvokeAzureAgent", "agent": "Test"}
         executor = InvokeAzureAgentExecutor(action_def)
@@ -946,12 +946,12 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "User query")
+        await state.set("Local.input", "User query")
 
         action_def = {
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
 
@@ -961,13 +961,13 @@ class TestAgentExecutorsCoverage:
         mock_agent.run.assert_called_once()
 
         # Verify result was stored
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == "Agent response"
 
         # Verify agent state was set
-        assert await state.get("agent.response") == "Agent response"
-        assert await state.get("agent.name") == "TestAgent"
-        assert await state.get("agent.text") == "Agent response"
+        assert await state.get("Agent.response") == "Agent response"
+        assert await state.get("Agent.name") == "TestAgent"
+        assert await state.get("Agent.text") == "Agent response"
 
     async def test_agent_executor_with_agent_from_registry(self, mock_context, mock_shared_state):
         """Test agent executor retrieves agent from shared state registry."""
@@ -990,7 +990,7 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "Query")
+        await state.set("Local.input", "Query")
 
         action_def = {
             "kind": "InvokeAzureAgent",
@@ -1018,7 +1018,7 @@ class TestAgentExecutorsCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "Query")
+        await state.set("Local.input", "Query")
 
         action_def = {
             "kind": "InvokeAzureAgent",
@@ -1031,7 +1031,7 @@ class TestAgentExecutorsCoverage:
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        parsed = await state.get("turn.Parsed")
+        parsed = await state.get("Local.Parsed")
         assert parsed == {"status": "ok", "count": 42}
 
     async def test_invoke_tool_executor_not_found(self, mock_context, mock_shared_state):
@@ -1046,13 +1046,13 @@ class TestAgentExecutorsCoverage:
         action_def = {
             "kind": "InvokeTool",
             "tool": "MissingTool",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeToolExecutor(action_def)
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == {"error": "Tool 'MissingTool' not found in registry"}
 
     async def test_invoke_tool_executor_sync_tool(self, mock_context, mock_shared_state):
@@ -1074,13 +1074,13 @@ class TestAgentExecutorsCoverage:
             "kind": "InvokeTool",
             "tool": "add",
             "parameters": {"x": 5, "y": 3},
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeToolExecutor(action_def)
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == 8
 
     async def test_invoke_tool_executor_async_tool(self, mock_context, mock_shared_state):
@@ -1102,13 +1102,13 @@ class TestAgentExecutorsCoverage:
             "kind": "InvokeTool",
             "tool": "process",
             "input": "test data",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeToolExecutor(action_def)
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == "Processed: test data"
 
 
@@ -1128,11 +1128,11 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.data", [10, 20, 30])
+        await state.set("Local.data", [10, 20, 30])
 
         action_def = {
             "kind": "Foreach",
-            "source": "=turn.data",
+            "source": "=Local.data",
             "itemName": "item",
             "indexName": "idx",
         }
@@ -1155,7 +1155,7 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.data", ["a", "b", "c"])
+        await state.set("Local.data", ["a", "b", "c"])
 
         # Set up loop state as ForeachInitExecutor would
         state_data = await state.get_state_data()
@@ -1170,8 +1170,8 @@ class TestControlFlowCoverage:
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.data",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.data",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachNextExecutor(action_def, init_executor_id="foreach_init")
 
@@ -1190,11 +1190,11 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.status", "pending")
+        await state.set("Local.status", "pending")
 
         action_def = {
             "kind": "Switch",
-            "value": "=turn.status",
+            "value": "=Local.status",
         }
         cases = [
             {"match": "active"},
@@ -1217,11 +1217,11 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.status", "unknown")
+        await state.set("Local.status", "unknown")
 
         action_def = {
             "kind": "Switch",
-            "value": "=turn.status",
+            "value": "=Local.status",
         }
         cases = [
             {"match": "active"},
@@ -1320,8 +1320,8 @@ class TestControlFlowCoverage:
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.data",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.data",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachNextExecutor(action_def, init_executor_id="missing_loop")
 
@@ -1354,8 +1354,8 @@ class TestControlFlowCoverage:
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.data",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.data",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachNextExecutor(action_def, init_executor_id="loop_id")
 
@@ -1388,8 +1388,8 @@ class TestControlFlowCoverage:
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.data",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.data",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachNextExecutor(action_def, init_executor_id="loop_id")
 
@@ -1422,8 +1422,8 @@ class TestControlFlowCoverage:
 
         action_def = {
             "kind": "Foreach",
-            "itemsSource": "=turn.data",
-            "iteratorVariable": "turn.item",
+            "itemsSource": "=Local.data",
+            "iteratorVariable": "Local.item",
         }
         executor = ForeachNextExecutor(action_def, init_executor_id="loop_id")
 
@@ -1476,13 +1476,13 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 10)
+        await state.set("Local.x", 10)
 
         action_def = {"kind": "ConditionGroup"}
         conditions = [
-            {"condition": "=turn.x > 20"},
-            {"condition": "=turn.x > 5"},
-            {"condition": "=turn.x > 0"},
+            {"condition": "=Local.x > 20"},
+            {"condition": "=Local.x > 5"},
+            {"condition": "=Local.x > 0"},
         ]
         executor = ConditionGroupEvaluatorExecutor(action_def, conditions=conditions)
 
@@ -1501,12 +1501,12 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 0)
+        await state.set("Local.x", 0)
 
         action_def = {"kind": "ConditionGroup"}
         conditions = [
-            {"condition": "=turn.x > 10"},
-            {"condition": "=turn.x > 5"},
+            {"condition": "=Local.x > 10"},
+            {"condition": "=Local.x > 5"},
         ]
         executor = ConditionGroupEvaluatorExecutor(action_def, conditions=conditions)
 
@@ -1548,10 +1548,10 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", True)
+        await state.set("Local.flag", True)
 
         action_def = {"kind": "If"}
-        executor = IfConditionEvaluatorExecutor(action_def, condition_expr="=turn.flag")
+        executor = IfConditionEvaluatorExecutor(action_def, condition_expr="=Local.flag")
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
@@ -1568,10 +1568,10 @@ class TestControlFlowCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", False)
+        await state.set("Local.flag", False)
 
         action_def = {"kind": "If"}
-        executor = IfConditionEvaluatorExecutor(action_def, condition_expr="=turn.flag")
+        executor = IfConditionEvaluatorExecutor(action_def, condition_expr="=Local.flag")
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
@@ -1595,7 +1595,7 @@ class TestDeclarativeActionExecutorBase:
             SetValueExecutor,
         )
 
-        action_def = {"kind": "SetValue", "path": "turn.x", "value": 1}
+        action_def = {"kind": "SetValue", "path": "Local.x", "value": 1}
         executor = SetValueExecutor(action_def)
 
         # Trigger with dict - should initialize state with it
@@ -1603,7 +1603,7 @@ class TestDeclarativeActionExecutorBase:
 
         # State should have been initialized with the dict
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get("workflow.inputs")
+        inputs = await state.get("Workflow.Inputs")
         assert inputs == {"custom": "input"}
 
     async def test_ensure_state_initialized_with_string_input(self, mock_context, mock_shared_state):
@@ -1612,14 +1612,14 @@ class TestDeclarativeActionExecutorBase:
             SetValueExecutor,
         )
 
-        action_def = {"kind": "SetValue", "path": "turn.x", "value": 1}
+        action_def = {"kind": "SetValue", "path": "Local.x", "value": 1}
         executor = SetValueExecutor(action_def)
 
         # Trigger with string - should wrap in {"input": ...}
         await executor.handle_action("string trigger", mock_context)
 
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get("workflow.inputs")
+        inputs = await state.get("Workflow.Inputs")
         assert inputs == {"input": "string trigger"}
 
     async def test_ensure_state_initialized_with_custom_object(self, mock_context, mock_shared_state):
@@ -1632,13 +1632,13 @@ class TestDeclarativeActionExecutorBase:
             def __str__(self):
                 return "custom string"
 
-        action_def = {"kind": "SetValue", "path": "turn.x", "value": 1}
+        action_def = {"kind": "SetValue", "path": "Local.x", "value": 1}
         executor = SetValueExecutor(action_def)
 
         await executor.handle_action(CustomObj(), mock_context)
 
         state = DeclarativeWorkflowState(mock_shared_state)
-        inputs = await state.get("workflow.inputs")
+        inputs = await state.get("Workflow.Inputs")
         assert inputs == {"input": "custom string"}
 
     async def test_executor_display_name_property(self, mock_context, mock_shared_state):
@@ -1650,7 +1650,7 @@ class TestDeclarativeActionExecutorBase:
         action_def = {
             "kind": "SetValue",
             "displayName": "My Custom Action",
-            "path": "turn.x",
+            "path": "Local.x",
             "value": 1,
         }
         executor = SetValueExecutor(action_def)
@@ -1663,7 +1663,7 @@ class TestDeclarativeActionExecutorBase:
             SetValueExecutor,
         )
 
-        action_def = {"kind": "SetValue", "path": "turn.x", "value": 1}
+        action_def = {"kind": "SetValue", "path": "Local.x", "value": 1}
         executor = SetValueExecutor(action_def)
 
         assert executor.action_def == action_def
@@ -1690,7 +1690,7 @@ class TestHumanInputExecutorsCoverage:
         action_def = {
             "kind": "WaitForInput",
             "prompt": "Please enter your name:",
-            "property": "turn.userName",
+            "property": "Local.userName",
             "timeout": 30,
         }
         executor = WaitForInputExecutor(action_def)
@@ -1718,7 +1718,7 @@ class TestHumanInputExecutorsCoverage:
 
         action_def = {
             "kind": "WaitForInput",
-            "property": "turn.input",
+            "property": "Local.input",
         }
         executor = WaitForInputExecutor(action_def)
 
@@ -1745,7 +1745,7 @@ class TestHumanInputExecutorsCoverage:
             "kind": "RequestExternalInput",
             "requestType": "approval",
             "message": "Please approve this request",
-            "property": "turn.approvalResult",
+            "property": "Local.approvalResult",
             "timeout": 3600,
             "requiredFields": ["approver", "notes"],
             "metadata": {"priority": "high"},
@@ -1776,7 +1776,7 @@ class TestHumanInputExecutorsCoverage:
         action_def = {
             "kind": "Question",
             "question": "Select an option:",
-            "property": "turn.selection",
+            "property": "Local.selection",
             "choices": [
                 {"value": "a", "label": "Option A"},
                 {"value": "b"},  # No label, should use value
@@ -1821,14 +1821,14 @@ class TestAgentExternalLoopCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "User query")
-        await state.set("turn.needsMore", True)  # Loop condition will be true
+        await state.set("Local.input", "User query")
+        await state.set("Local.needsMore", True)  # Loop condition will be true
 
         action_def = {
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
             "input": {
-                "externalLoop": {"when": "=turn.needsMore"},
+                "externalLoop": {"when": "=Local.needsMore"},
             },
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
@@ -1860,12 +1860,12 @@ class TestAgentExternalLoopCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "Query")
+        await state.set("Local.input", "Query")
 
         action_def = {
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
 
@@ -1876,9 +1876,9 @@ class TestAgentExternalLoopCoverage:
         assert "Agent failed" in str(exc_info.value)
 
         # Should still store error in state before raising
-        error = await state.get("agent.error")
+        error = await state.get("Agent.error")
         assert "Agent failed" in error
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == {"error": "Agent failed"}
 
     async def test_agent_executor_string_result(self, mock_context, mock_shared_state):
@@ -1892,12 +1892,12 @@ class TestAgentExternalLoopCoverage:
 
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.input", "Query")
+        await state.set("Local.input", "Query")
 
         action_def = {
             "kind": "InvokeAzureAgent",
             "agent": "TestAgent",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
             "output": {"autoSend": True},
         }
         executor = InvokeAzureAgentExecutor(action_def, agents={"TestAgent": mock_agent})
@@ -1906,7 +1906,7 @@ class TestAgentExternalLoopCoverage:
 
         # Should auto-send output
         mock_context.yield_output.assert_called_with("Direct string response")
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == "Direct string response"
 
     async def test_invoke_tool_with_error(self, mock_context, mock_shared_state):
@@ -1927,13 +1927,13 @@ class TestAgentExternalLoopCoverage:
         action_def = {
             "kind": "InvokeTool",
             "tool": "bad_tool",
-            "resultProperty": "turn.result",
+            "resultProperty": "Local.result",
         }
         executor = InvokeToolExecutor(action_def)
 
         await executor.handle_action(ActionTrigger(), mock_context)
 
-        result = await state.get("turn.result")
+        result = await state.get("Local.result")
         assert result == {"error": "Tool error"}
 
 
@@ -1949,47 +1949,47 @@ class TestPowerFxFunctionsCoverage:
         """Test Lower and Upper functions."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.text", "Hello World")
+        await state.set("Local.text", "Hello World")
 
-        result = await state.eval("=Lower(turn.text)")
+        result = await state.eval("=Lower(Local.text)")
         assert result == "hello world"
 
-        result = await state.eval("=Upper(turn.text)")
+        result = await state.eval("=Upper(Local.text)")
         assert result == "HELLO WORLD"
 
     async def test_eval_if_function(self, mock_shared_state):
         """Test If function."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", True)
+        await state.set("Local.flag", True)
 
-        result = await state.eval('=If(turn.flag, "yes", "no")')
+        result = await state.eval('=If(Local.flag, "yes", "no")')
         assert result == "yes"
 
-        await state.set("turn.flag", False)
-        result = await state.eval('=If(turn.flag, "yes", "no")')
+        await state.set("Local.flag", False)
+        result = await state.eval('=If(Local.flag, "yes", "no")')
         assert result == "no"
 
     async def test_eval_not_function(self, mock_shared_state):
         """Test Not function."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.flag", True)
+        await state.set("Local.flag", True)
 
-        result = await state.eval("=Not(turn.flag)")
+        result = await state.eval("=Not(Local.flag)")
         assert result is False
 
     async def test_eval_and_or_functions(self, mock_shared_state):
         """Test And and Or functions."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.a", True)
-        await state.set("turn.b", False)
+        await state.set("Local.a", True)
+        await state.set("Local.b", False)
 
-        result = await state.eval("=And(turn.a, turn.b)")
+        result = await state.eval("=And(Local.a, Local.b)")
         assert result is False
 
-        result = await state.eval("=Or(turn.a, turn.b)")
+        result = await state.eval("=Or(Local.a, Local.b)")
         assert result is True
 
 
@@ -2373,7 +2373,7 @@ class TestAgentExecutorExternalLoop:
             response_obj_var=None,
             result_property=None,
             auto_send=True,
-            messages_path="conversation.messages",
+            messages_path="Conversation.messages",
         )
         mock_shared_state._data[EXTERNAL_LOOP_STATE_KEY] = loop_state
 
@@ -2480,7 +2480,7 @@ class TestBuilderValidation:
 
         yaml_def = {
             "name": "test_workflow",
-            "actions": [{"kind": "SetValue", "variable": {"path": "turn.x"}, "value": "test"}],
+            "actions": [{"kind": "SetValue", "variable": {"path": "Local.x"}, "value": "test"}],
         }
 
         builder = DeclarativeWorkflowBuilder(yaml_def)
@@ -2551,7 +2551,7 @@ class TestBuilderValidation:
             "actions": [
                 {
                     "kind": "Switch",
-                    "value": "=turn.choice",
+                    "value": "=Local.choice",
                     "cases": [
                         {
                             "match": "a",
@@ -2581,7 +2581,7 @@ class TestBuilderValidation:
             "actions": [
                 {
                     "kind": "Foreach",
-                    "items": "=turn.items",
+                    "items": "=Local.items",
                     "actions": [{"kind": "SendActivity"}],  # Missing 'activity'
                 }
             ],
@@ -2602,18 +2602,81 @@ class TestExpressionEdgeCases:
         """Test normal division works correctly."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 10)
-        await state.set("turn.y", 4)
+        await state.set("Local.x", 10)
+        await state.set("Local.y", 4)
 
-        result = await state.eval("=turn.x / turn.y")
+        result = await state.eval("=Local.x / Local.y")
         assert result == 2.5
 
     async def test_multiplication_normal(self, mock_shared_state):
         """Test normal multiplication."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
-        await state.set("turn.x", 6)
-        await state.set("turn.y", 7)
+        await state.set("Local.x", 6)
+        await state.set("Local.y", 7)
 
-        result = await state.eval("=turn.x * turn.y")
+        result = await state.eval("=Local.x * Local.y")
         assert result == 42
+
+
+class TestLongMessageTextHandling:
+    """Tests for handling long MessageText results that exceed PowerFx limits."""
+
+    async def test_short_message_text_embedded_inline(self, mock_shared_state):
+        """Test that short MessageText results are embedded inline."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        # Store a short message
+        short_text = "Hello world"
+        await state.set("Local.Messages", [{"text": short_text, "contents": [{"type": "text", "text": short_text}]}])
+
+        # Evaluate a formula with MessageText - should embed inline
+        result = await state.eval("=Upper(MessageText(Local.Messages))")
+        assert result == "HELLO WORLD"
+
+        # No temp variable should be created for short strings
+        temp_var = await state.get("Local._TempMessageText0")
+        assert temp_var is None
+
+    async def test_long_message_text_stored_in_temp_variable(self, mock_shared_state):
+        """Test that long MessageText results are stored in temp variables."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        # Create a message longer than 500 characters
+        long_text = "A" * 600  # 600 characters exceeds the 500 char threshold
+        await state.set("Local.Messages", [{"text": long_text, "contents": [{"type": "text", "text": long_text}]}])
+
+        # Evaluate a formula with MessageText
+        result = await state.eval("=Upper(MessageText(Local.Messages))")
+        assert result == "A" * 600  # Upper on 'A' is still 'A'
+
+        # A temp variable should have been created
+        temp_var = await state.get("Local._TempMessageText0")
+        assert temp_var == long_text
+
+    async def test_find_with_long_message_text(self, mock_shared_state):
+        """Test Find function works with long MessageText stored in temp variable."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        # Create a long message with a keyword to find
+        long_text = "X" * 550 + "CONGRATULATIONS" + "Y" * 50
+        await state.set("Local.Messages", [{"text": long_text, "contents": [{"type": "text", "text": long_text}]}])
+
+        # Test the pattern used in student_teacher workflow
+        result = await state.eval('=!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.Messages))))')
+        assert result is True
+
+    async def test_find_without_keyword_in_long_text(self, mock_shared_state):
+        """Test Find returns blank when keyword not found in long text."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        # Long text without the keyword
+        long_text = "X" * 600
+        await state.set("Local.Messages", [{"text": long_text, "contents": [{"type": "text", "text": long_text}]}])
+
+        result = await state.eval('=!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.Messages))))')
+        assert result is False

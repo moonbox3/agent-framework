@@ -19,34 +19,25 @@ trigger:
       variable: Local.TurnCount
       value: =0
 
-    # Store the original problem
-    - kind: SetVariable
-      id: store_problem
-      variable: Local.Problem
-      value: =inputs.problem
-
-    # Announce the start
+    # Announce the start with the problem
     - kind: SendActivity
       id: announce_start
       activity:
-        text: '=Concat("Starting math coaching session for: ", Local.Problem)'
+        text: '=Concat("Starting math coaching session for: ", Workflow.Inputs.input)'
 
     # Label for student
     - kind: SendActivity
       id: student_label
       activity:
-        text: "\n\n[Student]:\n"
+        text: "\n[Student]:\n"
 
     # Student attempts to solve - entry point for loop
+    # No explicit input.messages - uses implicit input from workflow inputs or conversation
     - kind: InvokeAzureAgent
       id: question_student
       conversationId: =System.ConversationId
       agent:
         name: StudentAgent
-      input:
-        messages: =Local.Problem
-      output:
-        messages: Local.StudentResponse
 
     # Label for teacher
     - kind: SendActivity
@@ -55,13 +46,12 @@ trigger:
         text: "\n\n[Teacher]:\n"
 
     # Teacher reviews and coaches
+    # No explicit input.messages - uses conversation context from conversationId
     - kind: InvokeAzureAgent
       id: question_teacher
       conversationId: =System.ConversationId
       agent:
         name: TeacherAgent
-      input:
-        messages: =Local.StudentResponse
       output:
         messages: Local.TeacherResponse
 
@@ -76,12 +66,12 @@ trigger:
       id: check_completion
       conditions:
         - id: success_condition
-          condition: =!IsBlank(Find("CONGRATULATIONS", Upper(Local.TeacherResponse)))
+          condition: =!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.TeacherResponse))))
           actions:
             - kind: SendActivity
               id: success_message
               activity:
-                text: "GOLD STAR! The student has demonstrated understanding."
+                text: "\nGOLD STAR! The student has demonstrated understanding."
             - kind: SetVariable
               id: set_success_result
               variable: workflow.outputs.result
@@ -101,7 +91,7 @@ trigger:
             - kind: SendActivity
               id: timeout_message
               activity:
-                text: "Let's try again later... The session has reached its limit."
+                text: "\nLet's try again later... The session has reached its limit."
             - kind: SetVariable
               id: set_timeout_result
               variable: workflow.outputs.result

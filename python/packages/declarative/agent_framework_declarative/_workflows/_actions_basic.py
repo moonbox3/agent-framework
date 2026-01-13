@@ -42,7 +42,7 @@ async def handle_set_value(ctx: ActionContext) -> AsyncGenerator[WorkflowEvent, 
 
     Action schema:
         kind: SetValue
-        path: turn.variableName  # or workflow.outputs.result
+        path: Local.variableName  # or Workflow.Outputs.result
         value: =expression or literal value
     """
     path = ctx.action.get("path")
@@ -83,9 +83,8 @@ async def handle_set_variable(ctx: ActionContext) -> AsyncGenerator[WorkflowEven
     # Evaluate the value if it's an expression
     evaluated_value = ctx.state.eval_if_expression(value)
 
-    # Map .NET-style variable names to Python state paths
-    # Local.X -> turn.X, System.X -> system.X, etc.
-    path = _map_variable_name_to_path(variable)
+    # Use .NET-style variable names directly (Local.X, System.X, Workflow.X)
+    path = _normalize_variable_path(variable)
 
     logger.debug(f"SetVariable: {variable} ({path}) = {evaluated_value}")
     ctx.state.set(path, evaluated_value)
@@ -94,26 +93,23 @@ async def handle_set_variable(ctx: ActionContext) -> AsyncGenerator[WorkflowEven
     yield  # Make it a generator
 
 
-def _map_variable_name_to_path(variable: str) -> str:
-    """Map .NET-style variable names to state paths.
+def _normalize_variable_path(variable: str) -> str:
+    """Normalize variable names to ensure they have a scope prefix.
 
     Args:
         variable: Variable name like 'Local.X' or 'System.ConversationId'
 
     Returns:
-        State path like 'turn.X' or 'system.ConversationId'
+        The variable path with a scope prefix (defaults to Local if none provided)
     """
-    if variable.startswith("Local."):
-        return "turn." + variable[6:]
-    if variable.startswith("System."):
-        return "system." + variable[7:]
-    if variable.startswith("Workflow."):
-        return "workflow." + variable[9:]
-    if "." in variable:
-        # Already has a namespace
+    if variable.startswith(("Local.", "System.", "Workflow.", "Agent.", "Conversation.")):
+        # Already has a proper namespace
         return variable
-    # Default to turn scope
-    return "turn." + variable
+    if "." in variable:
+        # Has some namespace, use as-is
+        return variable
+    # Default to Local scope
+    return "Local." + variable
 
 
 @action_handler("AppendValue")
@@ -122,7 +118,7 @@ async def handle_append_value(ctx: ActionContext) -> AsyncGenerator[WorkflowEven
 
     Action schema:
         kind: AppendValue
-        path: turn.results
+        path: Local.results
         value: =expression or literal value
     """
     path = ctx.action.get("path")
@@ -275,7 +271,7 @@ async def handle_set_text_variable(ctx: ActionContext) -> AsyncGenerator[Workflo
     else:
         evaluated_value = ctx.state.eval_if_expression(value)
 
-    path = _map_variable_name_to_path(variable)
+    path = _normalize_variable_path(variable)
 
     logger.debug(f"SetTextVariable: {variable} ({path}) = {str(evaluated_value)[:100]}")
     ctx.state.set(path, evaluated_value)
@@ -307,7 +303,7 @@ async def handle_set_multiple_variables(ctx: ActionContext) -> AsyncGenerator[Wo
             continue
 
         evaluated_value = ctx.state.eval_if_expression(value)
-        path = _map_variable_name_to_path(variable)
+        path = _normalize_variable_path(variable)
 
         logger.debug(f"SetMultipleVariables: {variable} ({path}) = {evaluated_value}")
         ctx.state.set(path, evaluated_value)
@@ -330,7 +326,7 @@ async def handle_reset_variable(ctx: ActionContext) -> AsyncGenerator[WorkflowEv
         logger.warning("ResetVariable action missing 'variable' property")
         return
 
-    path = _map_variable_name_to_path(variable)
+    path = _normalize_variable_path(variable)
 
     logger.debug(f"ResetVariable: {variable} ({path}) = None")
     ctx.state.set(path, None)
@@ -347,7 +343,7 @@ async def handle_clear_all_variables(ctx: ActionContext) -> AsyncGenerator[Workf
         kind: ClearAllVariables
     """
     logger.debug("ClearAllVariables: clearing turn scope")
-    ctx.state.reset_turn()
+    ctx.state.reset_local()
 
     return
     yield  # Make it a generator
@@ -374,19 +370,19 @@ async def handle_create_conversation(ctx: ActionContext) -> AsyncGenerator[Workf
     generated_id = str(uuid.uuid4())
 
     # Store conversation in state
-    conversations: dict[str, Any] = ctx.state.get("system.conversations") or {}
+    conversations: dict[str, Any] = ctx.state.get("System.conversations") or {}
     conversations[generated_id] = {
         "id": generated_id,
         "messages": [],
         "created_at": None,  # Could add timestamp
     }
-    ctx.state.set("system.conversations", conversations)
+    ctx.state.set("System.conversations", conversations)
 
     logger.debug(f"CreateConversation: created {generated_id}")
 
     # Store the generated ID in the specified variable (.NET style output binding)
     if conversation_id_var:
-        output_path = _map_variable_name_to_path(conversation_id_var)
+        output_path = _normalize_variable_path(conversation_id_var)
         ctx.state.set(output_path, generated_id)
         logger.debug(f"CreateConversation: bound to {output_path} = {generated_id}")
 
@@ -394,7 +390,7 @@ async def handle_create_conversation(ctx: ActionContext) -> AsyncGenerator[Workf
     output = ctx.action.get("output", {})
     output_var = output.get("conversationId")
     if output_var:
-        output_path = _map_variable_name_to_path(output_var)
+        output_path = _normalize_variable_path(output_var)
         ctx.state.set(output_path, generated_id)
         logger.debug(f"CreateConversation: legacy output bound to {output_path}")
 
@@ -432,7 +428,7 @@ async def handle_add_conversation_message(ctx: ActionContext) -> AsyncGenerator[
         evaluated_content = _interpolate_string(evaluated_content, ctx.state)
 
     # Get or create conversation
-    conversations: dict[str, Any] = ctx.state.get("system.conversations") or {}
+    conversations: dict[str, Any] = ctx.state.get("System.conversations") or {}
     if evaluated_id not in conversations:
         conversations[evaluated_id] = {"id": evaluated_id, "messages": []}
 
@@ -443,7 +439,7 @@ async def handle_add_conversation_message(ctx: ActionContext) -> AsyncGenerator[
     messages_list.append(message)
     conv_entry["messages"] = messages_list
     conversations[evaluated_id] = conv_entry
-    ctx.state.set("system.conversations", conversations)
+    ctx.state.set("System.conversations", conversations)
 
     # Also add to global conversation state
     ctx.state.add_conversation_message(message)
@@ -477,7 +473,7 @@ async def handle_copy_conversation_messages(ctx: ActionContext) -> AsyncGenerato
     evaluated_target = ctx.state.eval_if_expression(target_id)
 
     # Get conversations
-    conversations: dict[str, Any] = ctx.state.get("system.conversations") or {}
+    conversations: dict[str, Any] = ctx.state.get("System.conversations") or {}
 
     source_conv: dict[str, Any] = conversations.get(evaluated_source, {})
     source_messages: list[Any] = source_conv.get("messages", [])
@@ -496,7 +492,7 @@ async def handle_copy_conversation_messages(ctx: ActionContext) -> AsyncGenerato
     target_messages.extend(source_messages)
     target_entry["messages"] = target_messages
     conversations[evaluated_target] = target_entry
-    ctx.state.set("system.conversations", conversations)
+    ctx.state.set("System.conversations", conversations)
 
     logger.debug(
         "CopyConversationMessages: copied %d messages from %s to %s",
@@ -532,7 +528,7 @@ async def handle_retrieve_conversation_messages(ctx: ActionContext) -> AsyncGene
     evaluated_id = ctx.state.eval_if_expression(conversation_id)
 
     # Get messages
-    conversations: dict[str, Any] = ctx.state.get("system.conversations") or {}
+    conversations: dict[str, Any] = ctx.state.get("System.conversations") or {}
     conv: dict[str, Any] = conversations.get(evaluated_id, {})
     messages: list[Any] = conv.get("messages", [])
 
@@ -543,7 +539,7 @@ async def handle_retrieve_conversation_messages(ctx: ActionContext) -> AsyncGene
     # Handle output binding
     output_var = output.get("messages")
     if output_var:
-        output_path = _map_variable_name_to_path(output_var)
+        output_path = _normalize_variable_path(output_var)
         ctx.state.set(output_path, messages)
         logger.debug(f"RetrieveConversationMessages: bound {len(messages)} messages to {output_path}")
 
@@ -566,7 +562,7 @@ def _interpolate_string(text: str, state: "WorkflowState") -> str:
     def replace_var(match: re.Match[str]) -> str:
         var_path: str = match.group(1)
         # Map .NET style to Python style
-        path = _map_variable_name_to_path(var_path)
+        path = _normalize_variable_path(var_path)
         value = state.get(path)
         return str(value) if value is not None else ""
 

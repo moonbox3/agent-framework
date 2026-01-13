@@ -26,6 +26,140 @@ from ._human_input import ExternalLoopEvent, QuestionRequest
 logger = get_logger("agent_framework.declarative.workflows.actions")
 
 
+def _extract_json_from_response(text: str) -> Any:
+    r"""Extract and parse JSON from an agent response.
+
+    Agents often return JSON wrapped in markdown code blocks or with
+    explanatory text. This function attempts to extract and parse the
+    JSON content from various formats:
+
+    1. Pure JSON: {"key": "value"}
+    2. Markdown code block: ```json\n{"key": "value"}\n```
+    3. Markdown code block (no language): ```\n{"key": "value"}\n```
+    4. JSON with leading/trailing text: Here's the result: {"key": "value"}
+    5. Multiple JSON objects: Returns the LAST valid JSON object
+
+    When multiple JSON objects are present (e.g., streaming agent responses
+    that emit partial then final results), this returns the last complete
+    JSON object, which is typically the final/complete result.
+
+    Args:
+        text: The raw text response from an agent
+
+    Returns:
+        Parsed JSON as a Python dict/list, or None if parsing fails
+
+    Raises:
+        json.JSONDecodeError: If no valid JSON can be extracted
+    """
+    import re
+
+    if not text:
+        return None
+
+    text = text.strip()
+
+    if not text:
+        return None
+
+    # Try parsing as pure JSON first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code blocks: ```json ... ``` or ``` ... ```
+    # Use the last code block if there are multiple
+    code_block_patterns = [
+        r"```json\s*\n?(.*?)\n?```",  # ```json ... ```
+        r"```\s*\n?(.*?)\n?```",  # ``` ... ```
+    ]
+    for pattern in code_block_patterns:
+        matches = list(re.finditer(pattern, text, re.DOTALL))
+        if matches:
+            # Try the last match first (most likely to be the final result)
+            for match in reversed(matches):
+                try:
+                    return json.loads(match.group(1).strip())
+                except json.JSONDecodeError:
+                    continue
+
+    # Find ALL JSON objects {...} or arrays [...] in the text and return the last valid one
+    # This handles cases where agents stream multiple JSON objects (partial, then final)
+    all_json_objects: list[Any] = []
+
+    pos = 0
+    while pos < len(text):
+        # Find next { or [
+        json_start = -1
+        bracket_char = None
+        for i in range(pos, len(text)):
+            if text[i] == "{":
+                json_start = i
+                bracket_char = "{"
+                break
+            if text[i] == "[":
+                json_start = i
+                bracket_char = "["
+                break
+
+        if json_start < 0:
+            break  # No more JSON objects
+
+        # Find matching closing bracket
+        open_bracket = bracket_char
+        close_bracket = "}" if open_bracket == "{" else "]"
+        depth = 0
+        in_string = False
+        escape_next = False
+        found_end = False
+
+        for i in range(json_start, len(text)):
+            char = text[i]
+
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == "\\":
+                escape_next = True
+                continue
+
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == open_bracket:
+                depth += 1
+            elif char == close_bracket:
+                depth -= 1
+                if depth == 0:
+                    # Found the end
+                    potential_json = text[json_start : i + 1]
+                    try:
+                        parsed = json.loads(potential_json)
+                        all_json_objects.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    pos = i + 1
+                    found_end = True
+                    break
+
+        if not found_end:
+            # Malformed JSON, move past the start character
+            pos = json_start + 1
+
+    # Return the last valid JSON object (most likely to be the final/complete result)
+    if all_json_objects:
+        return all_json_objects[-1]
+
+    # Unable to extract JSON
+    raise json.JSONDecodeError("No valid JSON found in response", text, 0)
+
+
 def _build_messages_from_state(ctx: ActionContext) -> list[ChatMessage]:
     """Build the message list to send to an agent.
 
@@ -60,7 +194,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
         kind: InvokeAzureAgent
         agent: agentName
         input: =expression or literal input
-        outputPath: turn.response
+        outputPath: Local.response
 
     .NET-style schema:
         kind: InvokeAzureAgent
@@ -138,7 +272,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
     # Evaluate conversation ID
     if conversation_id:
         evaluated_conv_id = ctx.state.eval_if_expression(conversation_id)
-        ctx.state.set("system.ConversationId", evaluated_conv_id)
+        ctx.state.set("System.ConversationId", evaluated_conv_id)
 
     # Evaluate instructions (unused currently but may be used for prompting)
     _ = ctx.state.eval_if_expression(instructions) if instructions else None
@@ -231,16 +365,25 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
 
                 # Store in output variables (.NET style)
                 if output_messages_var:
-                    output_path_mapped = _map_variable_to_path(output_messages_var)
+                    output_path_mapped = _normalize_variable_path(output_messages_var)
                     ctx.state.set(output_path_mapped, response_messages if response_messages else text)
 
                 if output_response_obj_var:
-                    output_path_mapped = _map_variable_to_path(output_response_obj_var)
-                    # Try to parse as JSON if it looks like structured output
+                    output_path_mapped = _normalize_variable_path(output_response_obj_var)
+                    # Try to extract and parse JSON from the response
                     try:
-                        parsed = json.loads(text) if text else None
+                        parsed = _extract_json_from_response(text) if text else None
+                        logger.debug(
+                            f"InvokeAzureAgent (streaming): parsed responseObject for "
+                            f"'{output_path_mapped}': type={type(parsed).__name__}, "
+                            f"value_preview={str(parsed)[:100] if parsed else None}"
+                        )
                         ctx.state.set(output_path_mapped, parsed)
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            f"InvokeAzureAgent (streaming): failed to parse JSON for "
+                            f"'{output_path_mapped}': {e}, text_preview={text[:100] if text else None}"
+                        )
                         ctx.state.set(output_path_mapped, text)
 
                 # Store in output path (Python style)
@@ -275,15 +418,24 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
 
                 # Store in output variables (.NET style)
                 if output_messages_var:
-                    output_path_mapped = _map_variable_to_path(output_messages_var)
+                    output_path_mapped = _normalize_variable_path(output_messages_var)
                     ctx.state.set(output_path_mapped, response_messages if response_messages else text)
 
                 if output_response_obj_var:
-                    output_path_mapped = _map_variable_to_path(output_response_obj_var)
+                    output_path_mapped = _normalize_variable_path(output_response_obj_var)
                     try:
-                        parsed = json.loads(text) if text else None
+                        parsed = _extract_json_from_response(text) if text else None
+                        logger.debug(
+                            f"InvokeAzureAgent (non-streaming): parsed responseObject for "
+                            f"'{output_path_mapped}': type={type(parsed).__name__}, "
+                            f"value_preview={str(parsed)[:100] if parsed else None}"
+                        )
                         ctx.state.set(output_path_mapped, parsed)
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            f"InvokeAzureAgent (non-streaming): failed to parse JSON for "
+                            f"'{output_path_mapped}': {e}, text_preview={text[:100] if text else None}"
+                        )
                         ctx.state.set(output_path_mapped, text)
 
                 # Store in output path (Python style)
@@ -334,7 +486,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
                 yield QuestionRequest(
                     request_id=f"{action_id}_input_{iteration}",
                     prompt="Waiting for user input...",
-                    variable="turn.userInput",
+                    variable="Local.userInput",
                 )
 
                 iteration += 1
@@ -349,24 +501,23 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
         break
 
 
-def _map_variable_to_path(variable: str) -> str:
-    """Map .NET-style variable names to state paths.
+def _normalize_variable_path(variable: str) -> str:
+    """Normalize variable names to ensure they have a scope prefix.
 
     Args:
         variable: Variable name like 'Local.X' or 'System.ConversationId'
 
     Returns:
-        State path like 'turn.X' or 'system.ConversationId'
+        The variable path with a scope prefix (defaults to Local if none provided)
     """
-    if variable.startswith("Local."):
-        return "turn." + variable[6:]
-    if variable.startswith("System."):
-        return "system." + variable[7:]
-    if variable.startswith("Workflow."):
-        return "workflow." + variable[9:]
-    if "." in variable:
+    if variable.startswith(("Local.", "System.", "Workflow.", "Agent.", "Conversation.")):
+        # Already has a proper namespace
         return variable
-    return "turn." + variable
+    if "." in variable:
+        # Has some namespace, use as-is
+        return variable
+    # Default to Local scope
+    return "Local." + variable
 
 
 @action_handler("InvokePromptAgent")
@@ -378,7 +529,7 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
         agent: agentName  # name of the agent in the agents registry
         input: =expression or literal input
         instructions: =expression or literal prompt/instructions
-        outputPath: turn.response  # optional path to store result
+        outputPath: Local.response  # optional path to store result
     """
     # Implementation is similar to InvokeAzureAgent
     # The difference is primarily in how the agent is configured

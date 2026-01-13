@@ -77,7 +77,7 @@ class QuestionExecutor(DeclarativeActionExecutor):
 
         question_text = self._action_def.get("text") or self._action_def.get("question", "")
         output_property = self._action_def.get("output", {}).get("property") or self._action_def.get(
-            "property", "turn.answer"
+            "property", "Local.answer"
         )
         choices = self._action_def.get("choices", [])
         default_value = self._action_def.get("defaultValue")
@@ -130,7 +130,7 @@ class QuestionExecutor(DeclarativeActionExecutor):
         """Handle the user's response to the question."""
         state = self._get_state(ctx.shared_state)
 
-        output_property = original_request.metadata.get("output_property", "turn.answer")
+        output_property = original_request.metadata.get("output_property", "Local.answer")
         answer = response.value if response.value is not None else response.user_input
 
         if output_property:
@@ -156,7 +156,7 @@ class ConfirmationExecutor(DeclarativeActionExecutor):
 
         message = self._action_def.get("text") or self._action_def.get("message", "")
         output_property = self._action_def.get("output", {}).get("property") or self._action_def.get(
-            "property", "turn.confirmed"
+            "property", "Local.confirmed"
         )
         yes_label = self._action_def.get("yesLabel", "Yes")
         no_label = self._action_def.get("noLabel", "No")
@@ -191,7 +191,7 @@ class ConfirmationExecutor(DeclarativeActionExecutor):
         """Handle the user's confirmation response."""
         state = self._get_state(ctx.shared_state)
 
-        output_property = original_request.metadata.get("output_property", "turn.confirmed")
+        output_property = original_request.metadata.get("output_property", "Local.confirmed")
 
         # Convert response to boolean
         if response.value is not None:
@@ -208,7 +208,7 @@ class ConfirmationExecutor(DeclarativeActionExecutor):
 
 
 class WaitForInputExecutor(DeclarativeActionExecutor):
-    """Executor that waits for user input during a conversation turn.
+    """Executor that waits for user input during a conversation.
 
     Used when the workflow needs to pause and wait for the next user message
     in a conversational flow.
@@ -225,7 +225,7 @@ class WaitForInputExecutor(DeclarativeActionExecutor):
 
         prompt = self._action_def.get("prompt")
         output_property = self._action_def.get("output", {}).get("property") or self._action_def.get(
-            "property", "turn.input"
+            "property", "Local.input"
         )
         timeout_seconds = self._action_def.get("timeout")
 
@@ -258,7 +258,7 @@ class WaitForInputExecutor(DeclarativeActionExecutor):
         """Handle the user's input."""
         state = self._get_state(ctx.shared_state)
 
-        output_property = original_request.metadata.get("output_property", "turn.input")
+        output_property = original_request.metadata.get("output_property", "Local.input")
 
         if output_property:
             await state.set(output_property, response.user_input)
@@ -285,7 +285,7 @@ class RequestExternalInputExecutor(DeclarativeActionExecutor):
         request_type = self._action_def.get("requestType", "external")
         message = self._action_def.get("message", "")
         output_property = self._action_def.get("output", {}).get("property") or self._action_def.get(
-            "property", "turn.externalInput"
+            "property", "Local.externalInput"
         )
         timeout_seconds = self._action_def.get("timeout")
         required_fields = self._action_def.get("requiredFields", [])
@@ -325,7 +325,7 @@ class RequestExternalInputExecutor(DeclarativeActionExecutor):
         """Handle the external input response."""
         state = self._get_state(ctx.shared_state)
 
-        output_property = original_request.metadata.get("output_property", "turn.externalInput")
+        output_property = original_request.metadata.get("output_property", "Local.externalInput")
 
         # Store the response value or user_input
         result = response.value if response.value is not None else response.user_input

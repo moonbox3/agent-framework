@@ -51,9 +51,9 @@ class TestPowerFxBuiltinFunctions:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        # From YAML: =Concat("Nice to meet you, ", turn.userName, "!")
-        await state.set("turn.userName", "Alice")
-        result = await state.eval('=Concat("Nice to meet you, ", turn.userName, "!")')
+        # From YAML: =Concat("Nice to meet you, ", Local.userName, "!")
+        await state.set("Local.userName", "Alice")
+        result = await state.eval('=Concat("Nice to meet you, ", Local.userName, "!")')
         assert result == "Nice to meet you, Alice!"
 
     async def test_concat_multiple_args(self, mock_shared_state):
@@ -61,19 +61,19 @@ class TestPowerFxBuiltinFunctions:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        # From YAML: =Concat(turn.greeting, ", ", turn.name, "!")
-        await state.set("turn.greeting", "Hello")
-        await state.set("turn.name", "World")
-        result = await state.eval('=Concat(turn.greeting, ", ", turn.name, "!")')
+        # From YAML: =Concat(Local.greeting, ", ", Local.name, "!")
+        await state.set("Local.greeting", "Hello")
+        await state.set("Local.name", "World")
+        result = await state.eval('=Concat(Local.greeting, ", ", Local.name, "!")')
         assert result == "Hello, World!"
 
     async def test_concat_with_local_namespace(self, mock_shared_state):
-        """Test Concat using Local.* namespace (maps to turn.*)."""
+        """Test Concat using Local.* namespace (maps to Local.*)."""
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
         # From YAML: =Concat("Starting math coaching session for: ", Local.Problem)
-        await state.set("turn.Problem", "2 + 2")
+        await state.set("Local.Problem", "2 + 2")
         result = await state.eval('=Concat("Starting math coaching session for: ", Local.Problem)')
         assert result == "Starting math coaching session for: 2 + 2"
 
@@ -98,11 +98,11 @@ class TestPowerFxBuiltinFunctions:
         await state.initialize()
 
         # From YAML: =Not(Local.EscalationParameters.IsComplete)
-        await state.set("turn.EscalationParameters", {"IsComplete": False})
+        await state.set("Local.EscalationParameters", {"IsComplete": False})
         result = await state.eval("=Not(Local.EscalationParameters.IsComplete)")
         assert result is True
 
-        await state.set("turn.EscalationParameters", {"IsComplete": True})
+        await state.set("Local.EscalationParameters", {"IsComplete": True})
         result = await state.eval("=Not(Local.EscalationParameters.IsComplete)")
         assert result is False
 
@@ -111,17 +111,17 @@ class TestPowerFxBuiltinFunctions:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        # From YAML: =Or(turn.feeling = "great", turn.feeling = "good")
-        await state.set("turn.feeling", "great")
-        result = await state.eval('=Or(turn.feeling = "great", turn.feeling = "good")')
+        # From YAML: =Or(Local.feeling = "great", Local.feeling = "good")
+        await state.set("Local.feeling", "great")
+        result = await state.eval('=Or(Local.feeling = "great", Local.feeling = "good")')
         assert result is True
 
-        await state.set("turn.feeling", "good")
-        result = await state.eval('=Or(turn.feeling = "great", turn.feeling = "good")')
+        await state.set("Local.feeling", "good")
+        result = await state.eval('=Or(Local.feeling = "great", Local.feeling = "good")')
         assert result is True
 
-        await state.set("turn.feeling", "bad")
-        result = await state.eval('=Or(turn.feeling = "great", turn.feeling = "good")')
+        await state.set("Local.feeling", "bad")
+        result = await state.eval('=Or(Local.feeling = "great", Local.feeling = "good")')
         assert result is False
 
     async def test_upper_function(self, mock_shared_state):
@@ -130,7 +130,7 @@ class TestPowerFxBuiltinFunctions:
         await state.initialize()
 
         # From YAML: =Upper(System.LastMessage.Text)
-        await state.set("system.LastMessage", {"Text": "hello world"})
+        await state.set("System.LastMessage", {"Text": "hello world"})
         result = await state.eval("=Upper(System.LastMessage.Text)")
         assert result == "HELLO WORLD"
 
@@ -140,11 +140,11 @@ class TestPowerFxBuiltinFunctions:
         await state.initialize()
 
         # From YAML: =!IsBlank(Find("CONGRATULATIONS", Upper(Local.TeacherResponse)))
-        await state.set("turn.TeacherResponse", "CONGRATULATIONS! You solved it!")
+        await state.set("Local.TeacherResponse", "CONGRATULATIONS! You solved it!")
         result = await state.eval('=Not(IsBlank(Find("CONGRATULATIONS", Upper(Local.TeacherResponse))))')
         assert result is True
 
-        await state.set("turn.TeacherResponse", "Try again")
+        await state.set("Local.TeacherResponse", "Try again")
         result = await state.eval('=Not(IsBlank(Find("CONGRATULATIONS", Upper(Local.TeacherResponse))))')
         assert result is False
 
@@ -176,7 +176,7 @@ class TestPowerFxSystemVariables:
         await state.initialize()
 
         # From YAML: conversationId: =System.ConversationId
-        await state.set("system.ConversationId", "conv-12345")
+        await state.set("System.ConversationId", "conv-12345")
         result = await state.eval("=System.ConversationId")
         assert result == "conv-12345"
 
@@ -186,7 +186,7 @@ class TestPowerFxSystemVariables:
         await state.initialize()
 
         # From YAML: =Upper(System.LastMessage.Text) <> "EXIT"
-        await state.set("system.LastMessage", {"Text": "Hello"})
+        await state.set("System.LastMessage", {"Text": "Hello"})
         result = await state.eval("=System.LastMessage.Text")
         assert result == "Hello"
 
@@ -196,11 +196,11 @@ class TestPowerFxSystemVariables:
         await state.initialize()
 
         # From YAML: when: =Upper(System.LastMessage.Text) <> "EXIT"
-        await state.set("system.LastMessage", {"Text": "hello"})
+        await state.set("System.LastMessage", {"Text": "hello"})
         result = await state.eval('=Upper(System.LastMessage.Text) <> "EXIT"')
         assert result is True
 
-        await state.set("system.LastMessage", {"Text": "exit"})
+        await state.set("System.LastMessage", {"Text": "exit"})
         result = await state.eval('=Upper(System.LastMessage.Text) <> "EXIT"')
         assert result is False
 
@@ -231,12 +231,12 @@ class TestPowerFxComparisonOperators:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        # From YAML: condition: =turn.age < 65
-        await state.set("turn.age", 30)
-        assert await state.eval("=turn.age < 65") is True
+        # From YAML: condition: =Local.age < 65
+        await state.set("Local.age", 30)
+        assert await state.eval("=Local.age < 65") is True
 
-        await state.set("turn.age", 70)
-        assert await state.eval("=turn.age < 65") is False
+        await state.set("Local.age", 70)
+        assert await state.eval("=Local.age < 65") is False
 
     async def test_less_than_with_local(self, mock_shared_state):
         """Test < with Local namespace."""
@@ -244,10 +244,10 @@ class TestPowerFxComparisonOperators:
         await state.initialize()
 
         # From YAML: condition: =Local.TurnCount < 4
-        await state.set("turn.TurnCount", 2)
+        await state.set("Local.TurnCount", 2)
         assert await state.eval("=Local.TurnCount < 4") is True
 
-        await state.set("turn.TurnCount", 5)
+        await state.set("Local.TurnCount", 5)
         assert await state.eval("=Local.TurnCount < 4") is False
 
     async def test_equality(self, mock_shared_state):
@@ -255,12 +255,12 @@ class TestPowerFxComparisonOperators:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        # From YAML: =turn.feeling = "great"
-        await state.set("turn.feeling", "great")
-        assert await state.eval('=turn.feeling = "great"') is True
+        # From YAML: =Local.feeling = "great"
+        await state.set("Local.feeling", "great")
+        assert await state.eval('=Local.feeling = "great"') is True
 
-        await state.set("turn.feeling", "bad")
-        assert await state.eval('=turn.feeling = "great"') is False
+        await state.set("Local.feeling", "bad")
+        assert await state.eval('=Local.feeling = "great"') is False
 
     async def test_inequality(self, mock_shared_state):
         """Test <> inequality operator."""
@@ -268,9 +268,9 @@ class TestPowerFxComparisonOperators:
         await state.initialize()
 
         # From YAML: =Upper(System.LastMessage.Text) <> "EXIT"
-        await state.set("turn.status", "active")
-        assert await state.eval('=turn.status <> "done"') is True
-        assert await state.eval('=turn.status <> "active"') is False
+        await state.set("Local.status", "active")
+        assert await state.eval('=Local.status <> "done"') is True
+        assert await state.eval('=Local.status <> "active"') is False
 
 
 class TestPowerFxArithmetic:
@@ -300,7 +300,7 @@ class TestPowerFxArithmetic:
         await state.initialize()
 
         # From YAML: value: =Local.TurnCount + 1
-        await state.set("turn.TurnCount", 3)
+        await state.set("Local.TurnCount", 3)
         result = await state.eval("=Local.TurnCount + 1")
         assert result == 4
 
@@ -332,7 +332,7 @@ class TestPowerFxCustomFunctions:
         await state.initialize()
 
         # From YAML: messages: =UserMessage(Local.ServiceParameters.IssueDescription)
-        await state.set("turn.ServiceParameters", {"IssueDescription": "My computer won't boot"})
+        await state.set("Local.ServiceParameters", {"IssueDescription": "My computer won't boot"})
         result = await state.eval("=UserMessage(Local.ServiceParameters.IssueDescription)")
 
         assert isinstance(result, dict)
@@ -345,7 +345,7 @@ class TestPowerFxCustomFunctions:
         await state.initialize()
 
         # From YAML: messages: =Local.Problem
-        await state.set("turn.Problem", "What is 2+2?")
+        await state.set("Local.Problem", "What is 2+2?")
         result = await state.eval("=UserMessage(Local.Problem)")
 
         assert result["role"] == "user"
@@ -357,13 +357,13 @@ class TestPowerFxCustomFunctions:
         await state.initialize()
 
         await state.set(
-            "turn.messages",
+            "Local.messages",
             [
                 {"role": "user", "text": "Hello"},
                 {"role": "assistant", "text": "Hi there!"},
             ],
         )
-        result = await state.eval("=MessageText(turn.messages)")
+        result = await state.eval("=MessageText(Local.messages)")
         assert result == "Hi there!"
 
     async def test_message_text_empty_list(self, mock_shared_state):
@@ -371,8 +371,8 @@ class TestPowerFxCustomFunctions:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize()
 
-        await state.set("turn.messages", [])
-        result = await state.eval("=MessageText(turn.messages)")
+        await state.set("Local.messages", [])
+        result = await state.eval("=MessageText(Local.messages)")
         assert result == ""
 
 
@@ -403,7 +403,7 @@ class TestPowerFxNestedVariables:
         await state.initialize()
 
         # From YAML: =Local.ServiceParameters.IssueDescription
-        await state.set("turn.ServiceParameters", {"IssueDescription": "Screen is black"})
+        await state.set("Local.ServiceParameters", {"IssueDescription": "Screen is black"})
         result = await state.eval("=Local.ServiceParameters.IssueDescription")
         assert result == "Screen is black"
 
@@ -413,7 +413,7 @@ class TestPowerFxNestedVariables:
         await state.initialize()
 
         # From YAML: =Local.RoutingParameters.TeamName
-        await state.set("turn.RoutingParameters", {"TeamName": "Windows Support"})
+        await state.set("Local.RoutingParameters", {"TeamName": "Windows Support"})
         result = await state.eval("=Local.RoutingParameters.TeamName")
         assert result == "Windows Support"
 
@@ -423,7 +423,7 @@ class TestPowerFxNestedVariables:
         await state.initialize()
 
         # From YAML: =Local.TicketParameters.TicketId
-        await state.set("turn.TicketParameters", {"TicketId": "TKT-12345"})
+        await state.set("Local.TicketParameters", {"TicketId": "TKT-12345"})
         result = await state.eval("=Local.TicketParameters.TicketId")
         assert result == "TKT-12345"
 
@@ -495,7 +495,7 @@ class TestStringInterpolation:
         await state.initialize()
 
         # From YAML: activity: "Created ticket #{Local.TicketParameters.TicketId}"
-        await state.set("turn.TicketParameters", {"TicketId": "TKT-999"})
+        await state.set("Local.TicketParameters", {"TicketId": "TKT-999"})
         result = await state.interpolate_string("Created ticket #{Local.TicketParameters.TicketId}")
         assert result == "Created ticket #TKT-999"
 
@@ -505,7 +505,7 @@ class TestStringInterpolation:
         await state.initialize()
 
         # From YAML: activity: Routing to {Local.RoutingParameters.TeamName}
-        await state.set("turn.RoutingParameters", {"TeamName": "Linux Support"})
+        await state.set("Local.RoutingParameters", {"TeamName": "Linux Support"})
         result = await state.interpolate_string("Routing to {Local.RoutingParameters.TeamName}")
         assert result == "Routing to Linux Support"
 
@@ -536,12 +536,12 @@ class TestWorkflowInputsAccess:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"name": "Alice", "age": 25})
 
-        # From YAML: value: =inputs.name (lowercase alias)
-        result = await state.eval("=workflow.inputs.name")
+        # .NET style (standard)
+        result = await state.eval("=Workflow.Inputs.name")
         assert result == "Alice"
 
-        # .NET style
-        result = await state.eval("=Workflow.Inputs.name")
+        # Also test inputs.name shorthand
+        result = await state.eval("=inputs.name")
         assert result == "Alice"
 
     async def test_inputs_problem(self, mock_shared_state):
@@ -549,6 +549,6 @@ class TestWorkflowInputsAccess:
         state = DeclarativeWorkflowState(mock_shared_state)
         await state.initialize({"problem": "What is 5 * 6?"})
 
-        # From YAML: value: =inputs.problem
-        result = await state.eval("=workflow.inputs.problem")
+        # .NET style (standard)
+        result = await state.eval("=Workflow.Inputs.problem")
         assert result == "What is 5 * 6?"

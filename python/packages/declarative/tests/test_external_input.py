@@ -172,7 +172,7 @@ class TestProcessExternalLoop:
     def test_external_loop_true_condition(self):
         """Test when external loop condition evaluates to true."""
         state = WorkflowState()
-        state.set("turn.isComplete", False)
+        state.set("Local.isComplete", False)
 
         input_config = {
             "externalLoop": {
@@ -189,7 +189,7 @@ class TestProcessExternalLoop:
     def test_external_loop_false_condition(self):
         """Test when external loop condition evaluates to false."""
         state = WorkflowState()
-        state.set("turn.isComplete", True)
+        state.set("Local.isComplete", True)
 
         input_config = {
             "externalLoop": {

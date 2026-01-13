@@ -56,13 +56,13 @@ class TestSetTextVariableHandler:
         handler = get_action_handler("SetTextVariable")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.greeting") == "Hello, World!"
+        assert ctx.state.get("Local.greeting") == "Hello, World!"
 
     @pytest.mark.asyncio
     async def test_set_text_variable_with_interpolation(self):
         """Test setting text with variable interpolation."""
         state = WorkflowState()
-        state.set("turn.name", "Alice")
+        state.set("Local.name", "Alice")
 
         ctx = create_action_context(
             {
@@ -76,7 +76,7 @@ class TestSetTextVariableHandler:
         handler = get_action_handler("SetTextVariable")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.message") == "Hello, Alice!"
+        assert ctx.state.get("Local.message") == "Hello, Alice!"
 
 
 class TestResetVariableHandler:
@@ -86,7 +86,7 @@ class TestResetVariableHandler:
     async def test_reset_variable(self):
         """Test resetting a variable to None."""
         state = WorkflowState()
-        state.set("turn.counter", 5)
+        state.set("Local.counter", 5)
 
         ctx = create_action_context(
             {
@@ -99,7 +99,7 @@ class TestResetVariableHandler:
         handler = get_action_handler("ResetVariable")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.counter") is None
+        assert ctx.state.get("Local.counter") is None
 
 
 class TestSetMultipleVariablesHandler:
@@ -120,9 +120,9 @@ class TestSetMultipleVariablesHandler:
         handler = get_action_handler("SetMultipleVariables")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.a") == 1
-        assert ctx.state.get("turn.b") == 2
-        assert ctx.state.get("turn.c") == "three"
+        assert ctx.state.get("Local.a") == 1
+        assert ctx.state.get("Local.b") == 2
+        assert ctx.state.get("Local.c") == "three"
 
 
 class TestClearAllVariablesHandler:
@@ -132,9 +132,9 @@ class TestClearAllVariablesHandler:
     async def test_clear_all_variables(self):
         """Test clearing all turn-scoped variables."""
         state = WorkflowState()
-        state.set("turn.a", 1)
-        state.set("turn.b", 2)
-        state.set("workflow.outputs.result", "kept")
+        state.set("Local.a", 1)
+        state.set("Local.b", 2)
+        state.set("Workflow.Outputs.result", "kept")
 
         ctx = create_action_context(
             {
@@ -146,10 +146,10 @@ class TestClearAllVariablesHandler:
         handler = get_action_handler("ClearAllVariables")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.a") is None
-        assert ctx.state.get("turn.b") is None
+        assert ctx.state.get("Local.a") is None
+        assert ctx.state.get("Local.b") is None
         # Workflow outputs should be preserved
-        assert ctx.state.get("workflow.outputs.result") == "kept"
+        assert ctx.state.get("Workflow.Outputs.result") == "kept"
 
 
 class TestCreateConversationHandler:
@@ -171,7 +171,7 @@ class TestCreateConversationHandler:
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
         # Check conversation was created with auto-generated ID
-        conversations = ctx.state.get("system.conversations")
+        conversations = ctx.state.get("System.conversations")
         assert conversations is not None
         assert len(conversations) == 1
 
@@ -180,7 +180,7 @@ class TestCreateConversationHandler:
         assert conversations[generated_id]["messages"] == []
 
         # Check output binding - the ID should be stored in the specified variable
-        assert ctx.state.get("turn.myConvId") == generated_id
+        assert ctx.state.get("Local.myConvId") == generated_id
 
     @pytest.mark.asyncio
     async def test_create_conversation_legacy_output(self):
@@ -196,7 +196,7 @@ class TestCreateConversationHandler:
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
         # Check conversation was created
-        conversations = ctx.state.get("system.conversations")
+        conversations = ctx.state.get("System.conversations")
         assert conversations is not None
         assert len(conversations) == 1
 
@@ -204,7 +204,7 @@ class TestCreateConversationHandler:
         generated_id = list(conversations.keys())[0]
 
         # Check legacy output binding
-        assert ctx.state.get("turn.myConvId") == generated_id
+        assert ctx.state.get("Local.myConvId") == generated_id
 
     @pytest.mark.asyncio
     async def test_create_conversation_auto_id(self):
@@ -217,7 +217,7 @@ class TestCreateConversationHandler:
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
         # Check conversation was created with some ID
-        conversations = ctx.state.get("system.conversations")
+        conversations = ctx.state.get("System.conversations")
         assert conversations is not None
         assert len(conversations) == 1
 
@@ -230,7 +230,7 @@ class TestAddConversationMessageHandler:
         """Test adding a message to a conversation."""
         state = WorkflowState()
         state.set(
-            "system.conversations",
+            "System.conversations",
             {
                 "conv-123": {"id": "conv-123", "messages": []},
             },
@@ -251,7 +251,7 @@ class TestAddConversationMessageHandler:
         handler = get_action_handler("AddConversationMessage")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        conversations = ctx.state.get("system.conversations")
+        conversations = ctx.state.get("System.conversations")
         assert len(conversations["conv-123"]["messages"]) == 1
         assert conversations["conv-123"]["messages"][0]["content"] == "Hello!"
 
@@ -310,19 +310,19 @@ class TestConditionGroupWithElseActions:
                 {
                     "condition": False,
                     "actions": [
-                        {"kind": "SetValue", "path": "turn.result", "value": "matched"},
+                        {"kind": "SetValue", "path": "Local.result", "value": "matched"},
                     ],
                 },
             ],
             "elseActions": [
-                {"kind": "SetValue", "path": "turn.result", "value": "else"},
+                {"kind": "SetValue", "path": "Local.result", "value": "else"},
             ],
         })
 
         handler = get_action_handler("ConditionGroup")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "else"
+        assert ctx.state.get("Local.result") == "else"
 
     @pytest.mark.asyncio
     async def test_condition_group_match_skips_else(self):
@@ -333,16 +333,16 @@ class TestConditionGroupWithElseActions:
                 {
                     "condition": True,
                     "actions": [
-                        {"kind": "SetValue", "path": "turn.result", "value": "matched"},
+                        {"kind": "SetValue", "path": "Local.result", "value": "matched"},
                     ],
                 },
             ],
             "elseActions": [
-                {"kind": "SetValue", "path": "turn.result", "value": "else"},
+                {"kind": "SetValue", "path": "Local.result", "value": "else"},
             ],
         })
 
         handler = get_action_handler("ConditionGroup")
         _events = [e async for e in handler(ctx)]  # noqa: F841
 
-        assert ctx.state.get("turn.result") == "matched"
+        assert ctx.state.get("Local.result") == "matched"

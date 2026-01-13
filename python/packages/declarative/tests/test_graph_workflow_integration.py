@@ -28,7 +28,7 @@ class TestGraphBasedWorkflowExecution:
             "name": "simple_workflow",
             "actions": [
                 {"kind": "SendActivity", "id": "greet", "activity": {"text": "Hello!"}},
-                {"kind": "SetValue", "id": "set_count", "path": "turn.count", "value": 1},
+                {"kind": "SetValue", "id": "set_count", "path": "Local.count", "value": 1},
                 {"kind": "SendActivity", "id": "done", "activity": {"text": "Done!"}},
             ],
         }
@@ -50,11 +50,11 @@ class TestGraphBasedWorkflowExecution:
         yaml_def = {
             "name": "conditional_workflow",
             "actions": [
-                {"kind": "SetValue", "id": "set_flag", "path": "turn.flag", "value": True},
+                {"kind": "SetValue", "id": "set_flag", "path": "Local.flag", "value": True},
                 {
                     "kind": "If",
                     "id": "check_flag",
-                    "condition": "=turn.flag",
+                    "condition": "=Local.flag",
                     "then": [
                         {"kind": "SendActivity", "id": "say_yes", "activity": {"text": "Flag is true!"}},
                     ],
@@ -82,14 +82,14 @@ class TestGraphBasedWorkflowExecution:
         yaml_def = {
             "name": "loop_workflow",
             "actions": [
-                {"kind": "SetValue", "id": "set_items", "path": "turn.items", "value": ["a", "b", "c"]},
+                {"kind": "SetValue", "id": "set_items", "path": "Local.items", "value": ["a", "b", "c"]},
                 {
                     "kind": "Foreach",
                     "id": "process_items",
-                    "itemsSource": "=turn.items",
-                    "iteratorVariable": "turn.item",
+                    "itemsSource": "=Local.items",
+                    "iteratorVariable": "Local.item",
                     "actions": [
-                        {"kind": "SendActivity", "id": "show_item", "activity": {"text": "=turn.item"}},
+                        {"kind": "SendActivity", "id": "show_item", "activity": {"text": "=Local.item"}},
                     ],
                 },
             ],
@@ -113,19 +113,19 @@ class TestGraphBasedWorkflowExecution:
         yaml_def = {
             "name": "switch_workflow",
             "actions": [
-                {"kind": "SetValue", "id": "set_level", "path": "turn.level", "value": 2},
+                {"kind": "SetValue", "id": "set_level", "path": "Local.level", "value": 2},
                 {
                     "kind": "Switch",
                     "id": "check_level",
                     "conditions": [
                         {
-                            "condition": "=turn.level = 1",
+                            "condition": "=Local.level = 1",
                             "actions": [
                                 {"kind": "SendActivity", "id": "level_1", "activity": {"text": "Level 1"}},
                             ],
                         },
                         {
-                            "condition": "=turn.level = 2",
+                            "condition": "=Local.level = 2",
                             "actions": [
                                 {"kind": "SendActivity", "id": "level_2", "activity": {"text": "Level 2"}},
                             ],
@@ -167,7 +167,7 @@ actions:
       text: "Hello from graph mode!"
   - kind: SetValue
     id: set_val
-    path: turn.result
+    path: Local.result
     value: 42
 """
         workflow = factory.create_workflow_from_yaml(yaml_content)
@@ -189,7 +189,7 @@ actions:
       text: "Starting workflow"
   - kind: SetValue
     id: set_message
-    path: turn.message
+    path: Local.message
     value: "Hello World"
   - kind: SendActivity
     id: end
@@ -214,9 +214,9 @@ class TestGraphWorkflowCheckpointing:
         yaml_def = {
             "name": "multi_executor_workflow",
             "actions": [
-                {"kind": "SetValue", "id": "step1", "path": "turn.a", "value": 1},
-                {"kind": "SetValue", "id": "step2", "path": "turn.b", "value": 2},
-                {"kind": "SetValue", "id": "step3", "path": "turn.c", "value": 3},
+                {"kind": "SetValue", "id": "step1", "path": "Local.a", "value": 1},
+                {"kind": "SetValue", "id": "step2", "path": "Local.b", "value": 2},
+                {"kind": "SetValue", "id": "step3", "path": "Local.c", "value": 3},
             ],
         }
 
@@ -297,8 +297,8 @@ class TestGraphWorkflowStateManagement:
         yaml_def = {
             "name": "state_test",
             "actions": [
-                {"kind": "SetValue", "id": "set", "path": "turn.value", "value": "test_data"},
-                {"kind": "SendActivity", "id": "send", "activity": {"text": "=turn.value"}},
+                {"kind": "SetValue", "id": "set", "path": "Local.value", "value": "test_data"},
+                {"kind": "SendActivity", "id": "send", "activity": {"text": "=Local.value"}},
             ],
         }
 
@@ -317,9 +317,9 @@ class TestGraphWorkflowStateManagement:
         yaml_def = {
             "name": "multi_var_test",
             "actions": [
-                {"kind": "SetValue", "id": "set_a", "path": "turn.a", "value": "Hello"},
-                {"kind": "SetValue", "id": "set_b", "path": "turn.b", "value": "World"},
-                {"kind": "SendActivity", "id": "send", "activity": {"text": "=turn.a"}},
+                {"kind": "SetValue", "id": "set_a", "path": "Local.a", "value": "Hello"},
+                {"kind": "SetValue", "id": "set_b", "path": "Local.b", "value": "World"},
+                {"kind": "SendActivity", "id": "send", "activity": {"text": "=Local.a"}},
             ],
         }
 

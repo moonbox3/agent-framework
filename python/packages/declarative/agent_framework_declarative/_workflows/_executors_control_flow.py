@@ -247,21 +247,21 @@ class ForeachInitExecutor(DeclarativeActionExecutor):
         if items:
             # Set the iteration variable
             # Support multiple schema formats:
-            # - Graph mode: iteratorVariable, item (default "turn.item")
-            # - Interpreter mode: itemName (default "item", stored in turn scope)
+            # - Graph mode: iteratorVariable, item (default "Local.item")
+            # - Interpreter mode: itemName (default "item", stored in Local scope)
             item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item")
             if not item_var:
-                # Interpreter mode: itemName defaults to "item", store in turn scope
+                # Interpreter mode: itemName defaults to "item", store in Local scope
                 item_name = self._action_def.get("itemName", "item")
-                item_var = f"turn.{item_name}"
+                item_var = f"Local.{item_name}"
 
             # Support multiple schema formats for index:
             # - Graph mode: indexVariable, index
-            # - Interpreter mode: indexName (default "index", stored in turn scope)
+            # - Interpreter mode: indexName (default "index", stored in Local scope)
             index_var = self._action_def.get("indexVariable") or self._action_def.get("index")
             if not index_var and "indexName" in self._action_def:
                 index_name = self._action_def.get("indexName", "index")
-                index_var = f"turn.{index_name}"
+                index_var = f"Local.{index_name}"
 
             await state.set(item_var, items[0])
             if index_var:
@@ -326,21 +326,21 @@ class ForeachNextExecutor(DeclarativeActionExecutor):
 
             # Set the iteration variable
             # Support multiple schema formats:
-            # - Graph mode: iteratorVariable, item (default "turn.item")
-            # - Interpreter mode: itemName (default "item", stored in turn scope)
+            # - Graph mode: iteratorVariable, item (default "Local.item")
+            # - Interpreter mode: itemName (default "item", stored in Local scope)
             item_var = self._action_def.get("iteratorVariable") or self._action_def.get("item")
             if not item_var:
-                # Interpreter mode: itemName defaults to "item", store in turn scope
+                # Interpreter mode: itemName defaults to "item", store in Local scope
                 item_name = self._action_def.get("itemName", "item")
-                item_var = f"turn.{item_name}"
+                item_var = f"Local.{item_name}"
 
             # Support multiple schema formats for index:
             # - Graph mode: indexVariable, index
-            # - Interpreter mode: indexName (default "index", stored in turn scope)
+            # - Interpreter mode: indexName (default "index", stored in Local scope)
             index_var = self._action_def.get("indexVariable") or self._action_def.get("index")
             if not index_var and "indexName" in self._action_def:
                 index_name = self._action_def.get("indexName", "index")
-                index_var = f"turn.{index_name}"
+                index_var = f"Local.{index_name}"
 
             await state.set(item_var, items[current_index])
             if index_var:

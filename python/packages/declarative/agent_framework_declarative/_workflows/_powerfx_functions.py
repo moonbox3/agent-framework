@@ -119,6 +119,27 @@ def assistant_message(text: str) -> dict[str, str]:
     return {"role": "assistant", "content": str(text) if text else ""}
 
 
+def agent_message(text: str) -> dict[str, str]:
+    """Create an agent/assistant message object.
+
+    This is equivalent to the .NET AgentMessage() function.
+    It's an alias for assistant_message() for .NET compatibility.
+
+    Args:
+        text: The text content of the message
+
+    Returns:
+        A message dictionary with role 'assistant'
+
+    Examples:
+        .. code-block:: python
+
+            agent_message("Hello")
+            # Returns: {'role': 'assistant', 'content': 'Hello'}
+    """
+    return {"role": "assistant", "content": str(text) if text else ""}
+
+
 def system_message(text: str) -> dict[str, str]:
     """Create a system message object.
 
@@ -454,6 +475,7 @@ CUSTOM_FUNCTIONS: dict[str, Any] = {
     "MessageText": message_text,
     "UserMessage": user_message,
     "AssistantMessage": assistant_message,
+    "AgentMessage": agent_message,  # .NET compatibility alias for AssistantMessage
     "SystemMessage": system_message,
     "If": if_func,
     "IsBlank": is_blank,

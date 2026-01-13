@@ -499,6 +499,43 @@ class JoinExecutor(DeclarativeActionExecutor):
         await ctx.send_message(ActionComplete())
 
 
+class CancelDialogExecutor(DeclarativeActionExecutor):
+    """Executor for CancelDialog action.
+
+    Cancels the current dialog/workflow, equivalent to .NET CancelDialog.
+    This terminates execution similarly to EndWorkflow.
+    """
+
+    @handler
+    async def handle_action(
+        self,
+        trigger: Any,
+        ctx: WorkflowContext[ActionComplete],
+    ) -> None:
+        """Cancel the current dialog/workflow."""
+        # CancelDialog terminates execution without continuing
+        # Similar to EndWorkflow but semantically different (cancellation vs completion)
+        pass
+
+
+class CancelAllDialogsExecutor(DeclarativeActionExecutor):
+    """Executor for CancelAllDialogs action.
+
+    Cancels all dialogs in the execution stack, equivalent to .NET CancelAllDialogs.
+    This terminates the entire workflow execution.
+    """
+
+    @handler
+    async def handle_action(
+        self,
+        trigger: Any,
+        ctx: WorkflowContext[ActionComplete],
+    ) -> None:
+        """Cancel all dialogs/workflows."""
+        # CancelAllDialogs terminates all execution
+        pass
+
+
 # Mapping of control flow action kinds to executor classes
 # Note: Most control flow is handled by the builder creating graph structure,
 # these are the executors that are part of that structure
@@ -506,4 +543,6 @@ CONTROL_FLOW_EXECUTORS: dict[str, type[DeclarativeActionExecutor]] = {
     "EndWorkflow": EndWorkflowExecutor,
     "EndDialog": EndWorkflowExecutor,
     "EndConversation": EndConversationExecutor,
+    "CancelDialog": CancelDialogExecutor,
+    "CancelAllDialogs": CancelAllDialogsExecutor,
 }

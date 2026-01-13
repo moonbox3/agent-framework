@@ -535,6 +535,611 @@ class TestHumanInputExecutors:
         assert "continue" in request.message.lower()
 
 
+class TestParseValueExecutor:
+    """Tests for the ParseValue action executor."""
+
+    @pytest.fixture
+    def mock_context(self, mock_shared_state):
+        """Create a mock workflow context."""
+        ctx = MagicMock()
+        ctx.shared_state = mock_shared_state
+        ctx.send_message = AsyncMock()
+        ctx.yield_output = AsyncMock()
+        return ctx
+
+    @pytest.fixture
+    def mock_shared_state(self):
+        """Create a mock shared state."""
+        shared_state = MagicMock()
+        shared_state._data = {}
+
+        async def mock_get(key):
+            if key not in shared_state._data:
+                raise KeyError(key)
+            return shared_state._data[key]
+
+        async def mock_set(key, value):
+            shared_state._data[key] = value
+
+        shared_state.get = AsyncMock(side_effect=mock_get)
+        shared_state.set = AsyncMock(side_effect=mock_set)
+
+        return shared_state
+
+    @pytest.mark.asyncio
+    async def test_parse_value_string(self, mock_context, mock_shared_state):
+        """Test ParseValue with string type."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", "hello world")
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "string",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_parse_value_number(self, mock_context, mock_shared_state):
+        """Test ParseValue with number type."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", "123")
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "number",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == 123
+
+    @pytest.mark.asyncio
+    async def test_parse_value_float(self, mock_context, mock_shared_state):
+        """Test ParseValue with float number."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", "3.14")
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "number",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == 3.14
+
+    @pytest.mark.asyncio
+    async def test_parse_value_boolean_true(self, mock_context, mock_shared_state):
+        """Test ParseValue with boolean type (true)."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", "true")
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "boolean",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_parse_value_boolean_false(self, mock_context, mock_shared_state):
+        """Test ParseValue with boolean type (false)."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", "no")
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "boolean",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_parse_value_object_from_json(self, mock_context, mock_shared_state):
+        """Test ParseValue with object type from JSON string."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", '{"name": "Alice", "age": 30}')
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "object",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == {"name": "Alice", "age": 30}
+
+    @pytest.mark.asyncio
+    async def test_parse_value_array_from_json(self, mock_context, mock_shared_state):
+        """Test ParseValue with array type from JSON string."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", '["a", "b", "c"]')
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+            "valueType": "array",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_parse_value_no_type_conversion(self, mock_context, mock_shared_state):
+        """Test ParseValue without type conversion."""
+        from agent_framework_declarative._workflows._executors_basic import ParseValueExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.rawValue", {"status": "active"})
+
+        action_def = {
+            "kind": "ParseValue",
+            "variable": "Local.parsedValue",
+            "value": "=Local.rawValue",
+        }
+        executor = ParseValueExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.parsedValue")
+        assert result == {"status": "active"}
+
+
+class TestEditTableExecutor:
+    """Tests for the EditTable action executor."""
+
+    @pytest.fixture
+    def mock_context(self, mock_shared_state):
+        """Create a mock workflow context."""
+        ctx = MagicMock()
+        ctx.shared_state = mock_shared_state
+        ctx.send_message = AsyncMock()
+        ctx.yield_output = AsyncMock()
+        return ctx
+
+    @pytest.fixture
+    def mock_shared_state(self):
+        """Create a mock shared state."""
+        shared_state = MagicMock()
+        shared_state._data = {}
+
+        async def mock_get(key):
+            if key not in shared_state._data:
+                raise KeyError(key)
+            return shared_state._data[key]
+
+        async def mock_set(key, value):
+            shared_state._data[key] = value
+
+        shared_state.get = AsyncMock(side_effect=mock_get)
+        shared_state.set = AsyncMock(side_effect=mock_set)
+
+        return shared_state
+
+    @pytest.mark.asyncio
+    async def test_edit_table_add(self, mock_context, mock_shared_state):
+        """Test EditTable with add operation."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "b"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "add",
+            "value": "c",
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_insert_at_index(self, mock_context, mock_shared_state):
+        """Test EditTable with insert at specific index."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "c"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "add",
+            "value": "b",
+            "index": 1,
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_remove_by_value(self, mock_context, mock_shared_state):
+        """Test EditTable with remove by value."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "b", "c"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "remove",
+            "value": "b",
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == ["a", "c"]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_remove_by_index(self, mock_context, mock_shared_state):
+        """Test EditTable with remove by index."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "b", "c"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "remove",
+            "index": 1,
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == ["a", "c"]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_clear(self, mock_context, mock_shared_state):
+        """Test EditTable with clear operation."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "b", "c"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "clear",
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_edit_table_update_at_index(self, mock_context, mock_shared_state):
+        """Test EditTable with update at index."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.items", ["a", "b", "c"])
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.items",
+            "operation": "update",
+            "value": "B",
+            "index": 1,
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.items")
+        assert result == ["a", "B", "c"]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_creates_new_list(self, mock_context, mock_shared_state):
+        """Test EditTable creates new list if not exists."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        action_def = {
+            "kind": "EditTable",
+            "table": "Local.newItems",
+            "operation": "add",
+            "value": "first",
+        }
+        executor = EditTableExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.newItems")
+        assert result == ["first"]
+
+
+class TestEditTableV2Executor:
+    """Tests for the EditTableV2 action executor."""
+
+    @pytest.fixture
+    def mock_context(self, mock_shared_state):
+        """Create a mock workflow context."""
+        ctx = MagicMock()
+        ctx.shared_state = mock_shared_state
+        ctx.send_message = AsyncMock()
+        ctx.yield_output = AsyncMock()
+        return ctx
+
+    @pytest.fixture
+    def mock_shared_state(self):
+        """Create a mock shared state."""
+        shared_state = MagicMock()
+        shared_state._data = {}
+
+        async def mock_get(key):
+            if key not in shared_state._data:
+                raise KeyError(key)
+            return shared_state._data[key]
+
+        async def mock_set(key, value):
+            shared_state._data[key] = value
+
+        shared_state.get = AsyncMock(side_effect=mock_get)
+        shared_state.set = AsyncMock(side_effect=mock_set)
+
+        return shared_state
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_add(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with add operation."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1, "name": "Alice"}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "add",
+            "item": {"id": 2, "name": "Bob"},
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_add_or_update_new(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with addOrUpdate - adding new record."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1, "name": "Alice"}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "addOrUpdate",
+            "item": {"id": 2, "name": "Bob"},
+            "key": "id",
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_add_or_update_existing(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with addOrUpdate - updating existing record."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "addOrUpdate",
+            "item": {"id": 1, "name": "Alice Updated"},
+            "key": "id",
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == [{"id": 1, "name": "Alice Updated"}, {"id": 2, "name": "Bob"}]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_remove_by_key(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with remove by key."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "remove",
+            "item": {"id": 1},
+            "key": "id",
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == [{"id": 2, "name": "Bob"}]
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_clear(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with clear operation."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1}, {"id": 2}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "clear",
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_edit_table_v2_update_by_key(self, mock_context, mock_shared_state):
+        """Test EditTableV2 with update by key."""
+        from agent_framework_declarative._workflows._executors_basic import EditTableV2Executor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+        await state.set("Local.records", [{"id": 1, "status": "pending"}, {"id": 2, "status": "pending"}])
+
+        action_def = {
+            "kind": "EditTableV2",
+            "table": "Local.records",
+            "operation": "update",
+            "item": {"id": 1, "status": "complete"},
+            "key": "id",
+        }
+        executor = EditTableV2Executor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        result = await state.get("Local.records")
+        assert result == [{"id": 1, "status": "complete"}, {"id": 2, "status": "pending"}]
+
+
+class TestCancelDialogExecutors:
+    """Tests for CancelDialog and CancelAllDialogs executors."""
+
+    @pytest.fixture
+    def mock_context(self, mock_shared_state):
+        """Create a mock workflow context."""
+        ctx = MagicMock()
+        ctx.shared_state = mock_shared_state
+        ctx.send_message = AsyncMock()
+        ctx.yield_output = AsyncMock()
+        return ctx
+
+    @pytest.fixture
+    def mock_shared_state(self):
+        """Create a mock shared state."""
+        shared_state = MagicMock()
+        shared_state._data = {}
+
+        async def mock_get(key):
+            if key not in shared_state._data:
+                raise KeyError(key)
+            return shared_state._data[key]
+
+        async def mock_set(key, value):
+            shared_state._data[key] = value
+
+        shared_state.get = AsyncMock(side_effect=mock_get)
+        shared_state.set = AsyncMock(side_effect=mock_set)
+
+        return shared_state
+
+    @pytest.mark.asyncio
+    async def test_cancel_dialog_executor(self, mock_context, mock_shared_state):
+        """Test CancelDialogExecutor completes without error."""
+        from agent_framework_declarative._workflows._executors_control_flow import CancelDialogExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        action_def = {
+            "kind": "CancelDialog",
+        }
+        executor = CancelDialogExecutor(action_def)
+        # Should complete without raising
+        await executor.handle_action(ActionTrigger(), mock_context)
+        # CancelDialog is a no-op that signals termination
+        # No assertions needed - just verify it doesn't raise
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_dialogs_executor(self, mock_context, mock_shared_state):
+        """Test CancelAllDialogsExecutor completes without error."""
+        from agent_framework_declarative._workflows._executors_control_flow import CancelAllDialogsExecutor
+
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        action_def = {
+            "kind": "CancelAllDialogs",
+        }
+        executor = CancelAllDialogsExecutor(action_def)
+        # Should complete without raising
+        await executor.handle_action(ActionTrigger(), mock_context)
+        # CancelAllDialogs is a no-op that signals termination
+        # No assertions needed - just verify it doesn't raise
+
+
 class TestExtractJsonFromResponse:
     """Tests for the _extract_json_from_response helper function."""
 

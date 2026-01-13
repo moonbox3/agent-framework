@@ -306,7 +306,7 @@ class TestPowerFxArithmetic:
 
 
 class TestPowerFxCustomFunctions:
-    """Test custom functions (UserMessage, MessageText)."""
+    """Test custom functions (UserMessage, MessageText, AgentMessage)."""
 
     @pytest.fixture
     def mock_shared_state(self):
@@ -326,6 +326,33 @@ class TestPowerFxCustomFunctions:
         shared_state.set = AsyncMock(side_effect=mock_set)
         return shared_state
 
+    @pytest.mark.asyncio
+    async def test_agent_message_function(self, mock_shared_state):
+        """Test AgentMessage function (.NET compatibility alias for AssistantMessage)."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        # From .NET YAML: messages: =AgentMessage(Local.Response)
+        await state.set("Local.Response", "Here is the analysis result")
+        result = await state.eval("=AgentMessage(Local.Response)")
+
+        assert isinstance(result, dict)
+        assert result["role"] == "assistant"
+        assert result["text"] == "Here is the analysis result"
+
+    @pytest.mark.asyncio
+    async def test_agent_message_with_empty_string(self, mock_shared_state):
+        """Test AgentMessage with empty string."""
+        state = DeclarativeWorkflowState(mock_shared_state)
+        await state.initialize()
+
+        await state.set("Local.Response", "")
+        result = await state.eval("=AgentMessage(Local.Response)")
+
+        assert result["role"] == "assistant"
+        assert result["text"] == ""
+
+    @pytest.mark.asyncio
     async def test_user_message_with_variable(self, mock_shared_state):
         """Test UserMessage function with variable reference."""
         state = DeclarativeWorkflowState(mock_shared_state)

@@ -39,7 +39,7 @@ async def main() -> None:
         result = await agent.run(
             query,
             # Specify type to use as response
-            response_format=ReleaseBrief,
+            options={"response_format": ReleaseBrief},
         )
 
         if isinstance(result.value, ReleaseBrief):

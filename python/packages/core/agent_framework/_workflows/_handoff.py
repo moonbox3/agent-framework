@@ -286,32 +286,36 @@ class HandoffAgentExecutor(AgentExecutor):
         logit_bias = options.get("logit_bias")
         metadata = options.get("metadata")
 
+        # Disable parallel tool calls to prevent the agent from invoking multiple handoff tools at once.
+        cloned_options: dict[str, Any] = {
+            "allow_multiple_tool_calls": False,
+            "frequency_penalty": options.get("frequency_penalty"),
+            "instructions": options.get("instructions"),
+            "logit_bias": dict(logit_bias) if logit_bias else None,
+            "max_tokens": options.get("max_tokens"),
+            "metadata": dict(metadata) if metadata else None,
+            "model_id": options.get("model_id"),
+            "presence_penalty": options.get("presence_penalty"),
+            "response_format": options.get("response_format"),
+            "seed": options.get("seed"),
+            "stop": options.get("stop"),
+            "store": options.get("store"),
+            "temperature": options.get("temperature"),
+            "tool_choice": options.get("tool_choice"),
+            "tools": all_tools if all_tools else None,
+            "top_p": options.get("top_p"),
+            "user": options.get("user"),
+        }
+
         return ChatAgent(
             chat_client=agent.chat_client,
-            instructions=options.get("instructions"),
             id=agent.id,
             name=agent.name,
             description=agent.description,
             chat_message_store_factory=agent.chat_message_store_factory,
             context_providers=agent.context_provider,
             middleware=middleware,
-            # Disable parallel tool calls to prevent the agent from invoking multiple handoff tools at once.
-            allow_multiple_tool_calls=False,
-            frequency_penalty=options.get("frequency_penalty"),
-            logit_bias=dict(logit_bias) if logit_bias else None,
-            max_tokens=options.get("max_tokens"),
-            metadata=dict(metadata) if metadata else None,
-            model_id=options.get("model_id"),
-            presence_penalty=options.get("presence_penalty"),
-            response_format=options.get("response_format"),
-            seed=options.get("seed"),
-            stop=options.get("stop"),
-            store=options.get("store"),
-            temperature=options.get("temperature"),
-            tool_choice=options.get("tool_choice"),  # type: ignore[arg-type]
-            tools=all_tools if all_tools else None,
-            top_p=options.get("top_p"),
-            user=options.get("user"),
+            default_options=cloned_options,
         )
 
     def _apply_auto_tools(self, agent: ChatAgent, targets: Sequence[HandoffConfiguration]) -> None:

@@ -742,6 +742,18 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
         """
         await self._async_exit_stack.aclose()
 
+    @property
+    def mcp_tools(self) -> list["MCPTool"]:
+        """Get the list of MCP tools attached to this agent.
+
+        MCP tools are stored separately from regular tools for lifecycle management.
+        Their functions are added to the tools list at runtime during run() or run_stream().
+
+        Returns:
+            List of MCPTool instances attached to this agent.
+        """
+        return self._local_mcp_tools
+
     def _update_agent_name_and_description(self) -> None:
         """Update the agent name in the chat client.
 

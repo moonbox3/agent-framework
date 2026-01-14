@@ -275,13 +275,13 @@ class HandoffAgentExecutor(AgentExecutor):
         middleware = list(agent.middleware or [])
 
         # Reconstruct the original tools list by combining regular tools with MCP tools.
-        # ChatAgent.__init__ separates MCP tools into _local_mcp_tools during initialization,
+        # ChatAgent.__init__ separates MCP tools during initialization,
         # so we need to recombine them here to pass the complete tools list to the constructor.
         # This makes sure MCP tools are preserved when cloning agents for handoff workflows.
         tools_from_options = options.get("tools")
         all_tools = list(tools_from_options) if tools_from_options else []
-        if agent._local_mcp_tools:  # type: ignore
-            all_tools.extend(agent._local_mcp_tools)  # type: ignore
+        if agent.mcp_tools:
+            all_tools.extend(agent.mcp_tools)
 
         logit_bias = options.get("logit_bias")
         metadata = options.get("metadata")

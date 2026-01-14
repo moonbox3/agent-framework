@@ -315,7 +315,7 @@ class HandoffAgentExecutor(AgentExecutor):
             chat_message_store_factory=agent.chat_message_store_factory,
             context_providers=agent.context_provider,
             middleware=middleware,
-            default_options=cloned_options,
+            default_options=cloned_options,  # type: ignore[arg-type]
         )
 
     def _apply_auto_tools(self, agent: ChatAgent, targets: Sequence[HandoffConfiguration]) -> None:

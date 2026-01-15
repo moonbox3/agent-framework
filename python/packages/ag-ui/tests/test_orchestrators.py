@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from agent_framework import (
-    AgentRunResponseUpdate,
+    AgentResponseUpdate,
     BaseChatClient,
     ChatAgent,
     FunctionInvocationConfiguration,
@@ -55,12 +55,12 @@ def _create_mock_chat_agent(
         thread: Any = None,
         tools: list[Any] | None = None,
         **kwargs: Any,
-    ) -> AsyncGenerator[AgentRunResponseUpdate, None]:
+    ) -> AsyncGenerator[AgentResponseUpdate, None]:
         if capture_tools is not None and tools is not None:
             capture_tools.extend(tools)
         if capture_messages is not None:
             capture_messages.extend(messages)
-        yield AgentRunResponseUpdate(contents=[TextContent(text="ok")], role="assistant")
+        yield AgentResponseUpdate(contents=[TextContent(text="ok")], role="assistant")
 
     # Patch the run_stream method
     agent.run_stream = mock_run_stream  # type: ignore[method-assign]

@@ -678,7 +678,7 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
         normalized_tools: list[ToolProtocol | Callable[..., Any] | MutableMapping[str, Any]] = (  # type:ignore[reportUnknownVariableType]
             [] if tools_ is None else tools_ if isinstance(tools_, list) else [tools_]  # type: ignore[list-item]
         )
-        self._local_mcp_tools = [tool for tool in normalized_tools if isinstance(tool, MCPTool)]
+        self.mcp_tools: list[MCPTool] = [tool for tool in normalized_tools if isinstance(tool, MCPTool)]
         agent_tools = [tool for tool in normalized_tools if not isinstance(tool, MCPTool)]
 
         # Build chat options dict
@@ -720,7 +720,7 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
         Returns:
             The ChatAgent instance.
         """
-        for context_manager in chain([self.chat_client], self._local_mcp_tools):
+        for context_manager in chain([self.chat_client], self.mcp_tools):
             if isinstance(context_manager, AbstractAsyncContextManager):
                 await self._async_exit_stack.enter_async_context(context_manager)
         return self
@@ -741,18 +741,6 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
             exc_tb: The exception traceback if an exception was raised, None otherwise.
         """
         await self._async_exit_stack.aclose()
-
-    @property
-    def mcp_tools(self) -> list["MCPTool"]:
-        """Get the list of MCP tools attached to this agent.
-
-        MCP tools are stored separately from regular tools for lifecycle management.
-        Their functions are added to the tools list at runtime during run() or run_stream().
-
-        Returns:
-            List of MCPTool instances attached to this agent.
-        """
-        return self._local_mcp_tools
 
     def _update_agent_name_and_description(self) -> None:
         """Update the agent name in the chat client.
@@ -829,7 +817,7 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
             else:
                 final_tools.append(tool)  # type: ignore
 
-        for mcp_server in self._local_mcp_tools:
+        for mcp_server in self.mcp_tools:
             if not mcp_server.is_connected:
                 await self._async_exit_stack.enter_async_context(mcp_server)
             final_tools.extend(mcp_server.functions)
@@ -956,7 +944,7 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
             else:
                 final_tools.append(tool)
 
-        for mcp_server in self._local_mcp_tools:
+        for mcp_server in self.mcp_tools:
             if not mcp_server.is_connected:
                 await self._async_exit_stack.enter_async_context(mcp_server)
             final_tools.extend(mcp_server.functions)

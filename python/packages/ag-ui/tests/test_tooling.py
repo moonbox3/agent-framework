@@ -74,7 +74,7 @@ def test_collect_server_tools_includes_mcp_tools_when_connected() -> None:
     mock_mcp = MockMCPTool([mcp_function1, mcp_function2], is_connected=True)
 
     agent = _create_chat_agent_with_tool("regular_tool")
-    agent._local_mcp_tools = [mock_mcp]
+    agent.mcp_tools = [mock_mcp]
 
     tools = collect_server_tools(agent)
 
@@ -91,7 +91,7 @@ def test_collect_server_tools_excludes_mcp_tools_when_not_connected() -> None:
     mock_mcp = MockMCPTool([mcp_function], is_connected=False)
 
     agent = _create_chat_agent_with_tool("regular_tool")
-    agent._local_mcp_tools = [mock_mcp]
+    agent.mcp_tools = [mock_mcp]
 
     tools = collect_server_tools(agent)
 
@@ -118,7 +118,7 @@ def test_collect_server_tools_with_mcp_tools_via_public_property() -> None:
     mock_mcp = MockMCPTool([mcp_function], is_connected=True)
 
     agent = _create_chat_agent_with_tool("regular_tool")
-    agent._local_mcp_tools = [mock_mcp]
+    agent.mcp_tools = [mock_mcp]
 
     # Verify the public property works
     assert agent.mcp_tools == [mock_mcp]

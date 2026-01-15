@@ -984,7 +984,7 @@ class TestWorkflowAgentMergeUpdates:
 
         updates = [
             # User question
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="What is the weather?")],
                 role=Role.USER,
                 response_id="resp-1",
@@ -992,7 +992,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:00Z",
             ),
             # Assistant with function call
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionCallContent(call_id=call_id, name="get_weather", arguments='{"location": "NYC"}')],
                 role=Role.ASSISTANT,
                 response_id="resp-1",
@@ -1001,7 +1001,7 @@ class TestWorkflowAgentMergeUpdates:
             ),
             # Function result: no response_id previously caused this to go to global_dangling
             # and be placed at the end (the bug); fix now correctly associates via call_id
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionResultContent(call_id=call_id, result="Sunny, 72F")],
                 role=Role.TOOL,
                 response_id=None,
@@ -1009,7 +1009,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:02Z",
             ),
             # Final assistant answer
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="The weather in NYC is sunny and 72F.")],
                 role=Role.ASSISTANT,
                 response_id="resp-1",
@@ -1080,7 +1080,7 @@ class TestWorkflowAgentMergeUpdates:
 
         updates = [
             # User question
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="What's the weather and time?")],
                 role=Role.USER,
                 response_id="resp-1",
@@ -1088,7 +1088,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:00Z",
             ),
             # Assistant with first function call
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionCallContent(call_id=call_id_1, name="get_weather", arguments='{"location": "NYC"}')],
                 role=Role.ASSISTANT,
                 response_id="resp-1",
@@ -1096,7 +1096,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:01Z",
             ),
             # Assistant with second function call
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionCallContent(call_id=call_id_2, name="get_time", arguments='{"timezone": "EST"}')],
                 role=Role.ASSISTANT,
                 response_id="resp-1",
@@ -1104,7 +1104,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:02Z",
             ),
             # Second function result arrives first (no response_id)
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionResultContent(call_id=call_id_2, result="3:00 PM EST")],
                 role=Role.TOOL,
                 response_id=None,
@@ -1112,7 +1112,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:03Z",
             ),
             # First function result arrives second (no response_id)
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionResultContent(call_id=call_id_1, result="Sunny, 72F")],
                 role=Role.TOOL,
                 response_id=None,
@@ -1120,7 +1120,7 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:04Z",
             ),
             # Final assistant answer
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="It's sunny (72F) and 3 PM in NYC.")],
                 role=Role.ASSISTANT,
                 response_id="resp-1",
@@ -1171,7 +1171,7 @@ class TestWorkflowAgentMergeUpdates:
         in the messages, it should be appended at the end (fallback behavior).
         """
         updates = [
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="Hello")],
                 role=Role.USER,
                 response_id="resp-1",
@@ -1179,14 +1179,14 @@ class TestWorkflowAgentMergeUpdates:
                 created_at="2024-01-01T12:00:00Z",
             ),
             # Function result with no matching call
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[FunctionResultContent(call_id="orphan_call_id", result="orphan result")],
                 role=Role.TOOL,
                 response_id=None,
                 message_id="msg-2",
                 created_at="2024-01-01T12:00:01Z",
             ),
-            AgentRunResponseUpdate(
+            AgentResponseUpdate(
                 contents=[TextContent(text="Goodbye")],
                 role=Role.ASSISTANT,
                 response_id="resp-1",

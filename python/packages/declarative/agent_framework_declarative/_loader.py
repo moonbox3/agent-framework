@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 import yaml
 from agent_framework import (
@@ -610,13 +610,16 @@ class AgentFactory:
 
         # Create the agent using the provider
         # The provider's create_agent returns a ChatAgent directly
-        return await provider.create_agent(
-            name=prompt_agent.name or "DeclarativeAgent",
-            model=prompt_agent.model.id if prompt_agent.model else None,
-            instructions=prompt_agent.instructions,
-            description=prompt_agent.description,
-            tools=tools,
-            response_format=response_format,
+        return cast(
+            ChatAgent,
+            await provider.create_agent(
+                name=prompt_agent.name or "DeclarativeAgent",
+                model=prompt_agent.model.id if prompt_agent.model else None,
+                instructions=prompt_agent.instructions,
+                description=prompt_agent.description,
+                tools=tools,
+                response_format=response_format,
+            ),
         )
 
     def _get_client(self, prompt_agent: PromptAgent) -> ChatClientProtocol:

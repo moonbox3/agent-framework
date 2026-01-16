@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-import asyncio
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -481,7 +480,7 @@ class AgentFactory:
             yaml_path = Path(yaml_path)
         if not yaml_path.exists():
             raise DeclarativeLoaderError(f"YAML file not found at path: {yaml_path}")
-        yaml_str = await asyncio.to_thread(yaml_path.read_text)
+        yaml_str = yaml_path.read_text()
         return await self.create_agent_from_yaml_async(yaml_str)
 
     async def create_agent_from_yaml_async(self, yaml_str: str) -> ChatAgent:

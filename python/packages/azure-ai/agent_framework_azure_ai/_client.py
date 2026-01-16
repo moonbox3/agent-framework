@@ -26,7 +26,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from azure.core.exceptions import ResourceNotFoundError
 from pydantic import ValidationError
 
-from ._shared import AzureAISettings, create_text_format_config
+from ._shared import AzureAISettings, _extract_project_connection_id, create_text_format_config
 
 if TYPE_CHECKING:
     from agent_framework.openai import OpenAIResponsesOptions
@@ -500,17 +500,8 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
         if tool.description:
             mcp["server_description"] = tool.description
 
-        # Check for project_connection_id in additional_properties
-        # This is used for Azure AI Foundry connections (OAuth, etc.)
-        project_connection_id = None
-        if tool.additional_properties:
-            project_connection_id = tool.additional_properties.get("project_connection_id")
-            # Also check for connection info that may contain the connection name
-            if not project_connection_id and "connection" in tool.additional_properties:
-                conn = tool.additional_properties["connection"]
-                if isinstance(conn, dict) and conn.get("name"):
-                    project_connection_id = conn.get("name")
-
+        # Check for project_connection_id in additional_properties (for Azure AI Foundry connections)
+        project_connection_id = _extract_project_connection_id(tool.additional_properties)
         if project_connection_id:
             mcp["project_connection_id"] = project_connection_id
         elif tool.headers:

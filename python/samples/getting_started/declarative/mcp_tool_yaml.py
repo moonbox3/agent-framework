@@ -45,7 +45,7 @@ instructions: |
 
 model:
   id: gpt-4o
-  provider: OpenAI.Responses
+  provider: OpenAI.Responses  # Uses OpenAI's Responses API (requires OPENAI_API_KEY env var)
 
 tools:
   - kind: mcp
@@ -54,7 +54,7 @@ tools:
     url: https://api.githubcopilot.com/mcp/
     connection:
       kind: key
-      apiKey: =Env.GITHUB_PAT
+      apiKey: =Env.GITHUB_PAT  # PowerFx syntax to read from environment variable
     approvalMode: never
     allowedTools:
       - get_file_contents

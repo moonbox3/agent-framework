@@ -76,6 +76,37 @@ class AzureAISettings(AFBaseSettings):
     model_deployment_name: str | None = None
 
 
+def _extract_project_connection_id(additional_properties: dict[str, Any] | None) -> str | None:
+    """Extract project_connection_id from HostedMCPTool additional_properties.
+
+    Checks for both direct 'project_connection_id' key (programmatic usage)
+    and 'connection.name' structure (declarative/YAML usage).
+
+    Args:
+        additional_properties: The additional_properties dict from a HostedMCPTool.
+
+    Returns:
+        The project_connection_id if found, None otherwise.
+    """
+    if not additional_properties:
+        return None
+
+    # Check for direct project_connection_id (programmatic usage)
+    project_connection_id = additional_properties.get("project_connection_id")
+    if isinstance(project_connection_id, str):
+        return project_connection_id
+
+    # Check for connection.name structure (declarative/YAML usage)
+    if "connection" in additional_properties:
+        conn = additional_properties["connection"]
+        if isinstance(conn, dict):
+            name = conn.get("name")
+            if isinstance(name, str):
+                return name
+
+    return None
+
+
 def from_azure_ai_tools(tools: Sequence[Tool | dict[str, Any]] | None) -> list[ToolProtocol | dict[str, Any]]:
     """Parses and converts a sequence of Azure AI tools into Agent Framework compatible tools.
 
@@ -260,17 +291,8 @@ def _prepare_mcp_tool_for_azure_ai(tool: HostedMCPTool) -> MCPTool:
     if tool.description:
         mcp["server_description"] = tool.description
 
-    # Check for project_connection_id in additional_properties first (preferred for Azure AI)
-    # Azure AI Agent Service doesn't allow sensitive headers - use project_connection_id instead
-    project_connection_id = None
-    if tool.additional_properties:
-        project_connection_id = tool.additional_properties.get("project_connection_id")
-        # Also check for connection info that may contain the connection name
-        if not project_connection_id and "connection" in tool.additional_properties:
-            conn = tool.additional_properties["connection"]
-            if isinstance(conn, dict) and conn.get("name"):
-                project_connection_id = conn.get("name")
-
+    # Check for project_connection_id in additional_properties (for Azure AI Foundry connections)
+    project_connection_id = _extract_project_connection_id(tool.additional_properties)
     if project_connection_id:
         mcp["project_connection_id"] = project_connection_id
     elif tool.headers:

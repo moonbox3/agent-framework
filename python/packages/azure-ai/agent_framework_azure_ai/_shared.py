@@ -110,6 +110,11 @@ def from_azure_ai_tools(tools: Sequence[Tool | dict[str, Any]] | None) -> list[T
                     if "never" in require_approval:
                         approval_mode["never_require_approval"] = set(require_approval["never"].get("tool_names", []))  # type: ignore
 
+            # Preserve project_connection_id in additional_properties
+            additional_props: dict[str, Any] | None = None
+            if project_connection_id := mcp_tool.get("project_connection_id"):
+                additional_props = {"connection": {"name": project_connection_id}}
+
             agent_tools.append(
                 HostedMCPTool(
                     name=mcp_tool.get("server_label", "").replace("_", " "),
@@ -118,6 +123,7 @@ def from_azure_ai_tools(tools: Sequence[Tool | dict[str, Any]] | None) -> list[T
                     headers=mcp_tool.get("headers"),
                     allowed_tools=mcp_tool.get("allowed_tools"),
                     approval_mode=approval_mode,  # type: ignore
+                    additional_properties=additional_props,
                 )
             )
         elif tool_type == "code_interpreter":
@@ -254,7 +260,22 @@ def _prepare_mcp_tool_for_azure_ai(tool: HostedMCPTool) -> MCPTool:
     if tool.description:
         mcp["server_description"] = tool.description
 
-    if tool.headers:
+    # Check for project_connection_id in additional_properties first (preferred for Azure AI)
+    # Azure AI Agent Service doesn't allow sensitive headers - use project_connection_id instead
+    project_connection_id = None
+    if tool.additional_properties:
+        project_connection_id = tool.additional_properties.get("project_connection_id")
+        # Also check for connection info that may contain the connection name
+        if not project_connection_id and "connection" in tool.additional_properties:
+            conn = tool.additional_properties["connection"]
+            if isinstance(conn, dict) and conn.get("name"):
+                project_connection_id = conn.get("name")
+
+    if project_connection_id:
+        mcp["project_connection_id"] = project_connection_id
+    elif tool.headers:
+        # Only use headers if no project_connection_id is available
+        # Note: Azure AI Agent Service may reject headers with sensitive info
         mcp["headers"] = tool.headers
 
     if tool.allowed_tools:

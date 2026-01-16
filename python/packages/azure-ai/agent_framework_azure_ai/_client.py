@@ -497,6 +497,26 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
         """Get MCP tool from HostedMCPTool."""
         mcp = MCPTool(server_label=tool.name.replace(" ", "_"), server_url=str(tool.url))
 
+        if tool.description:
+            mcp["server_description"] = tool.description
+
+        # Check for project_connection_id in additional_properties
+        # This is used for Azure AI Foundry connections (OAuth, etc.)
+        project_connection_id = None
+        if tool.additional_properties:
+            project_connection_id = tool.additional_properties.get("project_connection_id")
+            # Also check for connection info that may contain the connection name
+            if not project_connection_id and "connection" in tool.additional_properties:
+                conn = tool.additional_properties["connection"]
+                if isinstance(conn, dict) and conn.get("name"):
+                    project_connection_id = conn.get("name")
+
+        if project_connection_id:
+            mcp["project_connection_id"] = project_connection_id
+        elif tool.headers:
+            # Only use headers if no project_connection_id is available
+            mcp["headers"] = tool.headers
+
         if tool.allowed_tools:
             mcp["allowed_tools"] = list(tool.allowed_tools)
 

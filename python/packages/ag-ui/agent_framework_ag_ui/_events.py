@@ -32,7 +32,7 @@ from agent_framework import (
     prepare_function_call_results,
 )
 
-from ._utils import extract_state_from_tool_args, generate_event_id, safe_json_parse
+from ._utils import extract_state_from_tool_args, generate_event_id, make_json_safe, safe_json_parse
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,11 @@ class AgentFrameworkEventBridge:
             self.current_tool_call_id = tool_call_id
 
         if content.arguments:
-            delta_str = content.arguments if isinstance(content.arguments, str) else json.dumps(content.arguments)
+            delta_str = (
+                content.arguments
+                if isinstance(content.arguments, str)
+                else json.dumps(make_json_safe(content.arguments))
+            )
             logger.info(f"Emitting ToolCallArgsEvent with delta_length={len(delta_str)}, id='{tool_call_id}'")
             args_event = ToolCallArgsEvent(
                 tool_call_id=tool_call_id,
@@ -392,7 +396,7 @@ class AgentFrameworkEventBridge:
             args_dict = {
                 "function_name": function_call.name,
                 "function_call_id": function_call.call_id,
-                "function_arguments": function_call.parse_arguments() or {},
+                "function_arguments": make_json_safe(function_call.parse_arguments() or {}),
                 "steps": [
                     {
                         "description": f"Execute {function_call.name}",
@@ -436,7 +440,7 @@ class AgentFrameworkEventBridge:
         args_dict = {
             "function_name": function_call.name,
             "function_call_id": function_call.call_id,
-            "function_arguments": function_call.parse_arguments() or {},
+            "function_arguments": make_json_safe(function_call.parse_arguments() or {}),
             "steps": [
                 {
                     "description": f"Execute {function_call.name}",

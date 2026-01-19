@@ -376,6 +376,40 @@ class MCPTool:
             return self._functions
         return [func for func in self._functions if func.name in self.allowed_tools]
 
+    async def _safe_close_exit_stack(self) -> None:
+        """Safely close the exit stack, handling cross-task boundary errors.
+
+        anyio's cancel scopes are bound to the task they were created in.
+        If aclose() is called from a different task (e.g., during streaming reconnection),
+        anyio will raise a RuntimeError or CancelledError. In this case, we log a warning
+        and allow garbage collection to clean up the resources.
+
+        Known error variants:
+        - "Attempted to exit cancel scope in a different task than it was entered in"
+        - "Attempted to exit a cancel scope that isn't the current tasks's current cancel scope"
+        - CancelledError from anyio cancel scope cleanup
+        """
+        import asyncio
+
+        try:
+            await self._exit_stack.aclose()
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            # Check for anyio cancel scope errors (multiple variants exist)
+            if "cancel scope" in error_msg:
+                logger.warning(
+                    "Could not cleanly close MCP exit stack due to cancel scope error. "
+                    "Old resources will be garbage collected. Error: %s",
+                    e,
+                )
+            else:
+                raise
+        except asyncio.CancelledError:
+            # CancelledError can occur during cleanup when cancel scopes are involved
+            logger.warning(
+                "Could not cleanly close MCP exit stack due to cancellation. Old resources will be garbage collected."
+            )
+
     async def connect(self, *, reset: bool = False) -> None:
         """Connect to the MCP server.
 
@@ -389,7 +423,7 @@ class MCPTool:
             ToolException: If connection or session initialization fails.
         """
         if reset:
-            await self._exit_stack.aclose()
+            await self._safe_close_exit_stack()
             self.session = None
             self.is_connected = False
             self._exit_stack = AsyncExitStack()
@@ -397,7 +431,7 @@ class MCPTool:
             try:
                 transport = await self._exit_stack.enter_async_context(self.get_mcp_client())
             except Exception as ex:
-                await self._exit_stack.aclose()
+                await self._safe_close_exit_stack()
                 command = getattr(self, "command", None)
                 if command:
                     error_msg = f"Failed to start MCP server '{command}': {ex}"
@@ -418,7 +452,7 @@ class MCPTool:
                     )
                 )
             except Exception as ex:
-                await self._exit_stack.aclose()
+                await self._safe_close_exit_stack()
                 raise ToolException(
                     message="Failed to create MCP session. Please check your configuration.",
                     inner_exception=ex,
@@ -426,7 +460,7 @@ class MCPTool:
             try:
                 await session.initialize()
             except Exception as ex:
-                await self._exit_stack.aclose()
+                await self._safe_close_exit_stack()
                 # Provide context about initialization failure
                 command = getattr(self, "command", None)
                 if command:
@@ -670,7 +704,7 @@ class MCPTool:
 
         Closes the connection and cleans up resources.
         """
-        await self._exit_stack.aclose()
+        await self._safe_close_exit_stack()
         self.session = None
         self.is_connected = False
 
@@ -842,7 +876,7 @@ class MCPTool:
         except ToolException:
             raise
         except Exception as ex:
-            await self._exit_stack.aclose()
+            await self._safe_close_exit_stack()
             raise ToolExecutionException("Failed to enter context manager.", inner_exception=ex) from ex
 
     async def __aexit__(

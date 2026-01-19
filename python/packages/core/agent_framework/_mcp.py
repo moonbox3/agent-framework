@@ -727,8 +727,11 @@ class MCPTool:
         # Filter out framework kwargs that cannot be serialized by the MCP SDK.
         # These are internal objects passed through the function invocation pipeline
         # that should not be forwarded to external MCP servers.
+        # conversation_id is an internal tracking ID used by services like Azure AI.
         filtered_kwargs = {
-            k: v for k, v in kwargs.items() if k not in {"chat_options", "tools", "tool_choice", "thread"}
+            k: v
+            for k, v in kwargs.items()
+            if k not in {"chat_options", "tools", "tool_choice", "thread", "conversation_id"}
         }
 
         # Try the operation, reconnecting once if the connection is closed

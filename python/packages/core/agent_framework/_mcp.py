@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import asyncio
 import logging
 import re
 import sys
@@ -386,11 +387,9 @@ class MCPTool:
 
         Known error variants:
         - "Attempted to exit cancel scope in a different task than it was entered in"
-        - "Attempted to exit a cancel scope that isn't the current tasks's current cancel scope"
+        - "Attempted to exit a cancel scope that isn't the current task's current cancel scope"
         - CancelledError from anyio cancel scope cleanup
         """
-        import asyncio
-
         try:
             await self._exit_stack.aclose()
         except RuntimeError as e:

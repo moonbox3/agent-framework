@@ -2459,7 +2459,7 @@ async def test_mcp_tool_safe_close_handles_alternate_cancel_scope_error():
 
     anyio has multiple variants of cancel scope errors:
     - "Attempted to exit cancel scope in a different task than it was entered in"
-    - "Attempted to exit a cancel scope that isn't the current tasks's current cancel scope"
+    - "Attempted to exit a cancel scope that isn't the current task's current cancel scope"
     """
     from contextlib import AsyncExitStack
 
@@ -2476,11 +2476,41 @@ async def test_mcp_tool_safe_close_handles_alternate_cancel_scope_error():
     # Mock the exit stack to raise the alternate cancel scope error
     mock_exit_stack = AsyncMock(spec=AsyncExitStack)
     mock_exit_stack.aclose = AsyncMock(
-        side_effect=RuntimeError("Attempted to exit a cancel scope that isn't the current tasks's current cancel scope")
+        side_effect=RuntimeError("Attempted to exit a cancel scope that isn't the current task's current cancel scope")
     )
     tool._exit_stack = mock_exit_stack
 
     # This should NOT raise - the error should be caught and logged
+    await tool._safe_close_exit_stack()
+
+    # Verify aclose was called
+    mock_exit_stack.aclose.assert_called_once()
+
+
+async def test_mcp_tool_safe_close_handles_cancelled_error():
+    """Test that _safe_close_exit_stack handles asyncio.CancelledError.
+
+    CancelledError can occur during cleanup when anyio cancel scopes are involved.
+    """
+    import asyncio
+    from contextlib import AsyncExitStack
+
+    from agent_framework._mcp import MCPStdioTool
+
+    tool = MCPStdioTool(
+        name="test_server",
+        command="test_command",
+        args=["arg1"],
+        load_tools=False,
+        load_prompts=False,
+    )
+
+    # Mock the exit stack to raise CancelledError
+    mock_exit_stack = AsyncMock(spec=AsyncExitStack)
+    mock_exit_stack.aclose = AsyncMock(side_effect=asyncio.CancelledError())
+    tool._exit_stack = mock_exit_stack
+
+    # This should NOT raise - the CancelledError should be caught and logged
     await tool._safe_close_exit_stack()
 
     # Verify aclose was called

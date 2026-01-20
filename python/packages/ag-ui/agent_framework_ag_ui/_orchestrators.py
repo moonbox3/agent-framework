@@ -69,6 +69,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+AG_UI_INTERNAL_METADATA_KEYS = {"ag_ui_thread_id", "ag_ui_run_id", "current_state"}
+
 
 class ExecutionContext:
     """Shared context for orchestrators."""
@@ -496,14 +498,17 @@ class DefaultOrchestrator(Orchestrator):
         all_updates: list[Any] | None = [] if collect_updates else None
         update_count = 0
         # Prepare metadata for chat client (Azure requires string values)
+        # Filter out AG-UI internal fields (ag_ui_thread_id, ag_ui_run_id) that are
+        # used only for AG-UI orchestration and not understood by chat clients.
         safe_metadata = build_safe_metadata(getattr(thread, "metadata", None))
+        client_metadata = {k: v for k, v in safe_metadata.items() if k not in AG_UI_INTERNAL_METADATA_KEYS}
 
         run_kwargs: dict[str, Any] = {
             "thread": thread,
             "tools": tools_param,
-            "options": {"metadata": safe_metadata},
+            "options": {"metadata": client_metadata},
         }
-        if safe_metadata:
+        if client_metadata:
             run_kwargs["options"]["store"] = True
 
         async def _resolve_approval_responses(
@@ -522,9 +527,13 @@ class DefaultOrchestrator(Orchestrator):
                     getattr(chat_client, "function_invocation_configuration", None) or FunctionInvocationConfiguration()
                 )
                 middleware_pipeline = extract_and_merge_function_middleware(chat_client, run_kwargs)
+                # Filter out AG-UI-specific kwargs that should not be passed to tool execution.
+                # 'options' contains metadata/store for Azure AI client requirements but is not
+                # understood by external tools like MCP servers.
+                tool_kwargs = {k: v for k, v in run_kwargs.items() if k != "options"}
                 try:
                     results, _ = await _try_execute_function_calls(
-                        custom_args=run_kwargs,
+                        custom_args=tool_kwargs,
                         attempt_idx=0,
                         function_calls=approved_responses,
                         tools=tools_for_execution,

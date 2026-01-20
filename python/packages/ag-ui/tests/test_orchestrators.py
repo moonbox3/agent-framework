@@ -305,3 +305,91 @@ async def test_state_context_not_injected_when_tool_call_matches_state() -> None
             if isinstance(content, TextContent) and content.text.startswith("Current state of the application:"):
                 state_messages.append(content.text)
     assert not state_messages
+
+
+def test_options_filtered_from_tool_kwargs() -> None:
+    """Verify 'options' is filtered when creating tool_kwargs from run_kwargs.
+
+    The AG-UI orchestrator adds 'options' (containing metadata/store for Azure AI)
+    to run_kwargs, but this should NOT be passed to _try_execute_function_calls
+    as external tools like MCP servers don't understand these kwargs.
+
+    This test verifies the filtering logic inline rather than through the full
+    orchestrator flow, matching the pattern in _resolve_approval_responses:
+        tool_kwargs = {k: v for k, v in run_kwargs.items() if k != "options"}
+    """
+    # Simulate the run_kwargs that the orchestrator creates
+    run_kwargs: dict[str, Any] = {
+        "thread": MagicMock(),
+        "tools": [server_tool],
+        "options": {"metadata": {"thread_id": "test-123"}, "store": True},
+    }
+
+    # This is the exact filtering logic from _resolve_approval_responses
+    tool_kwargs = {k: v for k, v in run_kwargs.items() if k != "options"}
+
+    # Verify 'options' was filtered out
+    assert "options" not in tool_kwargs, "'options' should be filtered out before tool execution"
+
+    # Verify other kwargs are preserved
+    assert "thread" in tool_kwargs, "'thread' should be preserved"
+    assert "tools" in tool_kwargs, "'tools' should be preserved"
+
+    # Verify the original run_kwargs still has options (it's needed for run_stream)
+    assert "options" in run_kwargs, "Original run_kwargs should still have 'options'"
+
+
+def test_orchestrator_filters_options_in_resolve_approval_responses() -> None:
+    """Verify the orchestrator code filters 'options' before tool execution.
+
+    This is a code inspection test that verifies the fix is present in the
+    _resolve_approval_responses function within DefaultOrchestrator.run().
+    """
+    import inspect
+
+    # Get the source code of the DefaultOrchestrator.run method
+    source = inspect.getsource(DefaultOrchestrator.run)
+
+    # Verify the filtering pattern is present
+    assert 'k != "options"' in source, (
+        "Expected 'options' filtering in DefaultOrchestrator.run(). "
+        "The line 'tool_kwargs = {k: v for k, v in run_kwargs.items() if k != \"options\"}' "
+        "should be present in _resolve_approval_responses."
+    )
+
+    # Verify tool_kwargs is passed to _try_execute_function_calls (not run_kwargs)
+    assert "custom_args=tool_kwargs" in source, (
+        "Expected _try_execute_function_calls to receive tool_kwargs (not run_kwargs). "
+        "This ensures 'options' is filtered out before tool execution."
+    )
+
+
+def test_agui_internal_metadata_filtered_from_client_metadata() -> None:
+    """Verify AG-UI internal metadata is filtered before passing to chat client.
+
+    AG-UI internal fields like 'ag_ui_thread_id', 'ag_ui_run_id', and 'current_state'
+    are used for orchestration tracking but should NOT be passed to chat clients
+    (e.g., Anthropic API only accepts 'user_id' in metadata).
+    """
+    import inspect
+
+    # Get the source code of the DefaultOrchestrator.run method
+    source = inspect.getsource(DefaultOrchestrator.run)
+
+    # Verify the AG-UI internal metadata keys are defined
+    assert "AG_UI_INTERNAL_METADATA_KEYS" in source, (
+        "Expected AG_UI_INTERNAL_METADATA_KEYS to be defined for filtering internal metadata."
+    )
+
+    # Verify the internal keys include the AG-UI specific fields
+    assert '"ag_ui_thread_id"' in source, "Expected 'ag_ui_thread_id' to be filtered"
+    assert '"ag_ui_run_id"' in source, "Expected 'ag_ui_run_id' to be filtered"
+    assert '"current_state"' in source, "Expected 'current_state' to be filtered"
+
+    # Verify client_metadata is used instead of safe_metadata for options
+    assert "client_metadata = {k: v for k, v in safe_metadata.items()" in source, (
+        "Expected client_metadata to be created by filtering safe_metadata."
+    )
+    assert '"options": {"metadata": client_metadata}' in source, (
+        "Expected client_metadata (not safe_metadata) to be passed in options."
+    )

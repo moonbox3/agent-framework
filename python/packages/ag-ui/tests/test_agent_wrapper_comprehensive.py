@@ -420,17 +420,22 @@ async def test_tool_result_function_approval_rejected():
 
 
 async def test_thread_metadata_tracking():
-    """Test that thread metadata includes ag_ui_thread_id and ag_ui_run_id."""
+    """Test that thread metadata includes ag_ui_thread_id and ag_ui_run_id.
+
+    Note: AG-UI internal metadata (ag_ui_thread_id, ag_ui_run_id) is stored in
+    thread.metadata for orchestration purposes, but is NOT passed to chat clients
+    via options.metadata since external clients may not accept these fields.
+    """
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    thread_metadata: dict[str, Any] = {}
+    captured_thread: list[Any] = []
 
     async def stream_fn(
         messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        metadata = options.get("metadata")
-        if metadata:
-            thread_metadata.update(metadata)
+        # Capture the thread to verify internal metadata
+        if "thread" in kwargs:
+            captured_thread.append(kwargs["thread"])
         yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
@@ -446,22 +451,30 @@ async def test_thread_metadata_tracking():
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
+    # AG-UI internal metadata is stored in thread.metadata (not in options.metadata)
+    assert len(captured_thread) > 0, "Thread should be passed to chat client"
+    thread_metadata = getattr(captured_thread[0], "metadata", {})
     assert thread_metadata.get("ag_ui_thread_id") == "test_thread_123"
     assert thread_metadata.get("ag_ui_run_id") == "test_run_456"
 
 
 async def test_state_context_injection():
-    """Test that current state is injected into thread metadata."""
+    """Test that current state is injected into thread metadata.
+
+    Note: AG-UI internal metadata (including current_state) is stored in
+    thread.metadata for orchestration purposes, but is NOT passed to chat clients
+    via options.metadata since external clients may not accept these fields.
+    """
     from agent_framework_ag_ui import AgentFrameworkAgent
 
-    thread_metadata: dict[str, Any] = {}
+    captured_thread: list[Any] = []
 
     async def stream_fn(
         messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        metadata = options.get("metadata")
-        if metadata:
-            thread_metadata.update(metadata)
+        # Capture the thread to verify internal metadata
+        if "thread" in kwargs:
+            captured_thread.append(kwargs["thread"])
         yield ChatResponseUpdate(contents=[TextContent(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
@@ -479,6 +492,9 @@ async def test_state_context_injection():
     async for event in wrapper.run_agent(input_data):
         events.append(event)
 
+    # AG-UI internal metadata is stored in thread.metadata (not in options.metadata)
+    assert len(captured_thread) > 0, "Thread should be passed to chat client"
+    thread_metadata = getattr(captured_thread[0], "metadata", {})
     current_state = thread_metadata.get("current_state")
     if isinstance(current_state, str):
         current_state = json.loads(current_state)

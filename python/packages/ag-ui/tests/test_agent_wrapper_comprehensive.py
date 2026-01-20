@@ -595,6 +595,7 @@ async def test_json_decode_error_in_tool_result():
     assert len(tool_events) == 0
 
 
+@pytest.mark.skip(reason="confirmation_strategy feature removed in orchestrator rewrite")
 async def test_suppressed_summary_with_document_state():
     """Test suppressed summary uses document state for confirmation message."""
     from agent_framework.ag_ui import AgentFrameworkAgent, DocumentWriterConfirmationStrategy

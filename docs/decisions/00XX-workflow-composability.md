@@ -9,6 +9,30 @@ informed: team
 
 # Workflow Composability Design
 
+## Table of Contents
+
+- [Problem Statement](#problem-statement)
+- [Goals](#goals)
+- [Current State](#current-state)
+- [Proposed API](#proposed-api)
+  - [OrchestrationBuilder Protocol](#orchestrationbuilder-protocol)
+  - [Core Addition: `add_workflow()`](#core-addition-add_workflow)
+  - [Usage](#usage)
+- [Type Safety](#type-safety)
+- [Implementation](#implementation)
+  - [How `add_workflow()` Works Internally](#how-add_workflow-works-internally)
+  - [How `add_edge()` Resolves Logical IDs](#how-add_edge-resolves-logical-ids)
+  - [Extracting Builder from High-Level Builders](#extracting-builder-from-high-level-builders)
+- [What We're NOT Doing](#what-were-not-doing)
+- [Migration](#migration)
+- [Open Questions](#open-questions)
+- [Alternatives Considered](#alternatives-considered)
+- [Design Decisions](#design-decisions)
+  - [Type Validation with `yield_output` vs `send_message`](#type-validation-with-yield_output-vs-send_message)
+- [Implementation Phases](#implementation-phases)
+
+---
+
 ## Problem Statement
 
 Users want to extend high-level builder patterns in two ways:
@@ -609,9 +633,59 @@ pipeline:
 
 ---
 
+## Design Decisions
+
+### Type Validation with `yield_output` vs `send_message`
+
+**Problem:** High-level builders like `ConcurrentBuilder` use `yield_output()` in their terminal executors (e.g., aggregator) to produce workflow output. However, when composing workflows via `add_workflow()`, edges connect the terminal executor to downstream executors. The type validation originally only checked `output_types` (types from `send_message()`), not `workflow_output_types` (types from `yield_output()`), resulting in spurious warnings.
+
+**Options Considered:**
+
+1. **Automatically swap aggregators when composing** - When `add_workflow()` is called, detect if the source has a terminal executor using `yield_output()` and swap it for one using `send_message()`.
+   - **Rejected:** Too implicit. The same builder would behave differently standalone vs composed, making debugging difficult.
+
+2. **Modify `_to_builder()` to use a forwarding aggregator** - Similar to option 1 but at the `_to_builder()` level.
+   - **Rejected:** Same issues - hidden behavior change violates principle of least surprise.
+
+3. **Enhance type validation to check `workflow_output_types`** - When validating edge type compatibility, if `output_types` is empty, fall back to `workflow_output_types`.
+   - **Chosen:** Simple, explicit, no runtime behavior change. The validation becomes smarter without changing how executors work.
+
+4. **Have runtime automatically forward `yield_output` data through edges** - Detect when an executor yields output but has outgoing edges, and forward that output as a message.
+   - **Rejected:** Changes runtime semantics in potentially surprising ways. Mixing `yield_output` (workflow output) with `send_message` (edge routing) should remain explicit.
+
+**Implementation:** Modified `_validate_edge_type_compatibility()` in `_validation.py` to fall back to `workflow_output_types` when `output_types` is empty:
+
+```python
+# Get output types from source executor
+# First try send_message output types, then fall back to yield_output types
+# This supports workflow composition where terminal executors (using yield_output)
+# may be connected to downstream executors via add_workflow()
+source_output_types = list(source_executor.output_types)
+if not source_output_types:
+    source_output_types = list(source_executor.workflow_output_types)
+```
+
+**Note for users:** When adding post-processing after a composed workflow's terminal executor (e.g., adding an `OutputFormatter` after `ConcurrentBuilder`), the terminal executor must use `send_message()` instead of `yield_output()` for the data to flow through the edge. This can be achieved with a custom aggregator:
+
+```python
+class ForwardingAggregator(Executor):
+    @handler
+    async def aggregate(
+        self, results: list[AgentExecutorResponse], ctx: WorkflowContext[list[ChatMessage]]
+    ) -> None:
+        # Extract and forward messages (uses send_message, not yield_output)
+        messages = [msg for r in results for msg in r.agent_response.messages if msg.role == Role.ASSISTANT]
+        await ctx.send_message(messages)
+
+# Use with ConcurrentBuilder
+analysis = ConcurrentBuilder().participants([...]).with_aggregator(ForwardingAggregator())
+```
+
+---
+
 ## Implementation Phases
 
-### Phase 1: Core `add_workflow()`
+### Phase 1: Core `add_workflow()` ✅
 
 1. Add internal `WorkflowMapping` dataclass (entry/exit tracking)
 2. Add `_to_builder()` to ConcurrentBuilder and SequentialBuilder
@@ -619,10 +693,10 @@ pipeline:
 4. Add logical ID resolution to `add_edge()` and `set_start_executor()`
 5. Add tests for basic composition
 
-### Phase 2: Type Validation
+### Phase 2: Type Validation ✅
 
-1. Add `_input_types` / `_output_types` properties to builders
-2. Enhance `build()` validation to check cross-workflow type compatibility
+1. ~~Add `_input_types` / `_output_types` properties to builders~~ (Using existing executor type introspection)
+2. Enhance `build()` validation to check cross-workflow type compatibility (fall back to `workflow_output_types`)
 3. Improve error messages
 
 ### Phase 3: Remaining Builders

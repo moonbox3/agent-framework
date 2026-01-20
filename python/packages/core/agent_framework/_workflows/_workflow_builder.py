@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from typing_extensions import deprecated
 
@@ -539,7 +539,9 @@ class WorkflowBuilder:
             # Resolve workflow logical IDs: source uses exit point, target uses entry point
             resolved_source = self._resolve_workflow_exit(source)
             resolved_target = self._resolve_workflow_entry(target)
-            self._edge_registry.append(_EdgeRegistration(source=resolved_source, target=resolved_target, condition=condition))
+            self._edge_registry.append(
+                _EdgeRegistration(source=resolved_source, target=resolved_target, condition=condition)
+            )
             return self
 
         # Both are Executor/AgentProtocol instances; wrap and add now
@@ -724,7 +726,7 @@ class WorkflowBuilder:
             resolved_source = self._resolve_workflow_exit(source)
             resolved_cases: list[Case | Default] = []
             for case in cases:
-                target_str = case.target  # type: ignore[assignment]
+                target_str = cast(str, case.target)
                 resolved_target = self._resolve_workflow_entry(target_str)
                 if isinstance(case, Default):
                     resolved_cases.append(Default(target=resolved_target))
@@ -1231,7 +1233,7 @@ class WorkflowBuilder:
                     .add_workflow(analysis, id="analysis")
                     .add_workflow(summary, id="summary")
                     .add_edge("analysis", "summary")  # Framework resolves entry/exit
-                    .set_start_executor("analysis")   # Framework knows entry point
+                    .set_start_executor("analysis")  # Framework knows entry point
                     .build()
                 )
 
@@ -1390,13 +1392,11 @@ class WorkflowBuilder:
             mapping = self._workflow_mappings[id]
             if len(mapping.exits) == 0:
                 raise ValueError(
-                    f"Workflow '{id}' has no known exit points. "
-                    f"Use explicit executor IDs like '{id}/<executor_id>'."
+                    f"Workflow '{id}' has no known exit points. Use explicit executor IDs like '{id}/<executor_id>'."
                 )
             if len(mapping.exits) != 1:
                 raise ValueError(
-                    f"Workflow '{id}' has {len(mapping.exits)} exit points. "
-                    f"Use explicit IDs: {mapping.exits}"
+                    f"Workflow '{id}' has {len(mapping.exits)} exit points. Use explicit IDs: {mapping.exits}"
                 )
             return mapping.exits[0]
         return id

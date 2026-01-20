@@ -2,13 +2,13 @@
 
 """Tests for workflow composition via add_workflow()."""
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from agent_framework import (
     ChatAgent,
+    ChatMessage,
     ConcurrentBuilder,
     Executor,
     SequentialBuilder,
@@ -28,8 +28,7 @@ def create_mock_agent(name: str) -> ChatAgent:
             messages=[MagicMock(role="assistant", content="test response")],
         )
     )
-    agent = ChatAgent(name=name, chat_client=mock_client)
-    return agent
+    return ChatAgent(name=name, chat_client=mock_client)
 
 
 # Test executors
@@ -71,6 +70,14 @@ class StringPassthroughExecutor(Executor):
     @handler
     async def handle(self, message: str, ctx: WorkflowContext[str]) -> None:
         await ctx.send_message(message)
+
+
+class ChatMessageListPassthroughExecutor(Executor):
+    """Executor that passes through list[ChatMessage] messages."""
+
+    @handler
+    async def handle(self, messages: list[ChatMessage], ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        await ctx.send_message(messages)
 
 
 # Basic add_workflow tests
@@ -250,11 +257,13 @@ async def test_compose_with_pre_and_post_processing():
 
     concurrent = ConcurrentBuilder().participants([agent1, agent2])
 
+    # Pre-processor accepts str (like the dispatcher), post-processor accepts list[ChatMessage]
+    # (like aggregator outputs)
     workflow = (
         WorkflowBuilder()
         .register_executor(lambda: StringPassthroughExecutor(id="pre"), name="pre")
         .add_workflow(concurrent, id="analysis")
-        .register_executor(lambda: StringPassthroughExecutor(id="post"), name="post")
+        .register_executor(lambda: ChatMessageListPassthroughExecutor(id="post"), name="post")
         .add_edge("pre", "analysis")
         .add_edge("analysis", "post")
         .set_start_executor("pre")

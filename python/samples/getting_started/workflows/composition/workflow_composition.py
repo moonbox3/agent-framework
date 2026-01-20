@@ -15,49 +15,36 @@ This new API simplifies workflow composition by allowing you to:
 3. Mix and match high-level patterns with custom executors
 
 Prerequisites:
-- Azure OpenAI or OpenAI API credentials (set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY,
-  or OPENAI_API_KEY)
+- Azure OpenAI credentials
 """
 
 import asyncio
 import os
 
 from agent_framework import (
+    AgentExecutorResponse,
     ChatAgent,
+    ChatMessage,
     ConcurrentBuilder,
     Executor,
+    Role,
     SequentialBuilder,
     WorkflowBuilder,
     WorkflowContext,
     handler,
 )
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import DefaultAzureCredential
 from typing_extensions import Never
 
 
 def create_chat_client():
     """Create a chat client based on available environment variables."""
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        from azure.identity import DefaultAzureCredential
-
-        from agent_framework.azure_ai import AzureOpenAIChatClient
-
-        return AzureOpenAIChatClient(
-            endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            credential=DefaultAzureCredential(),
-            model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
-        )
-    elif os.environ.get("OPENAI_API_KEY"):
-        from agent_framework.openai import OpenAIChatClient
-
-        return OpenAIChatClient(
-            api_key=os.environ["OPENAI_API_KEY"],
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
-        )
-    else:
-        raise ValueError(
-            "Please set either AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY, "
-            "or OPENAI_API_KEY environment variables."
-        )
+    return AzureOpenAIChatClient(
+        endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        credential=DefaultAzureCredential(),
+        model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
+    )
 
 
 # Custom preprocessor executor
@@ -70,13 +57,39 @@ class InputFormatter(Executor):
     @handler
     async def format_input(self, message: str, ctx: WorkflowContext[str]) -> None:
         """Format the input message."""
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("INPUT FORMATTER")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Received: {message[:100]}...")
         formatted = f"Please analyze the following topic thoroughly:\n\n{message}"
         print("Formatted input for analysis agents.")
         await ctx.send_message(formatted)
+
+
+# Custom aggregator that forwards messages to downstream executors (instead of yielding)
+class ForwardingAggregator(Executor):
+    """Aggregates agent responses and forwards them to downstream executors.
+
+    Unlike the default ConcurrentBuilder aggregator which yields output (terminal),
+    this aggregator uses send_message to forward to downstream executors.
+    """
+
+    def __init__(self):
+        super().__init__(id="forwarding_aggregator")
+
+    @handler
+    async def aggregate(self, results: list[AgentExecutorResponse], ctx: WorkflowContext[list[ChatMessage]]) -> None:
+        """Aggregate responses and forward to downstream."""
+        # Extract assistant messages from each agent's response
+        messages: list[ChatMessage] = []
+        for r in results:
+            if r.agent_response and r.agent_response.messages:
+                for msg in r.agent_response.messages:
+                    if msg.role == Role.ASSISTANT:
+                        messages.append(msg)
+
+        # Forward to downstream executor (OutputFormatter)
+        await ctx.send_message(messages)
 
 
 # Custom postprocessor executor
@@ -87,19 +100,17 @@ class OutputFormatter(Executor):
         super().__init__(id="output_formatter")
 
     @handler
-    async def format_output(self, messages: list, ctx: WorkflowContext[Never, str]) -> None:
+    async def format_output(self, messages: list[ChatMessage], ctx: WorkflowContext[Never, str]) -> None:
         """Format and yield the final output."""
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("OUTPUT FORMATTER")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # Extract text content from the messages
-        output_parts = []
+        output_parts: list[str] = []
         for msg in messages:
-            if hasattr(msg, "content"):
-                output_parts.append(str(msg.content))
-            elif hasattr(msg, "text"):
-                output_parts.append(str(msg.text))
+            if isinstance(msg, ChatMessage):
+                output_parts.append(msg.text)
             else:
                 output_parts.append(str(msg))
 
@@ -164,11 +175,16 @@ async def example_simple_composition():
 
     print("\n--- Final Output ---")
     for output in outputs:
-        if hasattr(output, "__iter__") and not isinstance(output, str):
+        if isinstance(output, list):
             for item in output:
-                print(item.content if hasattr(item, "content") else item)
+                if isinstance(item, ChatMessage):
+                    print(f"\n{item.text}")
+                else:
+                    print(f"\n{item}")
+        elif isinstance(output, ChatMessage):
+            print(f"\n{output.text}")
         else:
-            print(output)
+            print(f"\n{output}")
 
 
 async def example_pre_post_processing():
@@ -176,11 +192,15 @@ async def example_pre_post_processing():
 
     This shows how to wrap a ConcurrentBuilder with custom preprocessing
     and postprocessing executors.
+
+    Note: The default ConcurrentBuilder aggregator uses yield_output() which makes it
+    a terminal node. To chain to downstream executors, we use a custom ForwardingAggregator
+    that uses send_message() instead.
     """
     print("\n" + "=" * 80)
     print("EXAMPLE 2: Pre/Post Processing with Composed Workflows")
     print("=" * 80)
-    print("InputFormatter -> ConcurrentBuilder -> OutputFormatter")
+    print("InputFormatter -> ConcurrentBuilder (with custom aggregator) -> OutputFormatter")
 
     client = create_chat_client()
 
@@ -196,8 +216,12 @@ async def example_pre_post_processing():
         instructions="You are a market analyst. Provide market analysis in 2-3 sentences.",
     )
 
-    # Create the concurrent analysis pattern
-    analysis = ConcurrentBuilder().participants([technical_analyst, market_analyst])
+    # Create the concurrent analysis pattern with a custom forwarding aggregator
+    # The ForwardingAggregator uses send_message() to forward to downstream executors,
+    # unlike the default aggregator which uses yield_output() (terminal)
+    analysis = (
+        ConcurrentBuilder().participants([technical_analyst, market_analyst]).with_aggregator(ForwardingAggregator())
+    )
 
     # Compose with pre/post-processing
     workflow = (

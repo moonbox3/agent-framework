@@ -650,6 +650,9 @@ class DefaultOrchestrator(Orchestrator):
                 should_recreate_event_bridge = True
 
             if should_recreate_event_bridge:
+                # Preserve state from the old bridge to avoid orphaned messages and lost flags
+                old_message_id = event_bridge.current_message_id
+                old_should_stop_after_confirm = event_bridge.should_stop_after_confirm
                 event_bridge = AgentFrameworkEventBridge(
                     run_id=context.run_id,
                     thread_id=context.thread_id,
@@ -659,6 +662,9 @@ class DefaultOrchestrator(Orchestrator):
                     require_confirmation=context.config.require_confirmation,
                     approval_tool_name=approval_tool_name,
                 )
+                # Restore state so messages can be properly closed and confirmation flow works
+                event_bridge.current_message_id = old_message_id
+                event_bridge.should_stop_after_confirm = old_should_stop_after_confirm
                 should_recreate_event_bridge = False
 
             if update_count == 0:

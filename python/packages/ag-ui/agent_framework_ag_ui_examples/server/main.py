@@ -4,9 +4,9 @@
 
 import logging
 import os
-from typing import TYPE_CHECKING
 
 import uvicorn
+from agent_framework import BaseChatClient, ChatOptions
 from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
 from agent_framework.azure import AzureOpenAIChatClient
 from fastapi import FastAPI
@@ -19,10 +19,6 @@ from ..agents.simple_agent import simple_agent
 from ..agents.task_steps_agent import task_steps_agent_wrapped
 from ..agents.ui_generator_agent import ui_generator_agent
 from ..agents.weather_agent import weather_agent
-
-if TYPE_CHECKING:
-    from agent_framework import ChatOptions
-    from agent_framework._clients import BaseChatClient
 
 # Configure logging to file and console (disabled by default - set ENABLE_DEBUG_LOGGING=1 to enable)
 if os.getenv("ENABLE_DEBUG_LOGGING"):

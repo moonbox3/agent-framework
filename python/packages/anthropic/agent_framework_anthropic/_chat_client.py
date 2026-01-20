@@ -80,18 +80,6 @@ logger = get_logger("agent_framework.anthropic")
 ANTHROPIC_DEFAULT_MAX_TOKENS: Final[int] = 1024
 BETA_FLAGS: Final[list[str]] = ["mcp-client-2025-04-04", "code-execution-2025-08-25"]
 
-# Options from ChatOptions that are not supported by the Anthropic API
-# These are filtered out before making API calls
-UNSUPPORTED_OPTIONS: Final[frozenset[str]] = frozenset({
-    "logit_bias",
-    "seed",
-    "frequency_penalty",
-    "presence_penalty",
-    "store",
-    "conversation_id",
-})
-
-
 # region Anthropic Chat Options TypedDict
 
 
@@ -408,12 +396,8 @@ class AnthropicClient(BaseChatClient[TAnthropicOptions], Generic[TAnthropicOptio
 
             messages = prepend_instructions_to_messages(list(messages), instructions, role="system")
 
-        # Start with a copy of options, excluding unsupported and already-handled options
-        run_options: dict[str, Any] = {
-            k: v
-            for k, v in options.items()
-            if v is not None and k not in {"instructions"} and k not in UNSUPPORTED_OPTIONS
-        }
+        # Start with a copy of options, excluding already-handled options
+        run_options: dict[str, Any] = {k: v for k, v in options.items() if v is not None and k not in {"instructions"}}
 
         # Translation between options keys and Anthropic Messages API
         for old_key, new_key in OPTION_TRANSLATIONS.items():

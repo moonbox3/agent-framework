@@ -375,43 +375,6 @@ def test_prepare_tools_for_anthropic_none(mock_anthropic_client: MagicMock) -> N
 # Run Options Tests
 
 
-async def test_prepare_options_filters_unsupported_options(mock_anthropic_client: MagicMock) -> None:
-    """Test that _prepare_options filters out options unsupported by Anthropic API.
-
-    Options like 'store', 'logit_bias', 'seed', 'frequency_penalty', 'presence_penalty',
-    and 'conversation_id' are not supported by Anthropic and should be filtered out
-    to prevent 'unexpected keyword argument' errors.
-    """
-    chat_client = create_test_anthropic_client(mock_anthropic_client)
-
-    messages = [ChatMessage(role=Role.USER, text="Hello")]
-    # Include all unsupported options along with a supported one
-    chat_options: ChatOptions = {
-        "max_tokens": 100,
-        "store": True,  # OpenAI-specific, not supported by Anthropic
-        "logit_bias": {123: 1.0},  # Not supported by Anthropic
-        "seed": 42,  # Not supported by Anthropic
-        "frequency_penalty": 0.5,  # Not supported by Anthropic
-        "presence_penalty": 0.5,  # Not supported by Anthropic
-        "conversation_id": "conv_123",  # OpenAI Responses API-specific
-    }
-
-    run_options = chat_client._prepare_options(messages, chat_options)
-
-    # Verify unsupported options are NOT in run_options
-    assert "store" not in run_options
-    assert "logit_bias" not in run_options
-    assert "seed" not in run_options
-    assert "frequency_penalty" not in run_options
-    assert "presence_penalty" not in run_options
-    assert "conversation_id" not in run_options
-
-    # Verify supported options ARE still in run_options
-    assert run_options["max_tokens"] == 100
-    assert "model" in run_options
-    assert "messages" in run_options
-
-
 async def test_prepare_options_basic(mock_anthropic_client: MagicMock) -> None:
     """Test _prepare_options with basic ChatOptions."""
     chat_client = create_test_anthropic_client(mock_anthropic_client)

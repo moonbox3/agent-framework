@@ -471,6 +471,12 @@ class DefaultOrchestrator(Orchestrator):
         accumulated_text_content = ""
         active_message_id: str | None = None
 
+        # CRITICAL: Emit initial events (RunStartedEvent, etc.) at the start of every run.
+        # This must happen BEFORE any other events (like StateSnapshotEvent from approvals)
+        # because AG-UI clients require RunStartedEvent as the first event.
+        for event in self._create_initial_events(event_bridge, state_manager):
+            yield event
+
         # Check for FunctionApprovalResponseContent and emit updated state snapshot
         # This ensures the UI shows the approved state (e.g., 2 steps) not the original (3 steps)
         for snapshot_evt in collect_approved_state_snapshots(
@@ -506,10 +512,8 @@ class DefaultOrchestrator(Orchestrator):
         run_kwargs: dict[str, Any] = {
             "thread": thread,
             "tools": tools_param,
-            "options": {"metadata": client_metadata},
+            "options": {"metadata": client_metadata} if client_metadata else {},
         }
-        if client_metadata:
-            run_kwargs["options"]["store"] = True
 
         async def _resolve_approval_responses(
             messages: list[Any],
@@ -630,8 +634,6 @@ class DefaultOrchestrator(Orchestrator):
                     confirmation_message = strategy.on_state_rejected()
 
             message_id = generate_event_id()
-            for event in self._create_initial_events(event_bridge, state_manager):
-                yield event
             yield TextMessageStartEvent(message_id=message_id, role="assistant")
             yield TextMessageContentEvent(message_id=message_id, delta=confirmation_message)
             yield TextMessageEndEvent(message_id=message_id)
@@ -666,10 +668,6 @@ class DefaultOrchestrator(Orchestrator):
                 event_bridge.current_message_id = old_message_id
                 event_bridge.should_stop_after_confirm = old_should_stop_after_confirm
                 should_recreate_event_bridge = False
-
-            if update_count == 0:
-                for event in self._create_initial_events(event_bridge, state_manager):
-                    yield event
 
             update_count += 1
             logger.info(f"[STREAM] Received update #{update_count} from agent")

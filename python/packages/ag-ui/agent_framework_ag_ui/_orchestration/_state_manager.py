@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from ag_ui.core import CustomEvent, EventType
-from agent_framework import ChatMessage, TextContent
+from agent_framework import ChatMessage, Content
 
 from .._utils import make_json_safe
 
@@ -73,7 +73,7 @@ class StateManager:
         return ChatMessage(
             role="system",
             contents=[
-                TextContent(
+                Content.from_text(
                     text=(
                         "Current state of the application:\n"
                         f"{state_json}\n\n"

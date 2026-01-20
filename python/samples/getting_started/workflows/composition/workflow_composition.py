@@ -47,9 +47,21 @@ def create_chat_client():
     )
 
 
-# Custom preprocessor executor
+# =============================================================================
+# EXAMPLE CUSTOM EXECUTORS
+# =============================================================================
+# The executors below are FOR DEMONSTRATION PURPOSES ONLY. They show patterns
+# for building your own pre-processors, post-processors, and custom aggregators.
+# These are NOT part of the agent_framework library - you would write your own
+# versions tailored to your specific use case.
+# =============================================================================
+
+
 class InputFormatter(Executor):
-    """Formats the input message before sending to analysis."""
+    """Example preprocessor that formats input before sending to analysis.
+
+    This demonstrates how to add custom preprocessing before a composed workflow.
+    """
 
     def __init__(self):
         super().__init__(id="input_formatter")
@@ -66,12 +78,13 @@ class InputFormatter(Executor):
         await ctx.send_message(formatted)
 
 
-# Custom aggregator that forwards messages to downstream executors (instead of yielding)
 class ForwardingAggregator(Executor):
-    """Aggregates agent responses and forwards them to downstream executors.
+    """Example aggregator that forwards messages to downstream executors.
 
-    Unlike the default ConcurrentBuilder aggregator which yields output (terminal),
-    this aggregator uses send_message to forward to downstream executors.
+    This demonstrates how to create a custom aggregator for ConcurrentBuilder
+    when you need to chain to downstream executors. The default aggregator uses
+    yield_output() which makes it terminal. This version uses send_message()
+    to forward data through edges to downstream executors.
     """
 
     def __init__(self):
@@ -92,9 +105,11 @@ class ForwardingAggregator(Executor):
         await ctx.send_message(messages)
 
 
-# Custom postprocessor executor
 class OutputFormatter(Executor):
-    """Formats the final output from the workflow."""
+    """Example postprocessor that formats the final output from the workflow.
+
+    This demonstrates how to add custom postprocessing after a composed workflow.
+    """
 
     def __init__(self):
         super().__init__(id="output_formatter")

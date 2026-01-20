@@ -470,12 +470,24 @@ class DefaultOrchestrator(Orchestrator):
         messages_snapshot_emitted = False
         accumulated_text_content = ""
         active_message_id: str | None = None
+        initial_events_emitted = False
 
-        # CRITICAL: Emit initial events (RunStartedEvent, etc.) at the start of every run.
-        # This must happen BEFORE any other events (like StateSnapshotEvent from approvals)
-        # because AG-UI clients require RunStartedEvent as the first event.
-        for event in self._create_initial_events(event_bridge, state_manager):
-            yield event
+        # Check if this is an approval response flow (needs RunStartedEvent before any other events)
+        has_approval_response = any(
+            hasattr(msg, "contents")
+            and any(
+                getattr(c, "type", None) == "function_approval_response"
+                or type(c).__name__ == "FunctionApprovalResponseContent"
+                for c in (msg.contents or [])
+            )
+            for msg in provider_messages
+        )
+
+        # For approval responses, emit initial events upfront since the agent may not stream any updates
+        if has_approval_response:
+            for event in self._create_initial_events(event_bridge, state_manager):
+                yield event
+            initial_events_emitted = True
 
         # Check for FunctionApprovalResponseContent and emit updated state snapshot
         # This ensures the UI shows the approved state (e.g., 2 steps) not the original (3 steps)
@@ -669,6 +681,12 @@ class DefaultOrchestrator(Orchestrator):
                 event_bridge.should_stop_after_confirm = old_should_stop_after_confirm
                 should_recreate_event_bridge = False
 
+            # Emit initial events after the first update when we have the correct thread_id/run_id
+            if not initial_events_emitted:
+                for event in self._create_initial_events(event_bridge, state_manager):
+                    yield event
+                initial_events_emitted = True
+
             update_count += 1
             logger.info(f"[STREAM] Received update #{update_count} from agent")
             if all_updates is not None:
@@ -780,10 +798,12 @@ class DefaultOrchestrator(Orchestrator):
                     yield TextMessageEndEvent(message_id=message_id)
                     logger.info(f"Emitted conversational message with length={len(response_dict['message'])}")
 
-        if all_updates is not None and len(all_updates) == 0:
+        # Ensure initial events are emitted even if the stream was empty
+        if not initial_events_emitted:
             logger.info("No updates received from agent - emitting initial events")
             for event in self._create_initial_events(event_bridge, state_manager):
                 yield event
+            initial_events_emitted = True
 
         logger.info(f"[FINALIZE] Checking for unclosed message. current_message_id={event_bridge.current_message_id}")
         if event_bridge.current_message_id:

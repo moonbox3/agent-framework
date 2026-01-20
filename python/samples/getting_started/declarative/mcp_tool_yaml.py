@@ -149,7 +149,7 @@ async def run_azure_ai_example():
 
 async def main():
     """Run the MCP tool examples."""
-    # Run the OpenAI example (uncomment to run)
+    # Run the OpenAI example
     await run_openai_example()
 
     # Run the Azure AI example (uncomment to run)

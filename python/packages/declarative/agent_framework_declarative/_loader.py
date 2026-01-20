@@ -613,7 +613,7 @@ class AgentFactory:
         return cast(
             ChatAgent,
             await provider.create_agent(
-                name=prompt_agent.name or "DeclarativeAgent",
+                name=prompt_agent.name,
                 model=prompt_agent.model.id if prompt_agent.model else None,
                 instructions=prompt_agent.instructions,
                 description=prompt_agent.description,

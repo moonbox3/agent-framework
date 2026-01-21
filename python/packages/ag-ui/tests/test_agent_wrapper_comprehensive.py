@@ -433,9 +433,9 @@ async def test_thread_metadata_tracking():
     async def stream_fn(
         messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        metadata = options.get("metadata")
-        if metadata:
-            thread_metadata.update(metadata)
+        thread = kwargs.get("thread")
+        if thread:
+            captured_thread.append(thread)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
@@ -465,16 +465,16 @@ async def test_state_context_injection():
     thread.metadata for orchestration purposes, but is NOT passed to chat clients
     via options.metadata since external clients may not accept these fields.
     """
-    from agent_framework_ag_ui import AgentFrameworkAgent
+    from agent_framework.ag_ui import AgentFrameworkAgent
 
     captured_thread: list[Any] = []
 
     async def stream_fn(
         messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        metadata = options.get("metadata")
-        if metadata:
-            thread_metadata.update(metadata)
+        thread = kwargs.get("thread")
+        if thread:
+            captured_thread.append(thread)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
     agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))

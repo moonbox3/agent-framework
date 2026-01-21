@@ -362,9 +362,11 @@ def _emit_tool_result(
         if flow.current_state:
             events.append(StateSnapshotEvent(snapshot=flow.current_state))
 
-    # Reset tool tracking
+    # Reset tool tracking and message context
+    # After tool result, any subsequent text should start a new message
     flow.tool_call_id = None
     flow.tool_call_name = None
+    flow.message_id = None  # Reset so next text content starts a new message
 
     return events
 

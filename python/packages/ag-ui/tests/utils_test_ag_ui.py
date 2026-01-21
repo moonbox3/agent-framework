@@ -20,8 +20,6 @@ from agent_framework import (
 )
 from agent_framework._clients import TOptions_co
 
-from agent_framework_ag_ui._message_adapters import _deduplicate_messages, _sanitize_tool_history
-
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
 else:

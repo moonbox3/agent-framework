@@ -15,7 +15,7 @@ from agent_framework import (
     Content,
 )
 
-from .._utils import get_role_value, safe_json_parse
+from .._utils import get_role_value
 
 logger = logging.getLogger(__name__)
 

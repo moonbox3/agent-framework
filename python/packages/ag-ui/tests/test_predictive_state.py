@@ -2,7 +2,6 @@
 
 """Tests for predictive state handling."""
 
-import pytest
 from ag_ui.core import StateDeltaEvent
 
 from agent_framework_ag_ui._orchestration._predictive_state import PredictiveStateHandler
@@ -56,25 +55,19 @@ class TestExtractStateValue:
 
     def test_no_args(self):
         """Returns None when args is None."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}})
         result = handler.extract_state_value("tool", None)
         assert result is None
 
     def test_empty_args(self):
         """Returns None when args is empty string."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}})
         result = handler.extract_state_value("tool", "")
         assert result is None
 
     def test_tool_not_in_config(self):
         """Returns None when tool not in config."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "other_tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "other_tool", "tool_argument": "arg"}})
         result = handler.extract_state_value("some_tool", {"arg": "value"})
         assert result is None
 
@@ -88,9 +81,7 @@ class TestExtractStateValue:
 
     def test_extracts_with_wildcard(self):
         """Extracts entire args with * wildcard."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"data": {"tool": "update_data", "tool_argument": "*"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"data": {"tool": "update_data", "tool_argument": "*"}})
         args = {"key1": "value1", "key2": "value2"}
         result = handler.extract_state_value("update_data", args)
         assert result == ("data", args)
@@ -117,9 +108,7 @@ class TestIsPredictiveTool:
 
     def test_none_tool_name(self):
         """Returns False for None tool name."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "some_tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "some_tool", "tool_argument": "arg"}})
         assert handler.is_predictive_tool(None) is False
 
     def test_no_config(self):
@@ -129,16 +118,12 @@ class TestIsPredictiveTool:
 
     def test_tool_in_config(self):
         """Returns True when tool is in config."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "some_tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "some_tool", "tool_argument": "arg"}})
         assert handler.is_predictive_tool("some_tool") is True
 
     def test_tool_not_in_config(self):
         """Returns False when tool not in config."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "other_tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "other_tool", "tool_argument": "arg"}})
         assert handler.is_predictive_tool("some_tool") is False
 
 
@@ -147,9 +132,7 @@ class TestEmitStreamingDeltas:
 
     def test_no_tool_name(self):
         """Returns empty list for None tool name."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"key": {"tool": "tool", "tool_argument": "arg"}})
         result = handler.emit_streaming_deltas(None, '{"arg": "value"}')
         assert result == []
 
@@ -161,18 +144,14 @@ class TestEmitStreamingDeltas:
 
     def test_accumulates_args(self):
         """Accumulates argument chunks."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         handler.emit_streaming_deltas("write", '{"text')
         handler.emit_streaming_deltas("write", '": "hello')
         assert handler.streaming_tool_args == '{"text": "hello'
 
     def test_emits_delta_on_complete_json(self):
         """Emits delta when JSON is complete."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         events = handler.emit_streaming_deltas("write", '{"text": "hello"}')
         assert len(events) == 1
         assert isinstance(events[0], StateDeltaEvent)
@@ -182,9 +161,7 @@ class TestEmitStreamingDeltas:
 
     def test_emits_delta_on_partial_json(self):
         """Emits delta from partial JSON using regex."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         # First chunk - partial
         events = handler.emit_streaming_deltas("write", '{"text": "hel')
         assert len(events) == 1
@@ -192,9 +169,7 @@ class TestEmitStreamingDeltas:
 
     def test_does_not_emit_duplicate_deltas(self):
         """Does not emit delta when value unchanged."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         # First emission
         events1 = handler.emit_streaming_deltas("write", '{"text": "hello"}')
         assert len(events1) == 1
@@ -206,9 +181,7 @@ class TestEmitStreamingDeltas:
 
     def test_emits_delta_on_value_change(self):
         """Emits delta when value changes."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         # First value
         events1 = handler.emit_streaming_deltas("write", '{"text": "hello"}')
         assert len(events1) == 1
@@ -221,9 +194,7 @@ class TestEmitStreamingDeltas:
 
     def test_tracks_pending_updates(self):
         """Tracks pending state updates."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         handler.emit_streaming_deltas("write", '{"text": "hello"}')
         assert handler.pending_state_updates == {"doc": "hello"}
 
@@ -233,9 +204,7 @@ class TestEmitPartialDeltas:
 
     def test_unescapes_newlines(self):
         """Unescapes \\n in partial values."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         handler.streaming_tool_args = '{"text": "line1\\nline2'
         events = handler._emit_partial_deltas("write")
         assert len(events) == 1
@@ -243,9 +212,7 @@ class TestEmitPartialDeltas:
 
     def test_handles_escaped_quotes_partially(self):
         """Handles escaped quotes - regex stops at quote character."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         # The regex pattern [^"]* stops at ANY quote, including escaped ones.
         # This is expected behavior for partial streaming - the full JSON
         # will be parsed correctly when complete.
@@ -262,9 +229,7 @@ class TestEmitPartialDeltas:
 
     def test_unescapes_backslashes(self):
         """Unescapes \\\\ in partial values."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         handler.streaming_tool_args = '{"text": "path\\\\to\\\\file'
         events = handler._emit_partial_deltas("write")
         assert len(events) == 1
@@ -276,26 +241,20 @@ class TestEmitCompleteDeltas:
 
     def test_emits_for_matching_tool(self):
         """Emits delta for tool matching config."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         events = handler._emit_complete_deltas("write", {"text": "content"})
         assert len(events) == 1
         assert events[0].delta[0]["value"] == "content"
 
     def test_skips_non_matching_tool(self):
         """Skips tools not matching config."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         events = handler._emit_complete_deltas("other_tool", {"text": "content"})
         assert len(events) == 0
 
     def test_handles_wildcard_argument(self):
         """Handles * wildcard for entire args."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"data": {"tool": "update", "tool_argument": "*"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"data": {"tool": "update", "tool_argument": "*"}})
         args = {"key1": "val1", "key2": "val2"}
         events = handler._emit_complete_deltas("update", args)
         assert len(events) == 1
@@ -303,9 +262,7 @@ class TestEmitCompleteDeltas:
 
     def test_skips_missing_argument(self):
         """Skips when tool_argument not in args."""
-        handler = PredictiveStateHandler(
-            predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}}
-        )
+        handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "text"}})
         events = handler._emit_complete_deltas("write", {"other": "value"})
         assert len(events) == 0
 

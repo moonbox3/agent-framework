@@ -2,7 +2,6 @@
 
 """Tests for _run.py helper functions and FlowState."""
 
-import pytest
 from agent_framework import ChatMessage, Content
 
 from agent_framework_ag_ui._run import (
@@ -146,9 +145,7 @@ class TestFlowState:
     def test_get_tool_name(self):
         """Tests get_tool_name method."""
         flow = FlowState()
-        flow.tool_calls_by_id = {
-            "call_123": {"function": {"name": "get_weather", "arguments": "{}"}}
-        }
+        flow.tool_calls_by_id = {"call_123": {"function": {"name": "get_weather", "arguments": "{}"}}}
 
         assert flow.get_tool_name("call_123") == "get_weather"
         assert flow.get_tool_name("nonexistent") is None
@@ -370,9 +367,7 @@ def test_extract_approved_state_updates_no_approval():
     from agent_framework_ag_ui._orchestration._predictive_state import PredictiveStateHandler
     from agent_framework_ag_ui._run import _extract_approved_state_updates
 
-    handler = PredictiveStateHandler(
-        predict_state_config={"doc": {"tool": "write", "tool_argument": "content"}}
-    )
+    handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "content"}})
     messages = [ChatMessage(role="user", contents=[Content.from_text("Hello")])]
     result = _extract_approved_state_updates(messages, handler)
     assert result == {}

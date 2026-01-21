@@ -340,9 +340,12 @@ def _emit_tool_result(
     """Emit ToolCallResult events for FunctionResultContent."""
     events: list[BaseEvent] = []
 
-    if content.call_id:
-        events.append(ToolCallEndEvent(tool_call_id=content.call_id))
-        flow.tool_calls_ended.add(content.call_id)  # Track ended tool calls
+    # Cannot emit tool result without a call_id to associate it with
+    if not content.call_id:
+        return events
+
+    events.append(ToolCallEndEvent(tool_call_id=content.call_id))
+    flow.tool_calls_ended.add(content.call_id)  # Track ended tool calls
 
     result_content = prepare_function_call_results(content.result)
     message_id = generate_event_id()
@@ -740,9 +743,7 @@ async def run_agent_stream(
     # Filter out AG-UI internal metadata keys before passing to chat client
     # These are used internally for orchestration and should not be sent to the LLM provider
     client_metadata = {
-        k: v
-        for k, v in (thread.metadata or {}).items()
-        if k not in AG_UI_INTERNAL_METADATA_KEYS  # type: ignore[attr-defined]
+        k: v for k, v in (getattr(thread, "metadata", None) or {}).items() if k not in AG_UI_INTERNAL_METADATA_KEYS
     }
     safe_metadata = _build_safe_metadata(client_metadata) if client_metadata else {}
     if safe_metadata:

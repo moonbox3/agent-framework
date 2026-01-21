@@ -4,7 +4,7 @@
 
 import copy
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 from ag_ui.encoder import EventEncoder
@@ -56,8 +56,8 @@ def add_agent_framework_fastapi_endpoint(
     else:
         wrapped_agent = agent
 
-    @app.post(path, tags=tags or ["AG-UI"], dependencies=dependencies)  # type: ignore[arg-type]
-    async def agent_endpoint(request_body: AGUIRequest):  # type: ignore[misc]
+    @app.post(path, tags=tags or ["AG-UI"], dependencies=dependencies, response_model=None)  # type: ignore[arg-type]
+    async def agent_endpoint(request_body: AGUIRequest) -> StreamingResponse | dict[str, str]:
         """Handle AG-UI agent requests.
 
         Note: Function is accessed via FastAPI's decorator registration,
@@ -77,7 +77,7 @@ def add_agent_framework_fastapi_endpoint(
             )
             logger.info(f"Received request at {path}: {input_data.get('run_id', 'no-run-id')}")
 
-            async def event_generator():
+            async def event_generator() -> AsyncGenerator[str, None]:
                 encoder = EventEncoder()
                 event_count = 0
                 async for event in wrapped_agent.run_agent(input_data):

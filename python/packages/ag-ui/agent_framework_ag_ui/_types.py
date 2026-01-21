@@ -13,6 +13,7 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import TypeVar
 
+
 class PredictStateConfig(TypedDict):
     """Configuration for predictive state updates."""
 

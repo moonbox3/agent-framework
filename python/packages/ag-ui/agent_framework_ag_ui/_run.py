@@ -152,7 +152,6 @@ class FlowState:
     tool_call_id: str | None = None  # Current tool call being streamed
     tool_call_name: str | None = None  # Name of current tool call
     waiting_for_approval: bool = False  # Stop after approval request
-    pending_confirm_id: str | None = None  # ID of pending confirm_changes tool call
     current_state: dict[str, Any] = field(default_factory=dict)  # Shared state
     accumulated_text: str = ""  # For MessagesSnapshotEvent
     pending_tool_calls: list[dict[str, Any]] = field(default_factory=list)  # For MessagesSnapshotEvent
@@ -379,18 +378,15 @@ def _emit_approval_request(
 ) -> list[BaseEvent]:
     """Emit events for function approval request."""
     events: list[BaseEvent] = []
-    logger.info(f"[APPROVAL-REQUEST] Starting _emit_approval_request, require_confirmation={require_confirmation}")
 
     # function_call is required for approval requests - skip if missing
     func_call = content.function_call
-    logger.info(f"[APPROVAL-REQUEST] func_call={func_call}, content.id={content.id}")
     if not func_call:
         logger.warning("Approval request content missing function_call, skipping")
         return events
 
     func_name = func_call.name or ""
     func_call_id = func_call.call_id
-    logger.info(f"[APPROVAL-REQUEST] func_name={func_name}, func_call_id={func_call_id}")
 
     # Extract state from function arguments if predictive
     if predictive_handler and func_name:
@@ -422,12 +418,9 @@ def _emit_approval_request(
     )
 
     # Emit confirm_changes tool call for UI compatibility
-    # IMPORTANT: Do NOT emit ToolCallEndEvent here - the tool must remain in "executing"
-    # status for the frontend to show the confirmation dialog. The end event will be
-    # emitted when the user responds with their confirmation/rejection.
+    # The complete sequence (Start -> Args -> End) signals the UI to show the confirmation dialog
     if require_confirmation:
         confirm_id = generate_event_id()
-        logger.info(f"[APPROVAL-REQUEST] Emitting confirm_changes with id={confirm_id} (no end event - stays executing)")
         events.append(
             ToolCallStartEvent(
                 tool_call_id=confirm_id,
@@ -442,11 +435,9 @@ def _emit_approval_request(
             "steps": [{"description": f"Execute {func_name}", "status": "enabled"}],
         }
         events.append(ToolCallArgsEvent(tool_call_id=confirm_id, delta=json.dumps(args)))
-        # Store the confirm_id in flow so we can track it for the response
-        flow.pending_confirm_id = confirm_id
+        events.append(ToolCallEndEvent(tool_call_id=confirm_id))
 
     flow.waiting_for_approval = True
-    logger.info(f"[APPROVAL-REQUEST] Returning {len(events)} events")
     return events
 
 
@@ -459,7 +450,6 @@ def _emit_content(
 ) -> list[BaseEvent]:
     """Emit appropriate events for any content type."""
     content_type = getattr(content, "type", None)
-    logger.info(f"[EMIT-CONTENT] Processing content type: {content_type}")
     if content_type == "text":
         return _emit_text(content, flow, skip_text)
     elif content_type == "function_call":
@@ -467,7 +457,6 @@ def _emit_content(
     elif content_type == "function_result":
         return _emit_tool_result(content, flow, predictive_handler)
     elif content_type == "function_approval_request":
-        logger.info("[EMIT-CONTENT] Got function_approval_request - emitting approval events")
         return _emit_approval_request(content, flow, predictive_handler, require_confirmation)
     return []
 
@@ -597,13 +586,18 @@ async def _resolve_approval_responses(
     # Build normalized results for approved responses
     normalized_results: list[Content] = []
     for idx, approval in enumerate(approved_responses):
-        if idx < len(approved_function_results) and getattr(approved_function_results[idx], "type", None) == "function_result":
+        if (
+            idx < len(approved_function_results)
+            and getattr(approved_function_results[idx], "type", None) == "function_result"
+        ):
             normalized_results.append(approved_function_results[idx])
             continue
         # Get call_id from function_call if present, otherwise use approval.id
         func_call = approval.function_call
         call_id = (func_call.call_id if func_call else None) or approval.id or ""
-        normalized_results.append(Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed."))
+        normalized_results.append(
+            Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed.")
+        )
 
     # Build rejection results
     for rejection in rejected_responses:
@@ -741,9 +735,6 @@ async def run_agent_stream(
     run_kwargs: dict[str, Any] = {"thread": thread}
     if tools:
         run_kwargs["tools"] = tools
-        logger.info(f"[DEBUG] Setting run_kwargs['tools'] with {len(tools)} tools")
-        for t in tools:
-            logger.info(f"[DEBUG]   - {getattr(t, 'name', 'unknown')}: approval_mode={getattr(t, 'approval_mode', None)}")
     safe_metadata = _build_safe_metadata(thread.metadata)  # type: ignore[attr-defined]
     if safe_metadata:
         run_kwargs["options"] = {"metadata": safe_metadata, "store": True}
@@ -891,9 +882,7 @@ async def run_agent_stream(
 
                 # For predictive tools with require_confirmation, emit confirm_changes
                 if config.require_confirmation and config.predict_state_config and tool_name:
-                    is_predictive_tool = any(
-                        cfg["tool"] == tool_name for cfg in config.predict_state_config.values()
-                    )
+                    is_predictive_tool = any(cfg["tool"] == tool_name for cfg in config.predict_state_config.values())
                     if is_predictive_tool:
                         logger.info(f"Emitting confirm_changes for predictive tool '{tool_name}'")
                         # Extract state value from tool arguments for StateSnapshot
@@ -945,12 +934,6 @@ async def run_agent_stream(
         ):
             yield _build_messages_snapshot(flow, snapshot_messages)
 
-    # Only emit RunFinished if we're not waiting for approval with an active confirm_changes tool
-    # The AG-UI protocol requires all tool calls to be ended before RUN_FINISHED
-    if not flow.pending_confirm_id:
-        yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
-    else:
-        logger.info(f"Skipping RunFinishedEvent - waiting for approval on confirm_changes id={flow.pending_confirm_id}")
-
-
-__all__ = ["FlowState", "run_agent_stream"]
+    # Always emit RunFinished - confirm_changes tool call is complete (Start -> Args -> End)
+    # The UI will show confirmation dialog and send a new request when user responds
+    yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)

@@ -642,3 +642,109 @@ def test_agent_framework_to_agui_function_result_multiple_text_contents():
     agui_msg = messages[0]
     # Multiple items should return JSON array
     assert agui_msg["content"] == '["First result", "Second result"]'
+
+
+# Additional tests for better coverage
+
+
+def test_extract_text_from_contents_empty():
+    """Test extracting text from empty contents."""
+    result = extract_text_from_contents([])
+    assert result == ""
+
+
+def test_extract_text_from_contents_multiple():
+    """Test extracting text from multiple text contents."""
+    contents = [
+        Content.from_text("Hello "),
+        Content.from_text("World"),
+    ]
+    result = extract_text_from_contents(contents)
+    assert result == "Hello World"
+
+
+def test_extract_text_from_contents_non_text():
+    """Test extracting text ignores non-text contents."""
+    contents = [
+        Content.from_text("Hello"),
+        Content.from_function_call(call_id="call_1", name="tool", arguments="{}"),
+    ]
+    result = extract_text_from_contents(contents)
+    assert result == "Hello"
+
+
+def test_agui_to_agent_framework_with_tool_calls():
+    """Test converting AG-UI message with tool_calls."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+                }
+            ],
+        }
+    ]
+
+    result = agui_messages_to_agent_framework(messages)
+
+    assert len(result) == 1
+    assert len(result[0].contents) == 1
+    assert result[0].contents[0].type == "function_call"
+    assert result[0].contents[0].name == "get_weather"
+
+
+def test_agui_to_agent_framework_tool_result():
+    """Test converting AG-UI tool result message."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": "Sunny",
+            "toolCallId": "call_123",
+        },
+    ]
+
+    result = agui_messages_to_agent_framework(messages)
+
+    assert len(result) == 2
+    # Second message should be tool result
+    tool_msg = result[1]
+    assert tool_msg.role == Role.TOOL
+    assert tool_msg.contents[0].type == "function_result"
+    assert tool_msg.contents[0].result == "Sunny"
+
+
+def test_agui_messages_to_snapshot_format_empty():
+    """Test converting empty messages to snapshot format."""
+    result = agui_messages_to_snapshot_format([])
+    assert result == []
+
+
+def test_agui_messages_to_snapshot_format_basic():
+    """Test converting messages to snapshot format."""
+    messages = [
+        {"role": "user", "content": "Hello", "id": "msg_1"},
+        {"role": "assistant", "content": "Hi there", "id": "msg_2"},
+    ]
+
+    result = agui_messages_to_snapshot_format(messages)
+
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == "Hello"
+    assert result[1]["role"] == "assistant"
+    assert result[1]["content"] == "Hi there"

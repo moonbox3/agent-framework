@@ -4688,7 +4688,7 @@ wheels = [
 
 [[package]]
 name = "py2docfx"
-version = "0.1.23rc2387608"
+version = "0.1.23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -4696,7 +4696,7 @@ dependencies = [
     { name = "wheel", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/24/c20bdf757169a55b14b57d8bfae7d7be9194c7be511b0a0835df2ddf7a2e/py2docfx-0.1.23rc2387608-py3-none-any.whl", hash = "sha256:30c8d7e8cfbec59982fc561e81b48a549fbdc3cef055072395784cd4af3f5b4d", size = 11339241, upload-time = "2026-01-20T08:33:58.16Z" },
+    { url = "https://files.pythonhosted.org/packages/51/1f/9190016955e5ecdd87053d0609e72cf75eb6fe6002e06f1840ceb60eb68e/py2docfx-0.1.23-py3-none-any.whl", hash = "sha256:92eec60f8abb0426722644c1a636d1ab9ea7144a69d5cd0464f944dd03b5e5b2", size = 11339155, upload-time = "2026-01-20T10:34:49.458Z" },
 ]
 
 [[package]]

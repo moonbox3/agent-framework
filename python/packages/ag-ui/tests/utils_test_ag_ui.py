@@ -21,7 +21,6 @@ from agent_framework import (
 from agent_framework._clients import TOptions_co
 
 from agent_framework_ag_ui._message_adapters import _deduplicate_messages, _sanitize_tool_history
-from agent_framework_ag_ui._orchestrators import ExecutionContext
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -127,12 +126,5 @@ class StubAgent(AgentProtocol):
         return AgentThread()
 
 
-class TestExecutionContext(ExecutionContext):
-    """ExecutionContext helper that allows setting messages for tests."""
-
-    def set_messages(self, messages: list[ChatMessage], *, normalize: bool = True) -> None:
-        if normalize:
-            self._messages = _deduplicate_messages(_sanitize_tool_history(messages))
-        else:
-            self._messages = messages
-        self._snapshot_messages = None
+# Note: TestExecutionContext was removed along with _orchestrators.py
+# Tests should now use run_agent_stream() directly or the StubAgent class

@@ -20,22 +20,19 @@ class AgentConfig:
         predict_state_config: dict[str, dict[str, str]] | None = None,
         use_service_thread: bool = False,
         require_confirmation: bool = True,
-        confirmation_strategy: Any | None = None,
     ):
         """Initialize agent configuration.
 
         Args:
             state_schema: Optional state schema for state management; accepts dict or Pydantic model/class
-            predict_state_config: Configuration for predictive state updates (currently unused in simplified impl)
-            use_service_thread: Whether the agent thread is service-managed (currently unused)
-            require_confirmation: Whether predictive updates require confirmation (currently unused)
-            confirmation_strategy: Optional strategy for generating confirmation messages
+            predict_state_config: Configuration for predictive state updates
+            use_service_thread: Whether the agent thread is service-managed
+            require_confirmation: Whether predictive updates require user confirmation before applying
         """
         self.state_schema = self._normalize_state_schema(state_schema)
         self.predict_state_config = predict_state_config or {}
         self.use_service_thread = use_service_thread
         self.require_confirmation = require_confirmation
-        self.confirmation_strategy = confirmation_strategy
 
     @staticmethod
     def _normalize_state_schema(state_schema: Any | None) -> dict[str, Any]:
@@ -55,12 +52,12 @@ class AgentConfig:
             base_model_type = None
 
         if base_model_type is not None and isinstance(state_schema, base_model_type):
-            schema_dict = state_schema.__class__.model_json_schema()
+            schema_dict = state_schema.__class__.model_json_schema()  # type: ignore[union-attr]
             return schema_dict.get("properties", {}) or {}
 
         if base_model_type is not None and isinstance(state_schema, type) and issubclass(state_schema, base_model_type):
-            schema_dict = state_schema.model_json_schema()
-            return schema_dict.get("properties", {}) or {}
+            schema_dict = state_schema.model_json_schema()  # type: ignore[union-attr]
+            return schema_dict.get("properties", {}) or {}  # type: ignore
 
         return {}
 
@@ -80,9 +77,7 @@ class AgentFrameworkAgent:
         state_schema: Any | None = None,
         predict_state_config: dict[str, dict[str, str]] | None = None,
         require_confirmation: bool = True,
-        orchestrators: Any = None,  # Deprecated, kept for backwards compatibility
         use_service_thread: bool = False,
-        confirmation_strategy: Any = None,  # Deprecated, kept for backwards compatibility
     ):
         """Initialize the AG-UI compatible agent wrapper.
 
@@ -91,11 +86,9 @@ class AgentFrameworkAgent:
             name: Optional name for the agent
             description: Optional description
             state_schema: Optional state schema for state management; accepts dict or Pydantic model/class
-            predict_state_config: Configuration for predictive state updates (optional feature)
-            require_confirmation: Whether predictive updates require confirmation
-            orchestrators: Deprecated - kept for backwards compatibility
+            predict_state_config: Configuration for predictive state updates
+            require_confirmation: Whether predictive updates require user confirmation before applying
             use_service_thread: Whether the agent thread is service-managed
-            confirmation_strategy: Strategy for generating confirmation messages
         """
         self.agent = agent
         self.name = name or getattr(agent, "name", "agent")
@@ -106,7 +99,6 @@ class AgentFrameworkAgent:
             predict_state_config=predict_state_config,
             use_service_thread=use_service_thread,
             require_confirmation=require_confirmation,
-            confirmation_strategy=confirmation_strategy,
         )
 
     async def run_agent(

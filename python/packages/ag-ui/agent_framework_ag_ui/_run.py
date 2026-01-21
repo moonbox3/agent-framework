@@ -30,6 +30,13 @@ from agent_framework import (
     Content,
     prepare_function_call_results,
 )
+from agent_framework._middleware import extract_and_merge_function_middleware
+from agent_framework._tools import (
+    FunctionInvocationConfiguration,
+    _collect_approval_responses,  # type: ignore
+    _replace_approval_contents_with_results,  # type: ignore
+    _try_execute_function_calls,  # type: ignore
+)
 
 from ._message_adapters import normalize_agui_input_messages
 from ._orchestration._predictive_state import PredictiveStateHandler
@@ -42,6 +49,9 @@ if TYPE_CHECKING:
     from ._agent import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+# Keys that are internal to AG-UI orchestration and should not be passed to chat clients
+AG_UI_INTERNAL_METADATA_KEYS = {"ag_ui_thread_id", "ag_ui_run_id", "current_state"}
 
 
 def _build_safe_metadata(thread_metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -546,14 +556,6 @@ async def _resolve_approval_responses(
         agent: The agent instance (to get chat_client and config)
         run_kwargs: Kwargs for tool execution
     """
-    from agent_framework._middleware import extract_and_merge_function_middleware
-    from agent_framework._tools import (
-        FunctionInvocationConfiguration,
-        _collect_approval_responses,
-        _replace_approval_contents_with_results,
-        _try_execute_function_calls,
-    )
-
     fcc_todo = _collect_approval_responses(messages)
     if not fcc_todo:
         return
@@ -579,8 +581,8 @@ async def _resolve_approval_responses(
                 config=config,
             )
             approved_function_results = list(results)
-        except Exception:
-            logger.error("Failed to execute approved tool calls; injecting error results.")
+        except Exception as e:
+            logger.exception("Failed to execute approved tool calls; injecting error results: %s", e)
             approved_function_results = []
 
     # Build normalized results for approved responses
@@ -735,7 +737,14 @@ async def run_agent_stream(
     run_kwargs: dict[str, Any] = {"thread": thread}
     if tools:
         run_kwargs["tools"] = tools
-    safe_metadata = _build_safe_metadata(thread.metadata)  # type: ignore[attr-defined]
+    # Filter out AG-UI internal metadata keys before passing to chat client
+    # These are used internally for orchestration and should not be sent to the LLM provider
+    client_metadata = {
+        k: v
+        for k, v in (thread.metadata or {}).items()
+        if k not in AG_UI_INTERNAL_METADATA_KEYS  # type: ignore[attr-defined]
+    }
+    safe_metadata = _build_safe_metadata(client_metadata) if client_metadata else {}
     if safe_metadata:
         run_kwargs["options"] = {"metadata": safe_metadata, "store": True}
 

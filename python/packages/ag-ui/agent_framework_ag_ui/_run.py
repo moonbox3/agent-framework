@@ -41,7 +41,12 @@ from agent_framework._tools import (
 from ._message_adapters import normalize_agui_input_messages
 from ._orchestration._predictive_state import PredictiveStateHandler
 from ._orchestration._tooling import collect_server_tools, merge_tools, register_additional_client_tools
-from ._utils import convert_agui_tools_to_agent_framework, generate_event_id, get_conversation_id_from_update
+from ._utils import (
+    convert_agui_tools_to_agent_framework,
+    generate_event_id,
+    get_conversation_id_from_update,
+    make_json_safe,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -317,7 +322,9 @@ def _emit_tool_call(
 
     # Emit args if present
     if content.arguments:
-        delta = content.arguments if isinstance(content.arguments, str) else json.dumps(content.arguments)
+        delta = (
+            content.arguments if isinstance(content.arguments, str) else json.dumps(make_json_safe(content.arguments))
+        )
         events.append(ToolCallArgsEvent(tool_call_id=tool_call_id, delta=delta))
 
         # Track args for MessagesSnapshotEvent
@@ -424,7 +431,7 @@ def _emit_approval_request(
                 "function_call": {
                     "call_id": func_call_id,
                     "name": func_name,
-                    "arguments": func_call.parse_arguments(),
+                    "arguments": make_json_safe(func_call.parse_arguments()),
                 },
             },
         )
@@ -444,7 +451,7 @@ def _emit_approval_request(
         args = {
             "function_name": func_name,
             "function_call_id": func_call_id,
-            "function_arguments": func_call.parse_arguments() or {},
+            "function_arguments": make_json_safe(func_call.parse_arguments()) or {},
             "steps": [{"description": f"Execute {func_name}", "status": "enabled"}],
         }
         events.append(ToolCallArgsEvent(tool_call_id=confirm_id, delta=json.dumps(args)))

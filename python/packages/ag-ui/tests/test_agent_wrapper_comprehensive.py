@@ -624,49 +624,6 @@ async def test_json_decode_error_in_tool_result():
     assert len(tool_events) == 0
 
 
-@pytest.mark.skip(reason="confirmation_strategy feature removed in orchestrator rewrite")
-async def test_suppressed_summary_with_document_state():
-    """Test suppressed summary uses document state for confirmation message."""
-    from agent_framework.ag_ui import AgentFrameworkAgent, DocumentWriterConfirmationStrategy
-
-    async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
-    ) -> AsyncIterator[ChatResponseUpdate]:
-        yield ChatResponseUpdate(contents=[Content.from_text(text="Response")])
-
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=StreamingChatClientStub(stream_fn))
-    wrapper = AgentFrameworkAgent(
-        agent=agent,
-        state_schema={"document": {"type": "string"}},
-        predict_state_config={"document": {"tool": "write_doc", "tool_argument": "content"}},
-        confirmation_strategy=DocumentWriterConfirmationStrategy(),
-    )
-
-    # Simulate confirmation with document state
-    tool_result: dict[str, Any] = {"accepted": True, "steps": []}
-    input_data: dict[str, Any] = {
-        "messages": [
-            {
-                "role": "tool",
-                "content": json.dumps(tool_result),
-                "toolCallId": "confirm_123",
-            }
-        ],
-        "state": {"document": "This is the beginning of a document. It contains important information."},
-    }
-
-    events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
-        events.append(event)
-
-    # Should generate fallback summary from document state
-    text_events = [e for e in events if e.type == "TEXT_MESSAGE_CONTENT"]
-    assert len(text_events) > 0
-    # Should contain some reference to the document
-    full_text = "".join(e.delta for e in text_events)
-    assert "written" in full_text.lower() or "document" in full_text.lower()
-
-
 async def test_agent_with_use_service_thread_is_false():
     """Test that when use_service_thread is False, the AgentThread used to run the agent is NOT set to the service thread ID."""
     from agent_framework.ag_ui import AgentFrameworkAgent

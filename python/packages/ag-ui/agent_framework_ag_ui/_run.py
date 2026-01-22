@@ -496,7 +496,8 @@ def _is_confirm_changes_response(messages: list[Any]) -> bool:
                 if "accepted" in result and "steps" in result:
                     return True
             except json.JSONDecodeError:
-                pass
+                # Content is not valid JSON; continue checking other content items
+                logger.debug("Failed to parse confirm_changes tool result as JSON; treating as non-confirmation.")
     return False
 
 
@@ -906,7 +907,13 @@ async def run_agent_stream(
                                     flow.current_state[state_key] = state_value
                                     yield StateSnapshotEvent(snapshot=flow.current_state)
                             except json.JSONDecodeError:
-                                pass
+                                # Ignore malformed JSON in tool arguments for predictive state;
+                                # predictive updates are best-effort and should not break the flow.
+                                logger.warning(
+                                    "Failed to decode JSON arguments for predictive tool '%s' (tool_call_id=%s).",
+                                    tool_name,
+                                    tool_call_id,
+                                )
 
                         # Emit confirm_changes tool call
                         confirm_id = generate_event_id()

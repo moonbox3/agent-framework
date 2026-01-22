@@ -122,7 +122,3 @@ class StubAgent(AgentProtocol):
 
     def get_new_thread(self, **kwargs: Any) -> AgentThread:
         return AgentThread()
-
-
-# Note: TestExecutionContext was removed along with _orchestrators.py
-# Tests should now use run_agent_stream() directly or the StubAgent class

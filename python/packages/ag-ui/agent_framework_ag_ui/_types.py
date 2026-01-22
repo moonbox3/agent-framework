@@ -59,6 +59,18 @@ class AGUIRequest(BaseModel):
         None,
         description="Client-side tools to advertise to the LLM",
     )
+    context: list[dict[str, Any]] | None = Field(
+        None,
+        description="List of context objects provided to the agent",
+    )
+    forwarded_props: dict[str, Any] | None = Field(
+        None,
+        description="Additional properties forwarded to the agent",
+    )
+    parent_run_id: str | None = Field(
+        None,
+        description="ID of the run that spawned this run",
+    )
 
 
 # region AG-UI Chat Options TypedDict

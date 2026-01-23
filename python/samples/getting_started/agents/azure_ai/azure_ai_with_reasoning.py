@@ -13,7 +13,8 @@ Demonstrates how to enable reasoning capabilities using the Reasoning option.
 Shows both non-streaming and streaming approaches, including how to access
 reasoning content (type="text_reasoning") separately from answer content.
 
-Requires a reasoning-capable model (e.g., gpt-5.2) deployed in your Azure AI Project.
+Requires a reasoning-capable model (e.g., gpt-5.2) deployed in your Azure AI Project configured
+as `AZURE_AI_MODEL_DEPLOYMENT_NAME` in your environment.
 """
 
 
@@ -28,9 +29,8 @@ async def non_streaming_example() -> None:
         AzureAIProjectAgentProvider(credential=credential) as provider,
     ):
         agent = await provider.create_agent(
-            model="gpt-5.2",
-            name="BasicWeatherAgent",
-            instructions="You are a helpful weather agent who likes to understand the underlying physics of weather.",
+            name="ReasoningWeatherAgent",
+            instructions="You are a helpful weather agent who likes to understand the underlying physics.",
             default_options={"reasoning": Reasoning(effort="medium", summary="concise")},
         )
 
@@ -58,9 +58,8 @@ async def streaming_example() -> None:
         AzureAIProjectAgentProvider(credential=credential) as provider,
     ):
         agent = await provider.create_agent(
-            model="gpt-5.2",
-            name="BasicWeatherAgent",
-            instructions="You are a helpful weather agent who likes to understand the underlying physics of weather.",
+            name="ReasoningWeatherAgent",
+            instructions="You are a helpful weather agent who likes to understand the underlying physics.",
             default_options={"reasoning": Reasoning(effort="medium", summary="concise")},
         )
 

@@ -85,7 +85,7 @@ async def streaming_example() -> None:
 
 
 async def main() -> None:
-    print("=== Basic Azure AI Chat Client Agent Example ===")
+    print("=== Azure AI Agent with Reasoning Example ===")
 
     # await non_streaming_example()
     await streaming_example()

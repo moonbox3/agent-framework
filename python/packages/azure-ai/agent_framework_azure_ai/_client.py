@@ -12,7 +12,6 @@ from agent_framework import (
     ContextProvider,
     HostedMCPTool,
     Middleware,
-    TextContent,
     ToolProtocol,
     get_logger,
     use_chat_middleware,
@@ -33,7 +32,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from azure.core.exceptions import ResourceNotFoundError
 from pydantic import ValidationError
 
-from ._shared import AzureAISettings, create_text_format_config
+from ._shared import AzureAISettings, _extract_project_connection_id, create_text_format_config
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
@@ -477,8 +476,8 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
         # System/developer messages are turned into instructions, since there is no such message roles in Azure AI.
         for message in messages:
             if message.role.value in ["system", "developer"]:
-                for text_content in [content for content in message.contents if isinstance(content, TextContent)]:
-                    instructions_list.append(text_content.text)
+                for text_content in [content for content in message.contents if content.type == "text"]:
+                    instructions_list.append(text_content.text)  # type: ignore[arg-type]
             else:
                 result.append(message)
 
@@ -509,6 +508,17 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
     def _prepare_mcp_tool(tool: HostedMCPTool) -> MCPTool:  # type: ignore[override]
         """Get MCP tool from HostedMCPTool."""
         mcp = MCPTool(server_label=tool.name.replace(" ", "_"), server_url=str(tool.url))
+
+        if tool.description:
+            mcp["server_description"] = tool.description
+
+        # Check for project_connection_id in additional_properties (for Azure AI Foundry connections)
+        project_connection_id = _extract_project_connection_id(tool.additional_properties)
+        if project_connection_id:
+            mcp["project_connection_id"] = project_connection_id
+        elif tool.headers:
+            # Only use headers if no project_connection_id is available
+            mcp["headers"] = tool.headers
 
         if tool.allowed_tools:
             mcp["allowed_tools"] = list(tool.allowed_tools)

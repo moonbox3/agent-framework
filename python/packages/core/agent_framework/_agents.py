@@ -89,8 +89,10 @@ def _merge_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, 
         if value is None:
             continue
         if key == "tools" and result.get("tools"):
-            # Combine tool lists
-            result["tools"] = list(result["tools"]) + list(value)
+            # Combine tool lists, avoiding duplicates by name
+            existing_names = {getattr(t, "name", None) for t in result["tools"]}
+            unique_new = [t for t in value if getattr(t, "name", None) not in existing_names]
+            result["tools"] = list(result["tools"]) + unique_new
         elif key == "logit_bias" and result.get("logit_bias"):
             # Merge logit_bias dicts
             result["logit_bias"] = {**result["logit_bias"], **value}
@@ -1140,9 +1142,9 @@ class ChatAgent(BaseAgent, Generic[TOptions_co]):  # type: ignore[misc]
 
             # Convert result to MCP content
             if isinstance(result, str):
-                return [types.TextContent(type="text", text=result)]
+                return [types.TextContent(type="text", text=result)]  # type: ignore[attr-defined]
 
-            return [types.TextContent(type="text", text=str(result))]
+            return [types.TextContent(type="text", text=str(result))]  # type: ignore[attr-defined]
 
         @server.set_logging_level()  # type: ignore
         async def _set_logging_level(level: types.LoggingLevel) -> None:  # type: ignore

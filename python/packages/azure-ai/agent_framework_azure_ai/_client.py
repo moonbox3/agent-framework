@@ -46,7 +46,7 @@ else:
 logger = get_logger("agent_framework.azure")
 
 
-class AzureAIProjectAgentOptions(OpenAIResponsesOptions):
+class AzureAIProjectAgentOptions(OpenAIResponsesOptions, total=False):
     """Azure AI Project Agent options."""
 
     rai_config: RaiConfig
@@ -341,6 +341,10 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
                 args["temperature"] = run_options["temperature"]
             if "top_p" in run_options:
                 args["top_p"] = run_options["top_p"]
+            if "reasoning" in run_options:
+                args["reasoning"] = run_options["reasoning"]
+            if "rai_config" in run_options:
+                args["rai_config"] = run_options["rai_config"]
 
             # response_format is accessed from chat_options or additional_properties
             # since the base class excludes it from run_options

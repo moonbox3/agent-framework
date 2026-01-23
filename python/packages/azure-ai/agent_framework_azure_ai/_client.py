@@ -22,12 +22,7 @@ from agent_framework.observability import use_instrumentation
 from agent_framework.openai import OpenAIResponsesOptions
 from agent_framework.openai._responses_client import OpenAIBaseResponsesClient
 from azure.ai.projects.aio import AIProjectClient
-from azure.ai.projects.models import (
-    MCPTool,
-    PromptAgentDefinition,
-    PromptAgentDefinitionText,
-    RaiConfig,
-)
+from azure.ai.projects.models import MCPTool, PromptAgentDefinition, PromptAgentDefinitionText, RaiConfig, Reasoning
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.core.exceptions import ResourceNotFoundError
 from pydantic import ValidationError
@@ -56,6 +51,9 @@ class AzureAIProjectAgentOptions(OpenAIResponsesOptions):
 
     rai_config: RaiConfig
     """Configuration for Responsible AI (RAI) content filtering and safety features."""
+
+    reasoning: Reasoning  # type: ignore[misc]
+    """Configuration for enabling reasoning capabilities (requires azure.ai.projects.models.Reasoning)."""
 
 
 TAzureAIClientOptions = TypeVar(
@@ -408,6 +406,7 @@ class AzureAIClient(OpenAIBaseResponsesClient[TAzureAIClientOptions], Generic[TA
             "top_p",
             "text",
             "text_format",
+            "reasoning",
         ]
 
         for property in exclude:

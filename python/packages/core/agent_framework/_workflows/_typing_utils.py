@@ -10,6 +10,61 @@ logger = get_logger("agent_framework._workflows._typing_utils")
 T = TypeVar("T")
 
 
+def resolve_type_annotation(
+    type_annotation: type[Any] | UnionType | str | None,
+    globalns: dict[str, Any] | None = None,
+    localns: dict[str, Any] | None = None,
+) -> type[Any] | UnionType | None:
+    """Resolve a type annotation, including string forward references.
+
+    Args:
+        type_annotation: A type, union type, string forward reference, or None
+        globalns: Global namespace for resolving forward references (typically func.__globals__)
+        localns: Local namespace for resolving forward references
+
+    Returns:
+        The resolved type annotation. For string annotations, evaluates them in the
+        provided namespace. Returns None if type_annotation is None.
+
+    Raises:
+        NameError: If a forward reference cannot be resolved in the provided namespaces
+        SyntaxError: If a string annotation contains invalid Python syntax
+
+    Note:
+        This function uses eval() to resolve string type annotations. This is the same
+        approach used by Python's typing.get_type_hints() and typing.ForwardRef internally.
+        Security is managed by: (1) strings come from decorator parameters in source code,
+        not runtime user input, and (2) the eval namespace is restricted to the function's
+        module globals plus Union/Optional from typing.
+
+    Examples:
+        - resolve_type_annotation(str) -> str
+        - resolve_type_annotation("str | int", {"str": str, "int": int}) -> str | int
+        - resolve_type_annotation("MyClass", {"MyClass": MyClass}) -> MyClass
+    """
+    if type_annotation is None:
+        return None
+
+    if isinstance(type_annotation, str):
+        # Resolve string forward reference by evaluating it.
+        # This uses eval() which is the same approach as Python's typing.get_type_hints()
+        # and typing.ForwardRef._evaluate(). The namespace is restricted to the function's
+        # globals plus typing constructs, and input comes from developer source code.
+        eval_globalns = globalns.copy() if globalns else {}
+        eval_globalns.setdefault("Union", Union)
+        eval_globalns.setdefault("Optional", __import__("typing").Optional)
+
+        try:
+            return eval(type_annotation, eval_globalns, localns)  # noqa: S307  # nosec B307
+        except NameError as e:
+            raise NameError(
+                f"Could not resolve type annotation '{type_annotation}'. "
+                f"Make sure the type is defined or imported. Original error: {e}"
+            ) from e
+
+    return type_annotation
+
+
 def normalize_type_to_list(type_annotation: type[Any] | UnionType | None) -> list[type[Any]]:
     """Normalize a type annotation (possibly a union) to a list of concrete types.
 

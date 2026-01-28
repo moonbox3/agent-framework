@@ -3,12 +3,15 @@
 from dataclasses import dataclass
 from typing import Any, Generic, Optional, TypeVar, Union
 
+import pytest
+
 from agent_framework import RequestInfoEvent
 from agent_framework._workflows._typing_utils import (
     deserialize_type,
     is_instance_of,
     is_type_compatible,
     normalize_type_to_list,
+    resolve_type_annotation,
     serialize_type,
 )
 
@@ -78,6 +81,72 @@ def test_normalize_type_to_list_custom_types() -> None:
 
 
 # endregion: normalize_type_to_list tests
+
+
+# region: resolve_type_annotation tests
+
+
+def test_resolve_type_annotation_none() -> None:
+    """Test resolve_type_annotation with None returns None."""
+    assert resolve_type_annotation(None) is None
+
+
+def test_resolve_type_annotation_actual_types() -> None:
+    """Test resolve_type_annotation passes through actual types unchanged."""
+    assert resolve_type_annotation(str) is str
+    assert resolve_type_annotation(int) is int
+    assert resolve_type_annotation(str | int) == str | int
+
+
+def test_resolve_type_annotation_string_builtin() -> None:
+    """Test resolve_type_annotation resolves string references to builtin types."""
+    result = resolve_type_annotation("str", {"str": str})
+    assert result is str
+
+    result = resolve_type_annotation("int", {"int": int})
+    assert result is int
+
+
+def test_resolve_type_annotation_string_union() -> None:
+    """Test resolve_type_annotation resolves string union types."""
+    result = resolve_type_annotation("str | int", {"str": str, "int": int})
+    assert result == str | int
+
+
+def test_resolve_type_annotation_string_custom_type() -> None:
+    """Test resolve_type_annotation resolves string references to custom types."""
+
+    @dataclass
+    class MyCustomType:
+        value: int
+
+    result = resolve_type_annotation("MyCustomType", {"MyCustomType": MyCustomType})
+    assert result is MyCustomType
+
+    result = resolve_type_annotation("MyCustomType | str", {"MyCustomType": MyCustomType, "str": str})
+    assert set(result.__args__) == {MyCustomType, str}  # type: ignore[union-attr]
+
+
+def test_resolve_type_annotation_string_typing_union() -> None:
+    """Test resolve_type_annotation resolves Union[] syntax in strings."""
+    result = resolve_type_annotation("Union[str, int]", {"str": str, "int": int})
+    assert set(result.__args__) == {str, int}  # type: ignore[union-attr]
+
+
+def test_resolve_type_annotation_string_optional() -> None:
+    """Test resolve_type_annotation resolves Optional[] syntax in strings."""
+    result = resolve_type_annotation("Optional[str]", {"str": str})
+    assert str in result.__args__  # type: ignore[union-attr]
+    assert type(None) in result.__args__  # type: ignore[union-attr]
+
+
+def test_resolve_type_annotation_unresolvable_raises() -> None:
+    """Test resolve_type_annotation raises NameError for unresolvable types."""
+    with pytest.raises(NameError, match="Could not resolve type annotation"):
+        resolve_type_annotation("NonExistentType", {})
+
+
+# endregion: resolve_type_annotation tests
 
 
 def test_basic_types() -> None:

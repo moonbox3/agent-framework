@@ -542,8 +542,8 @@ def handler(
 @overload
 def handler(
     *,
-    input_type: type | types.UnionType | None = None,
-    output_type: type | types.UnionType | None = None,
+    input_type: type | types.UnionType | str | None = None,
+    output_type: type | types.UnionType | str | None = None,
 ) -> Callable[
     [Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]],
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
@@ -553,8 +553,8 @@ def handler(
 def handler(
     func: Callable[[ExecutorT, Any, ContextT], Awaitable[Any]] | None = None,
     *,
-    input_type: type | types.UnionType | None = None,
-    output_type: type | types.UnionType | None = None,
+    input_type: type | types.UnionType | str | None = None,
+    output_type: type | types.UnionType | str | None = None,
 ) -> (
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]
     | Callable[
@@ -567,43 +567,52 @@ def handler(
     Args:
         func: The function to decorate. Can be None when used with parameters.
         input_type: Optional explicit input type(s) for this handler. Supports union types
-            (e.g., ``str | int``). When provided, takes precedence over introspection from
-            the function's message parameter annotation.
+            (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
+            When provided, takes precedence over introspection from the function's message
+            parameter annotation.
         output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
-            Supports union types (e.g., ``str | int``). When provided, takes precedence over
-            introspection from the ``WorkflowContext`` generic parameters.
+            Supports union types (e.g., ``str | int``) and string forward references.
+            When provided, takes precedence over introspection from the ``WorkflowContext``
+            generic parameters.
 
     Returns:
         The decorated function with handler metadata.
 
     Example:
-        # Using introspection (existing behavior)
-        @handler
-        async def handle_string(self, message: str, ctx: WorkflowContext[str]) -> None:
-            ...
+        .. code-block:: python
 
-        # Using explicit types (takes precedence over introspection)
-        @handler(input_type=str | int, output_type=bool)
-        async def handle_data(self, message: Any, ctx: WorkflowContext) -> None:
-            ...
+            # Using introspection (existing behavior)
+            @handler
+            async def handle_string(self, message: str, ctx: WorkflowContext[str]) -> None: ...
 
-        # Only specifying input_type (output_type falls back to introspection)
-        @handler(input_type=MyCustomType)
-        async def handle_custom(self, message: Any, ctx: WorkflowContext[str]) -> None:
-            ...
+
+            # Using explicit types (takes precedence over introspection)
+            @handler(input_type=str | int, output_type=bool)
+            async def handle_data(self, message: Any, ctx: WorkflowContext) -> None: ...
+
+
+            # Using string forward references
+            @handler(input_type="MyCustomType | int", output_type="ResponseType")
+            async def handle_custom(self, message: Any, ctx: WorkflowContext) -> None: ...
     """
-    from ._typing_utils import normalize_type_to_list
+    from ._typing_utils import normalize_type_to_list, resolve_type_annotation
 
     def decorator(
         func: Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
     ) -> Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]:
+        # Resolve string forward references using the function's globals
+        resolved_input_type = resolve_type_annotation(input_type, func.__globals__) if input_type is not None else None
+        resolved_output_type = (
+            resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
+        )
+
         # Extract the message type and validate using unified validation
         introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
-            _validate_handler_signature(func, skip_message_annotation=input_type is not None)
+            _validate_handler_signature(func, skip_message_annotation=resolved_input_type is not None)
         )
 
         # Use explicit types if provided, otherwise fall back to introspection
-        message_type = input_type if input_type is not None else introspected_message_type
+        message_type = resolved_input_type if resolved_input_type is not None else introspected_message_type
 
         # Validate that we have a message type - this should never happen if signature
         # validation passed, but provides a clear error if type information is missing
@@ -613,7 +622,9 @@ def handler(
                 "or an explicit input_type parameter"
             )
 
-        final_output_types = normalize_type_to_list(output_type) if output_type is not None else inferred_output_types
+        final_output_types = (
+            normalize_type_to_list(resolved_output_type) if resolved_output_type is not None else inferred_output_types
+        )
 
         # Get signature for preservation
         sig = inspect.signature(func)

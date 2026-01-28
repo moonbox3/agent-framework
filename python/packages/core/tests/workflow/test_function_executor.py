@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -12,6 +13,27 @@ from agent_framework import (
     WorkflowContext,
     executor,
 )
+
+
+# Module-level types for string forward reference tests
+@dataclass
+class FuncExecForwardRefMessage:
+    content: str
+
+
+@dataclass
+class FuncExecForwardRefTypeA:
+    value: str
+
+
+@dataclass
+class FuncExecForwardRefTypeB:
+    value: int
+
+
+@dataclass
+class FuncExecForwardRefResponse:
+    result: str
 
 
 class TestFunctionExecutor:
@@ -735,3 +757,35 @@ class TestExecutorExplicitTypes:
 
         # Output types should include both
         assert set(process.output_types) == {bool, float}
+
+    def test_executor_with_string_forward_reference_input_type(self):
+        """Test that string forward references work for input_type."""
+
+        @executor(input_type="FuncExecForwardRefMessage")
+        async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        # Should resolve the string to the actual type
+        assert FuncExecForwardRefMessage in process._handlers
+        assert process.can_handle(Message(data=FuncExecForwardRefMessage("hello"), source_id="mock"))
+
+    def test_executor_with_string_forward_reference_union(self):
+        """Test that string forward references work with union types."""
+
+        @executor(input_type="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
+        async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        # Should handle both types
+        assert process.can_handle(Message(data=FuncExecForwardRefTypeA("hello"), source_id="mock"))
+        assert process.can_handle(Message(data=FuncExecForwardRefTypeB(42), source_id="mock"))
+
+    def test_executor_with_string_forward_reference_output_type(self):
+        """Test that string forward references work for output_type."""
+
+        @executor(input_type=str, output_type="FuncExecForwardRefResponse")
+        async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        # Should resolve the string output type
+        assert FuncExecForwardRefResponse in process.output_types

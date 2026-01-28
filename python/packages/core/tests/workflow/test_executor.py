@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from dataclasses import dataclass
+
 import pytest
 
 from agent_framework import (
@@ -14,6 +16,27 @@ from agent_framework import (
     handler,
     response_handler,
 )
+
+
+# Module-level types for string forward reference tests
+@dataclass
+class ForwardRefMessage:
+    content: str
+
+
+@dataclass
+class ForwardRefTypeA:
+    value: str
+
+
+@dataclass
+class ForwardRefTypeB:
+    value: int
+
+
+@dataclass
+class ForwardRefResponse:
+    result: str
 
 
 def test_executor_without_id():
@@ -736,6 +759,47 @@ class TestHandlerExplicitTypes:
         # Should have both output types
         assert int in exec_instance.output_types  # Explicit
         assert bool in exec_instance.output_types  # Introspected
+
+    def test_handler_with_string_forward_reference_input_type(self):
+        """Test that string forward references work for input_type."""
+
+        class StringRefExecutor(Executor):
+            @handler(input_type="ForwardRefMessage")
+            async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+                pass
+
+        exec_instance = StringRefExecutor(id="string_ref")
+
+        # Should resolve the string to the actual type
+        assert ForwardRefMessage in exec_instance._handlers
+        assert exec_instance.can_handle(Message(data=ForwardRefMessage("hello"), source_id="mock"))
+
+    def test_handler_with_string_forward_reference_union(self):
+        """Test that string forward references work with union types."""
+
+        class StringUnionExecutor(Executor):
+            @handler(input_type="ForwardRefTypeA | ForwardRefTypeB")
+            async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+                pass
+
+        exec_instance = StringUnionExecutor(id="string_union")
+
+        # Should handle both types
+        assert exec_instance.can_handle(Message(data=ForwardRefTypeA("hello"), source_id="mock"))
+        assert exec_instance.can_handle(Message(data=ForwardRefTypeB(42), source_id="mock"))
+
+    def test_handler_with_string_forward_reference_output_type(self):
+        """Test that string forward references work for output_type."""
+
+        class StringOutputExecutor(Executor):
+            @handler(input_type=str, output_type="ForwardRefResponse")
+            async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+                pass
+
+        exec_instance = StringOutputExecutor(id="string_output")
+
+        # Should resolve the string output type
+        assert ForwardRefResponse in exec_instance.output_types
 
 
 # endregion: Tests for @handler decorator with explicit input_type and output_type

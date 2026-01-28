@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ._executor import Executor
-from ._typing_utils import normalize_type_to_list
+from ._typing_utils import normalize_type_to_list, resolve_type_annotation
 from ._workflow_context import WorkflowContext, validate_workflow_context_annotation
 
 if sys.version_info >= (3, 11):
@@ -48,8 +48,8 @@ class FunctionExecutor(Executor):
         func: Callable[..., Any],
         id: str | None = None,
         *,
-        input_type: type | types.UnionType | None = None,
-        output_type: type | types.UnionType | None = None,
+        input_type: type | types.UnionType | str | None = None,
+        output_type: type | types.UnionType | str | None = None,
     ):
         """Initialize the FunctionExecutor with a user-defined function.
 
@@ -57,11 +57,13 @@ class FunctionExecutor(Executor):
             func: The function to wrap as an executor (can be sync or async)
             id: Optional executor ID. If None, uses the function name.
             input_type: Optional explicit input type(s) for this executor. Supports union types
-                (e.g., ``str | int``). When provided, takes precedence over introspection from
-                the function's message parameter annotation.
+                (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
+                When provided, takes precedence over introspection from the function's message
+                parameter annotation.
             output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
-                Supports union types (e.g., ``str | int``). When provided, takes precedence over
-                introspection from the ``WorkflowContext`` generic parameters.
+                Supports union types (e.g., ``str | int``) and string forward references.
+                When provided, takes precedence over introspection from the ``WorkflowContext``
+                generic parameters.
 
         Raises:
             ValueError: If func is a staticmethod or classmethod (use @handler on instance methods instead)
@@ -75,14 +77,22 @@ class FunctionExecutor(Executor):
                 f"or create an Executor subclass and use @handler on instance methods instead."
             )
 
+        # Resolve string forward references using the function's globals
+        resolved_input_type = resolve_type_annotation(input_type, func.__globals__) if input_type is not None else None
+        resolved_output_type = (
+            resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
+        )
+
         # Validate function signature and extract types
         introspected_message_type, ctx_annotation, inferred_output_types, workflow_output_types = (
-            _validate_function_signature(func, skip_message_annotation=input_type is not None)
+            _validate_function_signature(func, skip_message_annotation=resolved_input_type is not None)
         )
 
         # Use explicit types if provided, otherwise fall back to introspection
-        message_type = input_type if input_type is not None else introspected_message_type
-        output_types = normalize_type_to_list(output_type) if output_type is not None else inferred_output_types
+        message_type = resolved_input_type if resolved_input_type is not None else introspected_message_type
+        output_types = (
+            normalize_type_to_list(resolved_output_type) if resolved_output_type is not None else inferred_output_types
+        )
 
         # Validate that we have a message type - provides a clear error if type information is missing
         if message_type is None:
@@ -158,8 +168,8 @@ def executor(func: Callable[..., Any]) -> FunctionExecutor: ...
 def executor(
     *,
     id: str | None = None,
-    input_type: type | types.UnionType | None = None,
-    output_type: type | types.UnionType | None = None,
+    input_type: type | types.UnionType | str | None = None,
+    output_type: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor]: ...
 
 
@@ -167,8 +177,8 @@ def executor(
     func: Callable[..., Any] | None = None,
     *,
     id: str | None = None,
-    input_type: type | types.UnionType | None = None,
-    output_type: type | types.UnionType | None = None,
+    input_type: type | types.UnionType | str | None = None,
+    output_type: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor] | FunctionExecutor:
     """Decorator that converts a standalone function into a FunctionExecutor instance.
 
@@ -205,6 +215,11 @@ def executor(
             await ctx.send_message(True)
 
 
+        # Using string forward references:
+        @executor(input_type="MyCustomType | int", output_type="ResponseType")
+        async def process(message: Any, ctx: WorkflowContext): ...
+
+
         # For class-based executors, use @handler instead:
         class MyExecutor(Executor):
             def __init__(self):
@@ -218,11 +233,13 @@ def executor(
         func: The function to decorate (when used without parentheses)
         id: Optional custom ID for the executor. If None, uses the function name.
         input_type: Optional explicit input type(s) for this executor. Supports union types
-            (e.g., ``str | int``). When provided, takes precedence over introspection from
-            the function's message parameter annotation.
+            (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
+            When provided, takes precedence over introspection from the function's message
+            parameter annotation.
         output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
-            Supports union types (e.g., ``str | int``). When provided, takes precedence over
-            introspection from the ``WorkflowContext`` generic parameters.
+            Supports union types (e.g., ``str | int``) and string forward references.
+            When provided, takes precedence over introspection from the ``WorkflowContext``
+            generic parameters.
 
     Returns:
         A FunctionExecutor instance that can be wired into a Workflow.

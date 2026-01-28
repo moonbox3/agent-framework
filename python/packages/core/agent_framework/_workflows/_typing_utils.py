@@ -1,12 +1,43 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-import logging
 from types import UnionType
 from typing import Any, TypeVar, Union, cast, get_args, get_origin
 
-logger = logging.getLogger(__name__)
+from agent_framework import get_logger
+
+logger = get_logger("agent_framework._workflows._typing_utils")
 
 T = TypeVar("T")
+
+
+def normalize_type_to_list(type_annotation: type[Any] | UnionType | None) -> list[type[Any]]:
+    """Normalize a type annotation (possibly a union) to a list of concrete types.
+
+    Args:
+        type_annotation: A type, union type (using | or Union[]), or None
+
+    Returns:
+        A list of types. For union types, returns all members.
+        For None, returns an empty list.
+        For Optional[T] (Union[T, None]), returns [T, type(None)].
+
+    Examples:
+        - normalize_type_to_list(str) -> [str]
+        - normalize_type_to_list(str | int) -> [str, int]
+        - normalize_type_to_list(Union[str, int]) -> [str, int]
+        - normalize_type_to_list(None) -> []
+    """
+    if type_annotation is None:
+        return []
+
+    origin = get_origin(type_annotation)
+
+    # Handle Union types (str | int or Union[str, int])
+    if origin is Union or origin is UnionType:
+        return list(get_args(type_annotation))
+
+    # Single type
+    return [type_annotation]
 
 
 def is_instance_of(data: Any, target_type: type | UnionType | Any) -> bool:

@@ -1,15 +1,83 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, Union
+from typing import Any, Generic, Optional, TypeVar, Union
 
 from agent_framework import RequestInfoEvent
 from agent_framework._workflows._typing_utils import (
     deserialize_type,
     is_instance_of,
     is_type_compatible,
+    normalize_type_to_list,
     serialize_type,
 )
+
+# region: normalize_type_to_list tests
+
+
+def test_normalize_type_to_list_single_type() -> None:
+    """Test normalize_type_to_list with single types."""
+    assert normalize_type_to_list(str) == [str]
+    assert normalize_type_to_list(int) == [int]
+    assert normalize_type_to_list(float) == [float]
+    assert normalize_type_to_list(bool) == [bool]
+    assert normalize_type_to_list(list) == [list]
+    assert normalize_type_to_list(dict) == [dict]
+
+
+def test_normalize_type_to_list_none() -> None:
+    """Test normalize_type_to_list with None returns empty list."""
+    assert normalize_type_to_list(None) == []
+
+
+def test_normalize_type_to_list_union_pipe_syntax() -> None:
+    """Test normalize_type_to_list with union types using | syntax."""
+    result = normalize_type_to_list(str | int)
+    assert set(result) == {str, int}
+
+    result = normalize_type_to_list(str | int | bool)
+    assert set(result) == {str, int, bool}
+
+
+def test_normalize_type_to_list_union_typing_syntax() -> None:
+    """Test normalize_type_to_list with Union[] from typing module."""
+    result = normalize_type_to_list(Union[str, int])
+    assert set(result) == {str, int}
+
+    result = normalize_type_to_list(Union[str, int, bool])
+    assert set(result) == {str, int, bool}
+
+
+def test_normalize_type_to_list_optional() -> None:
+    """Test normalize_type_to_list with Optional types (Union[T, None])."""
+    # Optional[str] is Union[str, None]
+    result = normalize_type_to_list(Optional[str])
+    assert str in result
+    assert type(None) in result
+    assert len(result) == 2
+
+    # str | None is equivalent
+    result = normalize_type_to_list(str | None)
+    assert str in result
+    assert type(None) in result
+    assert len(result) == 2
+
+
+def test_normalize_type_to_list_custom_types() -> None:
+    """Test normalize_type_to_list with custom class types."""
+
+    @dataclass
+    class CustomMessage:
+        content: str
+
+    result = normalize_type_to_list(CustomMessage)
+    assert result == [CustomMessage]
+
+    result = normalize_type_to_list(CustomMessage | str)
+    assert set(result) == {CustomMessage, str}
+
+
+# endregion: normalize_type_to_list tests
 
 
 def test_basic_types() -> None:

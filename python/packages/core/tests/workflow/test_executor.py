@@ -801,5 +801,114 @@ class TestHandlerExplicitTypes:
         # Should resolve the string output type
         assert ForwardRefResponse in exec_instance.output_types
 
+    def test_handler_with_explicit_workflow_output_type(self):
+        """Test that explicit workflow_output_type takes precedence over introspection."""
+
+        class ExplicitWorkflowOutputExecutor(Executor):
+            @handler(workflow_output_type=bool)
+            async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
+                pass
+
+        exec_instance = ExplicitWorkflowOutputExecutor(id="explicit_workflow_output")
+
+        # Handler spec should have bool as workflow_output_type (explicit)
+        handler_func = exec_instance._handlers[str]
+        assert handler_func._handler_spec["workflow_output_types"] == [bool]
+
+        # Executor workflow_output_types property should reflect explicit type
+        assert bool in exec_instance.workflow_output_types
+        # output_types should still come from introspection (int from WorkflowContext[int])
+        assert int in exec_instance.output_types
+
+    def test_handler_with_explicit_workflow_output_type_precedence(self):
+        """Test that explicit workflow_output_type overrides introspected WorkflowContext second param."""
+
+        class PrecedenceExecutor(Executor):
+            @handler(workflow_output_type=str)
+            async def handle(self, message: int, ctx: WorkflowContext[int, bool]) -> None:
+                pass
+
+        exec_instance = PrecedenceExecutor(id="precedence")
+
+        # workflow_output_types should be str (explicit), not bool (introspected from ctx)
+        assert str in exec_instance.workflow_output_types
+        assert bool not in exec_instance.workflow_output_types
+
+    def test_handler_with_all_explicit_types(self):
+        """Test that all three explicit type parameters work together."""
+        from typing import Any
+
+        class AllExplicitExecutor(Executor):
+            @handler(input_type=str, output_type=int, workflow_output_type=bool)
+            async def handle(self, message: Any, ctx: WorkflowContext) -> None:
+                pass
+
+        exec_instance = AllExplicitExecutor(id="all_explicit")
+
+        # Check input type
+        assert str in exec_instance._handlers
+        assert exec_instance.can_handle(Message(data="hello", source_id="mock"))
+
+        # Check output_type
+        assert int in exec_instance.output_types
+
+        # Check workflow_output_type
+        assert bool in exec_instance.workflow_output_types
+
+    def test_handler_with_union_workflow_output_type(self):
+        """Test that union types work for workflow_output_type."""
+
+        class UnionWorkflowOutputExecutor(Executor):
+            @handler(workflow_output_type=str | int)
+            async def handle(self, message: str, ctx: WorkflowContext) -> None:
+                pass
+
+        exec_instance = UnionWorkflowOutputExecutor(id="union_workflow_output")
+
+        # Should include both types from union
+        assert str in exec_instance.workflow_output_types
+        assert int in exec_instance.workflow_output_types
+
+    def test_handler_with_string_forward_reference_workflow_output_type(self):
+        """Test that string forward references work for workflow_output_type."""
+
+        class StringWorkflowOutputExecutor(Executor):
+            @handler(input_type=str, workflow_output_type="ForwardRefResponse")
+            async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+                pass
+
+        exec_instance = StringWorkflowOutputExecutor(id="string_workflow_output")
+
+        # Should resolve the string workflow_output_type
+        assert ForwardRefResponse in exec_instance.workflow_output_types
+
+    def test_handler_with_string_forward_reference_union_workflow_output_type(self):
+        """Test that string forward reference union types work for workflow_output_type."""
+
+        class StringUnionWorkflowOutputExecutor(Executor):
+            @handler(input_type=str, workflow_output_type="ForwardRefTypeA | ForwardRefTypeB")
+            async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+                pass
+
+        exec_instance = StringUnionWorkflowOutputExecutor(id="string_union_workflow_output")
+
+        # Should resolve both types from string union
+        assert ForwardRefTypeA in exec_instance.workflow_output_types
+        assert ForwardRefTypeB in exec_instance.workflow_output_types
+
+    def test_handler_fallback_to_introspection_for_workflow_output_type(self):
+        """Test that workflow_output_type falls back to introspection when not explicitly provided."""
+
+        class IntrospectedWorkflowOutputExecutor(Executor):
+            @handler
+            async def handle(self, message: str, ctx: WorkflowContext[int, bool]) -> None:
+                pass
+
+        exec_instance = IntrospectedWorkflowOutputExecutor(id="introspected_workflow_output")
+
+        # Should use introspected types from WorkflowContext[int, bool]
+        assert int in exec_instance.output_types
+        assert bool in exec_instance.workflow_output_types
+
 
 # endregion: Tests for @handler decorator with explicit input_type and output_type

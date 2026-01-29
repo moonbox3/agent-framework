@@ -201,7 +201,9 @@ class Executor(RequestInfoMixin, DictConvertible):
 
         from builtins import type as builtin_type
 
-        self._handlers: dict[builtin_type[Any], Callable[[Any, WorkflowContext[Any, Any]], Awaitable[None]]] = {}
+        self._handlers: dict[
+            builtin_type[Any] | types.UnionType, Callable[[Any, WorkflowContext[Any, Any]], Awaitable[None]]
+        ] = {}
         self._handler_specs: list[dict[str, Any]] = []
         if not defer_discovery:
             self._discover_handlers()
@@ -386,10 +388,10 @@ class Executor(RequestInfoMixin, DictConvertible):
         self,
         name: str,
         func: Callable[[Any, WorkflowContext[Any]], Awaitable[Any]],
-        message_type: type,
+        message_type: type | types.UnionType,
         ctx_annotation: Any,
-        output_types: list[type],
-        workflow_output_types: list[type],
+        output_types: list[type[Any] | types.UnionType],
+        workflow_output_types: list[type[Any] | types.UnionType],
     ) -> None:
         """Register a handler at instance level.
 
@@ -415,7 +417,7 @@ class Executor(RequestInfoMixin, DictConvertible):
         })
 
     @property
-    def input_types(self) -> list[type[Any]]:
+    def input_types(self) -> list[type[Any] | types.UnionType]:
         """Get the list of input types that this executor can handle.
 
         Returns:
@@ -424,13 +426,13 @@ class Executor(RequestInfoMixin, DictConvertible):
         return list(self._handlers.keys())
 
     @property
-    def output_types(self) -> list[type[Any]]:
+    def output_types(self) -> list[type[Any] | types.UnionType]:
         """Get the list of output types that this executor can produce via send_message().
 
         Returns:
             A list of the output types inferred from the handlers' WorkflowContext[T] annotations.
         """
-        output_types: set[type[Any]] = set()
+        output_types: set[type[Any] | types.UnionType] = set()
 
         # Collect output types from all handlers
         for handler_spec in self._handler_specs + self._response_handler_specs:
@@ -440,13 +442,13 @@ class Executor(RequestInfoMixin, DictConvertible):
         return list(output_types)
 
     @property
-    def workflow_output_types(self) -> list[type[Any]]:
+    def workflow_output_types(self) -> list[type[Any] | types.UnionType]:
         """Get the list of workflow output types that this executor can produce via yield_output().
 
         Returns:
             A list of the workflow output types inferred from handlers' WorkflowContext[T, U] annotations.
         """
-        output_types: set[type[Any]] = set()
+        output_types: set[type[Any] | types.UnionType] = set()
 
         # Collect workflow output types from all handlers
         for handler_spec in self._handler_specs + self._response_handler_specs:
@@ -544,6 +546,7 @@ def handler(
     *,
     input_type: type | types.UnionType | str | None = None,
     output_type: type | types.UnionType | str | None = None,
+    workflow_output_type: type | types.UnionType | str | None = None,
 ) -> Callable[
     [Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]],
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
@@ -555,6 +558,7 @@ def handler(
     *,
     input_type: type | types.UnionType | str | None = None,
     output_type: type | types.UnionType | str | None = None,
+    workflow_output_type: type | types.UnionType | str | None = None,
 ) -> (
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]
     | Callable[
@@ -573,7 +577,11 @@ def handler(
         output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
             Supports union types (e.g., ``str | int``) and string forward references.
             When provided, takes precedence over introspection from the ``WorkflowContext``
-            generic parameters.
+            first generic parameter (T_Out).
+        workflow_output_type: Optional explicit output type(s) that can be yielded via
+            ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
+            forward references. When provided, takes precedence over introspection from the
+            ``WorkflowContext`` second generic parameter (T_W_Out).
 
     Returns:
         The decorated function with handler metadata.
@@ -594,6 +602,13 @@ def handler(
             # Using string forward references
             @handler(input_type="MyCustomType | int", output_type="ResponseType")
             async def handle_custom(self, message: Any, ctx: WorkflowContext) -> None: ...
+
+
+            # Specifying both output types (send_message and yield_output)
+            @handler(input_type=str, output_type=int, workflow_output_type=bool)
+            async def handle_full(self, message: Any, ctx: WorkflowContext) -> None:
+                await ctx.send_message(42)  # int - matches output_type
+                await ctx.yield_output(True)  # bool - matches workflow_output_type
     """
     from ._typing_utils import normalize_type_to_list, resolve_type_annotation
 
@@ -604,6 +619,11 @@ def handler(
         resolved_input_type = resolve_type_annotation(input_type, func.__globals__) if input_type is not None else None
         resolved_output_type = (
             resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
+        )
+        resolved_workflow_output_type = (
+            resolve_type_annotation(workflow_output_type, func.__globals__)
+            if workflow_output_type is not None
+            else None
         )
 
         # Extract the message type and validate using unified validation
@@ -625,6 +645,11 @@ def handler(
         final_output_types = (
             normalize_type_to_list(resolved_output_type) if resolved_output_type is not None else inferred_output_types
         )
+        final_workflow_output_types = (
+            normalize_type_to_list(resolved_workflow_output_type)
+            if resolved_workflow_output_type is not None
+            else inferred_workflow_output_types
+        )
 
         # Get signature for preservation
         sig = inspect.signature(func)
@@ -643,7 +668,7 @@ def handler(
             "message_type": message_type,
             # Keep output_types and workflow_output_types in spec for validators
             "output_types": final_output_types,
-            "workflow_output_types": inferred_workflow_output_types,
+            "workflow_output_types": final_workflow_output_types,
             "ctx_annotation": ctx_annotation,
         }
 

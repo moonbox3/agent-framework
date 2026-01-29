@@ -50,6 +50,7 @@ class FunctionExecutor(Executor):
         *,
         input_type: type | types.UnionType | str | None = None,
         output_type: type | types.UnionType | str | None = None,
+        workflow_output_type: type | types.UnionType | str | None = None,
     ):
         """Initialize the FunctionExecutor with a user-defined function.
 
@@ -63,7 +64,11 @@ class FunctionExecutor(Executor):
             output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
                 Supports union types (e.g., ``str | int``) and string forward references.
                 When provided, takes precedence over introspection from the ``WorkflowContext``
-                generic parameters.
+                first generic parameter (T_Out).
+            workflow_output_type: Optional explicit output type(s) that can be yielded via
+                ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
+                forward references. When provided, takes precedence over introspection from the
+                ``WorkflowContext`` second generic parameter (T_W_Out).
 
         Raises:
             ValueError: If func is a staticmethod or classmethod (use @handler on instance methods instead)
@@ -82,16 +87,28 @@ class FunctionExecutor(Executor):
         resolved_output_type = (
             resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
         )
+        resolved_workflow_output_type = (
+            resolve_type_annotation(workflow_output_type, func.__globals__)
+            if workflow_output_type is not None
+            else None
+        )
 
         # Validate function signature and extract types
-        introspected_message_type, ctx_annotation, inferred_output_types, workflow_output_types = (
+        introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
             _validate_function_signature(func, skip_message_annotation=resolved_input_type is not None)
         )
 
         # Use explicit types if provided, otherwise fall back to introspection
         message_type = resolved_input_type if resolved_input_type is not None else introspected_message_type
-        output_types = (
-            normalize_type_to_list(resolved_output_type) if resolved_output_type is not None else inferred_output_types
+        output_types: list[type[Any] | types.UnionType] = (
+            normalize_type_to_list(resolved_output_type)
+            if resolved_output_type is not None
+            else list(inferred_output_types)
+        )
+        final_workflow_output_types: list[type[Any] | types.UnionType] = (
+            normalize_type_to_list(resolved_workflow_output_type)
+            if resolved_workflow_output_type is not None
+            else list(inferred_workflow_output_types)
         )
 
         # Validate that we have a message type - provides a clear error if type information is missing
@@ -144,7 +161,7 @@ class FunctionExecutor(Executor):
             message_type=message_type,
             ctx_annotation=ctx_annotation,
             output_types=output_types,
-            workflow_output_types=workflow_output_types,
+            workflow_output_types=final_workflow_output_types,
         )
 
         # Now we can safely call _discover_handlers (it won't find any class-level handlers)
@@ -170,6 +187,7 @@ def executor(
     id: str | None = None,
     input_type: type | types.UnionType | str | None = None,
     output_type: type | types.UnionType | str | None = None,
+    workflow_output_type: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor]: ...
 
 
@@ -179,6 +197,7 @@ def executor(
     id: str | None = None,
     input_type: type | types.UnionType | str | None = None,
     output_type: type | types.UnionType | str | None = None,
+    workflow_output_type: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor] | FunctionExecutor:
     """Decorator that converts a standalone function into a FunctionExecutor instance.
 
@@ -220,6 +239,13 @@ def executor(
         async def process(message: Any, ctx: WorkflowContext): ...
 
 
+        # Specifying both output types (send_message and yield_output):
+        @executor(input_type=str, output_type=int, workflow_output_type=bool)
+        async def process(message: Any, ctx: WorkflowContext):
+            await ctx.send_message(42)  # int - matches output_type
+            await ctx.yield_output(True)  # bool - matches workflow_output_type
+
+
         # For class-based executors, use @handler instead:
         class MyExecutor(Executor):
             def __init__(self):
@@ -239,7 +265,11 @@ def executor(
         output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
             Supports union types (e.g., ``str | int``) and string forward references.
             When provided, takes precedence over introspection from the ``WorkflowContext``
-            generic parameters.
+            first generic parameter (T_Out).
+        workflow_output_type: Optional explicit output type(s) that can be yielded via
+            ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
+            forward references. When provided, takes precedence over introspection from the
+            ``WorkflowContext`` second generic parameter (T_W_Out).
 
     Returns:
         A FunctionExecutor instance that can be wired into a Workflow.
@@ -249,7 +279,9 @@ def executor(
     """
 
     def wrapper(func: Callable[..., Any]) -> FunctionExecutor:
-        return FunctionExecutor(func, id=id, input_type=input_type, output_type=output_type)
+        return FunctionExecutor(
+            func, id=id, input_type=input_type, output_type=output_type, workflow_output_type=workflow_output_type
+        )
 
     # If func is provided, this means @executor was used without parentheses
     if func is not None:

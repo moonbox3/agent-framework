@@ -55,7 +55,10 @@ def resolve_type_annotation(
         eval_globalns.setdefault("Optional", __import__("typing").Optional)
 
         try:
-            return eval(type_annotation, eval_globalns, localns)  # noqa: S307  # nosec B307
+            return cast(
+                "type[Any] | UnionType",
+                eval(type_annotation, eval_globalns, localns),  # noqa: S307  # nosec B307
+            )
         except NameError as e:
             raise NameError(
                 f"Could not resolve type annotation '{type_annotation}'. "
@@ -65,7 +68,7 @@ def resolve_type_annotation(
     return type_annotation
 
 
-def normalize_type_to_list(type_annotation: type[Any] | UnionType | None) -> list[type[Any]]:
+def normalize_type_to_list(type_annotation: type[Any] | UnionType | None) -> list[type[Any] | UnionType]:
     """Normalize a type annotation (possibly a union) to a list of concrete types.
 
     Args:

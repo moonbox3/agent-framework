@@ -789,3 +789,109 @@ class TestExecutorExplicitTypes:
 
         # Should resolve the string output type
         assert FuncExecForwardRefResponse in process.output_types
+
+    def test_executor_with_explicit_workflow_output_type(self):
+        """Test that explicit workflow_output_type takes precedence over introspection."""
+
+        @executor(workflow_output_type=bool)
+        async def process(message: str, ctx: WorkflowContext[int]) -> None:
+            pass
+
+        # Handler spec should have bool as workflow_output_type (explicit)
+        spec = process._handler_specs[0]
+        assert spec["workflow_output_types"] == [bool]
+
+        # Executor workflow_output_types property should reflect explicit type
+        assert bool in process.workflow_output_types
+        # output_types should still come from introspection (int from WorkflowContext[int])
+        assert int in process.output_types
+
+    def test_executor_with_explicit_workflow_output_type_precedence(self):
+        """Test that explicit workflow_output_type overrides introspected WorkflowContext second param."""
+
+        @executor(workflow_output_type=str)
+        async def process(message: int, ctx: WorkflowContext[int, bool]) -> None:
+            pass
+
+        # workflow_output_types should be str (explicit), not bool (introspected from ctx)
+        assert str in process.workflow_output_types
+        assert bool not in process.workflow_output_types
+
+    def test_executor_with_all_explicit_types(self):
+        """Test that all three explicit type parameters work together."""
+        from typing import Any
+
+        @executor(input_type=str, output_type=int, workflow_output_type=bool)
+        async def process(message: Any, ctx: WorkflowContext) -> None:
+            pass
+
+        # Check input type
+        assert str in process._handlers
+        assert process.can_handle(Message(data="hello", source_id="mock"))
+
+        # Check output_type
+        assert int in process.output_types
+
+        # Check workflow_output_type
+        assert bool in process.workflow_output_types
+
+    def test_executor_with_union_workflow_output_type(self):
+        """Test that union types work for workflow_output_type."""
+
+        @executor(workflow_output_type=str | int)
+        async def process(message: str, ctx: WorkflowContext) -> None:
+            pass
+
+        # Should include both types from union
+        assert str in process.workflow_output_types
+        assert int in process.workflow_output_types
+
+    def test_executor_with_string_forward_reference_workflow_output_type(self):
+        """Test that string forward references work for workflow_output_type."""
+
+        @executor(input_type=str, workflow_output_type="FuncExecForwardRefResponse")
+        async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        # Should resolve the string workflow_output_type
+        assert FuncExecForwardRefResponse in process.workflow_output_types
+
+    def test_executor_with_string_forward_reference_union_workflow_output_type(self):
+        """Test that string forward reference union types work for workflow_output_type."""
+
+        @executor(input_type=str, workflow_output_type="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
+        async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        # Should resolve both types from string union
+        assert FuncExecForwardRefTypeA in process.workflow_output_types
+        assert FuncExecForwardRefTypeB in process.workflow_output_types
+
+    def test_executor_fallback_to_introspection_for_workflow_output_type(self):
+        """Test that workflow_output_type falls back to introspection when not explicitly provided."""
+
+        @executor
+        async def process(message: str, ctx: WorkflowContext[int, bool]) -> None:
+            pass
+
+        # Should use introspected types from WorkflowContext[int, bool]
+        assert int in process.output_types
+        assert bool in process.workflow_output_types
+
+    def test_function_executor_constructor_with_workflow_output_type(self):
+        """Test FunctionExecutor constructor accepts workflow_output_type parameter."""
+
+        async def my_func(message: str, ctx: WorkflowContext) -> None:
+            pass
+
+        exec_instance = FunctionExecutor(
+            my_func,
+            id="test_constructor",
+            input_type=str,
+            output_type=int,
+            workflow_output_type=bool,
+        )
+
+        assert str in exec_instance._handlers
+        assert int in exec_instance.output_types
+        assert bool in exec_instance.workflow_output_types

@@ -574,7 +574,7 @@ class TestHandlerExplicitTypes:
         from typing import Any
 
         class ExplicitInputExecutor(Executor):
-            @handler(input_type=str)
+            @handler(input=str)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -593,7 +593,7 @@ class TestHandlerExplicitTypes:
         """Test that explicit output_type takes precedence over introspection."""
 
         class ExplicitOutputExecutor(Executor):
-            @handler(output_type=int)
+            @handler(output=int)
             async def handle(self, message: str, ctx: WorkflowContext[str]) -> None:
                 pass
 
@@ -612,7 +612,7 @@ class TestHandlerExplicitTypes:
         from typing import Any
 
         class ExplicitBothExecutor(Executor):
-            @handler(input_type=dict, output_type=list)
+            @handler(input=dict, output=list)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -635,7 +635,7 @@ class TestHandlerExplicitTypes:
         from typing import Any
 
         class UnionInputExecutor(Executor):
-            @handler(input_type=str | int)
+            @handler(input=str | int)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -656,7 +656,7 @@ class TestHandlerExplicitTypes:
         from typing import Any
 
         class UnionOutputExecutor(Executor):
-            @handler(output_type=str | int | bool)
+            @handler(output=str | int | bool)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -671,7 +671,7 @@ class TestHandlerExplicitTypes:
         class PrecedenceExecutor(Executor):
             # Introspection would give: input=str, output=[int]
             # Explicit gives: input=bytes, output=[float]
-            @handler(input_type=bytes, output_type=float)
+            @handler(input=bytes, output=float)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
                 pass
 
@@ -704,7 +704,7 @@ class TestHandlerExplicitTypes:
 
         # Only explicit input_type, introspect output_type
         class OnlyInputExecutor(Executor):
-            @handler(input_type=bytes)
+            @handler(input=bytes)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
                 pass
 
@@ -714,7 +714,7 @@ class TestHandlerExplicitTypes:
 
         # Only explicit output_type, introspect input_type
         class OnlyOutputExecutor(Executor):
-            @handler(output_type=float)
+            @handler(output=float)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
                 pass
 
@@ -727,7 +727,7 @@ class TestHandlerExplicitTypes:
         """Test that explicit input_type allows handler without message type annotation."""
 
         class NoAnnotationExecutor(Executor):
-            @handler(input_type=str)
+            @handler(input=str)
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -741,7 +741,7 @@ class TestHandlerExplicitTypes:
         """Test executor with multiple handlers, some with explicit types and some introspected."""
 
         class MixedExecutor(Executor):
-            @handler(input_type=str, output_type=int)
+            @handler(input=str, output=int)
             async def handle_explicit(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -764,7 +764,7 @@ class TestHandlerExplicitTypes:
         """Test that string forward references work for input_type."""
 
         class StringRefExecutor(Executor):
-            @handler(input_type="ForwardRefMessage")
+            @handler(input="ForwardRefMessage")
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -778,7 +778,7 @@ class TestHandlerExplicitTypes:
         """Test that string forward references work with union types."""
 
         class StringUnionExecutor(Executor):
-            @handler(input_type="ForwardRefTypeA | ForwardRefTypeB")
+            @handler(input="ForwardRefTypeA | ForwardRefTypeB")
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -792,7 +792,7 @@ class TestHandlerExplicitTypes:
         """Test that string forward references work for output_type."""
 
         class StringOutputExecutor(Executor):
-            @handler(input_type=str, output_type="ForwardRefResponse")
+            @handler(input=str, output="ForwardRefResponse")
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -805,7 +805,7 @@ class TestHandlerExplicitTypes:
         """Test that explicit workflow_output_type takes precedence over introspection."""
 
         class ExplicitWorkflowOutputExecutor(Executor):
-            @handler(workflow_output_type=bool)
+            @handler(workflow_output=bool)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
                 pass
 
@@ -824,7 +824,7 @@ class TestHandlerExplicitTypes:
         """Test that explicit workflow_output_type overrides introspected WorkflowContext second param."""
 
         class PrecedenceExecutor(Executor):
-            @handler(workflow_output_type=str)
+            @handler(workflow_output=str)
             async def handle(self, message: int, ctx: WorkflowContext[int, bool]) -> None:
                 pass
 
@@ -839,7 +839,7 @@ class TestHandlerExplicitTypes:
         from typing import Any
 
         class AllExplicitExecutor(Executor):
-            @handler(input_type=str, output_type=int, workflow_output_type=bool)
+            @handler(input=str, output=int, workflow_output=bool)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -859,7 +859,7 @@ class TestHandlerExplicitTypes:
         """Test that union types work for workflow_output_type."""
 
         class UnionWorkflowOutputExecutor(Executor):
-            @handler(workflow_output_type=str | int)
+            @handler(workflow_output=str | int)
             async def handle(self, message: str, ctx: WorkflowContext) -> None:
                 pass
 
@@ -873,7 +873,7 @@ class TestHandlerExplicitTypes:
         """Test that string forward references work for workflow_output_type."""
 
         class StringWorkflowOutputExecutor(Executor):
-            @handler(input_type=str, workflow_output_type="ForwardRefResponse")
+            @handler(input=str, workflow_output="ForwardRefResponse")
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 
@@ -886,7 +886,7 @@ class TestHandlerExplicitTypes:
         """Test that string forward reference union types work for workflow_output_type."""
 
         class StringUnionWorkflowOutputExecutor(Executor):
-            @handler(input_type=str, workflow_output_type="ForwardRefTypeA | ForwardRefTypeB")
+            @handler(input=str, workflow_output="ForwardRefTypeA | ForwardRefTypeB")
             async def handle(self, message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
                 pass
 

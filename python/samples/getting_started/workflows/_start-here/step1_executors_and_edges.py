@@ -35,13 +35,13 @@ What this example shows
 
 - Explicit type parameters with @handler:
     Instead of relying on type introspection from function signatures, you can explicitly
-    specify `input_type` and/or `output_type` on the @handler decorator. These explicit
+    specify `input` and/or `output` on the @handler decorator. These explicit
     types take precedence over introspection and support union types (e.g., `str | int`).
 
     Examples:
-        @handler(input_type=str | int)  # Accepts str or int, output from introspection
-        @handler(output_type=str | int)  # Input from introspection, outputs str or int
-        @handler(input_type=str, output_type=int)  # Both explicitly specified
+        @handler(input=str | int)  # Accepts str or int, output from introspection
+        @handler(output=str | int)  # Input from introspection, outputs str or int
+        @handler(input=str, output=int)  # Both explicitly specified
 
 - Fluent WorkflowBuilder API:
     add_edge(A, B) to connect nodes, set_start_executor(A), then build() -> Workflow.
@@ -115,8 +115,8 @@ async def reverse_text(text: str, ctx: WorkflowContext[Never, str]) -> None:
 # Example 3: Using explicit type parameters on @handler
 # -----------------------------------------------------
 #
-# Instead of relying on type introspection, you can explicitly specify input_type
-# and/or output_type on the @handler decorator. These take precedence over introspection
+# Instead of relying on type introspection, you can explicitly specify input
+# and/or output on the @handler decorator. These take precedence over introspection
 # and support union types (e.g., str | int).
 #
 # This is useful when:
@@ -128,7 +128,7 @@ async def reverse_text(text: str, ctx: WorkflowContext[Never, str]) -> None:
 class ExclamationAdder(Executor):
     """An executor that adds exclamation marks, demonstrating explicit @handler types.
 
-    This example shows how to use explicit input_type and output_type parameters
+    This example shows how to use explicit input and output parameters
     on the @handler decorator instead of relying on introspection from the function
     signature. This approach is especially useful for union types.
     """
@@ -136,11 +136,11 @@ class ExclamationAdder(Executor):
     def __init__(self, id: str):
         super().__init__(id=id)
 
-    @handler(input_type=str, output_type=str)
+    @handler(input=str, output=str)
     async def add_exclamation(self, message: str, ctx: WorkflowContext) -> None:
         """Add exclamation marks to the input.
 
-        Note: The input_type=str and output_type=str are explicitly specified on @handler,
+        Note: The input=str and output=str are explicitly specified on @handler,
         so the framework uses those instead of introspecting the function signature.
         The WorkflowContext here has no type parameters because the explicit types
         on @handler take precedence.
@@ -174,8 +174,8 @@ async def main():
     # -------------------------------------------------------
     exclamation_adder = ExclamationAdder(id="exclamation_adder")
 
-    # This workflow demonstrates the explicit input_type/output_type feature:
-    # exclamation_adder uses @handler(input_type=str, output_type=str) to
+    # This workflow demonstrates the explicit input/output feature:
+    # exclamation_adder uses @handler(input=str, output=str) to
     # explicitly declare types instead of relying on introspection.
     workflow2 = (
         WorkflowBuilder()

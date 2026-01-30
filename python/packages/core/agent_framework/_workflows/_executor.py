@@ -21,7 +21,7 @@ from ._model_utils import DictConvertible
 from ._request_info_mixin import RequestInfoMixin
 from ._runner_context import Message, MessageType, RunnerContext
 from ._shared_state import SharedState
-from ._typing_utils import is_instance_of
+from ._typing_utils import is_instance_of, normalize_type_to_list, resolve_type_annotation
 from ._workflow_context import WorkflowContext, validate_workflow_context_annotation
 
 logger = logging.getLogger(__name__)
@@ -329,15 +329,13 @@ class Executor(RequestInfoMixin, DictConvertible):
         """Discover message handlers in the executor class."""
         # Use __class__.__dict__ to avoid accessing pydantic's dynamic attributes
         for attr_name in dir(self.__class__):
-            # Narrow the exception scope - only catch AttributeError when accessing the attribute
             try:
                 attr = getattr(self.__class__, attr_name)
             except AttributeError:
                 # Skip attributes that may not be accessible (e.g., dynamic descriptors)
-                logger.debug(f"Could not access attribute {attr_name} on {self.__class__.__name__}")
                 continue
 
-            # Discover @handler methods - let AttributeError propagate for malformed handler specs
+            # Discover @handler methods
             if callable(attr) and hasattr(attr, "_handler_spec"):
                 handler_spec = attr._handler_spec  # type: ignore
                 message_type = handler_spec["message_type"]
@@ -357,7 +355,6 @@ class Executor(RequestInfoMixin, DictConvertible):
                     "output_types": handler_spec.get("output_types", []),
                     "workflow_output_types": handler_spec.get("workflow_output_types", []),
                     "ctx_annotation": handler_spec.get("ctx_annotation"),
-                    "source": "class_method",  # Distinguish from instance handlers if needed
                 })
 
     def can_handle(self, message: Message) -> bool:
@@ -413,7 +410,6 @@ class Executor(RequestInfoMixin, DictConvertible):
             "ctx_annotation": ctx_annotation,
             "output_types": output_types,
             "workflow_output_types": workflow_output_types,
-            "source": "instance_method",  # Distinguish from class handlers if needed
         })
 
     @property
@@ -544,9 +540,9 @@ def handler(
 @overload
 def handler(
     *,
-    input_type: type | types.UnionType | str | None = None,
-    output_type: type | types.UnionType | str | None = None,
-    workflow_output_type: type | types.UnionType | str | None = None,
+    input: type | types.UnionType | str | None = None,
+    output: type | types.UnionType | str | None = None,
+    workflow_output: type | types.UnionType | str | None = None,
 ) -> Callable[
     [Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]],
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
@@ -556,9 +552,9 @@ def handler(
 def handler(
     func: Callable[[ExecutorT, Any, ContextT], Awaitable[Any]] | None = None,
     *,
-    input_type: type | types.UnionType | str | None = None,
-    output_type: type | types.UnionType | str | None = None,
-    workflow_output_type: type | types.UnionType | str | None = None,
+    input: type | types.UnionType | str | None = None,
+    output: type | types.UnionType | str | None = None,
+    workflow_output: type | types.UnionType | str | None = None,
 ) -> (
     Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]
     | Callable[
@@ -570,15 +566,15 @@ def handler(
 
     Args:
         func: The function to decorate. Can be None when used with parameters.
-        input_type: Optional explicit input type(s) for this handler. Supports union types
+        input: Optional explicit input type(s) for this handler. Supports union types
             (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
             When provided, takes precedence over introspection from the function's message
             parameter annotation.
-        output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
+        output: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
             Supports union types (e.g., ``str | int``) and string forward references.
             When provided, takes precedence over introspection from the ``WorkflowContext``
             first generic parameter (T_Out).
-        workflow_output_type: Optional explicit output type(s) that can be yielded via
+        workflow_output: Optional explicit output type(s) that can be yielded via
             ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
             forward references. When provided, takes precedence over introspection from the
             ``WorkflowContext`` second generic parameter (T_W_Out).
@@ -595,38 +591,35 @@ def handler(
 
 
             # Using explicit types (takes precedence over introspection)
-            @handler(input_type=str | int, output_type=bool)
+            @handler(input=str | int, output=bool)
             async def handle_data(self, message: Any, ctx: WorkflowContext) -> None: ...
 
 
             # Using string forward references
-            @handler(input_type="MyCustomType | int", output_type="ResponseType")
+            @handler(input="MyCustomType | int", output="ResponseType")
             async def handle_custom(self, message: Any, ctx: WorkflowContext) -> None: ...
 
 
             # Specifying both output types (send_message and yield_output)
-            @handler(input_type=str, output_type=int, workflow_output_type=bool)
+            @handler(input=str, output=int, workflow_output=bool)
             async def handle_full(self, message: Any, ctx: WorkflowContext) -> None:
-                await ctx.send_message(42)  # int - matches output_type
-                await ctx.yield_output(True)  # bool - matches workflow_output_type
+                await ctx.send_message(42)  # int - matches output
+                await ctx.yield_output(True)  # bool - matches workflow_output
     """
-    from ._typing_utils import normalize_type_to_list, resolve_type_annotation
 
     def decorator(
         func: Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
     ) -> Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]:
         # Resolve string forward references using the function's globals
-        resolved_input_type = resolve_type_annotation(input_type, func.__globals__) if input_type is not None else None
-        resolved_output_type = (
-            resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
-        )
+        resolved_input_type = resolve_type_annotation(input, func.__globals__) if input is not None else None
+        resolved_output_type = resolve_type_annotation(output, func.__globals__) if output is not None else None
         resolved_workflow_output_type = (
-            resolve_type_annotation(workflow_output_type, func.__globals__)
-            if workflow_output_type is not None
-            else None
+            resolve_type_annotation(workflow_output, func.__globals__) if workflow_output is not None else None
         )
 
-        # Extract the message type and validate using unified validation
+        # Extract the message type and validate using unified validation.
+        # This runs even when explicit params are provided to allow mixing:
+        # e.g., input from decorator, output from WorkflowContext annotation.
         introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
             _validate_handler_signature(func, skip_message_annotation=resolved_input_type is not None)
         )
@@ -639,7 +632,7 @@ def handler(
         if message_type is None:
             raise ValueError(
                 f"Handler {func.__name__} requires either a message parameter type annotation "
-                "or an explicit input_type parameter"
+                "or an explicit input parameter"
             )
 
         final_output_types = (

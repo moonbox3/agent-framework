@@ -3,10 +3,6 @@
 from types import UnionType
 from typing import Any, TypeVar, Union, cast, get_args, get_origin
 
-from agent_framework import get_logger
-
-logger = get_logger("agent_framework._workflows._typing_utils")
-
 T = TypeVar("T")
 
 

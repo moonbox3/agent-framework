@@ -300,7 +300,7 @@ def _validate_function_signature(
     func: Callable[..., Any],
     *,
     skip_message_annotation: bool = False,
-) -> tuple[type | None, Any, list[type[Any]], list[type[Any]]]:
+) -> tuple[type | None, Any, list[type[Any] | types.UnionType], list[type[Any] | types.UnionType]]:
     """Validate function signature for executor functions.
 
     Args:

@@ -564,20 +564,24 @@ def handler(
 ):
     """Decorator to register a handler for an executor.
 
+    Type information can be provided in two mutually exclusive ways:
+
+    1. **Introspection** (default): Types are inferred from function signature annotations.
+       Use type annotations on the message parameter and WorkflowContext generic parameters.
+
+    2. **Explicit parameters**: Types are specified via decorator parameters (input, output,
+       workflow_output). When ANY explicit parameter is provided, ALL types must come from
+       explicit parameters - introspection is completely disabled. The ``input`` parameter
+       is required; ``output`` and ``workflow_output`` are optional (default to no outputs).
+
     Args:
         func: The function to decorate. Can be None when used with parameters.
-        input: Optional explicit input type(s) for this handler. Supports union types
-            (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
-            When provided, takes precedence over introspection from the function's message
-            parameter annotation.
-        output: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
+        input: Explicit input type(s) for this handler. Required when using explicit mode.
             Supports union types (e.g., ``str | int``) and string forward references.
-            When provided, takes precedence over introspection from the ``WorkflowContext``
-            first generic parameter (T_Out).
-        workflow_output: Optional explicit output type(s) that can be yielded via
-            ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
-            forward references. When provided, takes precedence over introspection from the
-            ``WorkflowContext`` second generic parameter (T_W_Out).
+        output: Explicit output type(s) that can be sent via ``ctx.send_message()``.
+            Optional; defaults to no outputs if not specified.
+        workflow_output: Explicit output type(s) that can be yielded via ``ctx.yield_output()``.
+            Optional; defaults to no outputs if not specified.
 
     Returns:
         The decorated function with handler metadata.
@@ -585,22 +589,22 @@ def handler(
     Example:
         .. code-block:: python
 
-            # Using introspection (existing behavior)
+            # Mode 1: Introspection - types from annotations
             @handler
             async def handle_string(self, message: str, ctx: WorkflowContext[str]) -> None: ...
 
 
-            # Using explicit types (takes precedence over introspection)
+            # Mode 2: Explicit types - ALL types from decorator params
             @handler(input=str | int, output=bool)
             async def handle_data(self, message: Any, ctx: WorkflowContext) -> None: ...
 
 
-            # Using string forward references
+            # Explicit with string forward references
             @handler(input="MyCustomType | int", output="ResponseType")
             async def handle_custom(self, message: Any, ctx: WorkflowContext) -> None: ...
 
 
-            # Specifying both output types (send_message and yield_output)
+            # Explicit with all three type parameters
             @handler(input=str, output=int, workflow_output=bool)
             async def handle_full(self, message: Any, ctx: WorkflowContext) -> None:
                 await ctx.send_message(42)  # int - matches output
@@ -610,39 +614,50 @@ def handler(
     def decorator(
         func: Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
     ) -> Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]:
-        # Resolve string forward references using the function's globals
-        resolved_input_type = resolve_type_annotation(input, func.__globals__) if input is not None else None
-        resolved_output_type = resolve_type_annotation(output, func.__globals__) if output is not None else None
-        resolved_workflow_output_type = (
-            resolve_type_annotation(workflow_output, func.__globals__) if workflow_output is not None else None
-        )
+        # Check if ANY explicit type parameter was provided - if so, use ONLY explicit params.
+        # This is "all or nothing" - no mixing of explicit params with introspection.
+        use_explicit_types = input is not None or output is not None or workflow_output is not None
 
-        # Extract the message type and validate using unified validation.
-        # This runs even when explicit params are provided to allow mixing:
-        # e.g., input from decorator, output from WorkflowContext annotation.
-        introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
-            _validate_handler_signature(func, skip_message_annotation=resolved_input_type is not None)
-        )
-
-        # Use explicit types if provided, otherwise fall back to introspection
-        message_type = resolved_input_type if resolved_input_type is not None else introspected_message_type
-
-        # Validate that we have a message type - this should never happen if signature
-        # validation passed, but provides a clear error if type information is missing
-        if message_type is None:
-            raise ValueError(
-                f"Handler {func.__name__} requires either a message parameter type annotation "
-                "or an explicit input parameter"
+        if use_explicit_types:
+            # Resolve string forward references using the function's globals
+            resolved_input_type = resolve_type_annotation(input, func.__globals__) if input is not None else None
+            resolved_output_type = resolve_type_annotation(output, func.__globals__) if output is not None else None
+            resolved_workflow_output_type = (
+                resolve_type_annotation(workflow_output, func.__globals__) if workflow_output is not None else None
             )
 
-        final_output_types = (
-            normalize_type_to_list(resolved_output_type) if resolved_output_type is not None else inferred_output_types
-        )
-        final_workflow_output_types = (
-            normalize_type_to_list(resolved_workflow_output_type)
-            if resolved_workflow_output_type is not None
-            else inferred_workflow_output_types
-        )
+            # Validate signature structure (correct number of params, ctx is WorkflowContext)
+            # but skip type extraction since we're using explicit types
+            _validate_handler_signature(func, skip_message_annotation=True)
+
+            # Use explicit types only - missing params default to empty
+            message_type = resolved_input_type
+            if message_type is None:
+                raise ValueError(f"Handler {func.__name__} with explicit type parameters must specify 'input' type")
+
+            final_output_types = normalize_type_to_list(resolved_output_type) if resolved_output_type else []
+            final_workflow_output_types = (
+                normalize_type_to_list(resolved_workflow_output_type) if resolved_workflow_output_type else []
+            )
+            # Get ctx_annotation for consistency (even though types come from explicit params)
+            ctx_annotation = (
+                inspect.signature(func).parameters[list(inspect.signature(func).parameters.keys())[2]].annotation
+            )
+        else:
+            # Use introspection for ALL types - no explicit params provided
+            introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
+                _validate_handler_signature(func, skip_message_annotation=False)
+            )
+
+            message_type = introspected_message_type
+            if message_type is None:
+                raise ValueError(
+                    f"Handler {func.__name__} requires either a message parameter type annotation "
+                    "or explicit type parameters (input, output, workflow_output)"
+                )
+
+            final_output_types = inferred_output_types
+            final_workflow_output_types = inferred_workflow_output_types
 
         # Get signature for preservation
         sig = inspect.signature(func)

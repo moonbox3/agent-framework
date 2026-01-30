@@ -590,16 +590,16 @@ class TestHandlerExplicitTypes:
         assert not exec_instance.can_handle(Message(data=42, source_id="mock"))
 
     def test_handler_with_explicit_output_type(self):
-        """Test that explicit output_type takes precedence over introspection."""
+        """Test that explicit output works when input is also specified."""
 
         class ExplicitOutputExecutor(Executor):
-            @handler(output=int)
+            @handler(input=str, output=int)
             async def handle(self, message: str, ctx: WorkflowContext[str]) -> None:
                 pass
 
         exec_instance = ExplicitOutputExecutor(id="explicit_output")
 
-        # Handler spec should have int as output type (explicit), not str (introspected)
+        # Handler spec should have int as output type (explicit)
         handler_func = exec_instance._handlers[str]
         assert handler_func._handler_spec["output_types"] == [int]
 
@@ -652,11 +652,11 @@ class TestHandlerExplicitTypes:
         assert not exec_instance.can_handle(Message(data=3.14, source_id="mock"))
 
     def test_handler_with_explicit_union_output_type(self):
-        """Test that explicit union output_type is normalized to a list."""
+        """Test that explicit union output is normalized to a list."""
         from typing import Any
 
         class UnionOutputExecutor(Executor):
-            @handler(output=str | int | bool)
+            @handler(input=bytes, output=str | int | bool)
             async def handle(self, message: Any, ctx: WorkflowContext) -> None:
                 pass
 
@@ -699,10 +699,10 @@ class TestHandlerExplicitTypes:
         assert str in exec_instance._handlers
         assert int in exec_instance.output_types
 
-    def test_handler_partial_explicit_types(self):
-        """Test that partial explicit types work (only input_type or only output_type)."""
+    def test_handler_explicit_mode_requires_input(self):
+        """Test that using any explicit type param requires input to be specified."""
 
-        # Only explicit input_type, introspect output_type
+        # Only explicit input - output defaults to empty (no introspection)
         class OnlyInputExecutor(Executor):
             @handler(input=bytes)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
@@ -710,18 +710,23 @@ class TestHandlerExplicitTypes:
 
         exec_input = OnlyInputExecutor(id="only_input")
         assert bytes in exec_input._handlers  # Explicit
-        assert int in exec_input.output_types  # Introspected
+        assert exec_input.output_types == []  # No output types (not introspected)
 
-        # Only explicit output_type, introspect input_type
-        class OnlyOutputExecutor(Executor):
-            @handler(output=float)
-            async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
-                pass
+        # Only explicit output without input should raise error
+        with pytest.raises(ValueError, match="must specify 'input' type"):
 
-        exec_output = OnlyOutputExecutor(id="only_output")
-        assert str in exec_output._handlers  # Introspected
-        assert float in exec_output.output_types  # Explicit
-        assert int not in exec_output.output_types  # Not introspected when explicit provided
+            class OnlyOutputExecutor(Executor):
+                @handler(output=float)
+                async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
+                    pass
+
+        # Only explicit workflow_output without input should raise error
+        with pytest.raises(ValueError, match="must specify 'input' type"):
+
+            class OnlyWorkflowOutputExecutor(Executor):
+                @handler(workflow_output=bool)
+                async def handle(self, message: str, ctx: WorkflowContext[int, str]) -> None:
+                    pass
 
     def test_handler_explicit_input_type_allows_no_message_annotation(self):
         """Test that explicit input_type allows handler without message type annotation."""
@@ -802,10 +807,10 @@ class TestHandlerExplicitTypes:
         assert ForwardRefResponse in exec_instance.output_types
 
     def test_handler_with_explicit_workflow_output_type(self):
-        """Test that explicit workflow_output_type takes precedence over introspection."""
+        """Test that explicit workflow_output works when input is also specified."""
 
         class ExplicitWorkflowOutputExecutor(Executor):
-            @handler(workflow_output=bool)
+            @handler(input=str, workflow_output=bool)
             async def handle(self, message: str, ctx: WorkflowContext[int]) -> None:
                 pass
 
@@ -817,21 +822,24 @@ class TestHandlerExplicitTypes:
 
         # Executor workflow_output_types property should reflect explicit type
         assert bool in exec_instance.workflow_output_types
-        # output_types should still come from introspection (int from WorkflowContext[int])
-        assert int in exec_instance.output_types
+        # output_types should be empty (explicit mode, output not specified)
+        assert exec_instance.output_types == []
 
-    def test_handler_with_explicit_workflow_output_type_precedence(self):
-        """Test that explicit workflow_output_type overrides introspected WorkflowContext second param."""
+    def test_handler_with_explicit_workflow_output_and_output(self):
+        """Test that explicit workflow_output works alongside explicit output."""
 
         class PrecedenceExecutor(Executor):
-            @handler(workflow_output=str)
+            @handler(input=int, output=float, workflow_output=str)
             async def handle(self, message: int, ctx: WorkflowContext[int, bool]) -> None:
                 pass
 
         exec_instance = PrecedenceExecutor(id="precedence")
 
-        # workflow_output_types should be str (explicit), not bool (introspected from ctx)
+        # All types should come from explicit params
+        assert int in exec_instance._handlers
+        assert float in exec_instance.output_types
         assert str in exec_instance.workflow_output_types
+        # Introspected types should NOT be present
         assert bool not in exec_instance.workflow_output_types
 
     def test_handler_with_all_explicit_types(self):
@@ -856,10 +864,10 @@ class TestHandlerExplicitTypes:
         assert bool in exec_instance.workflow_output_types
 
     def test_handler_with_union_workflow_output_type(self):
-        """Test that union types work for workflow_output_type."""
+        """Test that union types work for workflow_output."""
 
         class UnionWorkflowOutputExecutor(Executor):
-            @handler(workflow_output=str | int)
+            @handler(input=str, workflow_output=str | int)
             async def handle(self, message: str, ctx: WorkflowContext) -> None:
                 pass
 

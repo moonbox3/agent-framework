@@ -35,13 +35,15 @@ What this example shows
 
 - Explicit type parameters with @handler:
     Instead of relying on type introspection from function signatures, you can explicitly
-    specify `input` and/or `output` on the @handler decorator. These explicit
-    types take precedence over introspection and support union types (e.g., `str | int`).
+    specify `input`, `output`, and/or `workflow_output` on the @handler decorator.
+    This is "all or nothing": when ANY explicit parameter is provided, ALL types come
+    from explicit parameters (introspection is disabled). The `input` parameter is
+    required; `output` and `workflow_output` are optional.
 
     Examples:
-        @handler(input=str | int)  # Accepts str or int, output from introspection
-        @handler(output=str | int)  # Input from introspection, outputs str or int
-        @handler(input=str, output=int)  # Both explicitly specified
+        @handler(input=str | int)  # Accepts str or int, no outputs
+        @handler(input=str, output=int)  # Accepts str, outputs int
+        @handler(input=str, output=int, workflow_output=bool)  # All three specified
 
 - Fluent WorkflowBuilder API:
     add_edge(A, B) to connect nodes, set_start_executor(A), then build() -> Workflow.
@@ -115,9 +117,10 @@ async def reverse_text(text: str, ctx: WorkflowContext[Never, str]) -> None:
 # Example 3: Using explicit type parameters on @handler
 # -----------------------------------------------------
 #
-# Instead of relying on type introspection, you can explicitly specify input
-# and/or output on the @handler decorator. These take precedence over introspection
-# and support union types (e.g., str | int).
+# Instead of relying on type introspection, you can explicitly specify input,
+# output, and/or workflow_output on the @handler decorator. This is "all or nothing":
+# when ANY explicit parameter is provided, ALL types come from explicit parameters
+# (introspection is completely disabled). The input parameter is required.
 #
 # This is useful when:
 # - You want to accept multiple types (union types) without complex type annotations

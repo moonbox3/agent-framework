@@ -93,7 +93,7 @@ jobs:
         working-directory: python
         run: uv sync --package agent-framework-core --extra openai
 
-      - name: Prepare
+      - name: Pull GitHub MCP server image
         run: docker pull ghcr.io/github/github-mcp-server
 
       - name: Run

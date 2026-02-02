@@ -1,0 +1,118 @@
+name: AI Issue Triage
+
+on:
+  issues:
+    types: [opened]
+  discussion:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      reference:
+        description: 'Reference (e.g., "issue:123" or "discussion:456")'
+        required: true
+        type: string
+      live_mode:
+        description: 'Enable live mode'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: triage-${{ github.event.issue.number || github.event.discussion.number || github.event.inputs.reference }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  discussions: write
+  contents: read
+
+jobs:
+  security-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      reference: ${{ steps.check.outputs.reference }}
+    steps:
+      - name: Validate
+        id: check
+        run: |
+          if [[ "${{ github.actor }}" == *"[bot]"* ]] || [[ "${{ github.event.repository.fork }}" == "true" ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            REF="issue:${{ github.event.issue.number }}"
+          elif [[ "${{ github.event_name }}" == "discussion" ]]; then
+            REF="discussion:${{ github.event.discussion.number }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            REF="${{ github.event.inputs.reference }}"
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if ! [[ "$REF" =~ ^(issue|discussion):[0-9]+$ ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "reference=$REF" >> $GITHUB_OUTPUT
+
+  triage:
+    needs: security-check
+    if: needs.security-check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_CACHE_DIR: /tmp/.uv-cache
+      TRIAGE_LIVE: ${{ github.event.inputs.live_mode || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            python
+            .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Setup
+        run: git clone https://${{ secrets.TRIAGE_BOT_REPO_TOKEN }}@github.com/${{ vars.TRIAGE_BOT_REPO }}.git triage-bot
+        env:
+          GIT_TERMINAL_PROMPT: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "python/**/uv.lock"
+
+      - name: Install
+        working-directory: python
+        run: uv sync --package agent-framework-core --extra openai
+
+      - name: Prepare
+        run: docker pull ghcr.io/github/github-mcp-server
+
+      - name: Run
+        working-directory: python
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_ACTIONS_PR_WRITE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI__APIKEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+          TRIAGE_REFERENCE: ${{ needs.security-check.outputs.reference }}
+          TRIAGE_BOT_PATH: ${{ github.workspace }}/triage-bot
+        run: |
+          echo "::add-mask::$GITHUB_PERSONAL_ACCESS_TOKEN"
+          echo "::add-mask::$OPENAI_API_KEY"
+          uv run python $TRIAGE_BOT_PATH/run.py
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Triage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference:** ${{ needs.security-check.outputs.reference }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

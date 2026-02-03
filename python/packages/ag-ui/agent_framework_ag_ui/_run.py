@@ -461,8 +461,20 @@ def _emit_approval_request(
             "function_arguments": make_json_safe(func_call.parse_arguments()) or {},
             "steps": [{"description": f"Execute {func_name}", "status": "enabled"}],
         }
-        events.append(ToolCallArgsEvent(tool_call_id=confirm_id, delta=json.dumps(args)))
+        args_json = json.dumps(args)
+        events.append(ToolCallArgsEvent(tool_call_id=confirm_id, delta=args_json))
         events.append(ToolCallEndEvent(tool_call_id=confirm_id))
+
+        # Track confirm_changes in pending_tool_calls for MessagesSnapshotEvent
+        # The frontend needs to see this in the snapshot to render the confirmation dialog
+        confirm_entry = {
+            "id": confirm_id,
+            "type": "function",
+            "function": {"name": "confirm_changes", "arguments": args_json},
+        }
+        flow.pending_tool_calls.append(confirm_entry)
+        flow.tool_calls_by_id[confirm_id] = confirm_entry
+        flow.tool_calls_ended.add(confirm_id)  # Mark as ended since we emit End event
 
     flow.waiting_for_approval = True
     return events
@@ -1030,8 +1042,20 @@ async def run_agent_stream(
                             "function_arguments": function_arguments,
                             "steps": [{"description": f"Execute {tool_name}", "status": "enabled"}],
                         }
-                        yield ToolCallArgsEvent(tool_call_id=confirm_id, delta=json.dumps(confirm_args))
+                        confirm_args_json = json.dumps(confirm_args)
+                        yield ToolCallArgsEvent(tool_call_id=confirm_id, delta=confirm_args_json)
                         yield ToolCallEndEvent(tool_call_id=confirm_id)
+
+                        # Track confirm_changes in pending_tool_calls for MessagesSnapshotEvent
+                        # The frontend needs to see this in the snapshot to render the confirmation dialog
+                        confirm_entry = {
+                            "id": confirm_id,
+                            "type": "function",
+                            "function": {"name": "confirm_changes", "arguments": confirm_args_json},
+                        }
+                        flow.pending_tool_calls.append(confirm_entry)
+                        flow.tool_calls_by_id[confirm_id] = confirm_entry
+                        flow.tool_calls_ended.add(confirm_id)  # Mark as ended since we emit End event
                         flow.waiting_for_approval = True
 
     # Close any open message

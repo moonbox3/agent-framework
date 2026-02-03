@@ -452,11 +452,15 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                                 merged_args["steps"] = merged_steps
                         state_args = merged_args
 
-                        # Keep the original tool call and AG-UI snapshot in sync with approved args.
-                        updated_args = (
-                            json.dumps(merged_args) if isinstance(matching_func_call.arguments, str) else merged_args
+                        # Update the ChatMessage tool call with only enabled steps (for LLM context).
+                        # The LLM should only see the steps that were actually approved/executed.
+                        updated_args_for_llm = (
+                            json.dumps(filtered_args) if isinstance(matching_func_call.arguments, str) else filtered_args
                         )
-                        matching_func_call.arguments = updated_args
+                        matching_func_call.arguments = updated_args_for_llm
+
+                        # Update raw messages with all steps + status (for MESSAGES_SNAPSHOT display).
+                        # This allows the UI to show which steps were enabled/disabled.
                         _update_tool_call_arguments(messages, str(approval_call_id), merged_args)
                         # Create a new FunctionCallContent with the modified arguments
                         func_call_for_approval = Content.from_function_call(

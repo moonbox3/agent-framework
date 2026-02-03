@@ -1,0 +1,158 @@
+# Example GitHub Action Workflow for Docs Update Bot
+#
+# Place this file in the PUBLIC repo at:
+#   .github/workflows/docs-update.yml
+#
+# Required Secrets:
+#   - DOCS_BOT_REPO_TOKEN: PAT with access to clone the private docs-bot repo
+#   - GH_ACTIONS_PR_WRITE: PAT with write access to the docs repo
+#   - OPENAI__APIKEY: OpenAI API key (or use Azure OpenAI secrets)
+#
+# Required Variables:
+#   - DOCS_BOT_REPO: The private repo containing the docs-bot code (e.g., "your-org/docs-bot")
+
+name: Docs Update on PR Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to process'
+        required: true
+        type: number
+
+concurrency:
+  group: docs-update-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Security check - skip for bots and forks
+  security-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      pr_title: ${{ steps.check.outputs.pr_title }}
+      pr_url: ${{ steps.check.outputs.pr_url }}
+      merge_sha: ${{ steps.check.outputs.merge_sha }}
+    steps:
+      - name: Validate
+        id: check
+        run: |
+          # Skip for bots and forks
+          if [[ "${{ github.actor }}" == *"[bot]"* ]] || [[ "${{ github.event.repository.fork }}" == "true" ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # For PR merge events
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Only run for merged PRs
+            if [[ "${{ github.event.pull_request.merged }}" != "true" ]]; then
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+            echo "pr_url=${{ github.event.pull_request.html_url }}" >> $GITHUB_OUTPUT
+            echo "merge_sha=${{ github.event.pull_request.merge_commit_sha }}" >> $GITHUB_OUTPUT
+
+          # For manual dispatch
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "pr_number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+            # For manual dispatch, we need to fetch PR details
+            echo "pr_title=Manual trigger for PR #${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+            echo "pr_url=${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+            echo "merge_sha=" >> $GITHUB_OUTPUT
+
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "should_run=true" >> $GITHUB_OUTPUT
+
+  docs-update:
+    needs: security-check
+    if: needs.security-check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_CACHE_DIR: /tmp/.uv-cache
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            python
+          sparse-checkout-cone-mode: false
+
+      - name: Clone docs-bot
+        run: git clone https://${{ secrets.DOCS_BOT_REPO_TOKEN }}@github.com/${{ vars.DOCS_BOT_REPO }}.git docs-bot
+        env:
+          GIT_TERMINAL_PROMPT: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "python/**/uv.lock"
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --package agent-framework-core --extra openai
+
+      - name: Pull GitHub MCP server image
+        run: docker pull ghcr.io/github/github-mcp-server
+
+      - name: Run docs-bot
+        working-directory: python
+        env:
+          # GitHub tokens
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_ACTIONS_PR_WRITE }}
+
+          # LLM configuration
+          OPENAI_API_KEY: ${{ secrets.OPENAI__APIKEY }}
+          # Uncomment for Azure OpenAI:
+          # AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          # AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+
+          # PR information
+          PR_NUMBER: ${{ needs.security-check.outputs.pr_number }}
+          PR_TITLE: ${{ needs.security-check.outputs.pr_title }}
+          PR_URL: ${{ needs.security-check.outputs.pr_url }}
+          MERGE_SHA: ${{ needs.security-check.outputs.merge_sha }}
+
+          # Repository configuration
+          SOURCE_REPO: ${{ github.repository }}
+          DOCS_REPO: microsoftdocs/semantic-kernel-pr
+
+          # Workflow settings
+          CONFIDENCE_THRESHOLD_HIGH: "0.7"
+          CONFIDENCE_THRESHOLD_LOW: "0.4"
+
+          # Path to docs-bot
+          DOCS_BOT_PATH: ${{ github.workspace }}/docs-bot
+        run: |
+          echo "::add-mask::$GITHUB_PERSONAL_ACCESS_TOKEN"
+          echo "::add-mask::$OPENAI_API_KEY"
+          uv run python $DOCS_BOT_PATH/run.py
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Docs Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR Number:** ${{ needs.security-check.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR Title:** ${{ needs.security-check.outputs.pr_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

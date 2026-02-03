@@ -391,6 +391,7 @@ def _emit_tool_result(
     # This handles the case where a TextMessageStartEvent was emitted for tool-only
     # messages (Feature #4) but needs to be closed before starting a new message
     if flow.message_id:
+        logger.info(f"Closing text message (issue #3568 fix): message_id={flow.message_id}")
         events.append(TextMessageEndEvent(message_id=flow.message_id))
     flow.message_id = None  # Reset so next text content starts a new message
 
@@ -920,6 +921,8 @@ async def run_agent_stream(
 
         # Emit events for each content item
         for content in update.contents:
+            content_type = getattr(content, "type", None)
+            logger.debug(f"Processing content type={content_type}, message_id={flow.message_id}")
             for event in _emit_content(
                 content,
                 flow,
@@ -1060,6 +1063,7 @@ async def run_agent_stream(
 
     # Close any open message
     if flow.message_id:
+        logger.info(f"End of run: closing text message message_id={flow.message_id}")
         yield TextMessageEndEvent(message_id=flow.message_id)
 
     # Emit MessagesSnapshotEvent if we have tool calls or results

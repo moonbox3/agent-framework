@@ -5,7 +5,13 @@ from agent_framework import ChatMessage, Content
 from agent_framework_ag_ui._message_adapters import _deduplicate_messages, _sanitize_tool_history
 
 
-def test_sanitize_tool_history_injects_confirm_changes_result() -> None:
+def test_sanitize_tool_history_filters_out_confirm_changes_only_message() -> None:
+    """Test that assistant messages with ONLY confirm_changes are filtered out entirely.
+
+    When an assistant message contains only a confirm_changes tool call (no other tools),
+    the entire message should be filtered out because confirm_changes is a synthetic
+    tool for the approval UI flow that shouldn't be sent to the LLM.
+    """
     messages = [
         ChatMessage(
             role="assistant",
@@ -25,12 +31,17 @@ def test_sanitize_tool_history_injects_confirm_changes_result() -> None:
 
     sanitized = _sanitize_tool_history(messages)
 
+    # Assistant message with only confirm_changes should be filtered out
+    assistant_messages = [
+        msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "assistant"
+    ]
+    assert len(assistant_messages) == 0
+
+    # No synthetic tool result should be injected since confirm_changes was filtered out
     tool_messages = [
         msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "tool"
     ]
-    assert len(tool_messages) == 1
-    assert str(tool_messages[0].contents[0].call_id) == "call_confirm_123"
-    assert tool_messages[0].contents[0].result == "Confirmed"
+    assert len(tool_messages) == 0
 
 
 def test_deduplicate_messages_prefers_non_empty_tool_results() -> None:
@@ -133,22 +144,20 @@ def test_convert_approval_results_preserves_other_user_content() -> None:
     assert messages[2].contents[0].type == "function_result"
 
 
-def test_sanitize_tool_history_multiple_requests_with_confirm_changes() -> None:
-    """Test that confirm_changes is properly handled across multiple requests.
+def test_sanitize_tool_history_filters_confirm_changes_keeps_other_tools() -> None:
+    """Test that confirm_changes is filtered but other tools are preserved.
 
-    This is a regression test for the MCP tool double-call bug. When a second
-    MCP tool call happens after the first one completed, the message history
-    should have proper synthetic results for all confirm_changes calls.
+    When an assistant message contains both a real tool call and confirm_changes,
+    confirm_changes should be filtered out while the real tool call is kept.
+    No synthetic result is injected for confirm_changes since it's filtered.
     """
-    # Simulate history from first request (already completed)
-    # Note: confirm_changes synthetic result might be missing from frontend's snapshot
     messages = [
-        # First request - user asks something
+        # User asks something
         ChatMessage(
             role="user",
             contents=[Content.from_text(text="What time is it?")],
         ),
-        # First request - assistant calls MCP tool + confirm_changes
+        # Assistant calls MCP tool + confirm_changes
         ChatMessage(
             role="assistant",
             contents=[
@@ -156,14 +165,12 @@ def test_sanitize_tool_history_multiple_requests_with_confirm_changes() -> None:
                 Content.from_function_call(call_id="call_c1", name="confirm_changes", arguments="{}"),
             ],
         ),
-        # First request - tool result for the actual MCP tool
+        # Tool result for the actual MCP tool
         ChatMessage(
             role="tool",
             contents=[Content.from_function_result(call_id="call_1", result="2024-01-01 12:00:00")],
         ),
-        # Note: NO tool result for call_c1 (confirm_changes) - this is the bug scenario!
-        # The synthetic was injected in request 1 but not persisted in snapshot
-        # Second request - user asks something else
+        # User asks something else
         ChatMessage(
             role="user",
             contents=[Content.from_text(text="What's the date?")],
@@ -172,14 +179,91 @@ def test_sanitize_tool_history_multiple_requests_with_confirm_changes() -> None:
 
     sanitized = _sanitize_tool_history(messages)
 
-    # After sanitization, call_c1 should have a synthetic result
+    # Find the assistant message
+    assistant_messages = [
+        msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+
+    # Assistant message should only have get_datetime, not confirm_changes
+    function_call_names = [c.name for c in assistant_messages[0].contents if c.type == "function_call"]
+    assert "get_datetime" in function_call_names
+    assert "confirm_changes" not in function_call_names
+
+    # Only one tool message (for call_1), no synthetic for confirm_changes
     tool_messages = [
         msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "tool"
     ]
+    assert len(tool_messages) == 1
+    assert str(tool_messages[0].contents[0].call_id) == "call_1"
 
-    # Should have 2 tool messages: one for call_1 (real) and one for call_c1 (synthetic)
-    assert len(tool_messages) == 2
 
+def test_sanitize_tool_history_filters_confirm_changes_from_assistant_messages() -> None:
+    """Test that confirm_changes is removed from assistant messages sent to LLM.
+
+    This is a regression test for the human-in-the-loop bug where the LLM would see
+    confirm_changes with function_arguments containing the original steps (e.g., 5 steps)
+    even when the user only approved a subset (e.g., 2 steps), causing the LLM to
+    respond with "Here's your 5-step plan" instead of "Here's your 2-step plan".
+    """
+    messages = [
+        ChatMessage(
+            role="user",
+            contents=[Content.from_text(text="Build a robot")],
+        ),
+        # Assistant message with both generate_task_steps and confirm_changes
+        ChatMessage(
+            role="assistant",
+            contents=[
+                Content.from_function_call(
+                    call_id="call_1",
+                    name="generate_task_steps",
+                    arguments='{"steps": [{"description": "Step 1"}, {"description": "Step 2"}]}',
+                ),
+                Content.from_function_call(
+                    call_id="call_c1",
+                    name="confirm_changes",
+                    arguments='{"function_arguments": {"steps": [{"description": "Step 1"}, {"description": "Step 2"}]}}',
+                ),
+            ],
+        ),
+        # Approval response
+        ChatMessage(
+            role="user",
+            contents=[
+                Content.from_function_approval_response(
+                    approved=True,
+                    id="call_1",
+                    function_call=Content.from_function_call(
+                        call_id="call_1",
+                        name="generate_task_steps",
+                        arguments='{"steps": [{"description": "Step 1"}]}',  # Only 1 step approved
+                    ),
+                ),
+            ],
+        ),
+    ]
+
+    sanitized = _sanitize_tool_history(messages)
+
+    # Find the assistant message in sanitized output
+    assistant_messages = [
+        msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "assistant"
+    ]
+
+    assert len(assistant_messages) == 1
+
+    # The assistant message should NOT contain confirm_changes
+    assistant_contents = assistant_messages[0].contents or []
+    function_call_names = [c.name for c in assistant_contents if c.type == "function_call"]
+    assert "generate_task_steps" in function_call_names
+    assert "confirm_changes" not in function_call_names
+
+    # No synthetic tool result for confirm_changes (it was filtered from the message)
+    tool_messages = [
+        msg for msg in sanitized if (msg.role.value if hasattr(msg.role, "value") else str(msg.role)) == "tool"
+    ]
+    # No tool results expected since there are no completed tool calls
+    # (the approval response is handled separately by the framework)
     tool_call_ids = {str(msg.contents[0].call_id) for msg in tool_messages}
-    assert "call_1" in tool_call_ids
-    assert "call_c1" in tool_call_ids
+    assert "call_c1" not in tool_call_ids  # No synthetic result for confirm_changes

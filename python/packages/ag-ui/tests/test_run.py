@@ -2,12 +2,18 @@
 
 """Tests for _run.py helper functions and FlowState."""
 
+from ag_ui.core import (
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+)
 from agent_framework import ChatMessage, Content
 
 from agent_framework_ag_ui._run import (
     FlowState,
     _build_safe_metadata,
     _create_state_context_message,
+    _emit_content,
+    _emit_tool_result,
     _has_only_tool_calls,
     _inject_state_context,
     _should_suppress_intermediate_snapshot,
@@ -356,14 +362,10 @@ def test_emit_tool_call_generates_id():
 def test_emit_tool_result_closes_open_message():
     """Test _emit_tool_result emits TextMessageEndEvent for open text message.
 
-    This is a regression test for issue #3568 where TEXT_MESSAGE_END was not
+    This is a regression test for where TEXT_MESSAGE_END was not
     emitted when using MCP tools because the message_id was reset without
     closing the message first.
     """
-    from ag_ui.core import TextMessageEndEvent
-
-    from agent_framework_ag_ui._run import FlowState, _emit_tool_result
-
     flow = FlowState()
     # Simulate an open text message (e.g., from Feature #4 tool-only detection)
     flow.message_id = "open-msg-123"
@@ -387,10 +389,6 @@ def test_emit_tool_result_closes_open_message():
 
 def test_emit_tool_result_no_open_message():
     """Test _emit_tool_result works when there's no open text message."""
-    from ag_ui.core import TextMessageEndEvent
-
-    from agent_framework_ag_ui._run import FlowState, _emit_tool_result
-
     flow = FlowState()
     # No open message
     flow.message_id = None
@@ -563,3 +561,128 @@ def test_malformed_json_in_confirm_args_skips_confirmation():
 
     assert should_skip_confirmation is False
     assert function_arguments == {"content": "hello"}
+
+
+class TestTextMessageEventBalancing:
+    """Tests for proper TEXT_MESSAGE_START/END event balancing.
+
+    These tests verify that the streaming flow produces balanced pairs of
+    TextMessageStartEvent and TextMessageEndEvent, especially when tool
+    execution is involved.
+    """
+
+    def test_tool_only_flow_produces_balanced_events(self):
+        """Test that a tool-only response produces balanced TEXT_MESSAGE events.
+
+        This simulates the scenario where the LLM immediately calls a tool
+        without any initial text, then returns text after the tool result.
+        """
+        flow = FlowState()
+        all_events: list = []
+
+        # Step 1: LLM outputs function_call only (no text)
+        func_call_content = Content.from_function_call(
+            call_id="call_weather",
+            name="get_weather",
+            arguments='{"city": "Seattle"}',
+        )
+
+        # Feature #4 check: this should trigger TextMessageStartEvent
+        contents = [func_call_content]
+        if not flow.message_id and _has_only_tool_calls(contents):
+            flow.message_id = "tool-msg-1"
+            all_events.append(TextMessageStartEvent(message_id=flow.message_id, role="assistant"))
+
+        # Emit tool call events
+        all_events.extend(_emit_content(func_call_content, flow))
+
+        # Step 2: Tool executes and returns result
+        func_result_content = Content.from_function_result(
+            call_id="call_weather",
+            result='{"temp": 55, "conditions": "rainy"}',
+        )
+
+        # This should close the text message
+        all_events.extend(_emit_tool_result(func_result_content, flow))
+
+        # Verify message_id was reset
+        assert flow.message_id is None, "message_id should be reset after tool result"
+
+        # Step 3: LLM outputs text response
+        text_content = Content.from_text("The weather in Seattle is 55°F and rainy.")
+
+        # Since message_id is None, _emit_text should create a new one
+        for event in _emit_content(text_content, flow):
+            all_events.append(event)
+
+        # Step 4: End of stream - emit final TextMessageEndEvent
+        if flow.message_id:
+            all_events.append(TextMessageEndEvent(message_id=flow.message_id))
+
+        # Verify event counts
+        start_events = [e for e in all_events if isinstance(e, TextMessageStartEvent)]
+        end_events = [e for e in all_events if isinstance(e, TextMessageEndEvent)]
+
+        # Should have 2 TextMessageStartEvent and 2 TextMessageEndEvent
+        assert len(start_events) == 2, f"Expected 2 start events, got {len(start_events)}"
+        assert len(end_events) == 2, f"Expected 2 end events, got {len(end_events)}"
+
+        # Verify order: first message should start and end before second starts
+        # Find indices
+        start_indices = [i for i, e in enumerate(all_events) if isinstance(e, TextMessageStartEvent)]
+        end_indices = [i for i, e in enumerate(all_events) if isinstance(e, TextMessageEndEvent)]
+
+        # First end should come before second start
+        assert end_indices[0] < start_indices[1], (
+            f"First TextMessageEndEvent (index {end_indices[0]}) should come "
+            f"before second TextMessageStartEvent (index {start_indices[1]})"
+        )
+
+    def test_text_then_tool_flow(self):
+        """Test flow where LLM outputs text first, then calls a tool.
+
+        This simulates: "Let me check the weather..." -> tool call -> tool result -> "The weather is..."
+        """
+        flow = FlowState()
+        all_events: list = []
+
+        # Step 1: LLM outputs text first
+        text1 = Content.from_text("Let me check the weather for you.")
+        all_events.extend(_emit_content(text1, flow))
+
+        # Verify message_id is set
+        assert flow.message_id is not None, "message_id should be set after text"
+        first_msg_id = flow.message_id
+
+        # Step 2: LLM outputs function_call
+        func_call = Content.from_function_call(
+            call_id="call_1",
+            name="get_weather",
+            arguments="{}",
+        )
+        all_events.extend(_emit_content(func_call, flow))
+
+        # Step 3: Tool result comes back
+        func_result = Content.from_function_result(call_id="call_1", result="sunny")
+        all_events.extend(_emit_tool_result(func_result, flow))
+
+        # Verify message_id was reset and first message was closed
+        assert flow.message_id is None
+        end_events_so_far = [e for e in all_events if isinstance(e, TextMessageEndEvent)]
+        assert len(end_events_so_far) == 1
+        assert end_events_so_far[0].message_id == first_msg_id
+
+        # Step 4: LLM outputs follow-up text
+        text2 = Content.from_text("The weather is sunny!")
+        all_events.extend(_emit_content(text2, flow))
+
+        # Step 5: End of stream
+        if flow.message_id:
+            all_events.append(TextMessageEndEvent(message_id=flow.message_id))
+
+        # Verify balance
+        start_events = [e for e in all_events if isinstance(e, TextMessageStartEvent)]
+        end_events = [e for e in all_events if isinstance(e, TextMessageEndEvent)]
+
+        assert len(start_events) == 2
+        assert len(end_events) == 2

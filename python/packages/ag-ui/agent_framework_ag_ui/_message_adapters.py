@@ -45,7 +45,32 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                     confirm_changes_call = content
                     break
 
-            sanitized.append(msg)
+            # Filter out confirm_changes from assistant messages before sending to LLM.
+            # confirm_changes is a synthetic tool for the approval UI flow - the LLM shouldn't
+            # see it because it may contain stale function_arguments that confuse the model
+            # (e.g., showing 5 steps when only 2 were approved).
+            # When we filter out confirm_changes, we also remove it from tool_ids and don't
+            # set pending_confirm_changes_id, so no synthetic result is injected for it.
+            # This is required because OpenAI validates that every tool result has a matching
+            # tool call in the previous assistant message.
+            if confirm_changes_call:
+                filtered_contents = [
+                    c for c in (msg.contents or []) if not (c.type == "function_call" and c.name == "confirm_changes")
+                ]
+                if filtered_contents:
+                    # Create a new message without confirm_changes
+                    msg = ChatMessage(role=msg.role, contents=filtered_contents)
+                    sanitized.append(msg)
+                # If no contents left after filtering, don't append anything
+
+                # Remove confirm_changes from tool_ids since we filtered it from the message
+                if confirm_changes_call.call_id:
+                    tool_ids.discard(str(confirm_changes_call.call_id))
+                # Don't set pending_confirm_changes_id - we don't want a synthetic result
+                confirm_changes_call = None
+            else:
+                sanitized.append(msg)
+
             pending_tool_call_ids = tool_ids if tool_ids else None
             pending_confirm_changes_id = (
                 str(confirm_changes_call.call_id) if confirm_changes_call and confirm_changes_call.call_id else None
@@ -455,7 +480,9 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Cha
                         # Update the ChatMessage tool call with only enabled steps (for LLM context).
                         # The LLM should only see the steps that were actually approved/executed.
                         updated_args_for_llm = (
-                            json.dumps(filtered_args) if isinstance(matching_func_call.arguments, str) else filtered_args
+                            json.dumps(filtered_args)
+                            if isinstance(matching_func_call.arguments, str)
+                            else filtered_args
                         )
                         matching_func_call.arguments = updated_args_for_llm
 

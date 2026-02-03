@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import pytest
+from typing_extensions import Never
 
 from agent_framework import (
     ChatMessage,
@@ -210,7 +211,6 @@ async def test_executor_completed_event_contains_sent_messages():
 
 async def test_executor_completed_event_includes_yielded_outputs():
     """Test that ExecutorCompletedEvent.data includes yielded outputs."""
-    from typing_extensions import Never
 
     from agent_framework import WorkflowOutputEvent
 
@@ -341,7 +341,6 @@ def test_executor_output_types_property():
 
 def test_executor_workflow_output_types_property():
     """Test that the workflow_output_types property correctly identifies workflow output types."""
-    from typing_extensions import Never
 
     # Test executor with no workflow output types
     class NoWorkflowOutputExecutor(Executor):

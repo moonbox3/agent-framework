@@ -213,7 +213,9 @@ def response_handler(
     ) -> Callable[[ExecutorT, Any, Any, ContextT], Awaitable[None]]:
         # Check if ANY explicit type parameter was provided - if so, use ONLY explicit params.
         # This is "all or nothing" - no mixing of explicit params with introspection.
-        use_explicit_types = request is not None or response is not None or output is not None or workflow_output is not None
+        use_explicit_types = (
+            request is not None or response is not None or output is not None or workflow_output is not None
+        )
 
         if use_explicit_types:
             # Resolve string forward references using the function's globals
@@ -348,7 +350,9 @@ def _validate_response_handler_signature(
     else:
         output_types, workflow_output_types = [], []
 
-    request_type = original_request_param.annotation if original_request_param.annotation != inspect.Parameter.empty else None
+    request_type = (
+        original_request_param.annotation if original_request_param.annotation != inspect.Parameter.empty else None
+    )
     response_type = response_param.annotation if response_param.annotation != inspect.Parameter.empty else None
     ctx_annotation = ctx_param.annotation if ctx_param.annotation != inspect.Parameter.empty else None
 

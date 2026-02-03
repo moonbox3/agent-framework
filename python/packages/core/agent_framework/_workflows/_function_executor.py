@@ -48,24 +48,24 @@ class FunctionExecutor(Executor):
         func: Callable[..., Any],
         id: str | None = None,
         *,
-        input_type: type | types.UnionType | str | None = None,
-        output_type: type | types.UnionType | str | None = None,
-        workflow_output_type: type | types.UnionType | str | None = None,
+        input: type | types.UnionType | str | None = None,
+        output: type | types.UnionType | str | None = None,
+        workflow_output: type | types.UnionType | str | None = None,
     ):
         """Initialize the FunctionExecutor with a user-defined function.
 
         Args:
             func: The function to wrap as an executor (can be sync or async)
             id: Optional executor ID. If None, uses the function name.
-            input_type: Optional explicit input type(s) for this executor. Supports union types
+            input: Optional explicit input type(s) for this executor. Supports union types
                 (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
                 When provided, takes precedence over introspection from the function's message
                 parameter annotation.
-            output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
+            output: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
                 Supports union types (e.g., ``str | int``) and string forward references.
                 When provided, takes precedence over introspection from the ``WorkflowContext``
                 first generic parameter (T_Out).
-            workflow_output_type: Optional explicit output type(s) that can be yielded via
+            workflow_output: Optional explicit output type(s) that can be yielded via
                 ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
                 forward references. When provided, takes precedence over introspection from the
                 ``WorkflowContext`` second generic parameter (T_W_Out).
@@ -83,14 +83,10 @@ class FunctionExecutor(Executor):
             )
 
         # Resolve string forward references using the function's globals
-        resolved_input_type = resolve_type_annotation(input_type, func.__globals__) if input_type is not None else None
-        resolved_output_type = (
-            resolve_type_annotation(output_type, func.__globals__) if output_type is not None else None
-        )
+        resolved_input_type = resolve_type_annotation(input, func.__globals__) if input is not None else None
+        resolved_output_type = resolve_type_annotation(output, func.__globals__) if output is not None else None
         resolved_workflow_output_type = (
-            resolve_type_annotation(workflow_output_type, func.__globals__)
-            if workflow_output_type is not None
-            else None
+            resolve_type_annotation(workflow_output, func.__globals__) if workflow_output is not None else None
         )
 
         # Validate function signature and extract types
@@ -185,9 +181,9 @@ def executor(func: Callable[..., Any]) -> FunctionExecutor: ...
 def executor(
     *,
     id: str | None = None,
-    input_type: type | types.UnionType | str | None = None,
-    output_type: type | types.UnionType | str | None = None,
-    workflow_output_type: type | types.UnionType | str | None = None,
+    input: type | types.UnionType | str | None = None,
+    output: type | types.UnionType | str | None = None,
+    workflow_output: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor]: ...
 
 
@@ -195,9 +191,9 @@ def executor(
     func: Callable[..., Any] | None = None,
     *,
     id: str | None = None,
-    input_type: type | types.UnionType | str | None = None,
-    output_type: type | types.UnionType | str | None = None,
-    workflow_output_type: type | types.UnionType | str | None = None,
+    input: type | types.UnionType | str | None = None,
+    output: type | types.UnionType | str | None = None,
+    workflow_output: type | types.UnionType | str | None = None,
 ) -> Callable[[Callable[..., Any]], FunctionExecutor] | FunctionExecutor:
     """Decorator that converts a standalone function into a FunctionExecutor instance.
 
@@ -229,21 +225,22 @@ def executor(
 
 
         # Using explicit types (takes precedence over introspection):
-        @executor(id="my_executor", input_type=str | int, output_type=bool)
-        async def process(message: Any, ctx: WorkflowContext):
+        # Note: No type annotations on function parameters when using explicit types
+        @executor(id="my_executor", input=str | int, output=bool)
+        async def process(message, ctx):
             await ctx.send_message(True)
 
 
         # Using string forward references:
-        @executor(input_type="MyCustomType | int", output_type="ResponseType")
-        async def process(message: Any, ctx: WorkflowContext): ...
+        @executor(input="MyCustomType | int", output="ResponseType")
+        async def process(message, ctx): ...
 
 
         # Specifying both output types (send_message and yield_output):
-        @executor(input_type=str, output_type=int, workflow_output_type=bool)
-        async def process(message: Any, ctx: WorkflowContext):
-            await ctx.send_message(42)  # int - matches output_type
-            await ctx.yield_output(True)  # bool - matches workflow_output_type
+        @executor(input=str, output=int, workflow_output=bool)
+        async def process(message, ctx):
+            await ctx.send_message(42)  # int - matches output
+            await ctx.yield_output(True)  # bool - matches workflow_output
 
 
         # For class-based executors, use @handler instead:
@@ -258,15 +255,15 @@ def executor(
     Args:
         func: The function to decorate (when used without parentheses)
         id: Optional custom ID for the executor. If None, uses the function name.
-        input_type: Optional explicit input type(s) for this executor. Supports union types
+        input: Optional explicit input type(s) for this executor. Supports union types
             (e.g., ``str | int``) and string forward references (e.g., ``"MyType | int"``).
             When provided, takes precedence over introspection from the function's message
             parameter annotation.
-        output_type: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
+        output: Optional explicit output type(s) that can be sent via ``ctx.send_message()``.
             Supports union types (e.g., ``str | int``) and string forward references.
             When provided, takes precedence over introspection from the ``WorkflowContext``
             first generic parameter (T_Out).
-        workflow_output_type: Optional explicit output type(s) that can be yielded via
+        workflow_output: Optional explicit output type(s) that can be yielded via
             ``ctx.yield_output()``. Supports union types (e.g., ``str | int``) and string
             forward references. When provided, takes precedence over introspection from the
             ``WorkflowContext`` second generic parameter (T_W_Out).
@@ -279,9 +276,7 @@ def executor(
     """
 
     def wrapper(func: Callable[..., Any]) -> FunctionExecutor:
-        return FunctionExecutor(
-            func, id=id, input_type=input_type, output_type=output_type, workflow_output_type=workflow_output_type
-        )
+        return FunctionExecutor(func, id=id, input=input, output=output, workflow_output=workflow_output)
 
     # If func is provided, this means @executor was used without parentheses
     if func is not None:
@@ -306,7 +301,7 @@ def _validate_function_signature(
     Args:
         func: The function to validate
         skip_message_annotation: If True, skip validation that message parameter has a type
-            annotation. Used when input_type is explicitly provided to the @executor decorator.
+            annotation. Used when input is explicitly provided to the @executor decorator.
 
     Returns:
         Tuple of (message_type, ctx_annotation, output_types, workflow_output_types).

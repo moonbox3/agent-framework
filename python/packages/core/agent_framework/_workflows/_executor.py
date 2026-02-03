@@ -349,13 +349,7 @@ class Executor(RequestInfoMixin, DictConvertible):
                 self._handlers[message_type] = bound_method
 
                 # Add to unified handler specs list
-                self._handler_specs.append({
-                    "name": handler_spec["name"],
-                    "message_type": message_type,
-                    "output_types": handler_spec.get("output_types", []),
-                    "workflow_output_types": handler_spec.get("workflow_output_types", []),
-                    "ctx_annotation": handler_spec.get("ctx_annotation"),
-                })
+                self._handler_specs.append({**handler_spec})
 
     def can_handle(self, message: Message) -> bool:
         """Check if the executor can handle a given message type.
@@ -595,18 +589,19 @@ def handler(
 
 
             # Mode 2: Explicit types - ALL types from decorator params
+            # Note: No type annotations on function parameters when using explicit types
             @handler(input=str | int, output=bool)
-            async def handle_data(self, message: Any, ctx: WorkflowContext) -> None: ...
+            async def handle_data(self, message, ctx): ...
 
 
             # Explicit with string forward references
             @handler(input="MyCustomType | int", output="ResponseType")
-            async def handle_custom(self, message: Any, ctx: WorkflowContext) -> None: ...
+            async def handle_custom(self, message, ctx): ...
 
 
             # Explicit with all three type parameters
             @handler(input=str, output=int, workflow_output=bool)
-            async def handle_full(self, message: Any, ctx: WorkflowContext) -> None:
+            async def handle_full(self, message, ctx):
                 await ctx.send_message(42)  # int - matches output
                 await ctx.yield_output(True)  # bool - matches workflow_output
     """

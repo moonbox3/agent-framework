@@ -565,7 +565,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_input_type(self):
         """Test that explicit input_type takes precedence over introspection."""
 
-        @executor(input_type=str)
+        @executor(input=str)
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -581,7 +581,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_output_type(self):
         """Test that explicit output_type takes precedence over introspection."""
 
-        @executor(output_type=int)
+        @executor(output=int)
         async def process(message: str, ctx: WorkflowContext[str]) -> None:
             pass
 
@@ -596,7 +596,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_input_and_output_types(self):
         """Test that both explicit input_type and output_type work together."""
 
-        @executor(id="explicit_both", input_type=dict, output_type=list)
+        @executor(id="explicit_both", input=dict, output=list)
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -615,7 +615,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_union_input_type(self):
         """Test that explicit union input_type is handled correctly."""
 
-        @executor(input_type=str | int)
+        @executor(input=str | int)
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -631,7 +631,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_union_output_type(self):
         """Test that explicit union output_type is normalized to a list."""
 
-        @executor(output_type=str | int | bool)
+        @executor(output=str | int | bool)
         async def process(message: Any, ctx: WorkflowContext) -> None:
             pass
 
@@ -643,7 +643,7 @@ class TestExecutorExplicitTypes:
 
         # Introspection would give: input=str, output=[int]
         # Explicit gives: input=bytes, output=[float]
-        @executor(input_type=bytes, output_type=float)
+        @executor(input=bytes, output=float)
         async def process(message: str, ctx: WorkflowContext[int]) -> None:
             pass
 
@@ -670,7 +670,7 @@ class TestExecutorExplicitTypes:
         """Test that partial explicit types work (only input_type or only output_type)."""
 
         # Only explicit input_type, introspect output_type
-        @executor(input_type=bytes)
+        @executor(input=bytes)
         async def process_input(message: str, ctx: WorkflowContext[int]) -> None:
             pass
 
@@ -678,7 +678,7 @@ class TestExecutorExplicitTypes:
         assert int in process_input.output_types  # Introspected
 
         # Only explicit output_type, introspect input_type
-        @executor(output_type=float)
+        @executor(output=float)
         async def process_output(message: str, ctx: WorkflowContext[int]) -> None:
             pass
 
@@ -689,7 +689,7 @@ class TestExecutorExplicitTypes:
     def test_executor_explicit_input_type_allows_no_message_annotation(self):
         """Test that explicit input_type allows function without message type annotation."""
 
-        @executor(input_type=str)
+        @executor(input=str)
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -700,7 +700,7 @@ class TestExecutorExplicitTypes:
     def test_executor_explicit_types_with_id(self):
         """Test that explicit types work together with id parameter."""
 
-        @executor(id="custom_id", input_type=bytes, output_type=int)
+        @executor(id="custom_id", input=bytes, output=int)
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -711,7 +711,7 @@ class TestExecutorExplicitTypes:
     def test_executor_explicit_types_with_single_param_function(self):
         """Test that explicit input_type works with single-parameter functions."""
 
-        @executor(input_type=str)
+        @executor(input=str)
         async def process(message):  # type: ignore[no-untyped-def]
             return message.upper()
 
@@ -723,7 +723,7 @@ class TestExecutorExplicitTypes:
     def test_executor_explicit_types_with_sync_function(self):
         """Test that explicit types work with synchronous functions."""
 
-        @executor(input_type=int, output_type=str)
+        @executor(input=int, output=str)
         def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -736,7 +736,7 @@ class TestExecutorExplicitTypes:
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
-        func_exec = FunctionExecutor(process, id="test", input_type=dict, output_type=list)
+        func_exec = FunctionExecutor(process, id="test", input=dict, output=list)
 
         assert dict in func_exec._handlers
         spec = func_exec._handler_specs[0]
@@ -747,7 +747,7 @@ class TestExecutorExplicitTypes:
         """Test that Union[] syntax also works for explicit types."""
         from typing import Union
 
-        @executor(input_type=Union[str, int], output_type=Union[bool, float])
+        @executor(input=Union[str, int], output=Union[bool, float])
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -761,7 +761,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_string_forward_reference_input_type(self):
         """Test that string forward references work for input_type."""
 
-        @executor(input_type="FuncExecForwardRefMessage")
+        @executor(input="FuncExecForwardRefMessage")
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -772,7 +772,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_string_forward_reference_union(self):
         """Test that string forward references work with union types."""
 
-        @executor(input_type="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
+        @executor(input="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -783,7 +783,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_string_forward_reference_output_type(self):
         """Test that string forward references work for output_type."""
 
-        @executor(input_type=str, output_type="FuncExecForwardRefResponse")
+        @executor(input=str, output="FuncExecForwardRefResponse")
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -793,7 +793,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_workflow_output_type(self):
         """Test that explicit workflow_output_type takes precedence over introspection."""
 
-        @executor(workflow_output_type=bool)
+        @executor(workflow_output=bool)
         async def process(message: str, ctx: WorkflowContext[int]) -> None:
             pass
 
@@ -809,7 +809,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_explicit_workflow_output_type_precedence(self):
         """Test that explicit workflow_output_type overrides introspected WorkflowContext second param."""
 
-        @executor(workflow_output_type=str)
+        @executor(workflow_output=str)
         async def process(message: int, ctx: WorkflowContext[int, bool]) -> None:
             pass
 
@@ -821,7 +821,7 @@ class TestExecutorExplicitTypes:
         """Test that all three explicit type parameters work together."""
         from typing import Any
 
-        @executor(input_type=str, output_type=int, workflow_output_type=bool)
+        @executor(input=str, output=int, workflow_output=bool)
         async def process(message: Any, ctx: WorkflowContext) -> None:
             pass
 
@@ -838,7 +838,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_union_workflow_output_type(self):
         """Test that union types work for workflow_output_type."""
 
-        @executor(workflow_output_type=str | int)
+        @executor(workflow_output=str | int)
         async def process(message: str, ctx: WorkflowContext) -> None:
             pass
 
@@ -849,7 +849,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_string_forward_reference_workflow_output_type(self):
         """Test that string forward references work for workflow_output_type."""
 
-        @executor(input_type=str, workflow_output_type="FuncExecForwardRefResponse")
+        @executor(input=str, workflow_output="FuncExecForwardRefResponse")
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -859,7 +859,7 @@ class TestExecutorExplicitTypes:
     def test_executor_with_string_forward_reference_union_workflow_output_type(self):
         """Test that string forward reference union types work for workflow_output_type."""
 
-        @executor(input_type=str, workflow_output_type="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
+        @executor(input=str, workflow_output="FuncExecForwardRefTypeA | FuncExecForwardRefTypeB")
         async def process(message, ctx: WorkflowContext) -> None:  # type: ignore[no-untyped-def]
             pass
 
@@ -887,9 +887,9 @@ class TestExecutorExplicitTypes:
         exec_instance = FunctionExecutor(
             my_func,
             id="test_constructor",
-            input_type=str,
-            output_type=int,
-            workflow_output_type=bool,
+            input=str,
+            output=int,
+            workflow_output=bool,
         )
 
         assert str in exec_instance._handlers

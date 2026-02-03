@@ -58,9 +58,9 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                     c for c in (msg.contents or []) if not (c.type == "function_call" and c.name == "confirm_changes")
                 ]
                 if filtered_contents:
-                    # Update the existing message without confirm_changes, preserving metadata
-                    msg.contents = filtered_contents
-                    sanitized.append(msg)
+                    # Create a new message without confirm_changes to avoid mutating the input
+                    filtered_msg = ChatMessage(role=msg.role, contents=filtered_contents)
+                    sanitized.append(filtered_msg)
                 # If no contents left after filtering, don't append anything
 
                 # Remove confirm_changes from tool_ids since we filtered it from the message
@@ -119,6 +119,8 @@ def _sanitize_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
                         user_text = content.text  # type: ignore[assignment]
                         break
 
+                if not user_text:
+                    continue
                 try:
                     parsed = json.loads(user_text)  # type: ignore[arg-type]
                     if "accepted" in parsed:

@@ -128,20 +128,21 @@ def test_convert_approval_results_preserves_other_user_content() -> None:
 
     _convert_approval_results_to_tool_messages(messages)
 
-    # Should have 3 messages now: assistant, user (with text), tool (with result)
+    # Should have 3 messages now: assistant, tool (with result), user (with text)
+    # OpenAI requires tool messages immediately after the assistant message with the tool call
     assert len(messages) == 3
 
     # First message unchanged
     assert messages[0].role.value == "assistant"
 
-    # Second message should be user with just text
-    assert messages[1].role.value == "user"
-    assert len(messages[1].contents) == 1
-    assert messages[1].contents[0].type == "text"
+    # Second message should be tool with result (must come right after assistant per OpenAI requirements)
+    assert messages[1].role.value == "tool"
+    assert messages[1].contents[0].type == "function_result"
 
-    # Third message should be tool with result
-    assert messages[2].role.value == "tool"
-    assert messages[2].contents[0].type == "function_result"
+    # Third message should be user with just text
+    assert messages[2].role.value == "user"
+    assert len(messages[2].contents) == 1
+    assert messages[2].contents[0].type == "text"
 
 
 def test_sanitize_tool_history_filters_confirm_changes_keeps_other_tools() -> None:

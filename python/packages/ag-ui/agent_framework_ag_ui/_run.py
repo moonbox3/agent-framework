@@ -516,7 +516,7 @@ def _is_confirm_changes_response(messages: list[Any]) -> bool:
 
     # Parse the content to check if it has the confirm_changes structure
     for content in last.contents:
-        if getattr(content, "type", None) == "text":
+        if getattr(content, "type", None) == "text" and content.text:
             try:
                 result = json.loads(content.text)
                 # confirm_changes results have 'accepted' and 'steps' keys
@@ -536,31 +536,34 @@ def _handle_step_based_approval(messages: list[Any]) -> list[BaseEvent]:
     # Parse the approval content
     approval_text = ""
     for content in last.contents:
-        if getattr(content, "type", None) == "text":
+        if getattr(content, "type", None) == "text" and content.text:
             approval_text = content.text
             break
 
-    try:
-        result = json.loads(approval_text)
-        accepted = result.get("accepted", False)
-        steps = result.get("steps", [])
-
-        if accepted:
-            # Generate acceptance message with step descriptions
-            enabled_steps = [s for s in steps if s.get("status") == "enabled"]
-            if enabled_steps:
-                message_parts = [f"Executing {len(enabled_steps)} approved steps:\n\n"]
-                for i, step in enumerate(enabled_steps, 1):
-                    message_parts.append(f"{i}. {step.get('description', 'Step')}\n")
-                message_parts.append("\nAll steps completed successfully!")
-                message = "".join(message_parts)
-            else:
-                message = "Changes confirmed and applied successfully!"
-        else:
-            # Rejection message
-            message = "No problem! What would you like me to change about the plan?"
-    except json.JSONDecodeError:
+    if not approval_text:
         message = "Acknowledged."
+    else:
+        try:
+            result = json.loads(approval_text)
+            accepted = result.get("accepted", False)
+            steps = result.get("steps", [])
+
+            if accepted:
+                # Generate acceptance message with step descriptions
+                enabled_steps = [s for s in steps if s.get("status") == "enabled"]
+                if enabled_steps:
+                    message_parts = [f"Executing {len(enabled_steps)} approved steps:\n\n"]
+                    for i, step in enumerate(enabled_steps, 1):
+                        message_parts.append(f"{i}. {step.get('description', 'Step')}\n")
+                    message_parts.append("\nAll steps completed successfully!")
+                    message = "".join(message_parts)
+                else:
+                    message = "Changes confirmed and applied successfully!"
+            else:
+                # Rejection message
+                message = "No problem! What would you like me to change about the plan?"
+        except json.JSONDecodeError:
+            message = "Acknowledged."
 
     message_id = generate_event_id()
     events.append(TextMessageStartEvent(message_id=message_id, role="assistant"))
@@ -661,56 +664,33 @@ def _convert_approval_results_to_tool_messages(messages: list[Any]) -> None:
     Args:
         messages: List of ChatMessage objects to process
     """
-    i = 0
-    while i < len(messages):
-        msg = messages[i]
-        role_value = get_role_value(msg)
+    result: list[Any] = []
 
-        if role_value != "user":
-            i += 1
+    for msg in messages:
+        if get_role_value(msg) != "user":
+            result.append(msg)
             continue
 
-        # Check if this user message has function_result content
-        function_results: list[Content] = []
-        other_contents: list[Any] = []
-
-        for content in msg.contents or []:
-            if getattr(content, "type", None) == "function_result":
-                function_results.append(content)
-            else:
-                other_contents.append(content)
+        function_results = [c for c in (msg.contents or []) if getattr(c, "type", None) == "function_result"]
+        other_contents = [c for c in (msg.contents or []) if getattr(c, "type", None) != "function_result"]
 
         if not function_results:
-            i += 1
+            result.append(msg)
             continue
 
-        # We have function results in a user message - need to fix this
         logger.info(
             f"Converting {len(function_results)} function_result content(s) from user message to tool message(s)"
         )
 
-        # Create tool messages for each function result
-        new_tool_messages = []
+        # Tool messages first (right after the preceding assistant message per OpenAI requirements)
         for func_result in function_results:
-            tool_msg = ChatMessage(
-                role="tool",
-                contents=[func_result],
-            )
-            new_tool_messages.append(tool_msg)
+            result.append(ChatMessage(role="tool", contents=[func_result]))
 
+        # Then user message with remaining content (if any)
         if other_contents:
-            # Keep the user message with remaining contents
-            msg.contents = other_contents
-            # Insert tool messages after this user message
-            for j, tool_msg in enumerate(new_tool_messages):
-                messages.insert(i + 1 + j, tool_msg)
-            i += 1 + len(new_tool_messages)
-        else:
-            # No other contents - replace user message with tool messages
-            messages.pop(i)
-            for j, tool_msg in enumerate(new_tool_messages):
-                messages.insert(i + j, tool_msg)
-            i += len(new_tool_messages)
+            result.append(ChatMessage(role=msg.role, contents=other_contents))
+
+    messages[:] = result
 
 
 def _build_messages_snapshot(
@@ -1063,7 +1043,7 @@ async def run_agent_stream(
 
     # Close any open message
     if flow.message_id:
-        logger.info(f"End of run: closing text message message_id={flow.message_id}")
+        logger.debug(f"End of run: closing text message message_id={flow.message_id}")
         yield TextMessageEndEvent(message_id=flow.message_id)
 
     # Emit MessagesSnapshotEvent if we have tool calls or results

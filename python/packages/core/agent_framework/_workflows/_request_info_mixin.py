@@ -9,7 +9,7 @@ import types
 from builtins import type as builtin_type
 from collections.abc import Awaitable, Callable
 from types import UnionType
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from ._typing_utils import is_instance_of, is_type_compatible, normalize_type_to_list, resolve_type_annotation
 from ._workflow_context import WorkflowContext, validate_workflow_context_annotation
@@ -255,9 +255,16 @@ def response_handler(
                 ctx_annotation = None
         else:
             # Use introspection - all types from annotations
-            final_request_type, final_response_type, ctx_annotation, final_output_types, final_workflow_output_types = (
-                _validate_response_handler_signature(func)
-            )
+            (
+                inferred_request_type,
+                inferred_response_type,
+                ctx_annotation,
+                final_output_types,
+                final_workflow_output_types,
+            ) = _validate_response_handler_signature(func)
+            # In introspection mode, validation ensures these are not None (raises ValueError if missing)
+            final_request_type = cast(type, inferred_request_type)
+            final_response_type = cast(type, inferred_response_type)
 
         # Get signature for preservation
         sig = inspect.signature(func)

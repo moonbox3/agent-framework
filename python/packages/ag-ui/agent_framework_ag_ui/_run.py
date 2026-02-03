@@ -45,6 +45,7 @@ from ._utils import (
     convert_agui_tools_to_agent_framework,
     generate_event_id,
     get_conversation_id_from_update,
+    get_role_value,
     make_json_safe,
 )
 
@@ -344,7 +345,7 @@ def _emit_tool_result(
     flow: FlowState,
     predictive_handler: PredictiveStateHandler | None = None,
 ) -> list[BaseEvent]:
-    """Emit ToolCallResult events for FunctionResultContent."""
+    """Emit ToolCallResult events for function_result content."""
     events: list[BaseEvent] = []
 
     # Cannot emit tool result without a call_id to associate it with
@@ -385,6 +386,12 @@ def _emit_tool_result(
     # After tool result, any subsequent text should start a new message
     flow.tool_call_id = None
     flow.tool_call_name = None
+
+    # Close any open text message before resetting message_id (issue #3568)
+    # This handles the case where a TextMessageStartEvent was emitted for tool-only
+    # messages (Feature #4) but needs to be closed before starting a new message
+    if flow.message_id:
+        events.append(TextMessageEndEvent(message_id=flow.message_id))
     flow.message_id = None  # Reset so next text content starts a new message
 
     return events
@@ -558,8 +565,8 @@ async def _resolve_approval_responses(
 ) -> None:
     """Execute approved function calls and replace approval content with results.
 
-    This modifies the messages list in place, replacing FunctionApprovalResponseContent
-    with FunctionResultContent containing the actual tool execution result.
+    This modifies the messages list in place, replacing function_approval_response
+    content with function_result content containing the actual tool execution result.
 
     Args:
         messages: List of messages (will be modified in place)
@@ -622,6 +629,76 @@ async def _resolve_approval_responses(
 
     _replace_approval_contents_with_results(messages, fcc_todo, normalized_results)  # type: ignore
 
+    # Post-process: Convert user messages with function_result content to proper tool messages.
+    # After _replace_approval_contents_with_results, approved tool calls have their results
+    # placed in user messages. OpenAI requires tool results to be in role="tool" messages.
+    # This transformation ensures the message history is valid for the LLM provider.
+    _convert_approval_results_to_tool_messages(messages)
+
+
+def _convert_approval_results_to_tool_messages(messages: list[Any]) -> None:
+    """Convert function_result content in user messages to proper tool messages.
+
+    After approval processing, tool results end up in user messages. OpenAI and other
+    providers require tool results to be in role="tool" messages. This function
+    extracts function_result content from user messages and creates proper tool messages.
+
+    This modifies the messages list in place.
+
+    Args:
+        messages: List of ChatMessage objects to process
+    """
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        role_value = get_role_value(msg)
+
+        if role_value != "user":
+            i += 1
+            continue
+
+        # Check if this user message has function_result content
+        function_results: list[Content] = []
+        other_contents: list[Any] = []
+
+        for content in msg.contents or []:
+            if getattr(content, "type", None) == "function_result":
+                function_results.append(content)
+            else:
+                other_contents.append(content)
+
+        if not function_results:
+            i += 1
+            continue
+
+        # We have function results in a user message - need to fix this
+        logger.info(
+            f"Converting {len(function_results)} function_result content(s) from user message to tool message(s)"
+        )
+
+        # Create tool messages for each function result
+        new_tool_messages = []
+        for func_result in function_results:
+            tool_msg = ChatMessage(
+                role="tool",
+                contents=[func_result],
+            )
+            new_tool_messages.append(tool_msg)
+
+        if other_contents:
+            # Keep the user message with remaining contents
+            msg.contents = other_contents
+            # Insert tool messages after this user message
+            for j, tool_msg in enumerate(new_tool_messages):
+                messages.insert(i + 1 + j, tool_msg)
+            i += 1 + len(new_tool_messages)
+        else:
+            # No other contents - replace user message with tool messages
+            messages.pop(i)
+            for j, tool_msg in enumerate(new_tool_messages):
+                messages.insert(i + j, tool_msg)
+            i += len(new_tool_messages)
+
 
 def _build_messages_snapshot(
     flow: FlowState,
@@ -630,25 +707,29 @@ def _build_messages_snapshot(
     """Build MessagesSnapshotEvent from current flow state."""
     all_messages = list(snapshot_messages)
 
-    # Add assistant message with tool calls
+    # Add assistant message with tool calls only (no content)
     if flow.pending_tool_calls:
         tool_call_message = {
             "id": flow.message_id or generate_event_id(),
             "role": "assistant",
             "tool_calls": flow.pending_tool_calls.copy(),
         }
-        if flow.accumulated_text:
-            tool_call_message["content"] = flow.accumulated_text
         all_messages.append(tool_call_message)
 
     # Add tool results
     all_messages.extend(flow.tool_results)
 
-    # Add text-only assistant message if no tool calls
-    if flow.accumulated_text and not flow.pending_tool_calls:
+    # Add text-only assistant message if there is accumulated text
+    # This is a separate message from the tool calls message to maintain
+    # the expected AG-UI protocol format (see issue #3619)
+    if flow.accumulated_text:
+        # Use a new ID for the content message if we had tool calls (separate message)
+        content_message_id = (
+            generate_event_id() if flow.pending_tool_calls else (flow.message_id or generate_event_id())
+        )
         all_messages.append(
             {
-                "id": flow.message_id or generate_event_id(),
+                "id": content_message_id,
                 "role": "assistant",
                 "content": flow.accumulated_text,
             }
@@ -922,6 +1003,20 @@ async def run_agent_stream(
                                     tool_call_id,
                                 )
 
+                        # Parse function arguments - skip confirm_changes if we can't parse
+                        # (we can't ask user to confirm something we can't properly display)
+                        try:
+                            function_arguments = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Failed to decode JSON arguments for confirm_changes tool '%s' "
+                                "(tool_call_id=%s). Skipping confirmation flow - cannot display "
+                                "malformed arguments to user for approval.",
+                                tool_name,
+                                tool_call_id,
+                            )
+                            continue  # Skip to next tool call without emitting confirm_changes
+
                         # Emit confirm_changes tool call
                         confirm_id = generate_event_id()
                         yield ToolCallStartEvent(
@@ -932,7 +1027,7 @@ async def run_agent_stream(
                         confirm_args = {
                             "function_name": tool_name,
                             "function_call_id": tool_call_id,
-                            "function_arguments": json.loads(tool_call.get("function", {}).get("arguments", "{}")),
+                            "function_arguments": function_arguments,
                             "steps": [{"description": f"Execute {tool_name}", "status": "enabled"}],
                         }
                         yield ToolCallArgsEvent(tool_call_id=confirm_id, delta=json.dumps(confirm_args))

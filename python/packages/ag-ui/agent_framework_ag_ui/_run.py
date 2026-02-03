@@ -391,7 +391,7 @@ def _emit_tool_result(
     # This handles the case where a TextMessageStartEvent was emitted for tool-only
     # messages (Feature #4) but needs to be closed before starting a new message
     if flow.message_id:
-        logger.info(f"Closing text message (issue #3568 fix): message_id={flow.message_id}")
+        logger.debug("Closing text message (issue #3568 fix): message_id=%s", flow.message_id)
         events.append(TextMessageEndEvent(message_id=flow.message_id))
     flow.message_id = None  # Reset so next text content starts a new message
 

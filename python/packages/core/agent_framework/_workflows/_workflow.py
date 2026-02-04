@@ -33,7 +33,7 @@ from ._executor import Executor
 from ._model_utils import DictConvertible
 from ._runner import Runner
 from ._runner_context import RunnerContext
-from ._shared_state import SharedState
+from ._state import State
 from ._typing_utils import is_instance_of
 
 logger = logging.getLogger(__name__)
@@ -204,11 +204,11 @@ class Workflow(DictConvertible):
 
         # Store non-serializable runtime objects as private attributes
         self._runner_context = runner_context
-        self._shared_state = SharedState()
+        self._state = State()
         self._runner: Runner = Runner(
             self.edge_groups,
             self.executors,
-            self._shared_state,
+            self._state,
             runner_context,
             max_iterations=max_iterations,
             workflow_id=self.id,
@@ -297,7 +297,7 @@ class Workflow(DictConvertible):
             initial_executor_fn: Optional function to execute initial executor
             reset_context: Whether to reset the context for a new run
             streaming: Whether to enable streaming mode for agents
-            run_kwargs: Optional kwargs to store in SharedState for agent invocations
+            run_kwargs: Optional kwargs to store in State for agent invocations
 
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
@@ -330,11 +330,12 @@ class Workflow(DictConvertible):
                 if reset_context:
                     self._runner.reset_iteration_count()
                     self._runner.context.reset_for_new_run()
-                    await self._shared_state.clear()
+                    self._state.clear()
 
-                # Store run kwargs in SharedState so executors can access them
+                # Store run kwargs in State so executors can access them
                 # Always store (even empty dict) so retrieval is deterministic
-                await self._shared_state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs or {})
+                self._state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs or {})
+                self._state.commit()  # Commit immediately so kwargs are available
 
                 # Set streaming mode after reset
                 self._runner_context.set_streaming(streaming)
@@ -428,7 +429,7 @@ class Workflow(DictConvertible):
             await executor.execute(
                 message,
                 [self.__class__.__name__],
-                self._shared_state,
+                self._state,
                 self._runner.context,
                 trace_contexts=None,
                 source_span_ids=None,
@@ -457,7 +458,7 @@ class Workflow(DictConvertible):
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
             **kwargs: Additional keyword arguments to pass through to agent invocations.
-                     These are stored in SharedState and accessible in @tool functions
+                     These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.
 
         Yields:
@@ -591,7 +592,7 @@ class Workflow(DictConvertible):
                                  build-time configuration
             include_status_events: Whether to include WorkflowStatusEvent instances in the result list.
             **kwargs: Additional keyword arguments to pass through to agent invocations.
-                     These are stored in SharedState and accessible in @tool functions
+                     These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.
 
         Returns:

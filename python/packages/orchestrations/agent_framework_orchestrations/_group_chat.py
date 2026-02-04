@@ -36,7 +36,7 @@ from agent_framework._workflows._base_group_chat_orchestrator import (
     GroupChatParticipantMessage,
     GroupChatRequestMessage,
     GroupChatResponseMessage,
-    GroupChatWorkflowContext_T_Out,
+    GroupChatWorkflowContextOutT,
     ParticipantRegistry,
     TerminationCondition,
 )
@@ -162,7 +162,7 @@ class GroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _handle_messages(
         self,
         messages: list[ChatMessage],
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Initialize orchestrator state and start the conversation loop."""
         self._append_messages(messages)
@@ -188,7 +188,7 @@ class GroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _handle_response(
         self,
         response: AgentExecutorResponse | GroupChatResponseMessage,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handle a participant response."""
         messages = self._process_participant_response(response)
@@ -323,7 +323,7 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _handle_messages(
         self,
         messages: list[ChatMessage],
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Initialize orchestrator state and start the conversation loop."""
         self._append_messages(messages)
@@ -355,7 +355,7 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _handle_response(
         self,
         response: AgentExecutorResponse | GroupChatResponseMessage,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handle a participant response."""
         messages = self._process_participant_response(response)

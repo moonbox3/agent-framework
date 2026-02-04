@@ -57,7 +57,7 @@ class GroupChatResponseMessage:
 
 
 TerminationCondition: TypeAlias = Callable[[list[ChatMessage]], bool | Awaitable[bool]]
-GroupChatWorkflowContext_T_Out: TypeAlias = AgentExecutorRequest | GroupChatRequestMessage | GroupChatParticipantMessage
+GroupChatWorkflowContextOutT: TypeAlias = AgentExecutorRequest | GroupChatRequestMessage | GroupChatParticipantMessage
 
 
 # region Group chat events
@@ -201,7 +201,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def handle_str(
         self,
         task: str,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handler for string input as workflow entry point.
 
@@ -220,7 +220,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def handle_message(
         self,
         task: ChatMessage,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handler for single ChatMessage input as workflow entry point.
 
@@ -239,7 +239,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def handle_messages(
         self,
         task: list[ChatMessage],
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handler for list of ChatMessages as workflow entry point.
 
@@ -262,7 +262,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def handle_participant_response(
         self,
         response: AgentExecutorResponse | GroupChatResponseMessage,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handler for participant responses.
 
@@ -288,7 +288,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def _handle_messages(
         self,
         messages: list[ChatMessage],
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handle task messages from users as workflow entry point.
 
@@ -303,7 +303,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
     async def _handle_response(
         self,
         response: AgentExecutorResponse | GroupChatResponseMessage,
-        ctx: WorkflowContext[GroupChatWorkflowContext_T_Out, list[ChatMessage]],
+        ctx: WorkflowContext[GroupChatWorkflowContextOutT, list[ChatMessage]],
     ) -> None:
         """Handle a participant response.
 

@@ -11,12 +11,10 @@ from agent_framework import (
     ChatMessage,
     GroupChatRequestSentEvent,
     HostedCodeInterpreterTool,
-    MagenticBuilder,
-    MagenticOrchestratorEvent,
-    MagenticProgressLedger,
     WorkflowOutputEvent,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
+from agent_framework.orchestrations import MagenticBuilder, MagenticOrchestratorEvent, MagenticProgressLedger
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)

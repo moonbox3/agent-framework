@@ -3,8 +3,9 @@
 import asyncio
 from typing import Any
 
-from agent_framework import ChatMessage, ConcurrentBuilder
+from agent_framework import ChatMessage
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 """

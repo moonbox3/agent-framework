@@ -9,8 +9,6 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     FileCheckpointStorage,
-    MagenticBuilder,
-    MagenticPlanReviewRequest,
     RequestInfoEvent,
     WorkflowCheckpoint,
     WorkflowOutputEvent,
@@ -18,6 +16,7 @@ from agent_framework import (
     WorkflowStatusEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import MagenticBuilder, MagenticPlanReviewRequest
 from azure.identity._credentials import AzureCliCredential
 
 """

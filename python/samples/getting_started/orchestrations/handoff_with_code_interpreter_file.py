@@ -32,16 +32,13 @@ from contextlib import asynccontextmanager
 from agent_framework import (
     AgentRunUpdateEvent,
     ChatAgent,
-    Content,
-    HandoffAgentUserRequest,
-    HandoffBuilder,
     HostedCodeInterpreterTool,
-    HostedFileContent,
     RequestInfoEvent,
     WorkflowEvent,
     WorkflowRunState,
     WorkflowStatusEvent,
 )
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from azure.identity.aio import AzureCliCredential
 
 # Toggle between V1 (AzureAIAgentClient) and V2 (AzureAIClient)
@@ -72,7 +69,7 @@ def _handle_events(events: list[WorkflowEvent]) -> tuple[list[RequestInfoEvent],
 
         elif isinstance(event, AgentRunUpdateEvent):
             for content in event.data.contents:
-                if isinstance(content, HostedFileContent):
+                if content.type == "hosted_file" and content.file_id:
                     file_ids.append(content.file_id)
                     print(f"[Found HostedFileContent: file_id={content.file_id}]")
                 elif content.type == "text" and content.annotations:

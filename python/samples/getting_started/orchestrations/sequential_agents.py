@@ -3,8 +3,9 @@
 import asyncio
 from typing import cast
 
-from agent_framework import ChatMessage, SequentialBuilder, WorkflowOutputEvent
+from agent_framework import ChatMessage, WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from azure.identity import AzureCliCredential
 
 """

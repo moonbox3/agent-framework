@@ -8,12 +8,12 @@ from agent_framework import (
     AgentExecutorResponse,
     ChatAgent,
     ChatMessage,
-    ConcurrentBuilder,
     Executor,
     WorkflowContext,
     handler,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 """

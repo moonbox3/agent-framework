@@ -9,9 +9,6 @@ from agent_framework import (
     AgentRunEvent,
     ChatAgent,
     ChatMessage,
-    HandoffAgentUserRequest,
-    HandoffBuilder,
-    HandoffSentEvent,
     RequestInfoEvent,
     Workflow,
     WorkflowEvent,
@@ -21,6 +18,7 @@ from agent_framework import (
     tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder, HandoffSentEvent
 from azure.identity import AzureCliCredential
 
 logging.basicConfig(level=logging.ERROR)
@@ -237,9 +235,11 @@ async def main() -> None:
             # Custom termination: Check if the triage agent has provided a closing message.
             # This looks for the last message being from triage_agent and containing "welcome",
             # which indicates the conversation has concluded naturally.
-            lambda conversation: len(conversation) > 0
-            and conversation[-1].author_name == "triage_agent"
-            and "welcome" in conversation[-1].text.lower()
+            lambda conversation: (
+                len(conversation) > 0
+                and conversation[-1].author_name == "triage_agent"
+                and "welcome" in conversation[-1].text.lower()
+            )
         )
     )
 

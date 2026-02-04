@@ -9,13 +9,12 @@ from agent_framework import (
     AgentRunUpdateEvent,
     ChatAgent,
     ChatMessage,
-    HandoffBuilder,
-    HostedWebSearchTool,
     WorkflowEvent,
     WorkflowOutputEvent,
     resolve_agent_id,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import HandoffBuilder
 from azure.identity import AzureCliCredential
 
 logging.basicConfig(level=logging.ERROR)
@@ -62,7 +61,6 @@ def create_agents(
             "coordinator. Keep each individual response focused on one aspect."
         ),
         name="research_agent",
-        tools=[HostedWebSearchTool()],
     )
 
     summary_agent = chat_client.as_agent(
@@ -130,8 +128,7 @@ async def main() -> None:
         )
         .with_termination_condition(
             # Terminate after coordinator provides 5 assistant responses
-            lambda conv: sum(1 for msg in conv if msg.author_name == "coordinator" and msg.role == "assistant")
-            >= 5
+            lambda conv: sum(1 for msg in conv if msg.author_name == "coordinator" and msg.role == "assistant") >= 5
         )
         .build()
     )

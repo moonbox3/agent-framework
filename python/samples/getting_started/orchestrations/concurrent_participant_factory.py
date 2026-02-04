@@ -6,13 +6,13 @@ from typing import Any, Never
 from agent_framework import (
     ChatAgent,
     ChatMessage,
-    ConcurrentBuilder,
     Executor,
     Workflow,
     WorkflowContext,
     handler,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 """

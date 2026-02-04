@@ -8,12 +8,11 @@ from agent_framework import (
     AgentRunUpdateEvent,
     ChatAgent,
     ChatMessage,
-    MagenticBuilder,
-    MagenticPlanReviewRequest,
     RequestInfoEvent,
     WorkflowOutputEvent,
 )
 from agent_framework.openai import OpenAIChatClient
+from agent_framework.orchestrations import MagenticBuilder, MagenticPlanReviewRequest
 
 """
 Sample: Magentic Orchestration with Human Plan Review

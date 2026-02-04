@@ -6,12 +6,12 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     Executor,
-    SequentialBuilder,
     Workflow,
     WorkflowContext,
     handler,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from azure.identity import AzureCliCredential
 
 """

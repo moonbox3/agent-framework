@@ -8,9 +8,6 @@ from agent_framework import (
     AgentRunEvent,
     ChatAgent,
     ChatMessage,
-    HandoffAgentUserRequest,
-    HandoffBuilder,
-    HandoffSentEvent,
     RequestInfoEvent,
     WorkflowEvent,
     WorkflowOutputEvent,
@@ -19,6 +16,7 @@ from agent_framework import (
     tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder, HandoffSentEvent
 from azure.identity import AzureCliCredential
 
 """Sample: Simple handoff workflow.

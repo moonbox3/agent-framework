@@ -6,11 +6,10 @@ from agent_framework import (
     AgentRunUpdateEvent,
     ChatAgent,
     ChatMessage,
-    GroupChatBuilder,
-    GroupChatState,
     WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import GroupChatBuilder, GroupChatState
 from azure.identity import AzureCliCredential
 
 """

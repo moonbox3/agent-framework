@@ -213,7 +213,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-**Note**: Sequential, Concurrent, Group Chat, Handoff, and Magentic orchestrations are available. See examples in [python/samples/getting_started/orchestrations/](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started/orchestrations).
+**Note**: Sequential, Concurrent, Group Chat, Handoff, and Magentic orchestrations are available. See examples in [orchestration samples](../../samples/getting_started/orchestrations).
 
 ## More Examples & Samples
 

@@ -1954,6 +1954,9 @@ def _handle_function_calls_response(
 
                 if response.conversation_id is not None:
                     _update_conversation_id(kwargs, response.conversation_id)
+                    # Also update options dict so subsequent API calls use the new conversation_id
+                    if options is not None:
+                        options["conversation_id"] = response.conversation_id
                     prepped_messages = []
 
                 # we load the tools here, since middleware might have changed them compared to before calling func.
@@ -2160,6 +2163,9 @@ def _handle_function_calls_streaming_response(
                 # In this case, we need to update kwargs with conversation id and also clear messages
                 if response.conversation_id is not None:
                     _update_conversation_id(kwargs, response.conversation_id)
+                    # Also update options dict so subsequent API calls use the new conversation_id
+                    if options is not None:
+                        options["conversation_id"] = response.conversation_id
                     prepped_messages = []
 
                 # we load the tools here, since middleware might have changed them compared to before calling func.

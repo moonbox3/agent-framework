@@ -46,26 +46,34 @@ class State:
             The value if found, otherwise the default value.
         """
         if key in self._pending:
-            return self._pending[key]
+            value = self._pending[key]
+            if value is _DeleteSentinel:
+                return default
+            return value
         return self._committed.get(key, default)
 
     def has(self, key: str) -> bool:
         """Check if a key exists in pending or committed state."""
-        return key in self._pending or key in self._committed
+        if key in self._pending:
+            return self._pending[key] is not _DeleteSentinel
+        return key in self._committed
 
     def delete(self, key: str) -> None:
         """Mark a key for deletion.
 
-        If the key exists in pending, it is removed from pending.
-        If the key exists only in committed, a sentinel is stored in pending
-        to indicate deletion at commit time.
+        If the key exists in committed state, a sentinel is stored in pending
+        to indicate deletion at commit time. If it only exists in pending,
+        it is removed from pending.
         """
-        if key in self._pending:
-            del self._pending[key]
-        elif key in self._committed:
-            self._pending[key] = _DeleteSentinel
-        else:
+        if key not in self._pending and key not in self._committed:
             raise KeyError(f"Key '{key}' not found in state.")
+
+        if key in self._committed:
+            # Mark for deletion from committed state at commit time
+            self._pending[key] = _DeleteSentinel
+        elif key in self._pending:
+            # Only exists in pending, safe to just remove
+            del self._pending[key]
 
     def clear(self) -> None:
         """Clear both committed and pending state."""

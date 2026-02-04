@@ -345,9 +345,9 @@ export function CheckpointInfoModal({
                       </div>
                     )}
 
-                  {/* Shared State */}
+                  {/* Workflow State */}
                   <div>
-                    <div className="text-sm font-medium mb-3">Shared State</div>
+                    <div className="text-sm font-medium mb-3">Workflow State</div>
                     {fullCheckpoint?.state && Object.keys(fullCheckpoint.state).filter(
                       (k) => k !== "_executor_state"
                     ).length > 0 ? (

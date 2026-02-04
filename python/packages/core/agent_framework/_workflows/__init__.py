@@ -102,7 +102,6 @@ from ._runner_context import (
     RunnerContext,
 )
 from ._sequential import SequentialBuilder
-from ._state import State
 from ._validation import (
     EdgeDuplicationError,
     GraphConnectivityError,
@@ -181,7 +180,6 @@ __all__ = [
     "SequentialBuilder",
     "SingleEdgeGroup",
     "StandardMagenticManager",
-    "State",
     "SubWorkflowRequestMessage",
     "SubWorkflowResponseMessage",
     "SuperStepCompletedEvent",

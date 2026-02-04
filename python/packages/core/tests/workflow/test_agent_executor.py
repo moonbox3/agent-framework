@@ -12,13 +12,13 @@ from agent_framework import (
     ChatMessage,
     ChatMessageStore,
     Content,
-    SequentialBuilder,
     WorkflowOutputEvent,
     WorkflowRunState,
     WorkflowStatusEvent,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorResponse
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
+from agent_framework.orchestrations import SequentialBuilder
 
 
 class _CountingAgent(BaseAgent):

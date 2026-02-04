@@ -16,13 +16,13 @@ from agent_framework import (
     ChatMessage,
     Content,
     Executor,
-    SequentialBuilder,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowRunState,
     WorkflowStatusEvent,
     handler,
 )
+from agent_framework.orchestrations import SequentialBuilder
 
 
 class _SimpleAgent(BaseAgent):

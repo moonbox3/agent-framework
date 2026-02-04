@@ -8,7 +8,6 @@ from agent_framework import (
     AgentExecutorResponse,
     AgentResponse,
     ChatMessage,
-    ConcurrentBuilder,
     Executor,
     WorkflowContext,
     WorkflowOutputEvent,
@@ -17,6 +16,7 @@ from agent_framework import (
     handler,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
+from agent_framework.orchestrations import ConcurrentBuilder
 from typing_extensions import Never
 
 

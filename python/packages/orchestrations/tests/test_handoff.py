@@ -11,14 +11,13 @@ from agent_framework import (
     ChatResponse,
     ChatResponseUpdate,
     Content,
-    HandoffAgentUserRequest,
-    HandoffBuilder,
     RequestInfoEvent,
     WorkflowEvent,
     WorkflowOutputEvent,
     resolve_agent_id,
     use_function_invocation,
 )
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 
 
 @use_function_invocation

@@ -17,18 +17,20 @@ from agent_framework import (
     ChatResponse,
     ChatResponseUpdate,
     Content,
-    GroupChatBuilder,
-    GroupChatState,
-    MagenticContext,
-    MagenticManagerBase,
-    MagenticProgressLedger,
-    MagenticProgressLedgerItem,
     RequestInfoEvent,
     WorkflowOutputEvent,
     WorkflowRunState,
     WorkflowStatusEvent,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
+from agent_framework.orchestrations import (
+    GroupChatBuilder,
+    GroupChatState,
+    MagenticContext,
+    MagenticManagerBase,
+    MagenticProgressLedger,
+    MagenticProgressLedgerItem,
+)
 
 
 class StubAgent(BaseAgent):
@@ -1185,7 +1187,7 @@ def test_group_chat_with_orchestrator_factory_returning_base_orchestrator():
         nonlocal factory_call_count
         factory_call_count += 1
         from agent_framework._workflows._base_group_chat_orchestrator import ParticipantRegistry
-        from agent_framework._workflows._group_chat import GroupChatOrchestrator
+        from agent_framework.orchestrations import GroupChatOrchestrator
 
         # Create a custom orchestrator; when returning BaseGroupChatOrchestrator,
         # the builder uses it as-is without modifying its participant registry

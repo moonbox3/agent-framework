@@ -17,16 +17,7 @@ from agent_framework import (
     Content,
     Executor,
     GroupChatRequestMessage,
-    MagenticBuilder,
-    MagenticContext,
-    MagenticManagerBase,
-    MagenticOrchestrator,
-    MagenticOrchestratorEvent,
-    MagenticPlanReviewRequest,
-    MagenticProgressLedger,
-    MagenticProgressLedgerItem,
     RequestInfoEvent,
-    StandardMagenticManager,
     Workflow,
     WorkflowCheckpoint,
     WorkflowCheckpointException,
@@ -38,6 +29,17 @@ from agent_framework import (
     handler,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
+from agent_framework.orchestrations import (
+    MagenticBuilder,
+    MagenticContext,
+    MagenticManagerBase,
+    MagenticOrchestrator,
+    MagenticOrchestratorEvent,
+    MagenticPlanReviewRequest,
+    MagenticProgressLedger,
+    MagenticProgressLedgerItem,
+    StandardMagenticManager,
+)
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -1243,7 +1245,7 @@ def test_magentic_agent_factory_with_standard_manager_options():
     custom_final_prompt = "Custom final: {task}"
 
     # Create a custom task ledger
-    from agent_framework._workflows._magentic import _MagenticTaskLedger  # type: ignore
+    from agent_framework_orchestrations._magentic import _MagenticTaskLedger  # type: ignore
 
     custom_task_ledger = _MagenticTaskLedger(
         facts=ChatMessage("assistant", ["Custom facts"]),
@@ -1279,7 +1281,7 @@ def test_magentic_agent_factory_with_standard_manager_options():
     manager = orchestrator._manager  # type: ignore[reportPrivateUsage]
 
     # Verify the manager is a StandardMagenticManager with the expected options
-    from agent_framework import StandardMagenticManager
+    from agent_framework.orchestrations import StandardMagenticManager
 
     assert isinstance(manager, StandardMagenticManager)
     assert manager.task_ledger is custom_task_ledger

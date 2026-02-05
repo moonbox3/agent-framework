@@ -10,18 +10,19 @@ from pathlib import Path
 from typing import Any, override
 
 from agent_framework import (
+    WorkflowEvent,
     Executor,
     FileCheckpointStorage,
-    RequestInfoEvent,
+    
     SubWorkflowRequestMessage,
     SubWorkflowResponseMessage,
     Workflow,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowExecutor,
-    WorkflowOutputEvent,
+    
     WorkflowRunState,
-    WorkflowStatusEvent,
+    
     handler,
     response_handler,
     tool,
@@ -336,10 +337,10 @@ async def main() -> None:
 
     request_id: str | None = None
     async for event in workflow.run_stream("Contoso Gadget Launch"):
-        if isinstance(event, RequestInfoEvent) and request_id is None:
+        if event.type == "request_info" and request_id is None:
             request_id = event.request_id
             print(f"Captured review request id: {request_id}")
-        if isinstance(event, WorkflowStatusEvent) and event.state is WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
+        if event.type == "status" and event.state is WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
             break
 
     if request_id is None:
@@ -365,9 +366,9 @@ async def main() -> None:
     # Rebuild fresh instances to mimic a separate process resuming
     workflow2 = build_parent_workflow(storage)
 
-    request_info_event: RequestInfoEvent | None = None
+    request_info_event: WorkflowEvent | None = None
     async for event in workflow2.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
-        if isinstance(event, RequestInfoEvent):
+        if event.type == "request_info":
             request_info_event = event
 
     if request_info_event is None:
@@ -376,9 +377,9 @@ async def main() -> None:
     print("\n=== Stage 3: approve draft ==")
 
     approval_response = "approve"
-    output_event: WorkflowOutputEvent | None = None
+    output_event: WorkflowEvent | None = None
     async for event in workflow2.send_responses_streaming({request_info_event.request_id: approval_response}):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             output_event = event
 
     if output_event is None:

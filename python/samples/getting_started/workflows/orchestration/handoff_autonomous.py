@@ -6,15 +6,12 @@ from typing import cast
 
 from agent_framework import (
     AgentResponseUpdate,
-    AgentRunUpdateEvent,
     ChatAgent,
     ChatMessage,
     HandoffBuilder,
     HostedWebSearchTool,
     WorkflowEvent,
-    WorkflowOutputEvent,
     resolve_agent_id,
-    tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -82,7 +79,7 @@ last_response_id: str | None = None
 
 def _display_event(event: WorkflowEvent) -> None:
     """Print the final conversation snapshot from workflow output events."""
-    if isinstance(event, AgentRunUpdateEvent) and event.data:
+    if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
         update: AgentResponseUpdate = event.data
         if not update.text:
             return
@@ -91,7 +88,7 @@ def _display_event(event: WorkflowEvent) -> None:
             last_response_id = update.response_id
             print(f"\n- {update.author_name}: ", flush=True, end="")
         print(event.data, flush=True, end="")
-    elif isinstance(event, WorkflowOutputEvent):
+    elif event.type == "output":
         conversation = cast(list[ChatMessage], event.data)
         print("\n=== Final Conversation (Autonomous with Iteration) ===")
         for message in conversation:

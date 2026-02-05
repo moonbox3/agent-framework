@@ -4,18 +4,19 @@ import asyncio
 from dataclasses import dataclass
 
 from agent_framework import (
+    WorkflowEvent,
     AgentExecutorRequest,  # Message bundle sent to an AgentExecutor
     AgentExecutorResponse,
     ChatAgent,  # Result returned by an AgentExecutor
     ChatMessage,  # Chat message structure
     Executor,  # Base class for workflow executors
-    RequestInfoEvent,  # Event emitted when human input is requested
+      # Event emitted when human input is requested
     Role,  # Enum of chat roles (user, assistant, system)
     WorkflowBuilder,  # Fluent builder for assembling the graph
     WorkflowContext,  # Per run context and event bus
-    WorkflowOutputEvent,  # Event emitted when workflow yields output
+      # Event emitted when workflow yields output
     WorkflowRunState,  # Enum of workflow run states
-    WorkflowStatusEvent,  # Event emitted on run state changes
+      # Event emitted on run state changes
     handler,
     response_handler,  # Decorator to expose an Executor method as a step
     tool,
@@ -48,7 +49,7 @@ Prerequisites:
 
 # How human-in-the-loop is achieved via `request_info` and `send_responses_streaming`:
 # - An executor (TurnManager) calls `ctx.request_info` with a payload (HumanFeedbackRequest).
-# - The workflow run pauses and emits a RequestInfoEvent with the payload and the request_id.
+# - The workflow run pauses and emits a  with the payload and the request_id.
 # - The application captures the event, prompts the user, and collects replies.
 # - The application calls `send_responses_streaming` with a map of request_ids to replies.
 # - The workflow resumes, and the response is delivered to the executor method decorated with @response_handler.
@@ -191,7 +192,7 @@ async def main() -> None:
         stream = (
             workflow.send_responses_streaming(pending_responses) if pending_responses else workflow.run_stream("start")
         )
-        # Collect events for this turn. Among these you may see WorkflowStatusEvent
+        # Collect events for this turn. Among these you may see 
         # with state IDLE_WITH_PENDING_REQUESTS when the workflow pauses for
         # human input, preceded by IN_PROGRESS_PENDING_REQUESTS as requests are
         # emitted.
@@ -201,20 +202,20 @@ async def main() -> None:
         # Collect human requests, workflow outputs, and check for completion.
         requests: list[tuple[str, str]] = []  # (request_id, prompt)
         for event in events:
-            if isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
-                # RequestInfoEvent for our HumanFeedbackRequest.
+            if event.type == "request_info" and isinstance(event.data, HumanFeedbackRequest):
+                #  for our HumanFeedbackRequest.
                 requests.append((event.request_id, event.data.prompt))
-            elif isinstance(event, WorkflowOutputEvent):
+            elif event.type == "output":
                 # Capture workflow output as they're yielded
                 workflow_output = str(event.data)
 
         # Detect run state transitions for a better developer experience.
         pending_status = any(
-            isinstance(e, WorkflowStatusEvent) and e.state == WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS
+            isinstance(e, ) and e.state == WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS
             for e in events
         )
         idle_with_requests = any(
-            isinstance(e, WorkflowStatusEvent) and e.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+            isinstance(e, ) and e.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
             for e in events
         )
         if pending_status:

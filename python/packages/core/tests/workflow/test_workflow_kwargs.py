@@ -86,7 +86,7 @@ async def test_sequential_kwargs_flow_to_agent() -> None:
         custom_data=custom_data,
         user_token=user_token,
     ):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Verify agent received kwargs
@@ -107,7 +107,7 @@ async def test_sequential_kwargs_flow_to_multiple_agents() -> None:
     custom_data = {"key": "value"}
 
     async for event in workflow.run_stream("test", custom_data=custom_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Both agents should have received kwargs
@@ -148,7 +148,7 @@ async def test_concurrent_kwargs_flow_to_agents() -> None:
         custom_data=custom_data,
         user_token=user_token,
     ):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Both agents should have received kwargs
@@ -195,7 +195,7 @@ async def test_groupchat_kwargs_flow_to_agents() -> None:
     custom_data = {"session_id": "group123"}
 
     async for event in workflow.run_stream("group chat test", custom_data=custom_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # At least one agent should have received kwargs
@@ -229,7 +229,7 @@ async def test_kwargs_stored_in_shared_state() -> None:
     workflow = SequentialBuilder().participants([inspector]).build()
 
     async for event in workflow.run_stream("test", my_kwarg="my_value", another=123):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     assert stored_kwargs is not None, "kwargs should be stored in SharedState"
@@ -255,7 +255,7 @@ async def test_empty_kwargs_stored_as_empty_dict() -> None:
 
     # Run without any kwargs
     async for event in workflow.run_stream("test"):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # SharedState should have empty dict when no kwargs provided
@@ -274,7 +274,7 @@ async def test_kwargs_with_none_values() -> None:
     workflow = SequentialBuilder().participants([agent]).build()
 
     async for event in workflow.run_stream("test", optional_param=None, other_param="value"):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     assert len(agent.captured_kwargs) >= 1
@@ -301,7 +301,7 @@ async def test_kwargs_with_complex_nested_data() -> None:
     }
 
     async for event in workflow.run_stream("test", complex_data=complex_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     assert len(agent.captured_kwargs) >= 1
@@ -319,12 +319,12 @@ async def test_kwargs_preserved_across_workflow_reruns() -> None:
 
     # First run
     async for event in workflow1.run_stream("run1", run_id="first"):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Second run with different kwargs (using fresh workflow)
     async for event in workflow2.run_stream("run2", run_id="second"):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     assert len(agent.captured_kwargs) >= 2
@@ -356,7 +356,7 @@ async def test_handoff_kwargs_flow_to_agents() -> None:
     custom_data = {"session_id": "handoff123"}
 
     async for event in workflow.run_stream("handoff test", custom_data=custom_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Coordinator agent should have received kwargs
@@ -413,7 +413,7 @@ async def test_magentic_kwargs_flow_to_agents() -> None:
     custom_data = {"session_id": "magentic123"}
 
     async for event in workflow.run_stream("magentic test", custom_data=custom_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # The workflow completes immediately via prepare_final_answer without invoking agents
@@ -463,7 +463,7 @@ async def test_magentic_kwargs_stored_in_shared_state() -> None:
     custom_data = {"magentic_key": "magentic_value"}
 
     async for event in magentic_workflow.run_stream("test task", custom_data=custom_data):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Verify the workflow completed (kwargs were stored, even if agent wasn't invoked)
@@ -617,7 +617,7 @@ async def test_subworkflow_kwargs_propagation() -> None:
         custom_data=custom_data,
         user_token=user_token,
     ):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Verify that the inner agent was called
@@ -676,7 +676,7 @@ async def test_subworkflow_kwargs_accessible_via_shared_state() -> None:
         my_custom_kwarg="should_be_propagated",
         another_kwarg=42,
     ):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Verify the state reader was invoked
@@ -721,7 +721,7 @@ async def test_nested_subworkflow_kwargs_propagation() -> None:
         "deeply nested test",
         deep_kwarg="should_reach_inner",
     ):
-        if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     # Verify inner agent was called

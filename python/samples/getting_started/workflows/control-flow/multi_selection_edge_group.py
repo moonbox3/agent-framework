@@ -17,7 +17,7 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowContext,
     WorkflowEvent,
-    WorkflowOutputEvent,
+    
     executor,
     tool,
 )
@@ -281,7 +281,7 @@ async def main() -> None:
     async for event in workflow.run_stream(email):
         if isinstance(event, DatabaseEvent):
             print(f"{event}")
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print(f"Workflow output: {event.data}")
 
     """

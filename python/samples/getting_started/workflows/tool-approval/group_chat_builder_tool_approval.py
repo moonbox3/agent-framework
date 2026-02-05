@@ -4,12 +4,12 @@ import asyncio
 from typing import Annotated
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     Content,
     GroupChatBuilder,
     GroupChatRequestSentEvent,
     GroupChatState,
-    RequestInfoEvent,
+    WorkflowEvent,
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
@@ -136,19 +136,19 @@ async def main() -> None:
     print("-" * 60)
 
     # Phase 1: Run workflow and collect all events (stream ends at IDLE or IDLE_WITH_PENDING_REQUESTS)
-    request_info_events: list[RequestInfoEvent] = []
+    request_info_events: list[WorkflowEvent] = []
     # Keep track of the last response to format output nicely in streaming mode
     last_response_id: str | None = None
     async for event in workflow.run_stream(
         "We need to deploy version 2.4.0 to production. Please coordinate the deployment."
     ):
-        if isinstance(event, RequestInfoEvent):
+        if event.type == "request_info":
             request_info_events.append(event)
             if isinstance(event.data, Content) and event.data.type == "function_approval_request":
                 print("\n[APPROVAL REQUIRED] From agent:", event.source_executor_id)
                 print(f"  Tool: {event.data.function_call.name}")
                 print(f"  Arguments: {event.data.function_call.arguments}")
-        elif isinstance(event, AgentRunUpdateEvent):
+        elif event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             if not event.data.text:
                 continue  # Skip empty updates
             response_id = event.data.response_id
@@ -178,7 +178,7 @@ async def main() -> None:
                 # Keep track of the response to format output nicely in streaming mode
                 last_response_id: str | None = None
                 async for event in workflow.send_responses_streaming({request_event.request_id: approval_response}):
-                    if isinstance(event, AgentRunUpdateEvent):
+                    if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
                         if not event.data.text:
                             continue  # Skip empty updates
                         response_id = event.data.response_id

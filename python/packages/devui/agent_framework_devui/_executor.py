@@ -8,7 +8,6 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from agent_framework import AgentProtocol, Content
-from agent_framework._workflows._events import RequestInfoEvent
 
 from ._conversations import ConversationStore, InMemoryConversationStore
 from ._discovery import EntityDiscovery
@@ -528,7 +527,7 @@ class AgentFrameworkExecutor:
 
                     async for event in workflow.send_responses_streaming(hil_responses):
                         # Enrich new RequestInfoEvents that may come from subsequent HIL requests
-                        if isinstance(event, RequestInfoEvent):
+                        if event.type == "request_info":
                             self._enrich_request_info_event_with_response_schema(event, workflow)
 
                         for trace_event in trace_collector.get_pending_events():
@@ -548,7 +547,7 @@ class AgentFrameworkExecutor:
                     async for event in workflow.run_stream(
                         checkpoint_id=checkpoint_id, checkpoint_storage=checkpoint_storage
                     ):
-                        if isinstance(event, RequestInfoEvent):
+                        if event.type == "request_info":
                             self._enrich_request_info_event_with_response_schema(event, workflow)
 
                         for trace_event in trace_collector.get_pending_events():
@@ -572,7 +571,7 @@ class AgentFrameworkExecutor:
                 parsed_input = await self._parse_workflow_input(workflow, request.input)
 
                 async for event in workflow.run_stream(parsed_input, checkpoint_storage=checkpoint_storage):
-                    if isinstance(event, RequestInfoEvent):
+                    if event.type == "request_info":
                         self._enrich_request_info_event_with_response_schema(event, workflow)
 
                     for trace_event in trace_collector.get_pending_events():

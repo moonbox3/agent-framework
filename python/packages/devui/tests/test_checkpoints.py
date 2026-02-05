@@ -428,10 +428,10 @@ class TestIntegration:
         # Run workflow until it reaches IDLE_WITH_PENDING_REQUESTS (after checkpoint is created)
         saw_request_event = False
         async for event in test_workflow.run_stream(WorkflowTestData(value="test")):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 saw_request_event = True
             # Wait for IDLE_WITH_PENDING_REQUESTS status (comes after checkpoint creation)
-            if isinstance(event, WorkflowStatusEvent) and "IDLE_WITH_PENDING_REQUESTS" in str(event.state):
+            if event.type == "status" and "IDLE_WITH_PENDING_REQUESTS" in str(event.state):
                 break
 
         assert saw_request_event, "Test workflow should have emitted RequestInfoEvent"

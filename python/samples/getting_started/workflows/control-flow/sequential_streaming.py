@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agent_framework import WorkflowBuilder, WorkflowContext, WorkflowOutputEvent, executor
+from agent_framework import WorkflowBuilder, WorkflowContext, WorkflowEvent, executor
 from typing_extensions import Never
 
 """
@@ -67,7 +67,7 @@ async def main():
     async for event in workflow.run_stream("hello world"):
         # You will see executor invoke and completion events as the workflow progresses.
         print(f"Event: {event}")
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             print(f"Workflow completed with result: {event.data}")
 
     """

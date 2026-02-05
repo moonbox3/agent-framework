@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Annotated, Any
 
-from agent_framework import ChatMessage, SequentialBuilder, WorkflowOutputEvent, tool
+from agent_framework import ChatMessage, SequentialBuilder,  tool
 from agent_framework.openai import OpenAIChatClient
 from pydantic import Field
 
@@ -117,7 +117,7 @@ async def main() -> None:
         custom_data=custom_data,
         user_token=user_token,
     ):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             output_data = event.data
             if isinstance(output_data, list):
                 for item in output_data:

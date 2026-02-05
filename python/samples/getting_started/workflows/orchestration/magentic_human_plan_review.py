@@ -5,14 +5,12 @@ import json
 from typing import cast
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
     MagenticBuilder,
     MagenticPlanReviewRequest,
-    RequestInfoEvent,
-    WorkflowOutputEvent,
-    tool,
+    WorkflowEvent,
 )
 from agent_framework.openai import OpenAIChatClient
 
@@ -80,9 +78,9 @@ async def main() -> None:
     print("\nStarting workflow execution...")
     print("=" * 60)
 
-    pending_request: RequestInfoEvent | None = None
+    pending_request: WorkflowEvent[MagenticPlanReviewRequest] | None = None
     pending_responses: dict[str, object] | None = None
-    output_event: WorkflowOutputEvent | None = None
+    output_event: WorkflowEvent | None = None
 
     while not output_event:
         if pending_responses is not None:
@@ -92,7 +90,7 @@ async def main() -> None:
 
         last_message_id: str | None = None
         async for event in stream:
-            if isinstance(event, AgentRunUpdateEvent):
+            if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
                 message_id = event.data.message_id
                 if message_id != last_message_id:
                     if last_message_id is not None:
@@ -101,10 +99,10 @@ async def main() -> None:
                     last_message_id = message_id
                 print(event.data, end="", flush=True)
 
-            elif isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
-                pending_request = event
+            elif event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
+                pending_request = cast(WorkflowEvent[MagenticPlanReviewRequest], event)
 
-            elif isinstance(event, WorkflowOutputEvent):
+            elif event.type == "output":
                 output_event = event
 
         pending_responses = None

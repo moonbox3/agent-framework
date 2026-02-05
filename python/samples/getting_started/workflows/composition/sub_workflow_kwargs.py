@@ -5,10 +5,11 @@ import json
 from typing import Annotated, Any
 
 from agent_framework import (
+    WorkflowEvent,
     ChatMessage,
     SequentialBuilder,
     WorkflowExecutor,
-    WorkflowOutputEvent,
+    
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
@@ -128,7 +129,7 @@ async def main() -> None:
         user_token=user_token,
         service_config=service_config,
     ):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             output_data = event.data
             if isinstance(output_data, list):
                 for item in output_data:  # type: ignore

@@ -4,10 +4,11 @@ import asyncio
 from typing import cast
 
 from agent_framework import (
+    WorkflowEvent,
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    
     handler,
     tool,
 )
@@ -78,7 +79,7 @@ async def main() -> None:
     outputs: list[str] = []
     async for event in workflow.run_stream("hello world"):
         print(f"Event: {event}")
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             outputs.append(cast(str, event.data))
 
     if outputs:

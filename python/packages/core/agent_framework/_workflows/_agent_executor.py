@@ -15,10 +15,7 @@ from ._agent_utils import resolve_agent_id
 from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
 from ._const import WORKFLOW_RUN_KWARGS_KEY
 from ._conversation_state import encode_chat_messages
-from ._events import (
-    AgentRunEvent,
-    AgentRunUpdateEvent,
-)
+from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._message_utils import normalize_messages_input
 from ._request_info_mixin import response_handler
@@ -340,7 +337,7 @@ class AgentExecutor(Executor):
             thread=self._agent_thread,
             **run_kwargs,
         )
-        await ctx.add_event(AgentRunEvent(self.id, response))
+        await ctx.add_event(WorkflowEvent.emit(self.id, response))
 
         # Handle any user input requests
         if response.user_input_requests:
@@ -370,7 +367,7 @@ class AgentExecutor(Executor):
             **run_kwargs,
         ):
             updates.append(update)
-            await ctx.add_event(AgentRunUpdateEvent(self.id, update))
+            await ctx.add_event(WorkflowEvent.emit(self.id, update))
 
             if update.user_input_requests:
                 user_input_requests.extend(update.user_input_requests)

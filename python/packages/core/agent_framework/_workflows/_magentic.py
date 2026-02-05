@@ -31,7 +31,7 @@ from ._base_group_chat_orchestrator import (
     ParticipantRegistry,
 )
 from ._checkpoint import CheckpointStorage
-from ._events import ExecutorEvent
+from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._model_utils import DictConvertible, encode_value
 from ._request_info_mixin import response_handler
@@ -773,8 +773,11 @@ class MagenticOrchestratorEventType(str, Enum):
 
 
 @dataclass
-class MagenticOrchestratorEvent(ExecutorEvent):
-    """Base class for Magentic orchestrator events."""
+class MagenticOrchestratorEvent(WorkflowEvent):
+    """Base class for Magentic orchestrator events.
+
+    Uses the 'custom' event type for extensibility.
+    """
 
     def __init__(
         self,
@@ -782,7 +785,7 @@ class MagenticOrchestratorEvent(ExecutorEvent):
         event_type: MagenticOrchestratorEventType,
         data: ChatMessage | MagenticProgressLedger,
     ) -> None:
-        super().__init__(executor_id, data)
+        super().__init__("custom", data=data, executor_id=executor_id)
         self.event_type = event_type
 
     def __repr__(self) -> str:
@@ -1514,7 +1517,7 @@ class MagenticBuilder:
 
             # During execution, handle plan review
             async for event in workflow.run_stream("task"):
-                if isinstance(event, RequestInfoEvent):
+                if event.type == "request_info":
                     request = event.data
                     if isinstance(request, MagenticHumanInterventionRequest):
                         if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:

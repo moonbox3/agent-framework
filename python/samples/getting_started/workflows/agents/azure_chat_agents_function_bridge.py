@@ -7,14 +7,13 @@ from agent_framework import (
     AgentExecutorRequest,
     AgentExecutorResponse,
     AgentResponse,
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatMessage,
     Role,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     executor,
-    tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -125,14 +124,14 @@ async def main() -> None:
 
     last_executor: str | None = None
     async for event in events:
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             if event.executor_id != last_executor:
                 if last_executor is not None:
                     print()
                 print(f"{event.executor_id}:", end=" ", flush=True)
                 last_executor = event.executor_id
             print(event.data, end="", flush=True)
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print("\n\n===== Final Output =====")
             response = event.data
             if isinstance(response, AgentResponse):

@@ -3,7 +3,8 @@
 import asyncio
 from dataclasses import dataclass
 
-from agent_framework import (  # Core chat primitives to build LLM requests
+from agent_framework import (
+    WorkflowEvent,  # Core chat primitives to build LLM requests
     AgentExecutorRequest,  # The message bundle sent to an AgentExecutor
     AgentExecutorResponse,  # The structured result returned by an AgentExecutor
     ChatAgent,  # Tracing event for agent execution steps
@@ -14,7 +15,7 @@ from agent_framework import (  # Core chat primitives to build LLM requests
     Role,  # Enum of chat roles (user, assistant, system)
     WorkflowBuilder,  # Fluent builder for wiring the workflow graph
     WorkflowContext,  # Per run context and event bus
-    WorkflowOutputEvent,  # Event emitted when workflow yields output
+      # Event emitted when workflow yields output
     handler,  # Decorator to mark an Executor method as invokable
     tool,
 )
@@ -148,7 +149,7 @@ async def main() -> None:
             print(f"{event.executor_id} invoked")
         elif isinstance(event, ExecutorCompletedEvent):
             print(f"{event.executor_id} completed")
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print("===== Final Aggregated Output =====")
             print(event.data)
 

@@ -184,7 +184,7 @@ class TestRequestInfoAndResponse:
         # First run the workflow until it emits a request
         request_info_event: RequestInfoEvent | None = None
         async for event in workflow.run_stream("test operation"):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 request_info_event = event
 
         assert request_info_event is not None
@@ -194,7 +194,7 @@ class TestRequestInfoAndResponse:
         # Send response and continue workflow
         completed = False
         async for event in workflow.send_responses_streaming({request_info_event.request_id: True}):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -209,7 +209,7 @@ class TestRequestInfoAndResponse:
         # First run the workflow until it emits a calculation request
         request_info_event: RequestInfoEvent | None = None
         async for event in workflow.run_stream("multiply 15.5 2.0"):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 request_info_event = event
 
         assert request_info_event is not None
@@ -221,7 +221,7 @@ class TestRequestInfoAndResponse:
         calculated_result = 31.0
         completed = False
         async for event in workflow.send_responses_streaming({request_info_event.request_id: calculated_result}):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -236,7 +236,7 @@ class TestRequestInfoAndResponse:
         # Collect all request events by running the full stream
         request_events: list[RequestInfoEvent] = []
         async for event in workflow.run_stream("start batch"):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 request_events.append(event)
 
         assert len(request_events) == 2
@@ -256,7 +256,7 @@ class TestRequestInfoAndResponse:
         responses = {approval_event.request_id: True, calc_event.request_id: 50.0}
         completed = False
         async for event in workflow.send_responses_streaming(responses):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -270,7 +270,7 @@ class TestRequestInfoAndResponse:
         # First run the workflow until it emits a request
         request_info_event: RequestInfoEvent | None = None
         async for event in workflow.run_stream("sensitive operation"):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 request_info_event = event
 
         assert request_info_event is not None
@@ -278,7 +278,7 @@ class TestRequestInfoAndResponse:
         # Deny the request
         completed = False
         async for event in workflow.send_responses_streaming({request_info_event.request_id: False}):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -294,9 +294,9 @@ class TestRequestInfoAndResponse:
         request_info_event: RequestInfoEvent | None = None
         idle_with_pending = False
         async for event in workflow.run_stream("test operation"):
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 request_info_event = event
-            elif isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
+            elif event.type == "status" and event.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
                 idle_with_pending = True
 
         assert request_info_event is not None
@@ -305,7 +305,7 @@ class TestRequestInfoAndResponse:
         # Continue with response
         completed = False
         async for event in workflow.send_responses_streaming({request_info_event.request_id: True}):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -318,7 +318,7 @@ class TestRequestInfoAndResponse:
         # Send invalid input (no numbers)
         completed = False
         async for event in workflow.run_stream("invalid input"):
-            if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            if event.type == "status" and event.state == WorkflowRunState.IDLE:
                 completed = True
 
         assert completed
@@ -340,7 +340,7 @@ class TestRequestInfoAndResponse:
             # Step 1: Run workflow to completion to ensure checkpoints are created
             request_info_event: RequestInfoEvent | None = None
             async for event in workflow.run_stream("checkpoint test operation"):
-                if isinstance(event, RequestInfoEvent):
+                if event.type == "request_info":
                     request_info_event = event
 
             # Verify request was emitted
@@ -380,10 +380,10 @@ class TestRequestInfoAndResponse:
             restored_request_event: RequestInfoEvent | None = None
             async for event in restored_workflow.run_stream(checkpoint_id=checkpoint_with_request.checkpoint_id):
                 # Should re-emit the pending request info event
-                if isinstance(event, RequestInfoEvent) and event.request_id == request_info_event.request_id:
+                if event.type == "request_info" and event.request_id == request_info_event.request_id:
                     restored_request_event = event
                 elif (
-                    isinstance(event, WorkflowStatusEvent)
+                    event.type == "status"
                     and event.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
                 ):
                     completed = True
@@ -402,7 +402,7 @@ class TestRequestInfoAndResponse:
             async for event in restored_workflow.send_responses_streaming({
                 request_info_event.request_id: True  # Approve the request
             }):
-                if isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+                if event.type == "status" and event.state == WorkflowRunState.IDLE:
                     final_completed = True
 
             assert final_completed, "Workflow should complete after providing response to restored request"

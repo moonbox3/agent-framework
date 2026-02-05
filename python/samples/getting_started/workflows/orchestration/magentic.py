@@ -6,7 +6,7 @@ import logging
 from typing import cast
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
     GroupChatRequestSentEvent,
@@ -14,8 +14,7 @@ from agent_framework import (
     MagenticBuilder,
     MagenticOrchestratorEvent,
     MagenticProgressLedger,
-    WorkflowOutputEvent,
-    tool,
+    WorkflowEvent,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
 
@@ -104,9 +103,9 @@ async def main() -> None:
 
     # Keep track of the last executor to format output nicely in streaming mode
     last_message_id: str | None = None
-    output_event: WorkflowOutputEvent | None = None
+    output_event: WorkflowEvent | None = None
     async for event in workflow.run_stream(task):
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             message_id = event.data.message_id
             if message_id != last_message_id:
                 if last_message_id is not None:
@@ -132,7 +131,7 @@ async def main() -> None:
         elif isinstance(event, GroupChatRequestSentEvent):
             print(f"\n[REQUEST SENT ({event.round_index})] to agent: {event.participant_name}")
 
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             output_event = event
 
     if not output_event:

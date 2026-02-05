@@ -6,7 +6,7 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    
     handler,
     tool,
 )
@@ -94,8 +94,8 @@ async def run_sequential_workflow() -> None:
 
     output_event = None
     async for event in workflow.run_stream("Hello world"):
-        if isinstance(event, WorkflowOutputEvent):
-            # The WorkflowOutputEvent contains the final result.
+        if event.type == "output":
+            # The  contains the final result.
             output_event = event
 
     if output_event:

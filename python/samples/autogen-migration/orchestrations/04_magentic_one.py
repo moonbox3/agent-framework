@@ -10,11 +10,12 @@ import json
 from typing import cast
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatMessage,
+    
     MagenticOrchestratorEvent,
     MagenticProgressLedger,
-    WorkflowOutputEvent,
+    
 )
 
 
@@ -110,10 +111,10 @@ async def run_agent_framework() -> None:
 
     # Run complex task
     last_message_id: str | None = None
-    output_event: WorkflowOutputEvent | None = None
+    output_event: WorkflowEvent | None = None
     print("[Agent Framework] Magentic conversation:")
     async for event in workflow.run_stream("Research Python async patterns and write a simple example"):
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             message_id = event.data.message_id
             if message_id != last_message_id:
                 if last_message_id is not None:
@@ -136,7 +137,7 @@ async def run_agent_framework() -> None:
             # Please refer to `with_plan_review` for proper human interaction during planning phases.
             await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter to continue...")
 
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             output_event = event
 
     if not output_event:

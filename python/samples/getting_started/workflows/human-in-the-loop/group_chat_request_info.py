@@ -28,14 +28,11 @@ from agent_framework import (
     AgentExecutorResponse,
     AgentRequestInfoResponse,
     AgentResponse,
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatMessage,
     GroupChatBuilder,
-    RequestInfoEvent,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
-    tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -120,7 +117,7 @@ async def main() -> None:
 
         # Process events
         async for event in stream:
-            if isinstance(event, AgentRunUpdateEvent):
+            if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
                 # Show all agent responses as they stream
                 if event.data and event.data.text:
                     agent_name = event.data.author_name or "unknown"
@@ -130,7 +127,7 @@ async def main() -> None:
                         print(f"\n[{agent_name}]: ", end="", flush=True)
                     print(event.data.text, end="", flush=True)
 
-            elif isinstance(event, RequestInfoEvent):
+            elif event.type == "request_info":
                 current_agent = None  # Reset for next agent
                 if isinstance(event.data, AgentExecutorResponse):
                     # Display pre-agent context for human input
@@ -156,7 +153,7 @@ async def main() -> None:
                         pending_responses = {event.request_id: AgentRequestInfoResponse.from_strings([user_input])}
                     print("(Resuming discussion...)")
 
-            elif isinstance(event, WorkflowOutputEvent):
+            elif event.type == "output":
                 print("\n" + "=" * 60)
                 print("DISCUSSION COMPLETE")
                 print("=" * 60)
@@ -170,7 +167,7 @@ async def main() -> None:
                         print(f"[{role}][{name}]: {text}...")
                 workflow_complete = True
 
-            elif isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE:
+            elif event.type == "status" and event.state == WorkflowRunState.IDLE:
                 workflow_complete = True
 
 

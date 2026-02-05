@@ -25,10 +25,7 @@ from ..exceptions import AgentExecutionException
 from ._agent_executor import AgentExecutor
 from ._checkpoint import CheckpointStorage
 from ._events import (
-    AgentRunUpdateEvent,
-    RequestInfoEvent,
     WorkflowEvent,
-    WorkflowOutputEvent,
 )
 from ._message_utils import normalize_messages_input
 from ._typing_utils import is_type_compatible
@@ -109,14 +106,14 @@ class WorkflowAgent(BaseAgent):
 
         super().__init__(id=id, name=name, description=description, **kwargs)
         self._workflow: "Workflow" = workflow
-        self._pending_requests: dict[str, RequestInfoEvent] = {}
+        self._pending_requests: dict[str, WorkflowEvent[Any]] = {}
 
     @property
     def workflow(self) -> "Workflow":
         return self._workflow
 
     @property
-    def pending_requests(self) -> dict[str, RequestInfoEvent]:
+    def pending_requests(self) -> "dict[str, WorkflowEvent[Any]]":
         return self._pending_requests
 
     async def run(
@@ -289,71 +286,76 @@ class WorkflowAgent(BaseAgent):
     def _convert_workflow_event_to_agent_update(
         self,
         response_id: str,
-        event: WorkflowEvent,
+        event: "WorkflowEvent[Any]",
     ) -> AgentResponseUpdate | None:
         """Convert a workflow event to an AgentResponseUpdate.
 
-        AgentRunUpdateEvent, RequestInfoEvent, and WorkflowOutputEvent are processed.
+        Events with type='data', type='request_info', and type='output' are processed.
         Other workflow events are ignored as they are workflow-internal.
 
-        For AgentRunUpdateEvent from AgentExecutor instances, only events from executors
+        For 'data' events (AgentResponseUpdate) from AgentExecutor instances, only events from executors
         with output_response=True are converted to agent updates. This prevents agent
         responses from executors that were not explicitly marked to surface their output.
-        Non-AgentExecutor executors that emit AgentRunUpdateEvent directly are allowed
+        Non-AgentExecutor executors that emit 'data' events directly are allowed
         through since they explicitly chose to emit the event.
         """
-        match event:
-            case AgentRunUpdateEvent(data=update, executor_id=executor_id):
-                # For AgentExecutor instances, only pass through if output_response=True.
-                # Non-AgentExecutor executors that emit AgentRunUpdateEvent are allowed through.
-                executor = self.workflow.executors.get(executor_id)
-                if isinstance(executor, AgentExecutor) and not executor.output_response:
-                    return None
-                if update:
-                    # Enrich with executor identity if author_name is not already set
-                    if not update.author_name:
-                        update.author_name = executor_id
-                    return update
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+            # For AgentExecutor instances, only pass through if output_response=True.
+            # Non-AgentExecutor executors that emit 'data' events are allowed through.
+            executor_id = event.executor_id
+            executor = self.workflow.executors.get(executor_id) if executor_id else None
+            if isinstance(executor, AgentExecutor) and not executor.output_response:
                 return None
+            update = event.data
+            if update:
+                # Enrich with executor identity if author_name is not already set
+                if not update.author_name:
+                    update.author_name = executor_id
+                return update
+            return None
 
-            case WorkflowOutputEvent(data=data, executor_id=executor_id):
-                # Convert workflow output to an agent response update.
-                # Handle different data types appropriately.
+        if event.type == "output":
+            # Convert workflow output to an agent response update.
+            # Handle different data types appropriately.
+            data = event.data
+            executor_id = event.executor_id
 
-                # Skip AgentResponse from AgentExecutor with output_response=True
-                # since streaming events already surfaced the content.
-                if isinstance(data, AgentResponse):
-                    executor = self.workflow.executors.get(executor_id)
-                    if isinstance(executor, AgentExecutor) and executor.output_response:
-                        return None
-
-                if isinstance(data, AgentResponseUpdate):
-                    return data
-                if isinstance(data, ChatMessage):
-                    return AgentResponseUpdate(
-                        contents=list(data.contents),
-                        role=data.role,
-                        author_name=data.author_name or executor_id,
-                        response_id=response_id,
-                        message_id=str(uuid.uuid4()),
-                        created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                        raw_representation=data,
-                    )
-                contents = self._extract_contents(data)
-                if not contents:
+            # Skip AgentResponse from AgentExecutor with output_response=True
+            # since streaming events already surfaced the content.
+            if isinstance(data, AgentResponse):
+                executor = self.workflow.executors.get(executor_id) if executor_id else None
+                if isinstance(executor, AgentExecutor) and executor.output_response:
                     return None
+
+            if isinstance(data, AgentResponseUpdate):
+                return data
+            if isinstance(data, ChatMessage):
                 return AgentResponseUpdate(
-                    contents=contents,
-                    role=Role.ASSISTANT,
-                    author_name=executor_id,
+                    contents=list(data.contents),
+                    role=data.role,
+                    author_name=data.author_name or executor_id,
                     response_id=response_id,
                     message_id=str(uuid.uuid4()),
                     created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                     raw_representation=data,
                 )
+            contents = self._extract_contents(data)
+            if not contents:
+                return None
+            return AgentResponseUpdate(
+                contents=contents,
+                role=Role.ASSISTANT,
+                author_name=executor_id,
+                response_id=response_id,
+                message_id=str(uuid.uuid4()),
+                created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                raw_representation=data,
+            )
 
-            case RequestInfoEvent(request_id=request_id):
-                # Store the pending request for later correlation
+        if event.type == "request_info":
+            # Store the pending request for later correlation
+            request_id = event.request_id
+            if request_id:
                 self.pending_requests[request_id] = event
 
                 args = self.RequestInfoFunctionArgs(request_id=request_id, data=event.data).to_dict()
@@ -376,9 +378,8 @@ class WorkflowAgent(BaseAgent):
                     message_id=str(uuid.uuid4()),
                     created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 )
-            case _:
-                # Ignore workflow-internal events
-                pass
+
+        # Ignore workflow-internal events
         return None
 
     def _extract_function_responses(self, input_messages: list[ChatMessage]) -> dict[str, Any]:

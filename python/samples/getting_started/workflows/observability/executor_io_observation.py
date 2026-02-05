@@ -4,12 +4,13 @@ import asyncio
 from typing import Any, cast
 
 from agent_framework import (
+    WorkflowEvent,
     Executor,
     ExecutorCompletedEvent,
     ExecutorInvokedEvent,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    
     handler,
     tool,
 )
@@ -104,7 +105,7 @@ async def main() -> None:
             if event.data:
                 print(f"    Output: {format_io_data(event.data)}")
 
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print(f"[WORKFLOW OUTPUT] {format_io_data(event.data)}")
 
     """

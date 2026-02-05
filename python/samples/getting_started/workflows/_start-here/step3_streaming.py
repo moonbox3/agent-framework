@@ -6,16 +6,13 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     Executor,
-    ExecutorFailedEvent,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowFailedEvent,
+    WorkflowErrorDetails,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
     handler,
-    tool,
 )
-from agent_framework._workflows._events import WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 from typing_extensions import Never
@@ -125,7 +122,7 @@ async def main():
     async for event in workflow.run_stream(
         ChatMessage(role="user", text="Create a slogan for a new electric SUV that is affordable and fun to drive.")
     ):
-        if isinstance(event, WorkflowStatusEvent):
+        if event.type == "status":
             prefix = f"State ({event.origin.value}): "
             if event.state == WorkflowRunState.IN_PROGRESS:
                 print(prefix + "IN_PROGRESS")
@@ -137,18 +134,17 @@ async def main():
                 print(prefix + "IDLE_WITH_PENDING_REQUESTS (prompt user or UI now)")
             else:
                 print(prefix + str(event.state))
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print(f"Workflow output ({event.origin.value}): {event.data}")
-        elif isinstance(event, ExecutorFailedEvent):
+        elif event.type == "executor_failed" and isinstance(event.details, WorkflowErrorDetails):
             print(
                 f"Executor failed ({event.origin.value}): "
                 f"{event.executor_id} {event.details.error_type}: {event.details.message}"
             )
-        elif isinstance(event, WorkflowFailedEvent):
-            details = event.details
-            print(f"Workflow failed ({event.origin.value}): {details.error_type}: {details.message}")
+        elif event.type == "failed" and isinstance(event.details, WorkflowErrorDetails):
+            print(f"Workflow failed ({event.origin.value}): {event.details.error_type}: {event.details.message}")
         else:
-            print(f"{event.__class__.__name__} ({event.origin.value}): {event}")
+            print(f"{event.type} ({event.origin.value}): {event}")
 
     """
     Sample Output:

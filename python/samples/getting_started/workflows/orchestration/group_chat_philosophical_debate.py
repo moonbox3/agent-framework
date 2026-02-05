@@ -5,13 +5,12 @@ import logging
 from typing import cast
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
     GroupChatBuilder,
     Role,
-    WorkflowOutputEvent,
-    tool,
+    WorkflowEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -241,7 +240,7 @@ Share your perspective authentically. Feel free to:
     current_speaker: str | None = None
 
     async for event in workflow.run_stream(f"Please begin the discussion on: {topic}"):
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             if event.executor_id != current_speaker:
                 if current_speaker is not None:
                     print("\n")
@@ -250,7 +249,7 @@ Share your perspective authentically. Feel free to:
 
             print(event.data, end="", flush=True)
 
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             final_conversation = cast(list[ChatMessage], event.data)
 
     print("\n\n" + "=" * 80)

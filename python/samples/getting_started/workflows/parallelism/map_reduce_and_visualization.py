@@ -8,10 +8,11 @@ from dataclasses import dataclass
 
 import aiofiles
 from agent_framework import (
+    WorkflowEvent,
     Executor,  # Base class for custom workflow steps
     WorkflowBuilder,  # Fluent builder for executors and edges
     WorkflowContext,  # Per run context with shared state and messaging
-    WorkflowOutputEvent,  # Event emitted when workflow yields output
+      # Event emitted when workflow yields output
     WorkflowViz,  # Utility to visualize a workflow graph
     handler,  # Decorator to expose an Executor method as a step
     tool,
@@ -332,7 +333,7 @@ async def main():
     # Step 4: Run the workflow with the raw text as input.
     async for event in workflow.run_stream(raw_text):
         print(f"Event: {event}")
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             print(f"Final Output: {event.data}")
 
 

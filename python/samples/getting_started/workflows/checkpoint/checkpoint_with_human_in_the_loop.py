@@ -10,19 +10,20 @@ from typing import Any, override
 # `agent_framework.builtin` chat client or mock the writer executor. We keep the
 # concrete import here so readers can see an end-to-end configuration.
 from agent_framework import (
+    WorkflowEvent,
     AgentExecutorRequest,
     AgentExecutorResponse,
     ChatMessage,
     Executor,
     FileCheckpointStorage,
-    RequestInfoEvent,
+    
     Role,
     Workflow,
     WorkflowBuilder,
     WorkflowCheckpoint,
     WorkflowContext,
-    WorkflowOutputEvent,
-    WorkflowStatusEvent,
+    
+    
     get_checkpoint_summary,
     handler,
     response_handler,
@@ -55,7 +56,7 @@ Typical pause/resume flow
 3. Later, restart the script, select that checkpoint, and provide the stored
    human decision when prompted to pre-supply responses.
    Doing so applies the answer immediately on resume, so the system does **not**
-   re-emit the same `RequestInfoEvent`.
+   re-emit the same ``.
 """
 
 # Directory used for the sample's temporary checkpoint files. We isolate the
@@ -261,11 +262,11 @@ async def run_interactive_session(
                 raise ValueError("Either initial_message or checkpoint_id must be provided")
 
         async for event in event_stream:
-            if isinstance(event, WorkflowStatusEvent):
+            if event.type == "status":
                 print(event)
-            if isinstance(event, WorkflowOutputEvent):
+            if event.type == "output":
                 completed_output = event.data
-            if isinstance(event, RequestInfoEvent):
+            if event.type == "request_info":
                 if isinstance(event.data, HumanApprovalRequest):
                     requests[event.request_id] = event.data
                 else:

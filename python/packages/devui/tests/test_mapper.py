@@ -20,9 +20,8 @@ from agent_framework._types import (
 
 # Import real workflow event classes - NOT mocks!
 from agent_framework._workflows._events import (
-    ExecutorCompletedEvent,
-    WorkflowStartedEvent,
-    WorkflowStatusEvent,
+    WorkflowEvent,
+    WorkflowRunState,
 )
 
 # Import test utilities
@@ -278,7 +277,7 @@ async def test_agent_run_response_mapping(mapper: MessageMapper, test_request: A
 
 
 async def test_executor_invoked_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test ExecutorInvokedEvent using the REAL class from agent_framework."""
+    """Test WorkflowEvent(type='executor_invoked') using the REAL class from agent_framework."""
     # Use real class, not mock!
     event = create_executor_invoked_event(executor_id="exec_123")
 
@@ -294,9 +293,9 @@ async def test_executor_invoked_event(mapper: MessageMapper, test_request: Agent
 
 
 async def test_executor_completed_event_simple_data(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test ExecutorCompletedEvent with simple dict data."""
+    """Test WorkflowEvent(type='executor_completed') with simple dict data."""
     # Create event with simple data
-    event = ExecutorCompletedEvent(executor_id="exec_123", data={"simple": "result"})
+    event = WorkflowEvent.executor_completed(executor_id="exec_123", data={"simple": "result"})
 
     # First need to invoke the executor to set up context
     invoke_event = create_executor_invoked_event(executor_id="exec_123")
@@ -318,10 +317,10 @@ async def test_executor_completed_event_simple_data(mapper: MessageMapper, test_
 async def test_executor_completed_event_with_agent_response(
     mapper: MessageMapper, test_request: AgentFrameworkRequest
 ) -> None:
-    """Test ExecutorCompletedEvent with nested AgentExecutorResponse.
+    """Test WorkflowEvent(type='executor_completed') with nested AgentExecutorResponse.
 
     This is a REGRESSION TEST for the serialization bug where
-    ExecutorCompletedEvent.data contained AgentExecutorResponse with nested
+    WorkflowEvent.data contained AgentExecutorResponse with nested
     AgentResponse and ChatMessage objects (SerializationMixin) that
     Pydantic couldn't serialize.
     """
@@ -391,7 +390,7 @@ async def test_executor_completed_event_serialization_to_json(
 
 
 async def test_executor_failed_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test ExecutorFailedEvent using the REAL class."""
+    """Test WorkflowEvent(type='executor_failed') using the REAL class."""
     # First invoke the executor
     invoke_event = create_executor_invoked_event(executor_id="exec_fail")
     await mapper.convert_event(invoke_event, test_request)
@@ -415,22 +414,21 @@ async def test_executor_failed_event(mapper: MessageMapper, test_request: AgentF
 
 
 async def test_workflow_started_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowStartedEvent using the REAL class."""
+    """Test WorkflowEvent(type='started') using the REAL class."""
 
-    event = WorkflowStartedEvent(data=None)
+    event = WorkflowEvent.started()
     events = await mapper.convert_event(event, test_request)
 
-    # WorkflowStartedEvent should emit response.created and response.in_progress
+    # WorkflowEvent(type='started') should emit response.created and response.in_progress
     assert len(events) == 2
     assert events[0].type == "response.created"
     assert events[1].type == "response.in_progress"
 
 
 async def test_workflow_status_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowStatusEvent using the REAL class."""
-    from agent_framework._workflows._events import WorkflowRunState
+    """Test WorkflowEvent(type='status') using the REAL class."""
 
-    event = WorkflowStatusEvent(state=WorkflowRunState.IN_PROGRESS)
+    event = WorkflowEvent.status(state=WorkflowRunState.IN_PROGRESS)
     events = await mapper.convert_event(event, test_request)
 
     # Should emit some status-related event
@@ -438,20 +436,20 @@ async def test_workflow_status_event(mapper: MessageMapper, test_request: AgentF
 
 
 # =============================================================================
-# Magentic Event Tests - Testing REAL AgentRunUpdateEvent with additional_properties
+# Magentic Event Tests - Testing REAL WorkflowEvent[AgentResponseUpdate] with additional_properties
 # =============================================================================
 
 
-async def test_magentic_agent_run_update_event_with_agent_delta_metadata(
+async def test_magentic_executor_event_with_agent_delta_metadata(
     mapper: MessageMapper, test_request: AgentFrameworkRequest
 ) -> None:
-    """Test that AgentRunUpdateEvent with magentic_event_type='agent_delta' is handled correctly.
+    """Test that WorkflowEvent[AgentResponseUpdate] with magentic_event_type='agent_delta' is handled correctly.
 
     This tests the ACTUAL event format Magentic emits - not a fake MagenticAgentDeltaEvent class.
-    Magentic uses AgentRunUpdateEvent with additional_properties containing magentic_event_type.
+    Magentic uses WorkflowEvent.emit() with additional_properties containing magentic_event_type.
     """
     from agent_framework._types import AgentResponseUpdate, Role
-    from agent_framework._workflows._events import AgentRunUpdateEvent
+    from agent_framework._workflows._events import WorkflowEvent
 
     # Create the REAL event format that Magentic emits
     update = AgentResponseUpdate(
@@ -463,11 +461,11 @@ async def test_magentic_agent_run_update_event_with_agent_delta_metadata(
             "agent_id": "writer_agent",
         },
     )
-    event = AgentRunUpdateEvent(executor_id="magentic_executor", data=update)
+    event = WorkflowEvent.emit(executor_id="magentic_executor", data=update)
 
     events = await mapper.convert_event(event, test_request)
 
-    # Should be treated as a regular AgentRunUpdateEvent with text content
+    # Should be treated as a regular WorkflowEvent[AgentResponseUpdate] with text content
     # The mapper should emit text delta events
     assert len(events) >= 1
     text_events = [e for e in events if getattr(e, "type", "") == "response.output_text.delta"]
@@ -476,13 +474,13 @@ async def test_magentic_agent_run_update_event_with_agent_delta_metadata(
 
 
 async def test_magentic_orchestrator_message_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test that AgentRunUpdateEvent with magentic_event_type='orchestrator_message' is handled.
+    """Test that WorkflowEvent[AgentResponseUpdate] with magentic_event_type='orchestrator_message' is handled.
 
-    Magentic emits orchestrator planning/instruction messages using AgentRunUpdateEvent
+    Magentic emits orchestrator planning/instruction messages using WorkflowEvent.emit()
     with additional_properties containing magentic_event_type='orchestrator_message'.
     """
     from agent_framework._types import AgentResponseUpdate, Role
-    from agent_framework._workflows._events import AgentRunUpdateEvent
+    from agent_framework._workflows._events import WorkflowEvent
 
     # Create orchestrator message event (REAL format from Magentic)
     update = AgentResponseUpdate(
@@ -495,11 +493,11 @@ async def test_magentic_orchestrator_message_event(mapper: MessageMapper, test_r
             "orchestrator_id": "magentic_orchestrator",
         },
     )
-    event = AgentRunUpdateEvent(executor_id="magentic_orchestrator", data=update)
+    event = WorkflowEvent.emit(executor_id="magentic_orchestrator", data=update)
 
     events = await mapper.convert_event(event, test_request)
 
-    # Currently, mapper treats this as regular AgentRunUpdateEvent (no special handling)
+    # Currently, mapper treats this as regular WorkflowEvent[AgentResponseUpdate] (no special handling)
     # This test documents the current behavior
     assert len(events) >= 1
     text_events = [e for e in events if getattr(e, "type", "") == "response.output_text.delta"]
@@ -510,15 +508,15 @@ async def test_magentic_orchestrator_message_event(mapper: MessageMapper, test_r
 async def test_magentic_events_use_same_event_class_as_other_workflows(
     mapper: MessageMapper, test_request: AgentFrameworkRequest
 ) -> None:
-    """Verify Magentic uses the same AgentRunUpdateEvent class as other workflows.
+    """Verify Magentic uses the same WorkflowEvent class as other workflows.
 
     This test documents that Magentic does NOT define separate event classes like
-    MagenticAgentDeltaEvent - it reuses AgentRunUpdateEvent with metadata in
+    MagenticAgentDeltaEvent - it reuses WorkflowEvent with metadata in
     additional_properties. Any mapper code checking for 'MagenticAgentDeltaEvent'
     class names is dead code.
     """
     from agent_framework._types import AgentResponseUpdate, Role
-    from agent_framework._workflows._events import AgentRunUpdateEvent
+    from agent_framework._workflows._events import WorkflowEvent
 
     # Create events the way different workflows do it
     # 1. Regular workflow (no additional_properties)
@@ -526,7 +524,7 @@ async def test_magentic_events_use_same_event_class_as_other_workflows(
         contents=[Content.from_text(text="Regular workflow response")],
         role=Role.ASSISTANT,
     )
-    regular_event = AgentRunUpdateEvent(executor_id="regular_executor", data=regular_update)
+    regular_event = WorkflowEvent.emit(executor_id="regular_executor", data=regular_update)
 
     # 2. Magentic workflow (with additional_properties)
     magentic_update = AgentResponseUpdate(
@@ -534,12 +532,12 @@ async def test_magentic_events_use_same_event_class_as_other_workflows(
         role=Role.ASSISTANT,
         additional_properties={"magentic_event_type": "agent_delta"},
     )
-    magentic_event = AgentRunUpdateEvent(executor_id="magentic_executor", data=magentic_update)
+    magentic_event = WorkflowEvent.emit(executor_id="magentic_executor", data=magentic_update)
 
     # Both should be the SAME class
     assert type(regular_event) is type(magentic_event)
-    assert isinstance(regular_event, AgentRunUpdateEvent)
-    assert isinstance(magentic_event, AgentRunUpdateEvent)
+    assert isinstance(regular_event, WorkflowEvent)
+    assert isinstance(magentic_event, WorkflowEvent)
 
     # Both should be handled by the same isinstance check in mapper
     regular_events = await mapper.convert_event(regular_event, test_request)
@@ -581,10 +579,10 @@ async def test_unknown_content_fallback(mapper: MessageMapper, test_request: Age
 
 
 async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowOutputEvent is converted to output_item.added."""
-    from agent_framework._workflows._events import WorkflowOutputEvent
+    """Test WorkflowEvent(type='output') is converted to output_item.added."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = WorkflowOutputEvent(data="Final workflow output", executor_id="final_executor")
+    event = WorkflowEvent.output(executor_id="final_executor", data="Final workflow output")
     events = await mapper.convert_event(event, test_request)
 
     # WorkflowOutputEvent should emit output_item.added
@@ -597,16 +595,16 @@ async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentF
 
 
 async def test_workflow_output_event_with_list_data(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowOutputEvent with list data (common for sequential/concurrent workflows)."""
+    """Test WorkflowEvent(type='output') with list data (common for sequential/concurrent workflows)."""
     from agent_framework import ChatMessage, Role
-    from agent_framework._workflows._events import WorkflowOutputEvent
+    from agent_framework._workflows._events import WorkflowEvent
 
     # Sequential/Concurrent workflows often output list[ChatMessage]
     messages = [
         ChatMessage(role=Role.USER, contents=[Content.from_text(text="Hello")]),
         ChatMessage(role=Role.ASSISTANT, contents=[Content.from_text(text="World")]),
     ]
-    event = WorkflowOutputEvent(data=messages, executor_id="complete")
+    event = WorkflowEvent.output(executor_id="complete", data=messages)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1
@@ -619,15 +617,15 @@ async def test_workflow_output_event_with_list_data(mapper: MessageMapper, test_
 
 
 async def test_workflow_failed_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowFailedEvent is converted to response.failed."""
-    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowFailedEvent
+    """Test WorkflowEvent(type='failed') is converted to response.failed."""
+    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
         error_type="TestError",
         message="Workflow failed due to test error",
         executor_id="failing_executor",
     )
-    event = WorkflowFailedEvent(details=details)
+    event = WorkflowEvent.failed(details=details)
     events = await mapper.convert_event(event, test_request)
 
     # WorkflowFailedEvent should emit response.failed
@@ -645,8 +643,8 @@ async def test_workflow_failed_event(mapper: MessageMapper, test_request: AgentF
 
 
 async def test_workflow_failed_event_with_extra(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowFailedEvent includes extra context when available."""
-    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowFailedEvent
+    """Test WorkflowEvent(type='failed') includes extra context when available."""
+    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
         error_type="ValidationError",
@@ -654,7 +652,7 @@ async def test_workflow_failed_event_with_extra(mapper: MessageMapper, test_requ
         executor_id="validation_executor",
         extra={"field": "email", "reason": "invalid format"},
     )
-    event = WorkflowFailedEvent(details=details)
+    event = WorkflowEvent.failed(details=details)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1
@@ -667,8 +665,8 @@ async def test_workflow_failed_event_with_extra(mapper: MessageMapper, test_requ
 
 
 async def test_workflow_failed_event_with_traceback(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowFailedEvent includes traceback when available."""
-    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowFailedEvent
+    """Test WorkflowEvent(type='failed') includes traceback when available."""
+    from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
         error_type="ValueError",
@@ -676,7 +674,7 @@ async def test_workflow_failed_event_with_traceback(mapper: MessageMapper, test_
         traceback="Traceback (most recent call last):\n  File ...\nValueError: Invalid input",
         executor_id="validation_executor",
     )
-    event = WorkflowFailedEvent(details=details)
+    event = WorkflowEvent.failed(details=details)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1
@@ -689,29 +687,29 @@ async def test_workflow_failed_event_with_traceback(mapper: MessageMapper, test_
 
 
 async def test_workflow_warning_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowWarningEvent is converted to trace event."""
-    from agent_framework._workflows._events import WorkflowWarningEvent
+    """Test WorkflowEvent(type='warning') is converted to trace event."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = WorkflowWarningEvent(data="This is a warning message")
+    event = WorkflowEvent.warning("This is a warning message")
     events = await mapper.convert_event(event, test_request)
 
-    # WorkflowWarningEvent should emit a trace event
+    # WorkflowEvent(type='warning') should emit a trace event
     assert len(events) == 1
     assert events[0].type == "response.trace.completed"
-    assert events[0].data["event_type"] == "WorkflowWarningEvent"
+    assert events[0].data["event_type"] == "warning"
 
 
 async def test_workflow_error_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowErrorEvent is converted to trace event."""
-    from agent_framework._workflows._events import WorkflowErrorEvent
+    """Test WorkflowEvent(type='error') is converted to trace event."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = WorkflowErrorEvent(data=ValueError("Something went wrong"))
+    event = WorkflowEvent.error(ValueError("Something went wrong"))
     events = await mapper.convert_event(event, test_request)
 
-    # WorkflowErrorEvent should emit a trace event
+    # WorkflowEvent(type='error') should emit a trace event
     assert len(events) == 1
     assert events[0].type == "response.trace.completed"
-    assert events[0].data["event_type"] == "WorkflowErrorEvent"
+    assert events[0].data["event_type"] == "error"
 
 
 # =============================================================================
@@ -720,10 +718,10 @@ async def test_workflow_error_event(mapper: MessageMapper, test_request: AgentFr
 
 
 async def test_request_info_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test RequestInfoEvent is converted to HIL request event."""
-    from agent_framework._workflows._events import RequestInfoEvent
+    """Test WorkflowEvent(type='request_info') is converted to HIL request event."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = RequestInfoEvent(
+    event = WorkflowEvent.request_info(
         request_id="req_123",
         source_executor_id="approval_executor",
         request_data={"action": "approve", "details": "Please approve this action"},
@@ -749,10 +747,10 @@ async def test_request_info_event(mapper: MessageMapper, test_request: AgentFram
 
 
 async def test_superstep_started_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test SuperStepStartedEvent is handled gracefully."""
-    from agent_framework._workflows._events import SuperStepStartedEvent
+    """Test WorkflowEvent(type='superstep_started') is handled gracefully."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = SuperStepStartedEvent(iteration=1)
+    event = WorkflowEvent.superstep_started(iteration=1)
     events = await mapper.convert_event(event, test_request)
 
     # SuperStepStartedEvent may not emit events (internal workflow signal)
@@ -761,10 +759,10 @@ async def test_superstep_started_event(mapper: MessageMapper, test_request: Agen
 
 
 async def test_superstep_completed_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test SuperStepCompletedEvent is handled gracefully."""
-    from agent_framework._workflows._events import SuperStepCompletedEvent
+    """Test WorkflowEvent(type='superstep_completed') is handled gracefully."""
+    from agent_framework._workflows._events import WorkflowEvent
 
-    event = SuperStepCompletedEvent(iteration=1)
+    event = WorkflowEvent.superstep_completed(iteration=1)
     events = await mapper.convert_event(event, test_request)
 
     # SuperStepCompletedEvent may not emit events (internal workflow signal)

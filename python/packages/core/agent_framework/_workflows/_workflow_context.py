@@ -14,15 +14,8 @@ from typing_extensions import Never, TypeVar, deprecated
 from ..observability import OtelAttr, create_workflow_span
 from ._const import EXECUTOR_STATE_KEY
 from ._events import (
-    RequestInfoEvent,
     WorkflowEvent,
     WorkflowEventSource,
-    WorkflowFailedEvent,
-    WorkflowLifecycleEvent,
-    WorkflowOutputEvent,
-    WorkflowStartedEvent,
-    WorkflowStatusEvent,
-    WorkflowWarningEvent,
     _framework_event_origin,  # type: ignore
 )
 from ._runner_context import Message, RunnerContext
@@ -205,15 +198,8 @@ def validate_workflow_context_annotation(
     return infer_output_types_from_ctx_annotation(annotation)
 
 
-_FRAMEWORK_LIFECYCLE_EVENT_TYPES: tuple[type[WorkflowEvent], ...] = cast(
-    tuple[type[WorkflowEvent], ...],
-    tuple(get_args(WorkflowLifecycleEvent))
-    or (
-        WorkflowStartedEvent,
-        WorkflowStatusEvent,
-        WorkflowFailedEvent,
-    ),
-)
+# Event types reserved for framework lifecycle (not allowed from user code)
+_FRAMEWORK_LIFECYCLE_EVENT_TYPES: frozenset[str] = frozenset({"started", "status", "failed"})
 
 
 class WorkflowContext(Generic[T_Out, T_W_Out]):
@@ -360,20 +346,19 @@ class WorkflowContext(Generic[T_Out, T_W_Out]):
         self._yielded_outputs.append(copy.deepcopy(output))
 
         with _framework_event_origin():
-            event = WorkflowOutputEvent(data=output, executor_id=self._executor_id)
+            event = WorkflowEvent.output(self._executor_id, output)
         await self._runner_context.add_event(event)
 
-    async def add_event(self, event: WorkflowEvent) -> None:
+    async def add_event(self, event: "WorkflowEvent[Any]") -> None:
         """Add an event to the workflow context."""
-        if event.origin == WorkflowEventSource.EXECUTOR and isinstance(event, _FRAMEWORK_LIFECYCLE_EVENT_TYPES):
-            event_name = event.__class__.__name__
+        if event.origin == WorkflowEventSource.EXECUTOR and event.type in _FRAMEWORK_LIFECYCLE_EVENT_TYPES:
             warning_msg = (
-                f"Executor '{self._executor_id}' attempted to emit {event_name}, "
+                f"Executor '{self._executor_id}' attempted to emit a '{event.type}' event, "
                 "which is reserved for framework lifecycle notifications. The "
                 "event was ignored."
             )
             logger.warning(warning_msg)
-            await self._runner_context.add_event(WorkflowWarningEvent(warning_msg))
+            await self._runner_context.add_event(WorkflowEvent.warning(warning_msg))
             return
         await self._runner_context.add_event(event)
 
@@ -402,7 +387,7 @@ class WorkflowContext(Generic[T_Out, T_W_Out]):
                 "not be processed. Please define a response handler using the @response_handler decorator."
             )
 
-        request_info_event = RequestInfoEvent(
+        request_info_event = WorkflowEvent.request_info(
             request_id=request_id or str(uuid.uuid4()),
             source_executor_id=self._executor_id,
             request_data=request_data,

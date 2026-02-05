@@ -3,7 +3,7 @@
 import asyncio
 from typing import cast
 
-from agent_framework import ChatMessage, Role, SequentialBuilder, WorkflowOutputEvent
+from agent_framework import ChatMessage, Role, SequentialBuilder, WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
@@ -47,7 +47,7 @@ async def main() -> None:
     # 3) Run and collect outputs
     outputs: list[list[ChatMessage]] = []
     async for event in workflow.run_stream("Write a tagline for a budget-friendly eBike."):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             outputs.append(cast(list[ChatMessage], event.data))
 
     if outputs:

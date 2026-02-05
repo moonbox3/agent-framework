@@ -9,17 +9,16 @@ from agent_framework import (
     AgentExecutorRequest,
     AgentExecutorResponse,
     AgentResponse,
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
     Executor,
     FunctionCallContent,
     FunctionResultContent,
-    RequestInfoEvent,
     Role,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     handler,
     response_handler,
     tool,
@@ -195,7 +194,7 @@ def create_final_editor_agent() -> ChatAgent:
     )
 
 
-def display_agent_run_update(event: AgentRunUpdateEvent, last_executor: str | None) -> None:
+def display_agent_run_update(event: WorkflowEvent[AgentResponseUpdate], last_executor: str | None) -> None:
     """Display an AgentRunUpdateEvent in a readable format."""
     printed_tool_calls: set[str] = set()
     printed_tool_results: set[str] = set()
@@ -291,13 +290,13 @@ async def main() -> None:
         requests: list[tuple[str, DraftFeedbackRequest]] = []
 
         async for event in stream:
-            if isinstance(event, AgentRunUpdateEvent) and display_agent_run_update_switch:
-                display_agent_run_update(event, last_executor)
-            if isinstance(event, RequestInfoEvent) and isinstance(event.data, DraftFeedbackRequest):
+            if event.type == "data" and isinstance(event.data, AgentResponseUpdate) and display_agent_run_update_switch:
+                display_agent_run_update(event, last_executor)  # type: ignore[arg-type]
+            if event.type == "request_info" and isinstance(event.data, DraftFeedbackRequest):
                 # Stash the request so we can prompt the human after the stream completes.
                 requests.append((event.request_id, event.data))
                 last_executor = None
-            elif isinstance(event, WorkflowOutputEvent):
+            elif event.type == "output":
                 last_executor = None
                 response = event.data
                 print("\n===== Final output =====")

@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agent_framework import AgentRunUpdateEvent, WorkflowBuilder, WorkflowOutputEvent
+from agent_framework import AgentResponseUpdate, WorkflowBuilder, WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
@@ -65,7 +65,7 @@ async def main():
 
     events = workflow.run_stream("Create a slogan for a new electric SUV that is affordable and fun to drive.")
     async for event in events:
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             # AgentRunUpdateEvent contains incremental text deltas from the underlying agent.
             # Print a prefix when the executor changes, then append updates on the same line.
             eid = event.executor_id
@@ -75,7 +75,7 @@ async def main():
                 print(f"{eid}:", end=" ", flush=True)
                 last_executor_id = eid
             print(event.data, end="", flush=True)
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print("\n===== Final output =====")
             print(event.data)
 

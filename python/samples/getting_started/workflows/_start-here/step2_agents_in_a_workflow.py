@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agent_framework import AgentRunEvent, WorkflowBuilder
+from agent_framework import AgentResponse, WorkflowBuilder, WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
@@ -53,7 +53,7 @@ async def main():
     events = await workflow.run("Create a slogan for a new electric SUV that is affordable and fun to drive.")
     # Print agent run events and final outputs
     for event in events:
-        if isinstance(event, AgentRunEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponse):
             print(f"{event.executor_id}: {event.data}")
 
     print(f"{'=' * 60}\nWorkflow Outputs: {events.get_outputs()}")

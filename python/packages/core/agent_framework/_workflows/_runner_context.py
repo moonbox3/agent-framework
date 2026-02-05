@@ -7,12 +7,12 @@ import uuid
 from copy import copy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
 from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
 from ._const import INTERNAL_SOURCE_ID
-from ._events import RequestInfoEvent, WorkflowEvent
+from ._events import WorkflowEvent
 from ._shared_state import SharedState
 from ._typing_utils import is_instance_of
 
@@ -51,7 +51,7 @@ class Message:
     source_span_ids: list[str] | None = None  # Publishing span IDs for linking from multiple sources
 
     # For response messages, the original request data
-    original_request_info_event: RequestInfoEvent | None = None
+    original_request_info_event: "WorkflowEvent[Any] | None" = None
 
     # Backward compatibility properties
     @property
@@ -254,11 +254,11 @@ class RunnerContext(Protocol):
         """
         ...
 
-    async def add_request_info_event(self, event: RequestInfoEvent) -> None:
-        """Add a RequestInfoEvent to the context and track it for correlation.
+    async def add_request_info_event(self, event: "WorkflowEvent[Any]") -> None:
+        """Add a request_info event to the context and track it for correlation.
 
         Args:
-            event: The RequestInfoEvent to be added.
+            event: The WorkflowEvent with type='request_info' to be added.
         """
         ...
 
@@ -271,11 +271,11 @@ class RunnerContext(Protocol):
         """
         ...
 
-    async def get_pending_request_info_events(self) -> dict[str, RequestInfoEvent]:
-        """Get the mapping of request IDs to their corresponding RequestInfoEvent.
+    async def get_pending_request_info_events(self) -> "dict[str, WorkflowEvent[Any]]":
+        """Get the mapping of request IDs to their corresponding request_info events.
 
         Returns:
-            A dictionary mapping request IDs to their corresponding RequestInfoEvent.
+            A dictionary mapping request IDs to their corresponding WorkflowEvent (type='request_info').
         """
         ...
 
@@ -294,7 +294,7 @@ class InProcRunnerContext:
         self._event_queue: asyncio.Queue[WorkflowEvent] = asyncio.Queue()
 
         # An additional storage for pending request info events
-        self._pending_request_info_events: dict[str, RequestInfoEvent] = {}
+        self._pending_request_info_events: dict[str, WorkflowEvent[Any]] = {}
 
         # Checkpointing configuration/state
         self._checkpoint_storage = checkpoint_storage
@@ -426,7 +426,7 @@ class InProcRunnerContext:
         self._pending_request_info_events.clear()
         pending_requests_data = checkpoint.pending_request_info_events
         for request_id, request_data in pending_requests_data.items():
-            request_info_event = RequestInfoEvent.from_dict(request_data)
+            request_info_event = WorkflowEvent.from_dict(request_data)
             self._pending_request_info_events[request_id] = request_info_event
             await self.add_event(request_info_event)
 
@@ -470,12 +470,14 @@ class InProcRunnerContext:
             "pending_request_info_events": serialized_pending_request_info_events,
         }
 
-    async def add_request_info_event(self, event: RequestInfoEvent) -> None:
-        """Add a RequestInfoEvent to the context and track it for correlation.
+    async def add_request_info_event(self, event: "WorkflowEvent[Any]") -> None:
+        """Add a request_info event to the context and track it for correlation.
 
         Args:
-            event: The RequestInfoEvent to be added.
+            event: The WorkflowEvent with type='request_info' to be added.
         """
+        if event.request_id is None:
+            raise ValueError("request_info event must have a request_id")
         self._pending_request_info_events[event.request_id] = event
         await self.add_event(event)
 
@@ -508,10 +510,10 @@ class InProcRunnerContext:
 
         await self.send_message(response_msg)
 
-    async def get_pending_request_info_events(self) -> dict[str, RequestInfoEvent]:
-        """Get the mapping of request IDs to their corresponding RequestInfoEvent.
+    async def get_pending_request_info_events(self) -> "dict[str, WorkflowEvent[Any]]":
+        """Get the mapping of request IDs to their corresponding request_info events.
 
         Returns:
-            A dictionary mapping request IDs to their corresponding RequestInfoEvent.
+            A dictionary mapping request IDs to their corresponding WorkflowEvent (type='request_info').
         """
         return dict(self._pending_request_info_events)

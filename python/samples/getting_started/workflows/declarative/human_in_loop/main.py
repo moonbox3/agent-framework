@@ -15,7 +15,7 @@ In a production scenario, you would integrate with a real UI or chat interface.
 import asyncio
 from pathlib import Path
 
-from agent_framework import Workflow, WorkflowOutputEvent
+from agent_framework import Workflow, WorkflowEvent
 from agent_framework.declarative import ExternalInputRequest, WorkflowFactory
 from agent_framework_declarative._workflows._handlers import TextOutputEvent
 
@@ -26,8 +26,8 @@ async def run_with_streaming(workflow: Workflow) -> None:
     print("-" * 40)
 
     async for event in workflow.run_stream({}):
-        # WorkflowOutputEvent wraps the actual output data
-        if isinstance(event, WorkflowOutputEvent):
+        #  wraps the actual output data
+        if event.type == "output":
             data = event.data
             if isinstance(data, TextOutputEvent):
                 print(f"[Bot]: {data.text}")

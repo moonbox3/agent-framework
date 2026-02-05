@@ -97,7 +97,7 @@ async def test_runner_run_until_convergence():
     )
     async for event in runner.run_until_convergence():
         assert isinstance(event, WorkflowEvent)
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             result = event.data
 
     assert result is not None and result == 10
@@ -137,7 +137,7 @@ async def test_runner_run_until_convergence_not_completed():
         match="Runner did not converge after 5 iterations.",
     ):
         async for event in runner.run_until_convergence():
-            assert not isinstance(event, WorkflowStatusEvent) or event.state != WorkflowRunState.IDLE
+            assert not event.type == "status" or event.state != WorkflowRunState.IDLE
 
 
 async def test_runner_already_running():

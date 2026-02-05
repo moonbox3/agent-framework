@@ -10,12 +10,12 @@ from agent_framework import (
     AgentProtocol,
     AgentResponse,
     AgentResponseUpdate,
-    AgentRunUpdateEvent,
     AgentThread,
     ChatMessage,
     ChatMessageStore,
     Content,
     Executor,
+    ExecutorEvent,
     Role,
     UsageDetails,
     WorkflowAgent,
@@ -47,7 +47,7 @@ class SimpleExecutor(Executor):
         streaming_update = AgentResponseUpdate(
             contents=[Content.from_text(text=response_text)], role=Role.ASSISTANT, message_id=str(uuid.uuid4())
         )
-        await ctx.add_event(AgentRunUpdateEvent(executor_id=self.id, data=streaming_update))
+        await ctx.add_event(ExecutorEvent(executor_id=self.id, data=streaming_update))
 
         # Pass message to next executor if any (for both streaming and non-streaming)
         await ctx.send_message([response_message])
@@ -71,7 +71,7 @@ class RequestingExecutor(Executor):
             role=Role.ASSISTANT,
             message_id=str(uuid.uuid4()),
         )
-        await ctx.add_event(AgentRunUpdateEvent(executor_id=self.id, data=update))
+        await ctx.add_event(ExecutorEvent(executor_id=self.id, data=update))
 
 
 class ConversationHistoryCapturingExecutor(Executor):
@@ -95,7 +95,7 @@ class ConversationHistoryCapturingExecutor(Executor):
         streaming_update = AgentResponseUpdate(
             contents=[Content.from_text(text=response_text)], role=Role.ASSISTANT, message_id=str(uuid.uuid4())
         )
-        await ctx.add_event(AgentRunUpdateEvent(executor_id=self.id, data=streaming_update))
+        await ctx.add_event(ExecutorEvent(executor_id=self.id, data=streaming_update))
         await ctx.send_message([response_message])
 
 
@@ -695,13 +695,13 @@ class TestWorkflowAgent:
 class TestWorkflowAgentAuthorName:
     """Test cases for author_name enrichment in WorkflowAgent (GitHub issue #1331)."""
 
-    async def test_agent_run_update_event_gets_executor_id_as_author_name(self):
-        """Test that AgentRunUpdateEvent gets executor_id as author_name when not already set.
+    async def test_executor_event_gets_executor_id_as_author_name(self):
+        """Test that ExecutorEvent[AgentResponseUpdate] gets executor_id as author_name when not already set.
 
         This validates the fix for GitHub issue #1331: agent responses should include
         identification of which agent produced them in multi-agent workflows.
         """
-        # Create workflow with executor that emits AgentRunUpdateEvent without author_name
+        # Create workflow with executor that emits ExecutorEvent[AgentResponseUpdate] without author_name
         executor1 = SimpleExecutor(id="my_executor_id", response_text="Response", emit_streaming=False)
         workflow = WorkflowBuilder().set_start_executor(executor1).build()
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")
@@ -732,7 +732,7 @@ class TestWorkflowAgentAuthorName:
                     author_name="custom_author_name",  # Explicitly set
                     message_id=str(uuid.uuid4()),
                 )
-                await ctx.add_event(AgentRunUpdateEvent(executor_id=self.id, data=update))
+                await ctx.add_event(ExecutorEvent(executor_id=self.id, data=update))
 
         executor = AuthorNameExecutor(id="executor_id")
         workflow = WorkflowBuilder().set_start_executor(executor).build()

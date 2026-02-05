@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from agent_framework import (
     AgentResponseUpdate,
-    AgentRunUpdateEvent,
     ChatClientProtocol,
     ChatMessage,
     Content,
@@ -14,8 +13,8 @@ from agent_framework import (
     Role,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowEvent,
     handler,
-    tool,
 )
 from agent_framework.openai import OpenAIChatClient
 from pydantic import BaseModel
@@ -33,7 +32,7 @@ approved responses are emitted to the external consumer. The workflow completes 
 Key Concepts Demonstrated:
 - WorkflowAgent: Wraps a workflow to behave like a regular agent.
 - Cyclic workflow design (Worker ↔ Reviewer) for iterative improvement.
-- AgentRunUpdateEvent: Mechanism for emitting approved responses externally.
+- ExecutorEvent: Mechanism for emitting approved responses externally.
 - Structured output parsing for review feedback using Pydantic.
 - State management for pending requests and retry logic.
 
@@ -160,9 +159,9 @@ class Worker(Executor):
             for message in request.agent_messages:
                 contents.extend(message.contents)
 
-            # Emit approved result to external consumer via AgentRunUpdateEvent.
+            # Emit approved result to external consumer via WorkflowEvent.
             await ctx.add_event(
-                AgentRunUpdateEvent(self.id, data=AgentResponseUpdate(contents=contents, role=Role.ASSISTANT))
+                WorkflowEvent.emit(self.id, data=AgentResponseUpdate(contents=contents, role=Role.ASSISTANT))
             )
             return
 

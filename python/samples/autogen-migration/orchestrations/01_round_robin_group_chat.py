@@ -53,7 +53,7 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's SequentialBuilder for sequential agent orchestration."""
-    from agent_framework import AgentRunUpdateEvent, SequentialBuilder
+    from agent_framework import AgentResponseUpdate,  SequentialBuilder
     from agent_framework.openai import OpenAIChatClient
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
@@ -81,7 +81,7 @@ async def run_agent_framework() -> None:
     print("[Agent Framework] Sequential conversation:")
     current_executor = None
     async for event in workflow.run_stream("Create a brief summary about electric vehicles"):
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             # Print executor name header when switching to a new agent
             if current_executor != event.executor_id:
                 if current_executor is not None:
@@ -98,10 +98,11 @@ async def run_agent_framework_with_cycle() -> None:
     from agent_framework import (
         AgentExecutorRequest,
         AgentExecutorResponse,
-        AgentRunUpdateEvent,
+        AgentResponseUpdate,
+        
         WorkflowBuilder,
         WorkflowContext,
-        WorkflowOutputEvent,
+        
         executor,
         tool,
     )
@@ -154,10 +155,10 @@ async def run_agent_framework_with_cycle() -> None:
     print("[Agent Framework with Cycle] Cyclic conversation:")
     current_executor = None
     async for event in workflow.run_stream("Create a brief summary about electric vehicles"):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             print("\n---------- Workflow Output ----------")
             print(event.data)
-        elif isinstance(event, AgentRunUpdateEvent):
+        elif event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             # Print executor name header when switching to a new agent
             if current_executor != event.executor_id:
                 if current_executor is not None:

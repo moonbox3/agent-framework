@@ -3,13 +3,12 @@
 import asyncio
 
 from agent_framework import (
-    AgentRunUpdateEvent,
+    AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
     GroupChatBuilder,
     GroupChatState,
-    WorkflowOutputEvent,
-    tool,
+    WorkflowEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -103,9 +102,9 @@ async def main() -> None:
 
     # Keep track of the last executor to format output nicely in streaming mode
     last_executor_id: str | None = None
-    output_event: WorkflowOutputEvent | None = None
+    output_event: WorkflowEvent | None = None
     async for event in workflow.run_stream(task):
-        if isinstance(event, AgentRunUpdateEvent):
+        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
             eid = event.executor_id
             if eid != last_executor_id:
                 if last_executor_id is not None:
@@ -113,7 +112,7 @@ async def main() -> None:
                 print(f"{eid}:", end=" ", flush=True)
                 last_executor_id = eid
             print(event.data, end="", flush=True)
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             output_event = event
 
     # The output of the workflow is the full list of messages exchanged

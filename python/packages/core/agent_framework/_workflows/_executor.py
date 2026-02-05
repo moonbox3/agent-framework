@@ -11,10 +11,8 @@ from typing import Any, TypeVar, overload
 
 from ..observability import create_processing_span
 from ._events import (
-    ExecutorCompletedEvent,
-    ExecutorFailedEvent,
-    ExecutorInvokedEvent,
     WorkflowErrorDetails,
+    WorkflowEvent,
     _framework_event_origin,  # type: ignore[reportPrivateUsage]
 )
 from ._model_utils import DictConvertible
@@ -274,14 +272,14 @@ class Executor(RequestInfoMixin, DictConvertible):
             # Invoke the handler with the message and context
             # Use deepcopy to capture original input state before handler can mutate it
             with _framework_event_origin():
-                invoke_event = ExecutorInvokedEvent(self.id, copy.deepcopy(message))
+                invoke_event = WorkflowEvent.executor_invoked(self.id, copy.deepcopy(message))
             await context.add_event(invoke_event)
             try:
                 await handler(message, context)
             except Exception as exc:
                 # Surface structured executor failure before propagating
                 with _framework_event_origin():
-                    failure_event = ExecutorFailedEvent(self.id, WorkflowErrorDetails.from_exception(exc))
+                    failure_event = WorkflowEvent.executor_failed(self.id, WorkflowErrorDetails.from_exception(exc))
                 await context.add_event(failure_event)
                 raise
             with _framework_event_origin():
@@ -289,7 +287,7 @@ class Executor(RequestInfoMixin, DictConvertible):
                 sent_messages = context.get_sent_messages()
                 yielded_outputs = context.get_yielded_outputs()
                 completion_data = sent_messages + yielded_outputs
-                completed_event = ExecutorCompletedEvent(self.id, completion_data if completion_data else None)
+                completed_event = WorkflowEvent.executor_completed(self.id, completion_data if completion_data else None)
             await context.add_event(completed_event)
 
     def _create_context_for_handler(

@@ -29,13 +29,14 @@ from random import random
 from typing import Any, override
 
 from agent_framework import (
+    WorkflowEvent,
     Executor,
     InMemoryCheckpointStorage,
     SuperStepCompletedEvent,
     WorkflowBuilder,
     WorkflowCheckpoint,
     WorkflowContext,
-    WorkflowOutputEvent,
+    
     handler,
     tool,
 )
@@ -127,7 +128,7 @@ async def main():
 
         output: str | None = None
         async for event in event_stream:
-            if isinstance(event, WorkflowOutputEvent):
+            if event.type == "output":
                 output = event.data
                 break
             if isinstance(event, SuperStepCompletedEvent) and random() < 0.5:

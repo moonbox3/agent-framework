@@ -26,7 +26,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from agent_framework import RequestInfoEvent, WorkflowOutputEvent
+from agent_framework import WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.declarative import (
     AgentExternalInputRequest,
@@ -259,7 +259,7 @@ async def main() -> None:
             stream = workflow.run_stream(user_input)
 
         async for event in stream:
-            if isinstance(event, WorkflowOutputEvent):
+            if event.type == "output":
                 data = event.data
                 source_id = getattr(event, "source_executor_id", "")
 
@@ -286,7 +286,7 @@ async def main() -> None:
                     else:
                         accumulated_response += str(data)
 
-            elif isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExternalInputRequest):
+            elif event.type == "request_info" and isinstance(event.data, AgentExternalInputRequest):
                 request = event.data
 
                 # The agent_response from the request contains the structured response

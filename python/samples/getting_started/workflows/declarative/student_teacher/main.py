@@ -22,7 +22,7 @@ Prerequisites:
 import asyncio
 from pathlib import Path
 
-from agent_framework import WorkflowOutputEvent
+from agent_framework import WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.declarative import WorkflowFactory
 from azure.identity import AzureCliCredential
@@ -82,7 +82,7 @@ async def main() -> None:
     print("=" * 50)
 
     async for event in workflow.run_stream("How would you compute the value of PI?"):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             print(f"{event.data}", flush=True, end="")
 
     print("\n" + "=" * 50)

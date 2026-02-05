@@ -78,4 +78,4 @@ async def test_resume_succeeds_when_graph_matches() -> None:
         )
     ]
 
-    assert any(isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE for event in events)
+    assert any(event.type == "status" and event.state == WorkflowRunState.IDLE for event in events)

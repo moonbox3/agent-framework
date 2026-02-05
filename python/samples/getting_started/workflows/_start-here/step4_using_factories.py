@@ -8,10 +8,9 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     executor,
     handler,
-    tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
@@ -86,7 +85,7 @@ async def main():
 
     output: AgentResponse | None = None
     async for event in workflow.run_stream("hello world"):
-        if isinstance(event, WorkflowOutputEvent) and isinstance(event.data, AgentResponse):
+        if event.type == "output" and isinstance(event.data, AgentResponse):
             output = event.data
 
     if output:

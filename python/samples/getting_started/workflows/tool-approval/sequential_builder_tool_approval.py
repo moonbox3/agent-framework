@@ -4,11 +4,12 @@ import asyncio
 from typing import Annotated
 
 from agent_framework import (
+    WorkflowEvent,
     ChatMessage,
     Content,
-    RequestInfoEvent,
+    
     SequentialBuilder,
-    WorkflowOutputEvent,
+    
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
@@ -24,7 +25,7 @@ This sample works as follows:
 1. A SequentialBuilder workflow is created with a single agent that has tools requiring approval.
 2. The agent receives a user task and determines it needs to call a sensitive tool.
 3. The tool call triggers a function_approval_request Content, pausing the workflow.
-4. The sample simulates human approval by responding to the RequestInfoEvent.
+4. The sample simulates human approval by responding to the .
 5. Once approved, the tool executes and the agent completes its response.
 6. The workflow outputs the final conversation with all messages.
 
@@ -34,7 +35,7 @@ requiring any additional builder configuration.
 
 Demonstrate:
 - Using @tool(approval_mode="always_require") for sensitive operations.
-- Handling RequestInfoEvent with function_approval_request Content in sequential workflows.
+- Handling  with function_approval_request Content in sequential workflows.
 - Resuming workflow execution after approval via send_responses_streaming.
 
 Prerequisites:
@@ -86,11 +87,11 @@ async def main() -> None:
     print("-" * 60)
 
     # Phase 1: Run workflow and collect all events (stream ends at IDLE or IDLE_WITH_PENDING_REQUESTS)
-    request_info_events: list[RequestInfoEvent] = []
+    request_info_events: list[WorkflowEvent] = []
     async for event in workflow.run_stream(
         "Check the schema and then update all orders with status 'pending' to 'processing'"
     ):
-        if isinstance(event, RequestInfoEvent):
+        if event.type == "request_info":
             request_info_events.append(event)
             if isinstance(event.data, Content) and event.data.type == "function_approval_request":
                 print(f"\nApproval requested for tool: {event.data.function_call.name}")
@@ -109,7 +110,7 @@ async def main() -> None:
                 # Phase 2: Send approval and continue workflow
                 output: list[ChatMessage] | None = None
                 async for event in workflow.send_responses_streaming({request_event.request_id: approval_response}):
-                    if isinstance(event, WorkflowOutputEvent):
+                    if event.type == "output":
                         output = event.data
 
                 if output:

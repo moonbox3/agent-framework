@@ -4,11 +4,12 @@ import asyncio
 from typing import Annotated
 
 from agent_framework import (
+    WorkflowEvent,
     ChatMessage,
     ConcurrentBuilder,
     Content,
-    RequestInfoEvent,
-    WorkflowOutputEvent,
+    
+    
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
@@ -34,7 +35,7 @@ agents may independently trigger approval requests.
 
 Demonstrate:
 - Handling multiple approval requests from different agents in concurrent workflows.
-- Handling RequestInfoEvent during concurrent agent execution.
+- Handling  during concurrent agent execution.
 - Understanding that approval pauses only the agent that triggered it, not all agents.
 
 Prerequisites:
@@ -84,12 +85,12 @@ def get_portfolio_balance() -> str:
     return "Portfolio: $50,000 invested, $10,000 cash available. Holdings: AAPL, GOOGL, MSFT."
 
 
-def _print_output(event: WorkflowOutputEvent) -> None:
+def _print_output(event: WorkflowEvent) -> None:
     if not event.data:
-        raise ValueError("WorkflowOutputEvent has no data")
+        raise ValueError("WorkflowEvent has no data")
 
     if not isinstance(event.data, list) and not all(isinstance(msg, ChatMessage) for msg in event.data):
-        raise ValueError("WorkflowOutputEvent data is not a list of ChatMessage")
+        raise ValueError("WorkflowEvent data is not a list of ChatMessage")
 
     messages: list[ChatMessage] = event.data  # type: ignore
 
@@ -131,17 +132,17 @@ async def main() -> None:
     print("-" * 60)
 
     # Phase 1: Run workflow and collect request info events
-    request_info_events: list[RequestInfoEvent] = []
+    request_info_events: list[WorkflowEvent] = []
     async for event in workflow.run_stream(
         "Manage my portfolio. Use a max of 5000 dollars to adjust my position using "
         "your best judgment based on market sentiment. No need to confirm trades with me."
     ):
-        if isinstance(event, RequestInfoEvent):
+        if event.type == "request_info":
             request_info_events.append(event)
             if isinstance(event.data, Content) and event.data.type == "function_approval_request":
                 print(f"\nApproval requested for tool: {event.data.function_call.name}")
                 print(f"  Arguments: {event.data.function_call.arguments}")
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             _print_output(event)
 
     # 6. Handle approval requests (if any)
@@ -156,7 +157,7 @@ async def main() -> None:
         if responses:
             # Phase 2: Send all approvals and continue workflow
             async for event in workflow.send_responses_streaming(responses):
-                if isinstance(event, WorkflowOutputEvent):
+                if event.type == "output":
                     _print_output(event)
     else:
         print("\nWorkflow completed without requiring approvals.")

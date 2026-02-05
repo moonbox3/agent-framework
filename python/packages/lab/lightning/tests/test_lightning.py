@@ -9,7 +9,7 @@ import pytest
 
 agentlightning = pytest.importorskip("agentlightning")
 
-from agent_framework import AgentExecutor, AgentResponse, ChatAgent, ExecutorEvent, WorkflowBuilder, Workflow
+from agent_framework import AgentExecutor, AgentResponse, ChatAgent, WorkflowBuilder, Workflow, WorkflowEvent
 from agent_framework_lab_lightning import AgentFrameworkTracer
 from agent_framework.openai import OpenAIChatClient
 from agentlightning import TracerTraceToTriplet
@@ -109,7 +109,7 @@ def workflow_two_agents():
 async def test_openai_workflow_two_agents(workflow_two_agents: Workflow):
     events = await workflow_two_agents.run("Please analyze the quarterly sales data")
 
-    # Get all ExecutorEvent[AgentResponse] data
+    # Get all data events with AgentResponse
     agent_outputs = [
         event.data for event in events if event.type == "data" and isinstance(event.data, AgentResponse)
     ]

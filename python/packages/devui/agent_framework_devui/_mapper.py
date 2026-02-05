@@ -183,7 +183,8 @@ class MessageMapper:
             # Handle WorkflowEvent with type='data' wrapping AgentResponseUpdate
             # This must be checked BEFORE generic WorkflowEvent check
             if isinstance(raw_event, WorkflowEvent) and raw_event.type == "data":
-                if isinstance(raw_event.data, AgentResponseUpdate):
+                # Extract the AgentResponseUpdate from the event's data attribute
+                if raw_event.data and isinstance(raw_event.data, AgentResponseUpdate):
                     # Preserve executor_id in context for proper output routing
                     context["current_executor_id"] = raw_event.executor_id
                     return await self._convert_agent_update(raw_event.data, context)

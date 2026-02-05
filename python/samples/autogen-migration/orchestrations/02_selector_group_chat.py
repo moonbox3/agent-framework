@@ -7,6 +7,8 @@ which agent should speak next based on the conversation context.
 
 import asyncio
 
+from agent_framework import AgentResponseUpdate
+
 
 async def run_autogen() -> None:
     """AutoGen's SelectorGroupChat with LLM-based speaker selection."""
@@ -59,7 +61,7 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's GroupChatBuilder with LLM-based speaker selection."""
-    from agent_framework import AgentResponseUpdate,  GroupChatBuilder
+    from agent_framework import GroupChatBuilder
     from agent_framework.openai import OpenAIChatClient
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")

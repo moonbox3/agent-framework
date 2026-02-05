@@ -28,7 +28,7 @@ from ._executor import Executor
 from ._model_utils import DictConvertible
 from ._runner import Runner
 from ._runner_context import RunnerContext
-from ._shared_state import SharedState
+from ._state import State
 from ._typing_utils import is_instance_of
 
 logger = logging.getLogger(__name__)
@@ -177,6 +177,7 @@ class Workflow(DictConvertible):
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         name: str | None = None,
         description: str | None = None,
+        output_executors: list[str] | None = None,
         **kwargs: Any,
     ):
         """Initialize the workflow with a list of edges.
@@ -189,6 +190,8 @@ class Workflow(DictConvertible):
             max_iterations: The maximum number of iterations the workflow will run for convergence.
             name: Optional human-readable name for the workflow.
             description: Optional description of what the workflow does.
+            output_executors: Optional list of executor IDs whose outputs will be considered workflow outputs.
+                              If None or empty, all executor outputs are treated as workflow outputs.
             kwargs: Additional keyword arguments. Unused in this implementation.
         """
         self.edge_groups = list(edge_groups)
@@ -199,13 +202,17 @@ class Workflow(DictConvertible):
         self.name = name
         self.description = description
 
+        # `WorkflowOutputEvent`s from these executors are treated as workflow outputs.
+        # If None or empty, all executor outputs are considered workflow outputs.
+        self._output_executors = list(output_executors) if output_executors else list(self.executors.keys())
+
         # Store non-serializable runtime objects as private attributes
         self._runner_context = runner_context
-        self._shared_state = SharedState()
+        self._state = State()
         self._runner: Runner = Runner(
             self.edge_groups,
             self.executors,
-            self._shared_state,
+            self._state,
             runner_context,
             max_iterations=max_iterations,
             workflow_id=self.id,
@@ -238,6 +245,7 @@ class Workflow(DictConvertible):
             "max_iterations": self.max_iterations,
             "edge_groups": [group.to_dict() for group in self.edge_groups],
             "executors": {executor_id: executor.to_dict() for executor_id, executor in self.executors.items()},
+            "output_executors": self._output_executors,
         }
 
         # Add optional name and description if provided
@@ -274,6 +282,10 @@ class Workflow(DictConvertible):
         """
         return self.executors[self.start_executor_id]
 
+    def get_output_executors(self) -> list[Executor]:
+        """Get the list of output executors in the workflow."""
+        return [self.executors[executor_id] for executor_id in self._output_executors]
+
     def get_executors_list(self) -> list[Executor]:
         """Get the list of executors in the workflow."""
         return list(self.executors.values())
@@ -294,7 +306,7 @@ class Workflow(DictConvertible):
             initial_executor_fn: Optional function to execute initial executor
             reset_context: Whether to reset the context for a new run
             streaming: Whether to enable streaming mode for agents
-            run_kwargs: Optional kwargs to store in SharedState for agent invocations
+            run_kwargs: Optional kwargs to store in State for agent invocations
 
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
@@ -327,11 +339,12 @@ class Workflow(DictConvertible):
                 if reset_context:
                     self._runner.reset_iteration_count()
                     self._runner.context.reset_for_new_run()
-                    await self._shared_state.clear()
+                    self._state.clear()
 
-                # Store run kwargs in SharedState so executors can access them
+                # Store run kwargs in State so executors can access them
                 # Always store (even empty dict) so retrieval is deterministic
-                await self._shared_state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs or {})
+                self._state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs or {})
+                self._state.commit()  # Commit immediately so kwargs are available
 
                 # Set streaming mode after reset
                 self._runner_context.set_streaming(streaming)
@@ -425,7 +438,7 @@ class Workflow(DictConvertible):
             await executor.execute(
                 message,
                 [self.__class__.__name__],
-                self._shared_state,
+                self._state,
                 self._runner.context,
                 trace_contexts=None,
                 source_span_ids=None,
@@ -454,7 +467,7 @@ class Workflow(DictConvertible):
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
             **kwargs: Additional keyword arguments to pass through to agent invocations.
-                     These are stored in SharedState and accessible in @tool functions
+                     These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.
 
         Yields:
@@ -536,6 +549,8 @@ class Workflow(DictConvertible):
                 streaming=True,
                 run_kwargs=kwargs if kwargs else None,
             ):
+                if event.type == "output" and not self._should_yield_output_event(event):
+                    continue
                 yield event
         finally:
             if checkpoint_storage is not None:
@@ -559,6 +574,8 @@ class Workflow(DictConvertible):
                 reset_context=False,  # Don't reset context when sending responses
                 streaming=True,
             ):
+                if event.type == "output" and not self._should_yield_output_event(event):
+                    continue
                 yield event
         finally:
             self._reset_running_flag()
@@ -588,7 +605,7 @@ class Workflow(DictConvertible):
                                  build-time configuration
             include_status_events: Whether to include WorkflowStatusEvent instances in the result list.
             **kwargs: Additional keyword arguments to pass through to agent invocations.
-                     These are stored in SharedState and accessible in @tool functions
+                     These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.
 
         Returns:
@@ -684,6 +701,8 @@ class Workflow(DictConvertible):
                 if include_status_events:
                     filtered.append(ev)
                 continue
+            if ev.type == "output" and not self._should_yield_output_event(ev):
+                continue
             filtered.append(ev)
 
         return WorkflowRunResult(filtered, status_events)
@@ -707,7 +726,13 @@ class Workflow(DictConvertible):
                 )
             ]
             status_events = [e for e in events if e.type == "status"]
-            filtered_events = [e for e in events if e.type not in ("status", "started")]
+            filtered_events: list[WorkflowEvent[Any]] = []
+            for e in events:
+                if e.type == "output" and not self._should_yield_output_event(e):
+                    continue
+                if e.type in ("status", "started"):
+                    continue
+                filtered_events.append(e)
             return WorkflowRunResult(filtered_events, status_events)
         finally:
             self._reset_running_flag()
@@ -746,6 +771,22 @@ class Workflow(DictConvertible):
         if executor_id not in self.executors:
             raise ValueError(f"Executor with ID {executor_id} not found.")
         return self.executors[executor_id]
+
+    def _should_yield_output_event(self, event: "WorkflowEvent[Any]") -> bool:
+        """Determine if an output event should be yielded as a workflow output.
+
+        Args:
+            event: The WorkflowEvent with type='output' to evaluate.
+
+        Returns:
+            True if the event should be yielded as a workflow output, False otherwise.
+        """
+        # If no specific output executors are defined, yield all outputs
+        if not self._output_executors:
+            return True
+
+        # Check if the event's source executor is in the list of output executors
+        return event.executor_id in self._output_executors
 
     # Graph signature helpers
 
@@ -848,7 +889,7 @@ class Workflow(DictConvertible):
         The returned agent converts standard agent inputs (strings, ChatMessage, or lists of these)
         into a list[ChatMessage] that is passed to the workflow's start executor. This conversion
         happens in WorkflowAgent._normalize_messages() which transforms:
-        - str -> [ChatMessage(role=USER, text=str)]
+        - str -> [ChatMessage(USER, [str])]
         - ChatMessage -> [ChatMessage]
         - list[str | ChatMessage] -> list[ChatMessage] (with string elements converted)
 

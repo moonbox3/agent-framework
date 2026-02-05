@@ -6,8 +6,9 @@ import asyncio
 from collections.abc import Sequence
 from typing import cast
 
-from agent_framework import ChatMessage, Role, SequentialBuilderWorkflowEvent
+from agent_framework import ChatMessage
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from azure.identity import AzureCliCredential
 from semantic_kernel.agents import Agent, ChatCompletionAgent, SequentialOrchestration
 from semantic_kernel.agents.runtime import InProcessRuntime
@@ -109,7 +110,7 @@ def _format_conversation(conversation: list[ChatMessage]) -> None:
 
     print("===== Agent Framework Sequential =====")
     for index, message in enumerate(conversation, start=1):
-        name = message.author_name or ("assistant" if message.role == Role.ASSISTANT else "user")
+        name = message.author_name or ("assistant" if message.role == "assistant" else "user")
         print(f"{'-' * 60}\n{index:02d} [{name}]\n{message.text}")
     print()
 

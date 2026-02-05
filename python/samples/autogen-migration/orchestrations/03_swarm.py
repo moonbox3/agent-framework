@@ -7,6 +7,8 @@ to other specialized agents based on the task requirements.
 
 import asyncio
 
+from agent_framework import AgentResponseUpdate, WorkflowEvent
+
 
 async def run_autogen() -> None:
     """AutoGen's Swarm pattern with human-in-the-loop handoffs."""
@@ -97,13 +99,9 @@ async def run_agent_framework() -> None:
     """Agent Framework's HandoffBuilder for agent coordination."""
     from agent_framework import (
         AgentResponseUpdate,
-        
         HandoffBuilder,
         HandoffUserInputRequest,
-        
         WorkflowRunState,
-        
-        tool,
     )
     from agent_framework.openai import OpenAIChatClient
 
@@ -141,9 +139,9 @@ async def run_agent_framework() -> None:
             name="support_handoff",
             participants=[triage_agent, billing_agent, tech_support],
         )
-        .set_coordinator(triage_agent)
+        .with_start_agent(triage_agent)
         .add_handoff(triage_agent, [billing_agent, tech_support])
-        .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role.value == "user") > 3)
+        .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role == "user") > 3)
         .build()
     )
 

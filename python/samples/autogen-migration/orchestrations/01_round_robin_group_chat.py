@@ -7,6 +7,8 @@ the task in a round-robin fashion.
 
 import asyncio
 
+from agent_framework import AgentResponseUpdate, WorkflowEvent
+
 
 async def run_autogen() -> None:
     """AutoGen's RoundRobinGroupChat for sequential agent orchestration."""
@@ -53,7 +55,7 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's SequentialBuilder for sequential agent orchestration."""
-    from agent_framework import AgentResponseUpdate,  SequentialBuilder
+    from agent_framework import SequentialBuilder
     from agent_framework.openai import OpenAIChatClient
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
@@ -88,8 +90,7 @@ async def run_agent_framework() -> None:
                     print()  # Newline after previous agent's message
                 print(f"---------- {event.executor_id} ----------")
                 current_executor = event.executor_id
-            if event.data:
-                print(event.data.text, end="", flush=True)
+            print(event.data.text, end="", flush=True)
     print()  # Final newline after conversation
 
 
@@ -99,12 +100,9 @@ async def run_agent_framework_with_cycle() -> None:
         AgentExecutorRequest,
         AgentExecutorResponse,
         AgentResponseUpdate,
-        
         WorkflowBuilder,
         WorkflowContext,
-        
         executor,
-        tool,
     )
     from agent_framework.openai import OpenAIChatClient
 

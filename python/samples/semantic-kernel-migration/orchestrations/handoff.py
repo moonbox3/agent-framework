@@ -8,13 +8,9 @@ from typing import cast
 
 from agent_framework import (
     ChatMessage,
-    HandoffBuilder,
-    HandoffUserInputRequest,
-    
     WorkflowEvent,
-    
-    tool,
 )
+from agent_framework.orchestrations import HandoffBuilder, HandoffUserInputRequest
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 from semantic_kernel.agents import Agent, ChatCompletionAgent, HandoffOrchestration, OrchestrationHandoffs
@@ -269,7 +265,7 @@ async def run_agent_framework_example(initial_task: str, scripted_responses: Seq
         text = message.text or ""
         if not text.strip():
             continue
-        speaker = message.author_name or message.role.value
+        speaker = message.author_name or message.role
         lines.append(f"{speaker}: {text}")
     return "\n".join(lines)
 

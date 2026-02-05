@@ -12,11 +12,9 @@ from typing import cast
 from agent_framework import (
     AgentResponseUpdate,
     ChatMessage,
-    
-    MagenticOrchestratorEvent,
-    MagenticProgressLedger,
-    
+    WorkflowEvent,
 )
+from agent_framework.orchestrations import MagenticOrchestratorEvent, MagenticProgressLedger
 
 
 async def run_autogen() -> None:
@@ -68,7 +66,7 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's MagenticBuilder for orchestrated collaboration."""
-    from agent_framework import MagenticBuilder
+    from agent_framework.orchestrations import MagenticBuilder
     from agent_framework.openai import OpenAIChatClient
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")

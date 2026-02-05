@@ -7,19 +7,16 @@ from pathlib import Path
 from typing import cast
 
 from agent_framework import (
-    WorkflowEvent,
+    AgentResponse,
     ChatAgent,
     ChatMessage,
     Content,
     FileCheckpointStorage,
-    HandoffAgentUserRequest,
-    HandoffBuilder,
-    
     Workflow,
-    
-    
+    WorkflowEvent,
     tool,
 )
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from agent_framework.azure import AzureOpenAIChatClient
 from azure.identity import AzureCliCredential
 
@@ -27,7 +24,7 @@ from azure.identity import AzureCliCredential
 Sample: Handoff Workflow with Tool Approvals + Checkpoint Resume
 
 Demonstrates the two-step pattern for resuming a handoff workflow from a checkpoint
-while handling both HandoffUserInputRequest prompts and function approval request Content
+while handling both HandoffAgentUserRequest prompts and function approval request Content
 for tool calls (e.g., submit_refund).
 
 Scenario:
@@ -107,7 +104,7 @@ def create_workflow(checkpoint_storage: FileCheckpointStorage) -> tuple[Workflow
         .with_checkpointing(checkpoint_storage)
         .with_termination_condition(
             # Terminate after 5 user messages for this demo
-            lambda conv: sum(1 for msg in conv if msg.role.value == "user") >= 5
+            lambda conv: sum(1 for msg in conv if msg.role == "user") >= 5
         )
         .build()
     )
@@ -125,7 +122,7 @@ def _print_handoff_agent_user_request(response: AgentResponse) -> None:
     for message in response.messages:
         if not message.text:
             continue
-        speaker = message.author_name or message.role.value
+        speaker = message.author_name or message.role
         print(f"  {speaker}: {message.text}")
 
 
@@ -134,6 +131,7 @@ def _print_handoff_request(request: HandoffAgentUserRequest, request_id: str) ->
     print(f"\n{'=' * 60}")
     print("WORKFLOW PAUSED - User input needed")
     print(f"Request ID: {request_id}")
+    print(f"Awaiting agent: {request.agent_response.agent_id}")
 
     _print_handoff_agent_user_request(request.agent_response)
 
@@ -142,11 +140,11 @@ def _print_handoff_request(request: HandoffAgentUserRequest, request_id: str) ->
 
 def _print_function_approval_request(request: Content, request_id: str) -> None:
     """Log pending tool approval details for debugging."""
-    args = request.function_call.parse_arguments() or {}
+    args = request.function_call.parse_arguments() or {}  # type: ignore
     print(f"\n{'=' * 60}")
     print("WORKFLOW PAUSED - Tool approval required")
     print(f"Request ID: {request_id}")
-    print(f"Function: {request.function_call.name}")
+    print(f"Function: {request.function_call.name}")  # type: ignore
     print(f"Arguments:\n{json.dumps(args, indent=2)}")
     print(f"{'=' * 60}\n")
 
@@ -162,7 +160,7 @@ def _build_responses_for_requests(
     for request in pending_requests:
         if isinstance(request.data, HandoffAgentUserRequest):
             if user_response is None:
-                raise ValueError("User response is required for HandoffUserInputRequest")
+                raise ValueError("User response is required for HandoffAgentUserRequest")
             responses[request.request_id] = user_response
         elif isinstance(request.data, Content) and request.data.type == "function_approval_request":
             if approve_tools is None:
@@ -282,11 +280,11 @@ async def resume_with_responses(
 
         elif event.type == "output":
             print("\n[Workflow Output Event - Conversation Update]")
-            if event.data and isinstance(event.data, list) and all(isinstance(msg, ChatMessage) for msg in event.data):
+            if event.data and isinstance(event.data, list) and all(isinstance(msg, ChatMessage) for msg in event.data):  # type: ignore
                 # Now safe to cast event.data to list[ChatMessage]
-                conversation = cast(list[ChatMessage], event.data)
+                conversation = cast(list[ChatMessage], event.data)  # type: ignore
                 for msg in conversation[-3:]:  # Show last 3 messages
-                    author = msg.author_name or msg.role.value
+                    author = msg.author_name or msg.role
                     text = msg.text[:100] + "..." if len(msg.text) > 100 else msg.text
                     print(f"  {author}: {text}")
 

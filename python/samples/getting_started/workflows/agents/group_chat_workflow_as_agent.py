@@ -42,7 +42,7 @@ async def main() -> None:
         )
         .participants([researcher, writer])
         # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
+        # Intermediate outputs will be emitted as WorkflowEvent with type "output" events
         .with_intermediate_outputs()
         .build()
     )

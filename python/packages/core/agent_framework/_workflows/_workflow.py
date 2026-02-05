@@ -142,7 +142,7 @@ class Workflow(DictConvertible):
     Executors within a workflow can request external input using `ctx.request_info()`:
     1. Executor calls `ctx.request_info()` to request input
     2. Executor implements `response_handler()` to process the response
-    3. Requests are emitted as RequestInfoEvent instances in the event stream
+    3. Requests are emitted as request_info events (WorkflowEvent with type='request_info') in the event stream
     4. Workflow enters IDLE_WITH_PENDING_REQUESTS state
     5. Caller handles requests and provides responses via the `send_responses` or `send_responses_streaming` methods
     6. Responses are routed to the requesting executors and response handlers are invoked
@@ -202,7 +202,7 @@ class Workflow(DictConvertible):
         self.name = name
         self.description = description
 
-        # `WorkflowOutputEvent`s from these executors are treated as workflow outputs.
+        # Output events (WorkflowEvent with type='output') from these executors are treated as workflow outputs.
         # If None or empty, all executor outputs are considered workflow outputs.
         self._output_executors = list(output_executors) if output_executors else list(self.executors.keys())
 
@@ -603,7 +603,7 @@ class Workflow(DictConvertible):
                                - With checkpoint_id: Used to load and restore the specified checkpoint
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
-            include_status_events: Whether to include WorkflowStatusEvent instances in the result list.
+            include_status_events: Whether to include status events (WorkflowEvent with type='status') in the result list.
             **kwargs: Additional keyword arguments to pass through to agent invocations.
                      These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.

@@ -36,7 +36,7 @@ writer_agent (uses Azure OpenAI tools) -> Coordinator -> writer_agent
 -> Coordinator -> final_editor_agent -> Coordinator -> output
 
 The writer agent calls tools to gather product facts before drafting copy. A custom executor
-packages the draft and emits a RequestInfoEvent so a human can comment, then replays the human
+packages the draft and emits a request_info event (type='request_info') so a human can comment, then replays the human
 guidance back into the conversation before the final editor agent produces the polished output.
 
 Demonstrates:

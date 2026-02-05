@@ -7,8 +7,8 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowCheckpointException,
     WorkflowContext,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
     handler,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage

@@ -26,13 +26,13 @@ from collections.abc import AsyncIterable
 from typing import Any
 
 from agent_framework import (
+    AgentExecutorResponse,
     AgentRequestInfoResponse,
     ChatMessage,
-    ConcurrentBuilder,
     WorkflowEvent,
 )
-from agent_framework._workflows._agent_executor import AgentExecutorResponse
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 # Store chat client at module level for aggregator access
@@ -96,8 +96,11 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, AgentExecutorResponse] = {}
     async for event in stream:
-        if event.type == "request_info" and isinstance(event.data, AgentExecutorResponse):
-            # Display agent output for review and potential modification
+        if (
+            event.type == "request_info"
+            and isinstance(event.data, AgentExecutorResponse)
+            and event.request_id is not None
+        ):
             requests[event.request_id] = event.data
 
         if event.type == "output":

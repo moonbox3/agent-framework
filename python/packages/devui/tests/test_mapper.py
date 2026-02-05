@@ -573,18 +573,18 @@ async def test_unknown_content_fallback(mapper: MessageMapper, test_request: Age
 
 
 # =============================================================================
-# WorkflowOutputEvent Tests
+# output event (type='output') Tests
 # =============================================================================
 
 
 async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='output') is converted to output_item.added."""
+    """Test output event (type='output') is converted to output_item.added."""
     from agent_framework._workflows._events import WorkflowEvent
 
     event = WorkflowEvent.output(executor_id="final_executor", data="Final workflow output")
     events = await mapper.convert_event(event, test_request)
 
-    # WorkflowOutputEvent should emit output_item.added
+    # output event (type='output') should emit output_item.added
     assert len(events) == 1
     assert events[0].type == "response.output_item.added"
     # Check item contains the output text
@@ -594,7 +594,7 @@ async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentF
 
 
 async def test_workflow_output_event_with_list_data(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='output') with list data (common for sequential/concurrent workflows)."""
+    """Test output event (type='output') with list data (common for sequential/concurrent workflows)."""
     from agent_framework import ChatMessage
     from agent_framework._workflows._events import WorkflowEvent
 
@@ -611,12 +611,12 @@ async def test_workflow_output_event_with_list_data(mapper: MessageMapper, test_
 
 
 # =============================================================================
-# WorkflowFailedEvent Tests
+# failed event (type='failed') Tests
 # =============================================================================
 
 
 async def test_workflow_failed_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='failed') is converted to response.failed."""
+    """Test failed event (type='failed') is converted to response.failed."""
     from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
@@ -627,7 +627,7 @@ async def test_workflow_failed_event(mapper: MessageMapper, test_request: AgentF
     event = WorkflowEvent.failed(details=details)
     events = await mapper.convert_event(event, test_request)
 
-    # WorkflowFailedEvent should emit response.failed
+    # failed event (type='failed') should emit response.failed
     assert len(events) >= 1
     # Find the failed event
     failed_events = [e for e in events if getattr(e, "type", "") == "response.failed"]
@@ -642,7 +642,7 @@ async def test_workflow_failed_event(mapper: MessageMapper, test_request: AgentF
 
 
 async def test_workflow_failed_event_with_extra(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='failed') includes extra context when available."""
+    """Test failed event (type='failed') includes extra context when available."""
     from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
@@ -664,7 +664,7 @@ async def test_workflow_failed_event_with_extra(mapper: MessageMapper, test_requ
 
 
 async def test_workflow_failed_event_with_traceback(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='failed') includes traceback when available."""
+    """Test failed event (type='failed') includes traceback when available."""
     from agent_framework._workflows._events import WorkflowErrorDetails, WorkflowEvent
 
     details = WorkflowErrorDetails(
@@ -712,12 +712,12 @@ async def test_workflow_error_event(mapper: MessageMapper, test_request: AgentFr
 
 
 # =============================================================================
-# RequestInfoEvent Tests (Human-in-the-Loop)
+# request_info event (type='request_info') Tests (Human-in-the-Loop)
 # =============================================================================
 
 
 async def test_request_info_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='request_info') is converted to HIL request event."""
+    """Test request_info event (type='request_info') is converted to HIL request event."""
     from agent_framework._workflows._events import WorkflowEvent
 
     event = WorkflowEvent.request_info(
@@ -728,7 +728,7 @@ async def test_request_info_event(mapper: MessageMapper, test_request: AgentFram
     )
     events = await mapper.convert_event(event, test_request)
 
-    # RequestInfoEvent should emit response.request_info.requested
+    # request_info event (type='request_info') should emit response.request_info.requested
     assert len(events) >= 1
     # Check that request info is captured
     has_hil_event = any(getattr(e, "type", "") == "response.request_info.requested" for e in events)
@@ -746,24 +746,24 @@ async def test_request_info_event(mapper: MessageMapper, test_request: AgentFram
 
 
 async def test_superstep_started_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='superstep_started') is handled gracefully."""
+    """Test superstep_started event (type='superstep_started') is handled gracefully."""
     from agent_framework._workflows._events import WorkflowEvent
 
     event = WorkflowEvent.superstep_started(iteration=1)
     events = await mapper.convert_event(event, test_request)
 
-    # SuperStepStartedEvent may not emit events (internal workflow signal)
+    # superstep_started event (type='superstep_started') may not emit events (internal workflow signal)
     # Just ensure it doesn't crash
     assert isinstance(events, list)
 
 
 async def test_superstep_completed_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
-    """Test WorkflowEvent(type='superstep_completed') is handled gracefully."""
+    """Test superstep_completed event (type='superstep_completed') is handled gracefully."""
     from agent_framework._workflows._events import WorkflowEvent
 
     event = WorkflowEvent.superstep_completed(iteration=1)
     events = await mapper.convert_event(event, test_request)
 
-    # SuperStepCompletedEvent may not emit events (internal workflow signal)
+    # superstep_completed event (type='superstep_completed') may not emit events (internal workflow signal)
     # Just ensure it doesn't crash
     assert isinstance(events, list)

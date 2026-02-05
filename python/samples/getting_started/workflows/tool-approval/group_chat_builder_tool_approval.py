@@ -34,7 +34,7 @@ different agents have different levels of tool access.
 
 Demonstrate:
 - Using set_select_speakers_func with agents that have approval-required tools.
-- Handling RequestInfoEvent in group chat scenarios.
+- Handling request_info events (type='request_info') in group chat scenarios.
 - Multi-round group chat with tool approval interruption and resumption.
 
 Prerequisites:

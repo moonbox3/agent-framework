@@ -13,7 +13,6 @@ from agent_framework import (
     ChatMessage,
     Content,
     WorkflowRunState,
-    WorkflowStatusEvent,
     tool,
 )
 from agent_framework._workflows._const import WORKFLOW_RUN_KWARGS_KEY

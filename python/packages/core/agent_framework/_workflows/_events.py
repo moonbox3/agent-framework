@@ -7,17 +7,16 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Literal, TypeAlias
+from typing import Any, Generic, Literal, cast
+
+from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
+from ._typing_utils import deserialize_type, serialize_type
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
 else:
     from typing_extensions import TypeVar  # type: ignore[import] # pragma: no cover
 
-from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value
-from ._typing_utils import deserialize_type, serialize_type
-
-# TypeVar with default parameter (Python 3.13+ feature, backported via typing_extensions)
 DataT = TypeVar("DataT", default=Any)
 
 
@@ -309,9 +308,7 @@ class WorkflowEvent(Generic[DataT]):
         return cls("executor_completed", executor_id=executor_id, data=data)
 
     @classmethod
-    def executor_failed(
-        cls, executor_id: str, details: WorkflowErrorDetails
-    ) -> "WorkflowEvent[WorkflowErrorDetails]":
+    def executor_failed(cls, executor_id: str, details: WorkflowErrorDetails) -> "WorkflowEvent[WorkflowErrorDetails]":
         """Create an 'executor_failed' event when an executor handler raises an error."""
         return WorkflowEvent("executor_failed", executor_id=executor_id, data=details, details=details)
 
@@ -353,13 +350,6 @@ class WorkflowEvent(Generic[DataT]):
         return cls.request_info(
             request_id=data["request_id"],
             source_executor_id=data["source_executor_id"],
-            request_data=request_data,
+            request_data=cast(Any, request_data),  # type: ignore
             response_type=deserialize_type(data["response_type"]),
         )
-
-
-# Type alias for backwards compatibility
-WorkflowLifecycleEvent: TypeAlias = WorkflowEvent[Any]
-
-# Backwards compatibility alias - ExecutorEvent is now just WorkflowEvent
-ExecutorEvent: TypeAlias = WorkflowEvent[DataT]  # type: ignore[type-arg]

@@ -261,10 +261,10 @@ class AgentFrameworkExecutor:
                         yield event
                 elif entity_info.type == "workflow":
                     async for event in self._execute_workflow(entity_obj, request, trace_collector):
-                        # Log RequestInfoEvent for debugging HIL flow
+                        # Log request_info event (type='request_info') for debugging HIL flow
                         event_class = event.__class__.__name__ if hasattr(event, "__class__") else type(event).__name__
                         if event_class == "RequestInfoEvent":
-                            logger.info("🔔 [EXECUTOR] RequestInfoEvent detected from workflow!")
+                            logger.info("🔔 [EXECUTOR] request_info event (type='request_info') detected from workflow!")
                             logger.info(f"   request_id: {getattr(event, 'request_id', 'N/A')}")
                             logger.info(f"   source_executor_id: {getattr(event, 'source_executor_id', 'N/A')}")
                             logger.info(f"   request_type: {getattr(event, 'request_type', 'N/A')}")
@@ -526,7 +526,7 @@ class AgentFrameworkExecutor:
                         logger.warning(f"Could not convert HIL responses to proper types: {e}")
 
                     async for event in workflow.send_responses_streaming(hil_responses):
-                        # Enrich new RequestInfoEvents that may come from subsequent HIL requests
+                        # Enrich new request_info events (type='request_info') that may come from subsequent HIL requests
                         if event.type == "request_info":
                             self._enrich_request_info_event_with_response_schema(event, workflow)
 
@@ -555,7 +555,7 @@ class AgentFrameworkExecutor:
 
                         yield event
 
-                        # Note: Removed break on RequestInfoEvent - continue yielding all events
+                        # Note: Removed break on request_info event (type='request_info') - continue yielding all events
                         # The workflow is already paused by ctx.request_info() in the framework
                         # DevUI should continue yielding events even during HIL pause
 
@@ -579,7 +579,7 @@ class AgentFrameworkExecutor:
 
                     yield event
 
-                    # Note: Removed break on RequestInfoEvent - continue yielding all events
+                    # Note: Removed break on request_info event (type='request_info') - continue yielding all events
                     # The workflow is already paused by ctx.request_info() in the framework
                     # DevUI should continue yielding events even during HIL pause
 
@@ -1024,10 +1024,10 @@ class AgentFrameworkExecutor:
             return raw_input
 
     def _enrich_request_info_event_with_response_schema(self, event: Any, workflow: Any) -> None:
-        """Extract response type from workflow executor and attach response schema to RequestInfoEvent.
+        """Extract response type from workflow executor and attach response schema to request_info event (type='request_info').
 
         Args:
-            event: RequestInfoEvent to enrich
+            event: request_info event (type='request_info') to enrich
             workflow: Workflow object containing executors
         """
         try:
@@ -1038,7 +1038,7 @@ class AgentFrameworkExecutor:
             request_type = getattr(event, "request_type", None)
 
             if not source_executor_id or not request_type:
-                logger.debug("RequestInfoEvent missing source_executor_id or request_type")
+                logger.debug("request_info event (type='request_info') missing source_executor_id or request_type")
                 return
 
             # Find the source executor in the workflow
@@ -1071,4 +1071,4 @@ class AgentFrameworkExecutor:
                 event._response_schema = response_schema
 
         except Exception as e:
-            logger.warning(f"Failed to enrich RequestInfoEvent with response schema: {e}")
+            logger.warning(f"Failed to enrich request_info event (type='request_info') with response schema: {e}")

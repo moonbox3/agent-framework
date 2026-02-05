@@ -91,7 +91,7 @@ async def main() -> None:
         # have nothing to add, but for demo purposes we want to see at least one full round of interaction.
         .with_termination_condition(lambda conversation: len(conversation) >= 6)
         # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
+        # Intermediate outputs will be emitted as WorkflowEvent with type "output" events
         .with_intermediate_outputs()
         .build()
     )

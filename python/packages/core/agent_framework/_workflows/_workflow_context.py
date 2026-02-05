@@ -277,10 +277,10 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         self._runner_context = runner_context
         self._state = state
 
-        # Track messages sent via send_message() for ExecutorCompletedEvent
+        # Track messages sent via send_message() for executor_completed event (type='executor_completed')
         self._sent_messages: list[Any] = []
 
-        # Track outputs yielded via yield_output() for ExecutorCompletedEvent
+        # Track outputs yielded via yield_output() for executor_completed event (type='executor_completed')
         self._yielded_outputs: list[Any] = []
 
         # Store trace contexts and source span IDs for linking (supporting multiple sources)
@@ -321,7 +321,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
             # Create Message wrapper
             msg = Message(data=message, source_id=self._executor_id, target_id=target_id)
 
-            # Track sent message for ExecutorCompletedEvent
+            # Track sent message for executor_completed event (type='executor_completed')
             self._sent_messages.append(message)
 
             # Inject current trace context if tracing enabled
@@ -341,7 +341,8 @@ class WorkflowContext(Generic[OutT, W_OutT]):
             output: The output to yield. This must conform to the workflow output type(s)
                     declared on this context.
         """
-        # Track yielded output for ExecutorCompletedEvent (deepcopy to capture state at yield time)
+        # Track yielded output for executor_completed event (type='executor_completed')
+        # (deepcopy to capture state at yield time)
         self._yielded_outputs.append(copy.deepcopy(output))
 
         with _framework_event_origin():
@@ -364,7 +365,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
     async def request_info(self, request_data: object, response_type: type, *, request_id: str | None = None) -> None:
         """Request information from outside of the workflow.
 
-        Calling this method will cause the workflow to emit a RequestInfoEvent, carrying the
+        Calling this method will cause the workflow to emit a request_info event (type='request_info'), carrying the
         provided request_data and request_type. External systems listening for such events
         can then process the request and respond accordingly.
 

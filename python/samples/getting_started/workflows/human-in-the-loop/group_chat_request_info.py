@@ -30,10 +30,10 @@ from agent_framework import (
     AgentExecutorResponse,
     AgentRequestInfoResponse,
     ChatMessage,
-    GroupChatBuilder,
     WorkflowEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import GroupChatBuilder
 from azure.identity import AzureCliCredential
 
 
@@ -42,7 +42,11 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, AgentExecutorResponse] = {}
     async for event in stream:
-        if event.type == "request_info" and isinstance(event.data, AgentExecutorResponse):
+        if (
+            event.type == "request_info"
+            and isinstance(event.data, AgentExecutorResponse)
+            and event.request_id is not None
+        ):
             requests[event.request_id] = event.data
 
         if event.type == "output":

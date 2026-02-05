@@ -499,11 +499,15 @@ class InProcRunnerContext:
                 f"expected {event.response_type.__name__}, got {type(response).__name__}"
             )
 
+        source_executor_id = event.source_executor_id
+        if source_executor_id is None:
+            raise RuntimeError("request_info event must have a source_executor_id for response routing")
+
         # Create ResponseMessage instance
         response_msg = Message(
             data=response,
-            source_id=INTERNAL_SOURCE_ID(event.source_executor_id),
-            target_id=event.source_executor_id,
+            source_id=INTERNAL_SOURCE_ID(source_executor_id),
+            target_id=source_executor_id,
             type=MessageType.RESPONSE,
             original_request_info_event=event,
         )

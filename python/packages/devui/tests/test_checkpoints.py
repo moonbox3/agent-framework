@@ -432,7 +432,7 @@ class TestIntegration:
             if event.type == "status" and "IDLE_WITH_PENDING_REQUESTS" in str(event.state):
                 break
 
-        assert saw_request_event, "Test workflow should have emitted RequestInfoEvent"
+        assert saw_request_event, "Test workflow should have emitted request_info event (type='request_info')"
 
         # Verify checkpoint was AUTOMATICALLY saved to our storage by the framework
         checkpoints_after = await checkpoint_storage.list_checkpoints()

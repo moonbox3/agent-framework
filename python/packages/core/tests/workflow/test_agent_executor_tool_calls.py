@@ -99,7 +99,7 @@ async def test_agent_executor_emits_tool_calls_in_streaming_mode() -> None:
     # Act: run in streaming mode
     events: list[WorkflowEvent[AgentResponseUpdate]] = []
     async for event in workflow.run_stream("What's the weather?"):
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             events.append(event)
 
     # Assert: we should receive 4 events (text, function call, function result, text)
@@ -270,7 +270,7 @@ async def test_agent_executor_tool_call_with_approval_streaming() -> None:
     workflow = WorkflowBuilder().set_start_executor(agent).add_edge(agent, test_executor).build()
 
     # Act
-    request_info_events: list[RequestInfoEvent] = []
+    request_info_events: list[WorkflowEvent] = []
     async for event in workflow.run_stream("Invoke tool requiring approval"):
         if event.type == "request_info":
             request_info_events.append(event)
@@ -347,7 +347,7 @@ async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> No
     workflow = WorkflowBuilder().set_start_executor(agent).add_edge(agent, test_executor).build()
 
     # Act
-    request_info_events: list[RequestInfoEvent] = []
+    request_info_events: list[WorkflowEvent] = []
     async for event in workflow.run_stream("Invoke tool requiring approval"):
         if event.type == "request_info":
             request_info_events.append(event)

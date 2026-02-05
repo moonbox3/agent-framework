@@ -189,8 +189,8 @@ class WorkflowExecutor(Executor):
 
     ## Error Handling
     WorkflowExecutor propagates sub-workflow failures:
-    - Captures WorkflowFailedEvent from sub-workflow
-    - Converts to WorkflowErrorEvent in parent context
+    - Captures failed event (type='failed') from sub-workflow
+    - Converts to error event in parent context
     - Provides detailed error information including sub-workflow ID
 
     ## Concurrent Execution Support
@@ -419,8 +419,11 @@ class WorkflowExecutor(Executor):
             response: The response to a previous request.
             ctx: The workflow context.
         """
+        request_id = response.source_event.request_id
+        if request_id is None:
+            raise RuntimeError("SubWorkflowResponseMessage source_event must have a request_id")
         await self._handle_response(
-            request_id=response.source_event.request_id,
+            request_id=request_id,
             response=response.data,
             ctx=ctx,
         )
@@ -548,15 +551,21 @@ class WorkflowExecutor(Executor):
 
         # Process request info events
         for event in request_info_events:
+            request_id = event.request_id
+            response_type = event.response_type
+            if request_id is None:
+                raise RuntimeError("request_info event must have a request_id")
+            if response_type is None:
+                raise RuntimeError("request_info event must have a response_type")
             # Track the pending request in execution context
-            execution_context.pending_requests[event.request_id] = event
+            execution_context.pending_requests[request_id] = event
             # Map request to execution for response routing
-            self._request_to_execution[event.request_id] = execution_context.execution_id
+            self._request_to_execution[request_id] = execution_context.execution_id
             if self._propagate_request:
                 # In a workflow where the parent workflow does not handle the request, the request
                 # should be propagated via the `request_info` mechanism to an external source. And
                 # a @response_handler would be required in the WorkflowExecutor to handle the response.
-                await ctx.request_info(event.data, event.response_type, request_id=event.request_id)
+                await ctx.request_info(event.data, response_type, request_id=request_id)
             else:
                 # In a workflow where the parent workflow has an executor that may intercept the
                 # request and handle it directly, a message should be sent.
@@ -567,15 +576,18 @@ class WorkflowExecutor(Executor):
 
         # Handle final state
         if workflow_run_state == WorkflowRunState.FAILED:
-            # Find the WorkflowFailedEvent.
+            # Find the failed event (type='failed').
             failed_events = [e for e in result if isinstance(e, WorkflowEvent) and e.type == "failed"]
             if failed_events:
                 failed_event = failed_events[0]
-                error_type = failed_event.details.error_type
-                error_message = failed_event.details.message
-                exception = Exception(
-                    f"Sub-workflow {self.workflow.id} failed with error: {error_type} - {error_message}"
-                )
+                if failed_event.details is not None:
+                    error_type = failed_event.details.error_type
+                    error_message = failed_event.details.message
+                    exception = Exception(
+                        f"Sub-workflow {self.workflow.id} failed with error: {error_type} - {error_message}"
+                    )
+                else:
+                    exception = Exception(f"Sub-workflow {self.workflow.id} failed with unknown error")
                 error_event = WorkflowEvent.error(exception)
                 await ctx.add_event(error_event)
         elif workflow_run_state == WorkflowRunState.IDLE:

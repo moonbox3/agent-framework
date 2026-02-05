@@ -73,7 +73,7 @@ async def main() -> None:
         # The agent orchestrator will intelligently decide when to end before this limit but just in case
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4)
         # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
+        # Intermediate outputs will be emitted as WorkflowEvent with type "output" events
         .with_intermediate_outputs()
         .build()
     )

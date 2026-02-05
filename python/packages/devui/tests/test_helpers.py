@@ -296,7 +296,7 @@ def create_agent_executor_response(
     executor_id: str = "test_executor",
     response_text: str = "Executor response",
 ) -> AgentExecutorResponse:
-    """Create an AgentExecutorResponse - the type that's nested in ExecutorEvent (kind=COMPLETED).data."""
+    """Create an AgentExecutorResponse - the type that's nested in executor_completed event (type='executor_completed').data."""
     agent_response = create_agent_run_response(response_text)
     return AgentExecutorResponse(
         executor_id=executor_id,

@@ -934,7 +934,7 @@ class MessageMapper:
 
                     # Emit output_item.added for each yield_output
                     logger.debug(
-                        f"WorkflowOutputEvent converted to output_item.added "
+                        f"output event (type='output') converted to output_item.added "
                         f"(executor: {executor_id}, length: {len(text)})"
                     )
                     return [
@@ -953,8 +953,8 @@ class MessageMapper:
 
             if event_type == "failed":
                 workflow_id = context.get("workflow_id", str(uuid4()))
-                # WorkflowFailedEvent uses 'details' field (WorkflowErrorDetails), not 'error'
-                # This matches ExecutorFailedEvent which also uses 'details'
+                # failed event (type='failed') uses 'details' field (WorkflowErrorDetails), not 'error'
+                # This matches executor_failed event which also uses 'details'
                 details = getattr(event, "details", None)
 
                 # Import Response and ResponseError types
@@ -1039,7 +1039,7 @@ class MessageMapper:
                         context.pop("current_executor_id", None)
 
                     # Create ExecutorActionItem with completed status
-                    # ExecutorEvent (kind=EXECUTOR_COMPLETED) uses 'data' field, not 'result'
+                    # executor_completed event (type='executor_completed') uses 'data' field, not 'result'
                     # Serialize the result data to ensure it's JSON-serializable
                     # (AgentExecutorResponse contains AgentResponse/ChatMessage which are SerializationMixin)
                     raw_result = getattr(event, "data", None)
@@ -1065,8 +1065,8 @@ class MessageMapper:
             if event_type == "executor_failed":
                     executor_id = getattr(event, "executor_id", "unknown")
                     item_id = context.get(f"exec_item_{executor_id}", f"exec_{executor_id}_unknown")
-                    # ExecutorEvent (kind=EXECUTOR_FAILED) uses 'details' property (WorkflowErrorDetails), not 'error'
-                    # This matches ExecutorEvent.details which returns self.data for EXECUTOR_FAILED kind
+                    # executor_failed event (type='executor_failed') uses 'details' property (WorkflowErrorDetails), not 'error'
+                    # This matches WorkflowEvent.details which returns self.data for executor_failed type
                     details = getattr(event, "details", None)
                     if details:
                         err_msg = getattr(details, "message", None) or str(details)
@@ -1104,7 +1104,7 @@ class MessageMapper:
                 request_type_class = getattr(event, "request_type", None)
                 request_data = getattr(event, "data", None)
 
-                logger.info("📨 [MAPPER] Processing RequestInfoEvent")
+                logger.info("📨 [MAPPER] Processing request_info event (type='request_info')")
                 logger.info(f"   request_id: {request_id}")
                 logger.info(f"   source_executor_id: {source_executor_id}")
                 logger.info(f"   request_type_class: {request_type_class}")

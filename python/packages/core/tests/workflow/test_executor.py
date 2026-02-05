@@ -138,7 +138,7 @@ def test_executor_handlers_with_output_types():
 
 
 async def test_executor_invoked_event_contains_input_data():
-    """Test that ExecutorEvent (kind=INVOKED) contains the input message data."""
+    """Test that executor_invoked event (type='executor_invoked') contains the input message data."""
 
     class UpperCaseExecutor(Executor):
         @handler
@@ -172,7 +172,7 @@ async def test_executor_invoked_event_contains_input_data():
 
 
 async def test_executor_completed_event_contains_sent_messages():
-    """Test that ExecutorEvent (kind=COMPLETED) contains the messages sent via ctx.send_message()."""
+    """Test that executor_completed event (type='executor_completed') contains the messages sent via ctx.send_message()."""
 
     class MultiSenderExecutor(Executor):
         @handler
@@ -230,10 +230,10 @@ async def test_executor_completed_event_includes_yielded_outputs():
 
     assert len(completed_events) == 1
     assert completed_events[0].executor_id == "yielder"
-    # Yielded outputs are now included in ExecutorEvent (kind=COMPLETED).data
+    # Yielded outputs are now included in executor_completed event (type='executor_completed').data
     assert completed_events[0].data == ["TEST"]
 
-    # Verify the output was also yielded as WorkflowOutputEvent
+    # Verify the output was also yielded as an output event (type='output')
     output_events = [e for e in events if e.type == "output"]
     assert len(output_events) == 1
     assert output_events[0].data == "TEST"
@@ -538,7 +538,7 @@ def test_executor_response_handler_union_output_types():
 
 
 async def test_executor_invoked_event_data_not_mutated_by_handler():
-    """Test that ExecutorEvent (kind=INVOKED).data captures original input, not mutated input."""
+    """Test that executor_invoked event (type='executor_invoked').data captures original input, not mutated input."""
 
     @executor(id="Mutator")
     async def mutator(messages: list[ChatMessage], ctx: WorkflowContext[list[ChatMessage]]) -> None:

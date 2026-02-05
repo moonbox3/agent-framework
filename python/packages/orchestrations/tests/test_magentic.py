@@ -245,9 +245,9 @@ async def test_magentic_workflow_plan_review_approval_to_completion():
     manager = FakeManager()
     wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).with_plan_review().build()
 
-    req_event: RequestInfoEvent | None = None
+    req_event: WorkflowEvent | None = None
     async for ev in wf.run_stream("do work"):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
     assert isinstance(req_event.data, MagenticPlanReviewRequest)
@@ -255,9 +255,9 @@ async def test_magentic_workflow_plan_review_approval_to_completion():
     completed = False
     output: list[ChatMessage] | None = None
     async for ev in wf.send_responses_streaming(responses={req_event.request_id: req_event.data.approve()}):
-        if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
+        if ev.type == "status" and ev.state == WorkflowRunState.IDLE:
             completed = True
-        elif isinstance(ev, WorkflowOutputEvent):
+        elif ev.type == "output":
             output = ev.data  # type: ignore[assignment]
         if completed and output is not None:
             break
@@ -290,9 +290,9 @@ async def test_magentic_plan_review_with_revise():
     )
 
     # Wait for the initial plan review request
-    req_event: RequestInfoEvent | None = None
+    req_event: WorkflowEvent | None = None
     async for ev in wf.run_stream("do work"):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
     assert isinstance(req_event.data, MagenticPlanReviewRequest)
@@ -303,7 +303,7 @@ async def test_magentic_plan_review_with_revise():
     async for ev in wf.send_responses_streaming(
         responses={req_event.request_id: req_event.data.revise("Looks good; consider Z")}
     ):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             saw_second_review = True
             req_event = ev
 
@@ -311,7 +311,7 @@ async def test_magentic_plan_review_with_revise():
     async for ev in wf.send_responses_streaming(
         responses={req_event.request_id: req_event.data.approve()}  # type: ignore[union-attr]
     ):
-        if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
+        if ev.type == "status" and ev.state == WorkflowRunState.IDLE:
             completed = True
             break
 
@@ -342,7 +342,7 @@ async def test_magentic_orchestrator_round_limit_produces_partial_result():
         None,
     )
     assert idle_status is not None
-    # Check that we got workflow output via WorkflowOutputEvent
+    # Check that we got workflow output via WorkflowEvent with type "output"
     output_event = next((e for e in events if e.type == "output"), None)
     assert output_event is not None
     data = output_event.data
@@ -366,9 +366,9 @@ async def test_magentic_checkpoint_resume_round_trip():
     )
 
     task_text = "checkpoint task"
-    req_event: RequestInfoEvent | None = None
+    req_event: WorkflowEvent | None = None
     async for ev in wf.run_stream(task_text):
-        if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
+        if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
     assert isinstance(req_event.data, MagenticPlanReviewRequest)
@@ -388,7 +388,7 @@ async def test_magentic_checkpoint_resume_round_trip():
         .build()
     )
 
-    completed: WorkflowOutputEvent | None = None
+    completed: WorkflowEvent | None = None
     req_event = None
     async for event in wf_resume.run_stream(
         resume_checkpoint.checkpoint_id,
@@ -583,9 +583,8 @@ async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[Cha
     events: list[WorkflowEvent] = []
     async for ev in wf.run_stream("task"):  # plan review disabled
         events.append(ev)
-        if ev.type == "output":
-            break
-        if ev.type == "data" and isinstance(ev.data, AgentResponseUpdate):
+        # Capture streaming updates (type="output" with AgentResponseUpdate data)
+        if ev.type == "output" and isinstance(ev.data, AgentResponseUpdate):
             captured.append(
                 ChatMessage(
                     role=ev.data.role or "assistant",
@@ -593,6 +592,9 @@ async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[Cha
                     author_name=ev.data.author_name,
                 )
             )
+        # Break on final AgentResponse output
+        elif ev.type == "output" and isinstance(ev.data, AgentResponse):
+            break
 
     return captured
 
@@ -644,7 +646,7 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
         .build()
     )
 
-    completed: WorkflowOutputEvent | None = None
+    completed: WorkflowEvent | None = None
     async for event in resumed.run_stream(checkpoint_id=inner_loop_checkpoint.checkpoint_id):  # type: ignore[reportUnknownMemberType]
         if event.type == "output":
             completed = event
@@ -684,7 +686,7 @@ async def test_magentic_checkpoint_resume_from_saved_state():
         .build()
     )
 
-    completed: WorkflowOutputEvent | None = None
+    completed: WorkflowEvent | None = None
     async for event in resumed_workflow.run_stream(checkpoint_id=resumed_state.checkpoint_id):
         if event.type == "output":
             completed = event
@@ -706,7 +708,7 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
         .build()
     )
 
-    req_event: RequestInfoEvent | None = None
+    req_event: WorkflowEvent | None = None
     async for event in workflow.run_stream("task"):
         if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
             req_event = event
@@ -789,9 +791,9 @@ async def test_magentic_checkpoint_runtime_only() -> None:
 
     baseline_output: ChatMessage | None = None
     async for ev in wf.run_stream("runtime checkpoint test", checkpoint_storage=storage):
-        if isinstance(ev, WorkflowOutputEvent):
+        if ev.type == "output":
             baseline_output = ev.data  # type: ignore[assignment]
-        if isinstance(ev, WorkflowStatusEvent) and ev.state in (
+        if ev.type == "status" and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
         ):
@@ -827,9 +829,9 @@ async def test_magentic_checkpoint_runtime_overrides_buildtime() -> None:
 
         baseline_output: ChatMessage | None = None
         async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):
-            if isinstance(ev, WorkflowOutputEvent):
+            if ev.type == "output":
                 baseline_output = ev.data  # type: ignore[assignment]
-            if isinstance(ev, WorkflowStatusEvent) and ev.state in (
+            if ev.type == "status" and ev.state in (
                 WorkflowRunState.IDLE,
                 WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
             ):
@@ -994,7 +996,7 @@ async def test_magentic_with_participant_factories():
     # Factory should be called during build
     assert call_count == 1
 
-    outputs: list[WorkflowOutputEvent] = []
+    outputs: list[WorkflowEvent] = []
     async for event in workflow.run_stream("test task"):
         if event.type == "output":
             outputs.append(event)
@@ -1041,7 +1043,7 @@ async def test_magentic_participant_factories_with_checkpointing():
         .build()
     )
 
-    outputs: list[WorkflowOutputEvent] = []
+    outputs: list[WorkflowEvent] = []
     async for event in workflow.run_stream("checkpoint test"):
         if event.type == "output":
             outputs.append(event)
@@ -1098,7 +1100,7 @@ async def test_magentic_with_manager_factory():
     # Factory should be called during build
     assert factory_call_count == 1
 
-    outputs: list[WorkflowOutputEvent] = []
+    outputs: list[WorkflowEvent] = []
     async for event in workflow.run_stream("test task"):
         if event.type == "output":
             outputs.append(event)

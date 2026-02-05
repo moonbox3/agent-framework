@@ -213,7 +213,7 @@ Share your perspective authentically. Feel free to:
         .participants([farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor])
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10)
         # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
+        # Intermediate outputs will be emitted as WorkflowEvent with type "output" events
         .with_intermediate_outputs()
         .build()
     )

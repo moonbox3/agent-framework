@@ -4,11 +4,10 @@ from dataclasses import dataclass
 
 from agent_framework import (
     FileCheckpointStorage,
-    RequestInfoEvent,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
     handler,
     response_handler,
 )
@@ -182,7 +181,7 @@ class TestRequestInfoAndResponse:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # First run the workflow until it emits a request
-        request_info_event: RequestInfoEvent | None = None
+        request_info_event: WorkflowEvent | None = None
         async for event in workflow.run_stream("test operation"):
             if event.type == "request_info":
                 request_info_event = event
@@ -207,7 +206,7 @@ class TestRequestInfoAndResponse:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # First run the workflow until it emits a calculation request
-        request_info_event: RequestInfoEvent | None = None
+        request_info_event: WorkflowEvent | None = None
         async for event in workflow.run_stream("multiply 15.5 2.0"):
             if event.type == "request_info":
                 request_info_event = event
@@ -234,7 +233,7 @@ class TestRequestInfoAndResponse:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # Collect all request events by running the full stream
-        request_events: list[RequestInfoEvent] = []
+        request_events: list[WorkflowEvent] = []
         async for event in workflow.run_stream("start batch"):
             if event.type == "request_info":
                 request_events.append(event)
@@ -242,10 +241,10 @@ class TestRequestInfoAndResponse:
         assert len(request_events) == 2
 
         # Find the approval and calculation requests
-        approval_event: RequestInfoEvent | None = next(
+        approval_event: WorkflowEvent | None = next(
             (e for e in request_events if isinstance(e.data, UserApprovalRequest)), None
         )
-        calc_event: RequestInfoEvent | None = next(
+        calc_event: WorkflowEvent | None = next(
             (e for e in request_events if isinstance(e.data, CalculationRequest)), None
         )
 
@@ -268,7 +267,7 @@ class TestRequestInfoAndResponse:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # First run the workflow until it emits a request
-        request_info_event: RequestInfoEvent | None = None
+        request_info_event: WorkflowEvent | None = None
         async for event in workflow.run_stream("sensitive operation"):
             if event.type == "request_info":
                 request_info_event = event
@@ -291,7 +290,7 @@ class TestRequestInfoAndResponse:
         workflow = WorkflowBuilder().set_start_executor(executor).build()
 
         # Run workflow until idle with pending requests
-        request_info_event: RequestInfoEvent | None = None
+        request_info_event: WorkflowEvent | None = None
         idle_with_pending = False
         async for event in workflow.run_stream("test operation"):
             if event.type == "request_info":
@@ -338,7 +337,7 @@ class TestRequestInfoAndResponse:
             workflow = WorkflowBuilder().set_start_executor(executor).with_checkpointing(storage).build()
 
             # Step 1: Run workflow to completion to ensure checkpoints are created
-            request_info_event: RequestInfoEvent | None = None
+            request_info_event: WorkflowEvent | None = None
             async for event in workflow.run_stream("checkpoint test operation"):
                 if event.type == "request_info":
                     request_info_event = event
@@ -377,7 +376,7 @@ class TestRequestInfoAndResponse:
 
             # Step 5: Resume from checkpoint and verify the request can be continued
             completed = False
-            restored_request_event: RequestInfoEvent | None = None
+            restored_request_event: WorkflowEvent | None = None
             async for event in restored_workflow.run_stream(checkpoint_id=checkpoint_with_request.checkpoint_id):
                 # Should re-emit the pending request info event
                 if event.type == "request_info" and event.request_id == request_info_event.request_id:

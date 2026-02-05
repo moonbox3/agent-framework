@@ -12,9 +12,8 @@ from agent_framework import (
     ChatMessage,
     ChatMessageStore,
     Content,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorResponse
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
@@ -73,9 +72,9 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     # Run the workflow with a user message
     first_run_output: AgentExecutorResponse | None = None
     async for ev in wf.run_stream("First workflow run"):
-        if isinstance(ev, WorkflowOutputEvent):
+        if ev.type == "output":
             first_run_output = ev.data  # type: ignore[assignment]
-        if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
+        if ev.type == "status" and ev.state == WorkflowRunState.IDLE:
             break
 
     assert first_run_output is not None
@@ -127,9 +126,9 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     # Resume from checkpoint
     resumed_output: AgentExecutorResponse | None = None
     async for ev in wf_resume.run_stream(checkpoint_id=restore_checkpoint.checkpoint_id):
-        if isinstance(ev, WorkflowOutputEvent):
+        if ev.type == "output":
             resumed_output = ev.data  # type: ignore[assignment]
-        if isinstance(ev, WorkflowStatusEvent) and ev.state in (
+        if ev.type == "status" and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
         ):

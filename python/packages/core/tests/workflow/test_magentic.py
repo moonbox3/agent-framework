@@ -11,7 +11,6 @@ from agent_framework import (
     AgentProtocol,
     AgentResponse,
     AgentResponseUpdate,
-    AgentRunUpdateEvent,
     AgentThread,
     BaseAgent,
     ChatMessage,
@@ -574,15 +573,19 @@ class StubAssistantsAgent(BaseAgent):
 async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[ChatMessage]:
     captured: list[ChatMessage] = []
 
-    wf = MagenticBuilder().participants([participant]).with_manager(manager=InvokeOnceManager()).build()
+    wf = (
+        MagenticBuilder()
+        .participants([participant])
+        .with_manager(manager=InvokeOnceManager())
+        .with_intermediate_outputs()
+        .build()
+    )
 
     # Run a bounded stream to allow one invoke and then completion
     events: list[WorkflowEvent] = []
     async for ev in wf.run_stream("task"):  # plan review disabled
         events.append(ev)
-        if isinstance(ev, WorkflowOutputEvent):
-            break
-        if isinstance(ev, AgentRunUpdateEvent):
+        if isinstance(ev, WorkflowOutputEvent) and isinstance(ev.data, AgentResponseUpdate):
             captured.append(
                 ChatMessage(
                     role=ev.data.role or "assistant",
@@ -597,7 +600,6 @@ async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[Cha
 async def test_agent_executor_invoke_with_thread_chat_client():
     agent = StubThreadAgent()
     captured = await _collect_agent_responses_setup(agent)
-    # Should have at least one response from agentA via _MagenticAgentExecutor path
     assert any((m.author_name == agent.name and "ok" in (m.text or "")) for m in captured)
 
 

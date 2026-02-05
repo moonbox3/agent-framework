@@ -93,10 +93,10 @@ def test_convert_approval_results_to_tool_messages() -> None:
     assert len(messages) == 2
 
     # First message unchanged
-    assert messages[0].role.value == "assistant"
+    assert messages[0].role == "assistant"
 
     # Second message should now be role="tool"
-    assert messages[1].role.value == "tool"
+    assert messages[1].role == "tool"
     assert messages[1].contents[0].type == "function_result"
     assert messages[1].contents[0].call_id == "call_123"
 
@@ -133,14 +133,14 @@ def test_convert_approval_results_preserves_other_user_content() -> None:
     assert len(messages) == 3
 
     # First message unchanged
-    assert messages[0].role.value == "assistant"
+    assert messages[0].role == "assistant"
 
     # Second message should be tool with result (must come right after assistant per OpenAI requirements)
-    assert messages[1].role.value == "tool"
+    assert messages[1].role == "tool"
     assert messages[1].contents[0].type == "function_result"
 
     # Third message should be user with just text
-    assert messages[2].role.value == "user"
+    assert messages[2].role == "user"
     assert len(messages[2].contents) == 1
     assert messages[2].contents[0].type == "text"
 

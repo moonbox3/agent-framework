@@ -71,7 +71,7 @@ def _handle_events(events: list[WorkflowEvent]) -> tuple[list[WorkflowEvent[Hand
             print(f"[status] {event.state.name}")
         elif event.type == "request_info" and isinstance(event.data, HandoffAgentUserRequest):
             requests.append(cast(WorkflowEvent[HandoffAgentUserRequest], event))
-        elif event.type == "output" or event.type == "data":
+        elif event.type == "output":
             data = event.data
             if isinstance(data, AgentResponseUpdate):
                 for content in data.contents:

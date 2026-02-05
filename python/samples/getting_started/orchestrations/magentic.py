@@ -106,7 +106,7 @@ async def main() -> None:
     last_response_id: str | None = None
     output_event: WorkflowEvent | None = None
     async for event in workflow.run_stream(task):
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             response_id = event.data.response_id
             if response_id != last_response_id:
                 if last_response_id is not None:

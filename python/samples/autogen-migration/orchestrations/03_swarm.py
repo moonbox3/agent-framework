@@ -162,7 +162,7 @@ async def run_agent_framework() -> None:
     pending_requests: list[WorkflowEvent] = []
 
     async for event in workflow.run_stream(scripted_responses[0]):
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             # Print executor name header when switching to a new agent
             if current_executor != event.executor_id:
                 if stream_line_open:
@@ -194,7 +194,7 @@ async def run_agent_framework() -> None:
         stream_line_open = False
 
         async for event in workflow.send_responses_streaming(responses):
-            if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+            if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
                 # Print executor name header when switching to a new agent
                 if current_executor != event.executor_id:
                     if stream_line_open:

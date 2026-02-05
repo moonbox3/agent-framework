@@ -84,7 +84,7 @@ async def test_executor_emits_normal_event() -> None:
 
 class _TestEvent(WorkflowEvent):
     def __init__(self, data: Any = None) -> None:
-        super().__init__("custom", data=data)
+        super().__init__("test_event", data=data)
 
 
 async def test_workflow_context_type_annotations_no_parameter() -> None:

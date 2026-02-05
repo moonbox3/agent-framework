@@ -112,7 +112,7 @@ async def main() -> None:
     async for event in workflow.run_stream(request):
         if isinstance(event, HandoffSentEvent):
             print(f"\nHandoff Event: from {event.source} to {event.target}\n")
-        elif event.type == "output" or event.type == "data":
+        elif event.type == "output":
             data = event.data
             if isinstance(data, AgentResponseUpdate):
                 if not data.text:

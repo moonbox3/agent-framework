@@ -119,8 +119,6 @@ WorkflowEventType = Literal[
     "executor_invoked",  # Executor handler was called (use .executor_id, .data)
     "executor_completed",  # Executor handler completed (use .executor_id, .data)
     "executor_failed",  # Executor handler raised error (use .executor_id, .details)
-    # Extension point
-    "custom",  # User-defined event (for subclassing)
 ]
 
 
@@ -176,7 +174,7 @@ class WorkflowEvent(Generic[DataT]):
 
     def __init__(
         self,
-        type: WorkflowEventType,
+        type: WorkflowEventType | str,
         data: DataT | None = None,
         *,
         # Event context fields

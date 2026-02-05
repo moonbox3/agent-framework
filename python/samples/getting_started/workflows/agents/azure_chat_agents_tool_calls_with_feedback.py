@@ -12,10 +12,8 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
+    Content,
     Executor,
-    FunctionCallContent,
-    FunctionResultContent,
-    Role,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowEvent,
@@ -49,9 +47,9 @@ Prerequisites:
 - Authentication via azure-identity. Run `az login` before executing.
 """
 
+
 # NOTE: approval_mode="never_require" is for sample brevity. Use "always_require" in production; see samples/getting_started/tools/function_tool_with_approval.py and samples/getting_started/tools/function_tool_with_approval_and_threads.py.
 @tool(approval_mode="never_require")
-
 def fetch_product_brief(
     product_name: Annotated[str, Field(description="Product name to look up.")],
 ) -> str:
@@ -67,8 +65,8 @@ def fetch_product_brief(
     }
     return briefs.get(product_name.lower(), f"No stored brief for '{product_name}'.")
 
-@tool(approval_mode="never_require")
 
+@tool(approval_mode="never_require")
 def get_brand_voice_profile(
     voice_name: Annotated[str, Field(description="Brand or campaign voice to emulate.")],
 ) -> str:
@@ -147,8 +145,7 @@ class Coordinator(Executor):
             # Human approved the draft as-is; forward it unchanged.
             await ctx.send_message(
                 AgentExecutorRequest(
-                    messages=original_request.conversation
-                    + [ChatMessage(Role.USER, text="The draft is approved as-is.")],
+                    messages=original_request.conversation + [ChatMessage("user", text="The draft is approved as-is.")],
                     should_respond=True,
                 ),
                 target_id=self.final_editor_id,
@@ -163,7 +160,7 @@ class Coordinator(Executor):
             "Rewrite the draft from the previous assistant message into a polished final version. "
             "Keep the response under 120 words and reflect any requested tone adjustments."
         )
-        conversation.append(ChatMessage(Role.USER, text=instruction))
+        conversation.append(ChatMessage("user", text=instruction))
         await ctx.send_message(
             AgentExecutorRequest(messages=conversation, should_respond=True), target_id=self.writer_id
         )
@@ -201,8 +198,8 @@ def display_agent_run_update(event: WorkflowEvent[AgentResponseUpdate], last_exe
     executor_id = event.executor_id
     update = event.data
     # Extract and print any new tool calls or results from the update.
-    function_calls = [c for c in update.contents if isinstance(c, FunctionCallContent)]  # type: ignore[union-attr]
-    function_results = [c for c in update.contents if isinstance(c, FunctionResultContent)]  # type: ignore[union-attr]
+    function_calls = [c for c in update.contents if isinstance(c, Content.from_function_call(c))]  # type: ignore[union-attr]
+    function_results = [c for c in update.contents if isinstance(c, Content.from_function_result(c))]  # type: ignore[union-attr]
     if executor_id != last_executor:
         if last_executor is not None:
             print()
@@ -290,7 +287,11 @@ async def main() -> None:
         requests: list[tuple[str, DraftFeedbackRequest]] = []
 
         async for event in stream:
-            if event.type == "data" and isinstance(event.data, AgentResponseUpdate) and display_agent_run_update_switch:
+            if (
+                event.type == "output"
+                and isinstance(event.data, AgentResponseUpdate)
+                and display_agent_run_update_switch
+            ):
                 display_agent_run_update(event, last_executor)  # type: ignore[arg-type]
             if event.type == "request_info" and isinstance(event.data, DraftFeedbackRequest):
                 # Stash the request so we can prompt the human after the stream completes.

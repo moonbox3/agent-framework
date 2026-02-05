@@ -74,7 +74,7 @@ class HandoffSentEvent(WorkflowEvent):
             target: Identifier of the target agent receiving the handoff
             data: Optional event-specific data
         """
-        super().__init__("custom", data=data)
+        super().__init__("handoff_sent", data=data)
         self.source = source
         self.target = target
 

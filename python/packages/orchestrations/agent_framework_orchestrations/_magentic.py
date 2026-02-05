@@ -784,7 +784,7 @@ class MagenticOrchestratorEvent(WorkflowEvent):
         event_type: MagenticOrchestratorEventType,
         data: ChatMessage | MagenticProgressLedger,
     ) -> None:
-        super().__init__("custom", data=data, executor_id=executor_id)
+        super().__init__("magentic_orchestrator", data=data, executor_id=executor_id)
         self.event_type = event_type
 
     def __repr__(self) -> str:

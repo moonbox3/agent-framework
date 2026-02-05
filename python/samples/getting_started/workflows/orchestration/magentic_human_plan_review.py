@@ -8,11 +8,10 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
-    MagenticBuilder,
-    MagenticPlanReviewRequest,
     WorkflowEvent,
 )
 from agent_framework.openai import OpenAIChatClient
+from agent_framework.orchestrations import MagenticBuilder, MagenticPlanReviewRequest
 
 """
 Sample: Magentic Orchestration with Human Plan Review
@@ -90,7 +89,7 @@ async def main() -> None:
 
         last_message_id: str | None = None
         async for event in stream:
-            if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+            if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
                 message_id = event.data.message_id
                 if message_id != last_message_id:
                     if last_message_id is not None:

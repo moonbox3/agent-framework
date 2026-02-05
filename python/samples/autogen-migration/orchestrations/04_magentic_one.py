@@ -112,7 +112,7 @@ async def run_agent_framework() -> None:
     output_event: WorkflowEvent | None = None
     print("[Agent Framework] Magentic conversation:")
     async for event in workflow.run_stream("Research Python async patterns and write a simple example"):
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             message_id = event.data.message_id
             if message_id != last_message_id:
                 if last_message_id is not None:

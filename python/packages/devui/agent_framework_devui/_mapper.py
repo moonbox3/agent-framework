@@ -180,11 +180,12 @@ class MessageMapper:
         try:
             from agent_framework import AgentResponse, AgentResponseUpdate, WorkflowEvent
 
-            # Handle WorkflowEvent with type='data' wrapping AgentResponseUpdate
+            # Handle WorkflowEvent with type='output' or 'data' wrapping AgentResponseUpdate
             # This must be checked BEFORE generic WorkflowEvent check
+            # Note: AgentExecutor uses type='output' for streaming updates
             if (
                 isinstance(raw_event, WorkflowEvent)
-                and raw_event.type == "data"
+                and raw_event.type in ("output", "data")
                 and raw_event.data
                 and isinstance(raw_event.data, AgentResponseUpdate)
             ):

@@ -102,7 +102,7 @@ async def run_agent_framework() -> None:
     print("[Agent Framework] Group chat conversation:")
     current_executor = None
     async for event in workflow.run_stream("How do I connect to a PostgreSQL database using Python?"):
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             # Print executor name header when switching to a new agent
             if current_executor != event.executor_id:
                 if current_executor is not None:

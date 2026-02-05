@@ -71,7 +71,7 @@ class GroupChatEvent(WorkflowEvent):
             round_index: Current round index
             data: Optional event-specific data
         """
-        super().__init__("custom", data=data)
+        super().__init__("group_chat", data=data)
         self.round_index = round_index
 
 

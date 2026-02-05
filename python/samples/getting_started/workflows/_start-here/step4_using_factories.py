@@ -87,7 +87,7 @@ async def main():
     async for event in workflow.run_stream("hello world"):
         # The outputs of the workflow are whatever the agents produce. So the events are expected to
         # contain `AgentResponseUpdate` from the agents in the workflow.
-        if event.type == "data" and isinstance(event.data, AgentResponseUpdate):
+        if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             update = event.data
             if first_update:
                 print(f"{update.author_name}: {update.text}", end="", flush=True)

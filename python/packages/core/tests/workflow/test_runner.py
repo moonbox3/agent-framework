@@ -227,7 +227,7 @@ async def test_runner_cancellation_stops_active_executor():
         executor_a.id: executor_a,
         executor_b.id: executor_b,
     }
-    shared_state = SharedState()
+    shared_state = State()
     ctx = InProcRunnerContext()
 
     runner = Runner(edges, executors, shared_state, ctx)

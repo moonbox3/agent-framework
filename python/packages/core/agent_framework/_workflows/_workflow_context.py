@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any, Generic, Union, cast, get_args, get_origi
 
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
-from typing_extensions import Never, TypeVar, deprecated
+from typing_extensions import Never, TypeVar
 
 from ..observability import OtelAttr, create_workflow_span
-from ._const import EXECUTOR_STATE_KEY
 from ._events import (
     RequestInfoEvent,
     WorkflowEvent,
@@ -456,42 +455,6 @@ class WorkflowContext(Generic[OutT, W_OutT]):
             A list of outputs that were yielded as workflow outputs.
         """
         return self._yielded_outputs.copy()
-
-    @deprecated(
-        "Override `on_checkpoint_save()` methods instead. "
-        "For cross-executor state sharing, use set_state() instead. "
-        "This API will be removed after 12/01/2025."
-    )
-    async def set_executor_state(self, state: dict[str, Any]) -> None:
-        """Store executor state in state under a reserved key.
-
-        Executors call this with a JSON-serializable dict capturing the minimal
-        state needed to resume. It replaces any previously stored state.
-        """
-        existing_states = self._state.get(EXECUTOR_STATE_KEY, {})
-
-        if not isinstance(existing_states, dict):
-            raise ValueError("Existing executor states in state is not a dictionary.")
-
-        existing_states[self._executor_id] = state
-        self._state.set(EXECUTOR_STATE_KEY, existing_states)
-
-    @deprecated(
-        "Override `on_checkpoint_restore()` methods instead. "
-        "For cross-executor state sharing, use get_state() instead. "
-        "This API will be removed after 12/01/2025."
-    )
-    async def get_executor_state(self) -> dict[str, Any] | None:
-        """Retrieve previously persisted state for this executor, if any."""
-        has_existing_states = self._state.has(EXECUTOR_STATE_KEY)
-        if not has_existing_states:
-            return None
-
-        existing_states = self._state.get(EXECUTOR_STATE_KEY)
-        if not isinstance(existing_states, dict):
-            raise ValueError("Existing executor states in state is not a dictionary.")
-
-        return existing_states.get(self._executor_id)  # type: ignore
 
     def is_streaming(self) -> bool:
         """Check if the workflow is running in streaming mode.

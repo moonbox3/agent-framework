@@ -32,6 +32,13 @@ class State:
 
         The value will be visible to subsequent `get()` calls but won't be
         committed to the actual state until `commit()` is called.
+
+        Note:
+            When multiple executors run concurrently within the same superstep,
+            each executor's writes go to the same pending buffer. The last write
+            for a given key wins when commit() is called. This is consistent with
+            the .NET behavior and the superstep execution model where all executors
+            in a superstep see the same committed state at the start.
         """
         self._pending[key] = value
 

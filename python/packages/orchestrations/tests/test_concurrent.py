@@ -348,7 +348,7 @@ async def test_concurrent_checkpoint_resume_round_trip() -> None:
         _FakeAgentExec("agentC", "Gamma"),
     )
 
-    wf = ConcurrentBuilder().participants(list(participants)).with_checkpointing(storage).build()
+    wf = ConcurrentBuilder(checkpoint_storage=storage).participants(list(participants)).build()
 
     baseline_output: list[ChatMessage] | None = None
     async for ev in wf.run_stream("checkpoint concurrent"):
@@ -372,7 +372,7 @@ async def test_concurrent_checkpoint_resume_round_trip() -> None:
         _FakeAgentExec("agentB", "Beta"),
         _FakeAgentExec("agentC", "Gamma"),
     )
-    wf_resume = ConcurrentBuilder().participants(list(resumed_participants)).with_checkpointing(storage).build()
+    wf_resume = ConcurrentBuilder(checkpoint_storage=storage).participants(list(resumed_participants)).build()
 
     resumed_output: list[ChatMessage] | None = None
     async for ev in wf_resume.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
@@ -442,7 +442,7 @@ async def test_concurrent_checkpoint_runtime_overrides_buildtime() -> None:
         runtime_storage = FileCheckpointStorage(temp_dir2)
 
         agents = [_FakeAgentExec(id="agent1", reply_text="A1"), _FakeAgentExec(id="agent2", reply_text="A2")]
-        wf = ConcurrentBuilder().participants(agents).with_checkpointing(buildtime_storage).build()
+        wf = ConcurrentBuilder(checkpoint_storage=buildtime_storage).participants(agents).build()
 
         baseline_output: list[ChatMessage] | None = None
         async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):

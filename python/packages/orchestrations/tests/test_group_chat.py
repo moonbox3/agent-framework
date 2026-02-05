@@ -227,10 +227,9 @@ async def test_group_chat_builder_basic_flow() -> None:
     beta = StubAgent("beta", "ack from beta")
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)  # Limit rounds to prevent infinite loop
         .with_orchestrator(selection_func=selector, orchestrator_name="manager")
         .participants([alpha, beta])
-        .with_max_rounds(2)  # Limit rounds to prevent infinite loop
         .build()
     )
 
@@ -254,10 +253,9 @@ async def test_group_chat_as_agent_accepts_conversation() -> None:
     beta = StubAgent("beta", "ack from beta")
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)  # Limit rounds to prevent infinite loop
         .with_orchestrator(selection_func=selector, orchestrator_name="manager")
         .participants([alpha, beta])
-        .with_max_rounds(2)  # Limit rounds to prevent infinite loop
         .build()
     )
 
@@ -396,10 +394,9 @@ class TestGroupChatWorkflow:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(max_rounds=2)  # Limit to 2 rounds
             .with_orchestrator(selection_func=selector)
             .participants([agent])
-            .with_max_rounds(2)  # Limit to 2 rounds
             .build()
         )
 
@@ -431,10 +428,9 @@ class TestGroupChatWorkflow:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(termination_condition=termination_condition)
             .with_orchestrator(selection_func=selector)
             .participants([agent])
-            .with_termination_condition(termination_condition)
             .build()
         )
 
@@ -459,10 +455,9 @@ class TestGroupChatWorkflow:
         worker = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(termination_condition=lambda conv: any(msg.author_name == "agent" for msg in conv))
             .with_orchestrator(agent=manager)
             .participants([worker])
-            .with_termination_condition(lambda conv: any(msg.author_name == "agent" for msg in conv))
             .build()
         )
 
@@ -506,11 +501,9 @@ class TestCheckpointing:
         storage = InMemoryCheckpointStorage()
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(max_rounds=1, checkpoint_storage=storage)
             .with_orchestrator(selection_func=selector)
             .participants([agent])
-            .with_max_rounds(1)
-            .with_checkpointing(storage)
             .build()
         )
 
@@ -536,11 +529,7 @@ class TestConversationHandling:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
-            .with_orchestrator(selection_func=selector)
-            .participants([agent])
-            .with_max_rounds(1)
-            .build()
+            GroupChatBuilder(max_rounds=1).with_orchestrator(selection_func=selector).participants([agent]).build()
         )
 
         with pytest.raises(ValueError, match="At least one ChatMessage is required to start the group chat workflow."):
@@ -560,11 +549,7 @@ class TestConversationHandling:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
-            .with_orchestrator(selection_func=selector)
-            .participants([agent])
-            .with_max_rounds(1)
-            .build()
+            GroupChatBuilder(max_rounds=1).with_orchestrator(selection_func=selector).participants([agent]).build()
         )
 
         outputs: list[list[ChatMessage]] = []
@@ -589,11 +574,7 @@ class TestConversationHandling:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
-            .with_orchestrator(selection_func=selector)
-            .participants([agent])
-            .with_max_rounds(1)
-            .build()
+            GroupChatBuilder(max_rounds=1).with_orchestrator(selection_func=selector).participants([agent]).build()
         )
 
         outputs: list[list[ChatMessage]] = []
@@ -621,11 +602,7 @@ class TestConversationHandling:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
-            .with_orchestrator(selection_func=selector)
-            .participants([agent])
-            .with_max_rounds(1)
-            .build()
+            GroupChatBuilder(max_rounds=1).with_orchestrator(selection_func=selector).participants([agent]).build()
         )
 
         outputs: list[list[ChatMessage]] = []
@@ -653,10 +630,9 @@ class TestRoundLimitEnforcement:
         agent = StubAgent("agent", "response")
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(max_rounds=1)  # Very low limit
             .with_orchestrator(selection_func=selector)
             .participants([agent])
-            .with_max_rounds(1)  # Very low limit
             .build()
         )
 
@@ -688,10 +664,9 @@ class TestRoundLimitEnforcement:
         agent = StubAgent("agent", "response from agent")
 
         workflow = (
-            GroupChatBuilder()
+            GroupChatBuilder(max_rounds=1)  # Hit limit after first response
             .with_orchestrator(selection_func=selector)
             .participants([agent])
-            .with_max_rounds(1)  # Hit limit after first response
             .build()
         )
 
@@ -720,10 +695,9 @@ async def test_group_chat_checkpoint_runtime_only() -> None:
     selector = make_sequence_selector()
 
     wf = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)
         .participants([agent_a, agent_b])
         .with_orchestrator(selection_func=selector)
-        .with_max_rounds(2)
         .build()
     )
 
@@ -758,11 +732,9 @@ async def test_group_chat_checkpoint_runtime_overrides_buildtime() -> None:
         selector = make_sequence_selector()
 
         wf = (
-            GroupChatBuilder()
+            GroupChatBuilder(max_rounds=2, checkpoint_storage=buildtime_storage)
             .participants([agent_a, agent_b])
             .with_orchestrator(selection_func=selector)
-            .with_max_rounds(2)
-            .with_checkpointing(buildtime_storage)
             .build()
         )
         baseline_output: list[ChatMessage] | None = None
@@ -804,10 +776,9 @@ async def test_group_chat_with_request_info_filtering():
         return "alpha"
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)
         .with_orchestrator(selection_func=selector, orchestrator_name="manager")
         .participants([alpha, beta])
-        .with_max_rounds(2)
         .with_request_info(agents=["beta"])  # Only pause before beta runs
         .build()
     )
@@ -856,10 +827,9 @@ async def test_group_chat_with_request_info_no_filter_pauses_all():
         return "alpha"
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=1)
         .with_orchestrator(selection_func=selector, orchestrator_name="manager")
         .participants([alpha])
-        .with_max_rounds(1)
         .with_request_info()  # No filter - pause for all
         .build()
     )
@@ -959,10 +929,9 @@ async def test_group_chat_with_participant_factories():
     selector = make_sequence_selector()
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)
         .register_participants([create_alpha, create_beta])
         .with_orchestrator(selection_func=selector)
-        .with_max_rounds(2)
         .build()
     )
 
@@ -994,10 +963,9 @@ async def test_group_chat_participant_factories_reusable_builder():
     selector = make_sequence_selector()
 
     builder = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)
         .register_participants([create_alpha, create_beta])
         .with_orchestrator(selection_func=selector)
-        .with_max_rounds(2)
     )
 
     # Build first workflow
@@ -1026,11 +994,9 @@ async def test_group_chat_participant_factories_with_checkpointing():
     selector = make_sequence_selector()
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(checkpoint_storage=storage, max_rounds=2)
         .register_participants([create_alpha, create_beta])
         .with_orchestrator(selection_func=selector)
-        .with_checkpointing(storage)
-        .with_max_rounds(2)
         .build()
     )
 

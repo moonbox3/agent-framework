@@ -246,7 +246,12 @@ async def test_standard_manager_plan_and_replan_combined_ledger():
 
 async def test_magentic_workflow_plan_review_approval_to_completion():
     manager = FakeManager()
-    wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).with_plan_review().build()
+    wf = (
+        MagenticBuilder(enable_plan_review=True)
+        .participants([DummyExec("agentA")])
+        .with_manager(manager=manager)
+        .build()
+    )
 
     req_event: RequestInfoEvent | None = None
     async for ev in wf.run_stream("do work"):
@@ -285,10 +290,9 @@ async def test_magentic_plan_review_with_revise():
 
     manager = CountingManager()
     wf = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True)
         .participants([DummyExec(name=manager.next_speaker_name)])
         .with_manager(manager=manager)
-        .with_plan_review()
         .build()
     )
 
@@ -360,11 +364,9 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     manager1 = FakeManager()
     wf = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
         .participants([DummyExec(name=manager1.next_speaker_name)])
         .with_manager(manager=manager1)
-        .with_plan_review()
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -383,11 +385,9 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     manager2 = FakeManager()
     wf_resume = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
         .participants([DummyExec(name=manager2.next_speaker_name)])
         .with_manager(manager=manager2)
-        .with_plan_review()
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -575,10 +575,9 @@ async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[Cha
     captured: list[ChatMessage] = []
 
     wf = (
-        MagenticBuilder()
+        MagenticBuilder(intermediate_outputs=True)
         .participants([participant])
         .with_manager(manager=InvokeOnceManager())
-        .with_intermediate_outputs()
         .build()
     )
 
@@ -623,10 +622,9 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
     storage = InMemoryCheckpointStorage()
 
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .participants([StubThreadAgent()])
         .with_manager(manager=InvokeOnceManager())
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -638,10 +636,9 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
     inner_loop_checkpoint = next(cp for cp in checkpoints if cp.metadata.get("superstep") == 1)  # type: ignore[reportUnknownMemberType]
 
     resumed = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .participants([StubThreadAgent()])
         .with_manager(manager=InvokeOnceManager())
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -661,10 +658,9 @@ async def test_magentic_checkpoint_resume_from_saved_state():
     manager = InvokeOnceManager()
 
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .participants([StubThreadAgent()])
         .with_manager(manager=manager)
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -678,10 +674,9 @@ async def test_magentic_checkpoint_resume_from_saved_state():
     resumed_state = checkpoints[-1]  # Use the last checkpoint
 
     resumed_workflow = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .participants([StubThreadAgent()])
         .with_manager(manager=InvokeOnceManager())
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -699,11 +694,9 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     manager = InvokeOnceManager()
 
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
         .participants([StubThreadAgent()])
         .with_manager(manager=manager)
-        .with_plan_review()
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -719,11 +712,9 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     target_checkpoint = checkpoints[-1]
 
     renamed_workflow = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
         .participants([StubThreadAgent(name="renamedAgent")])
         .with_manager(manager=InvokeOnceManager())
-        .with_plan_review()
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -819,10 +810,9 @@ async def test_magentic_checkpoint_runtime_overrides_buildtime() -> None:
 
         manager = FakeManager(max_round_count=10)
         wf = (
-            MagenticBuilder()
+            MagenticBuilder(checkpoint_storage=buildtime_storage)
             .participants([DummyExec("agentA")])
             .with_manager(manager=manager)
-            .with_checkpointing(buildtime_storage)
             .build()
         )
 
@@ -874,10 +864,9 @@ async def test_magentic_checkpoint_restore_no_duplicate_history():
     storage = InMemoryCheckpointStorage()
 
     wf = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .participants([DummyExec("agentA")])
         .with_manager(manager=manager)
-        .with_checkpointing(storage)
         .build()
     )
 
@@ -1035,10 +1024,9 @@ async def test_magentic_participant_factories_with_checkpointing():
 
     manager = FakeManager()
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(checkpoint_storage=storage)
         .register_participants([create_agent])
         .with_manager(manager=manager)
-        .with_checkpointing(storage)
         .build()
     )
 

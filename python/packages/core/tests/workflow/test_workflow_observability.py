@@ -268,8 +268,7 @@ async def test_end_to_end_workflow_tracing(span_exporter: InMemorySpanExporter) 
 
     # Create workflow with fan-in: executor1 -> [executor2, executor3] -> aggregator
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(executor1)
+        WorkflowBuilder(start_executor=executor1)
         .add_fan_out_edges(executor1, [executor2, executor3])
         .add_fan_in_edges([executor2, executor3], aggregator)
         .build()
@@ -297,11 +296,11 @@ async def test_end_to_end_workflow_tracing(span_exporter: InMemorySpanExporter) 
     span_exporter.clear()
 
     # Test workflow with name and description - verify OTEL attributes
-    (
-        WorkflowBuilder(name="Test Pipeline", description="Test workflow description")
-        .set_start_executor(MockExecutor("start"))
-        .build()
-    )
+    WorkflowBuilder(
+        name="Test Pipeline",
+        description="Test workflow description",
+        start_executor=MockExecutor("start"),
+    ).build()
 
     build_spans_with_metadata = [s for s in span_exporter.get_finished_spans() if s.name == "workflow.build"]
     assert len(build_spans_with_metadata) == 1
@@ -412,7 +411,7 @@ async def test_workflow_error_handling_in_tracing(span_exporter: InMemorySpanExp
             raise ValueError("Test error")
 
     failing_executor = FailingExecutor()
-    workflow = WorkflowBuilder().set_start_executor(failing_executor).build()
+    workflow = WorkflowBuilder(start_executor=failing_executor).build()
 
     # Run workflow and expect error
     with pytest.raises(ValueError, match="Test error"):

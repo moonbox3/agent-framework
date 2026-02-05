@@ -138,7 +138,7 @@ async def run_agent_framework_with_cycle() -> None:
             await context.send_message(AgentExecutorRequest(messages=response.full_conversation, should_respond=True))
 
     workflow = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor=researcher)
         .add_edge(researcher, writer)
         .add_edge(writer, editor)
         .add_edge(
@@ -146,7 +146,6 @@ async def run_agent_framework_with_cycle() -> None:
             check_approval,
         )
         .add_edge(check_approval, researcher)
-        .set_start_executor(researcher)
         .build()
     )
 

@@ -118,9 +118,11 @@ async def test_handoff():
     # Without explicitly defining handoffs, the builder will create connections
     # between all agents.
     workflow = (
-        HandoffBuilder(participants=[triage, specialist, escalation])
+        HandoffBuilder(
+            participants=[triage, specialist, escalation],
+            termination_condition=lambda conv: sum(1 for m in conv if m.role == "user") >= 2,
+        )
         .with_start_agent(triage)
-        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == "user") >= 2)
         .build()
     )
 
@@ -144,7 +146,15 @@ async def test_autonomous_mode_yields_output_without_user_request():
     specialist = MockHandoffAgent(name="specialist")
 
     workflow = (
-        HandoffBuilder(participants=[triage, specialist])
+        HandoffBuilder(
+            participants=[triage, specialist],
+            # This termination condition ensures the workflow runs through both agents.
+            # First message is the user message to triage, second is triage's response, which
+            # is a handoff to specialist, third is specialist's response that should not request
+            # user input due to autonomous mode. Fourth message will come from the specialist
+            # again and will trigger termination.
+            termination_condition=lambda conv: len(conv) >= 4,
+        )
         .with_start_agent(triage)
         # Since specialist has no handoff, the specialist will be generating normal responses.
         # With autonomous mode, this should continue until the termination condition is met.
@@ -152,12 +162,6 @@ async def test_autonomous_mode_yields_output_without_user_request():
             agents=[specialist],
             turn_limits={resolve_agent_id(specialist): 1},
         )
-        # This termination condition ensures the workflow runs through both agents.
-        # First message is the user message to triage, second is triage's response, which
-        # is a handoff to specialist, third is specialist's response that should not request
-        # user input due to autonomous mode. Fourth message will come from the specialist
-        # again and will trigger termination.
-        .with_termination_condition(lambda conv: len(conv) >= 4)
         .build()
     )
 
@@ -180,10 +184,9 @@ async def test_autonomous_mode_resumes_user_input_on_turn_limit():
     worker = MockHandoffAgent(name="worker")
 
     workflow = (
-        HandoffBuilder(participants=[triage, worker])
+        HandoffBuilder(participants=[triage, worker], termination_condition=lambda conv: False)
         .with_start_agent(triage)
         .with_autonomous_mode(agents=[worker], turn_limits={resolve_agent_id(worker): 2})
-        .with_termination_condition(lambda conv: False)
         .build()
     )
 
@@ -224,9 +227,8 @@ async def test_handoff_async_termination_condition() -> None:
     worker = MockHandoffAgent(name="worker")
 
     workflow = (
-        HandoffBuilder(participants=[coordinator, worker])
+        HandoffBuilder(participants=[coordinator, worker], termination_condition=async_termination)
         .with_start_agent(coordinator)
-        .with_termination_condition(async_termination)
         .build()
     )
 
@@ -471,9 +473,11 @@ async def test_handoff_with_participant_factories():
         return MockHandoffAgent(name="specialist")
 
     workflow = (
-        HandoffBuilder(participant_factories={"triage": create_triage, "specialist": create_specialist})
+        HandoffBuilder(
+            participant_factories={"triage": create_triage, "specialist": create_specialist},
+            termination_condition=lambda conv: sum(1 for m in conv if m.role == "user") >= 2,
+        )
         .with_start_agent("triage")
-        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == "user") >= 2)
         .build()
     )
 
@@ -541,12 +545,12 @@ async def test_handoff_with_participant_factories_and_add_handoff():
                 "triage": create_triage,
                 "specialist_a": create_specialist_a,
                 "specialist_b": create_specialist_b,
-            }
+            },
+            termination_condition=lambda conv: sum(1 for m in conv if m.role == "user") >= 3,
         )
         .with_start_agent("triage")
         .add_handoff("triage", ["specialist_a", "specialist_b"])
         .add_handoff("specialist_a", ["specialist_b"])
-        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == "user") >= 3)
         .build()
     )
 
@@ -582,10 +586,12 @@ async def test_handoff_participant_factories_with_checkpointing():
         return MockHandoffAgent(name="specialist")
 
     workflow = (
-        HandoffBuilder(participant_factories={"triage": create_triage, "specialist": create_specialist})
+        HandoffBuilder(
+            participant_factories={"triage": create_triage, "specialist": create_specialist},
+            checkpoint_storage=storage,
+            termination_condition=lambda conv: sum(1 for m in conv if m.role == "user") >= 2,
+        )
         .with_start_agent("triage")
-        .with_checkpointing(storage)
-        .with_termination_condition(lambda conv: sum(1 for m in conv if m.role == "user") >= 2)
         .build()
     )
 

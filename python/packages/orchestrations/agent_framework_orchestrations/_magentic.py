@@ -1364,7 +1364,7 @@ class MagenticBuilder:
     Human-in-the-loop Support:
         Magentic provides specialized HITL mechanisms via:
 
-        - `.with_plan_review()` - Review and approve/revise plans before execution
+        - `enable_plan_review=True` - Review and approve/revise plans before execution
         - `.with_human_input_on_stall()` - Intervene when workflow stalls
         - Tool approval via `function_approval_request` - Approve individual tool calls
 
@@ -1373,8 +1373,20 @@ class MagenticBuilder:
         for Magentic's planning-based orchestration.
     """
 
-    def __init__(self) -> None:
-        """Initialize the Magentic workflow builder."""
+    def __init__(
+        self,
+        *,
+        enable_plan_review: bool = False,
+        checkpoint_storage: CheckpointStorage | None = None,
+        intermediate_outputs: bool = False,
+    ) -> None:
+        """Initialize the Magentic workflow builder.
+
+        Args:
+            enable_plan_review: If True, requires human approval of the initial plan before proceeding.
+            checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
+            intermediate_outputs: If True, enables intermediate outputs from agent participants.
+        """
         self._participants: dict[str, AgentProtocol | Executor] = {}
         self._participant_factories: list[Callable[[], AgentProtocol | Executor]] = []
 
@@ -1383,12 +1395,12 @@ class MagenticBuilder:
         self._manager_factory: Callable[[], MagenticManagerBase] | None = None
         self._manager_agent_factory: Callable[[], AgentProtocol] | None = None
         self._standard_manager_options: dict[str, Any] = {}
-        self._enable_plan_review: bool = False
+        self._enable_plan_review: bool = enable_plan_review
 
-        self._checkpoint_storage: CheckpointStorage | None = None
+        self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
         # Intermediate outputs
-        self._intermediate_outputs = False
+        self._intermediate_outputs = intermediate_outputs
 
     def register_participants(
         self,
@@ -1480,102 +1492,6 @@ class MagenticBuilder:
 
         self._participants = named
 
-        return self
-
-    def with_plan_review(self, enable: bool = True) -> "MagenticBuilder":
-        """Enable or disable human-in-the-loop plan review before task execution.
-
-        When enabled, the workflow will pause after the manager generates the initial
-        plan and emit a MagenticHumanInterventionRequest event with kind=PLAN_REVIEW.
-        A human reviewer can then approve, request revisions, or reject the plan.
-        The workflow continues only after approval.
-
-        This is useful for:
-        - High-stakes tasks requiring human oversight
-        - Validating the manager's understanding of requirements
-        - Catching hallucinations or unrealistic plans early
-        - Educational scenarios where learners review AI planning
-
-        Args:
-            enable: Whether to require plan review (default True)
-
-        Returns:
-            Self for method chaining
-
-        Usage:
-
-        .. code-block:: python
-
-            workflow = (
-                MagenticBuilder()
-                .participants(agent1=agent1)
-                .with_manager(agent=manager_agent)
-                .with_plan_review(enable=True)
-                .build()
-            )
-
-            # During execution, handle plan review
-            async for event in workflow.run_stream("task"):
-                if isinstance(event, RequestInfoEvent):
-                    request = event.data
-                    if isinstance(request, MagenticHumanInterventionRequest):
-                        if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:
-                            # Review plan and respond
-                            reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
-                            await workflow.send_responses({event.request_id: reply})
-
-        See Also:
-            - :class:`MagenticHumanInterventionRequest`: Event emitted for review
-            - :class:`MagenticHumanInterventionReply`: Response to send back
-            - :class:`MagenticHumanInterventionDecision`: APPROVE/REVISE options
-        """
-        self._enable_plan_review = enable
-        return self
-
-    def with_checkpointing(self, checkpoint_storage: CheckpointStorage) -> "MagenticBuilder":
-        """Enable workflow state persistence using the provided checkpoint storage.
-
-        Checkpointing allows workflows to be paused, resumed across process restarts,
-        or recovered after failures. The entire workflow state including conversation
-        history, task ledgers, and progress is persisted at key points.
-
-        Args:
-            checkpoint_storage: Storage backend for checkpoints (e.g., InMemoryCheckpointStorage,
-                FileCheckpointStorage, or custom implementations)
-
-        Returns:
-            Self for method chaining
-
-        Usage:
-
-        .. code-block:: python
-
-            from agent_framework import InMemoryCheckpointStorage
-
-            storage = InMemoryCheckpointStorage()
-            workflow = (
-                MagenticBuilder()
-                .participants([agent1])
-                .with_manager(agent=manager_agent)
-                .with_checkpointing(storage)
-                .build()
-            )
-
-            # First run
-            thread_id = "task-123"
-            async for msg in workflow.run("task", thread_id=thread_id):
-                print(msg.text)
-
-            # Resume from checkpoint
-            async for msg in workflow.run("continue", thread_id=thread_id):
-                print(msg.text)
-
-        Notes:
-            - Checkpoints are created after each significant state transition
-            - Thread ID must be consistent across runs to resume properly
-            - Storage implementations may have different persistence guarantees
-        """
-        self._checkpoint_storage = checkpoint_storage
         return self
 
     @overload
@@ -1905,19 +1821,6 @@ class MagenticBuilder:
 
         return self
 
-    def with_intermediate_outputs(self) -> Self:
-        """Enable intermediate outputs from agent participants before aggregation.
-
-        When enabled, the workflow returns each agent participant's response or yields
-        streaming updates as they become available. The output of the orchestrator will
-        always be available as the final output of the workflow.
-
-        Returns:
-            Self for fluent chaining
-        """
-        self._intermediate_outputs = True
-        return self
-
     def _resolve_orchestrator(self, participants: Sequence[Executor]) -> Executor:
         """Determine the orchestrator to use for the workflow.
 
@@ -1983,17 +1886,15 @@ class MagenticBuilder:
         orchestrator: Executor = self._resolve_orchestrator(participants)
 
         # Build workflow graph
-        workflow_builder = WorkflowBuilder().set_start_executor(orchestrator)
+        workflow_builder = WorkflowBuilder(
+            start_executor=orchestrator,
+            checkpoint_storage=self._checkpoint_storage,
+            output_executors=[orchestrator] if not self._intermediate_outputs else None,
+        )
         for participant in participants:
             # Orchestrator and participant bi-directional edges
             workflow_builder = workflow_builder.add_edge(orchestrator, participant)
             workflow_builder = workflow_builder.add_edge(participant, orchestrator)
-        if self._checkpoint_storage is not None:
-            workflow_builder = workflow_builder.with_checkpointing(self._checkpoint_storage)
-
-        if not self._intermediate_outputs:
-            # Constrain output to orchestrator only
-            workflow_builder = workflow_builder.with_output_from([orchestrator])
 
         return workflow_builder.build()
 

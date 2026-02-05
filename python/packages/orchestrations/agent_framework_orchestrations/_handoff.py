@@ -578,6 +578,8 @@ class HandoffBuilder:
         participants: Sequence[AgentProtocol] | None = None,
         participant_factories: Mapping[str, Callable[[], AgentProtocol]] | None = None,
         description: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
+        termination_condition: TerminationCondition | None = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -600,6 +602,9 @@ class HandoffBuilder:
                                    created by this builder.
             description: Optional human-readable description explaining the workflow's
                          purpose. Useful for documentation and observability.
+            checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
+            termination_condition: Optional callable that receives the full conversation and returns True
+                (or awaitable True) if the workflow should terminate.
         """
         self._name = name
         self._description = description
@@ -618,7 +623,7 @@ class HandoffBuilder:
         self._handoff_config: dict[str, set[HandoffConfiguration]] = {}
 
         # Checkpoint related members
-        self._checkpoint_storage: CheckpointStorage | None = None
+        self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
         # Autonomous mode related
         self._autonomous_mode: bool = False
@@ -627,7 +632,9 @@ class HandoffBuilder:
         self._autonomous_mode_enabled_agents: list[str] = []
 
         # Termination related members
-        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = None
+        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = (
+            termination_condition
+        )
 
     def register_participants(
         self, participant_factories: Mapping[str, Callable[[], AgentProtocol]]
@@ -948,88 +955,6 @@ class HandoffBuilder:
 
         return self
 
-    def with_checkpointing(self, checkpoint_storage: CheckpointStorage) -> "HandoffBuilder":
-        """Enable workflow state persistence for resumable conversations.
-
-        Checkpointing allows the workflow to save its state at key points, enabling you to:
-        - Resume conversations after application restarts
-        - Implement long-running support tickets that span multiple sessions
-        - Recover from failures without losing conversation context
-        - Audit and replay conversation history
-
-        Args:
-            checkpoint_storage: Storage backend implementing CheckpointStorage interface.
-                               Common implementations: InMemoryCheckpointStorage (testing),
-                               database-backed storage (production).
-
-        Returns:
-            Self for method chaining.
-
-        Example (In-Memory):
-
-        .. code-block:: python
-
-            from agent_framework import InMemoryCheckpointStorage
-
-            storage = InMemoryCheckpointStorage()
-            workflow = HandoffBuilder(participants=[triage, refund, billing]).with_checkpointing(storage).build()
-
-            # Run workflow with a session ID for resumption
-            async for event in workflow.run_stream("Help me", session_id="user_123"):
-                # Process events...
-                pass
-
-            # Later, resume the same conversation
-            async for event in workflow.run_stream("I need a refund", session_id="user_123"):
-                # Conversation continues from where it left off
-                pass
-
-        Use Cases:
-            - Customer support systems with persistent ticket history
-            - Multi-day conversations that need to survive server restarts
-            - Compliance requirements for conversation auditing
-            - A/B testing different agent configurations on same conversation
-
-        Note:
-            Checkpointing adds overhead for serialization and storage I/O. Use it when
-            persistence is required, not for simple stateless request-response patterns.
-        """
-        self._checkpoint_storage = checkpoint_storage
-        return self
-
-    def with_termination_condition(self, termination_condition: TerminationCondition) -> "HandoffBuilder":
-        """Set a custom termination condition for the handoff workflow.
-
-        The condition can be either synchronous or asynchronous.
-
-        Args:
-            termination_condition: Function that receives the full conversation and returns True
-                (or awaitable True) if the workflow should terminate.
-
-        Returns:
-            Self for chaining.
-
-        Example:
-
-        .. code-block:: python
-
-            # Synchronous condition
-            builder.with_termination_condition(
-                lambda conv: len(conv) > 20 or any("goodbye" in msg.text.lower() for msg in conv[-2:])
-            )
-
-
-            # Asynchronous condition
-            async def check_termination(conv: list[ChatMessage]) -> bool:
-                # Can perform async operations
-                return len(conv) > 20
-
-
-            builder.with_termination_condition(check_termination)
-        """
-        self._termination_condition = termination_condition
-        return self
-
     def build(self) -> Workflow:
         """Construct the final Workflow instance from the configured builder.
 
@@ -1061,7 +986,9 @@ class HandoffBuilder:
         builder = WorkflowBuilder(
             name=self._name,
             description=self._description,
-        ).set_start_executor(start_executor)
+            start_executor=start_executor,
+            checkpoint_storage=self._checkpoint_storage,
+        )
 
         # Add the appropriate edges
         # In handoff workflows, all executors are connected, making a fully connected graph.
@@ -1076,10 +1003,6 @@ class HandoffBuilder:
                 builder = builder.add_fan_out_edges(executor, targets)
             elif len(targets) == 1:
                 builder = builder.add_edge(executor, targets[0])
-
-        # Configure checkpointing if enabled
-        if self._checkpoint_storage:
-            builder.with_checkpointing(self._checkpoint_storage)
 
         return builder.build()
 

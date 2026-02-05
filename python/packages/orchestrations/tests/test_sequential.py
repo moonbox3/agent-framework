@@ -216,7 +216,7 @@ async def test_sequential_checkpoint_resume_round_trip() -> None:
     storage = InMemoryCheckpointStorage()
 
     initial_agents = (_EchoAgent(id="agent1", name="A1"), _EchoAgent(id="agent2", name="A2"))
-    wf = SequentialBuilder().participants(list(initial_agents)).with_checkpointing(storage).build()
+    wf = SequentialBuilder(checkpoint_storage=storage).participants(list(initial_agents)).build()
 
     baseline_output: list[ChatMessage] | None = None
     async for ev in wf.run_stream("checkpoint sequential"):
@@ -237,7 +237,7 @@ async def test_sequential_checkpoint_resume_round_trip() -> None:
     )
 
     resumed_agents = (_EchoAgent(id="agent1", name="A1"), _EchoAgent(id="agent2", name="A2"))
-    wf_resume = SequentialBuilder().participants(list(resumed_agents)).with_checkpointing(storage).build()
+    wf_resume = SequentialBuilder(checkpoint_storage=storage).participants(list(resumed_agents)).build()
 
     resumed_output: list[ChatMessage] | None = None
     async for ev in wf_resume.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
@@ -308,7 +308,7 @@ async def test_sequential_checkpoint_runtime_overrides_buildtime() -> None:
         runtime_storage = FileCheckpointStorage(temp_dir2)
 
         agents = (_EchoAgent(id="agent1", name="A1"), _EchoAgent(id="agent2", name="A2"))
-        wf = SequentialBuilder().participants(list(agents)).with_checkpointing(buildtime_storage).build()
+        wf = SequentialBuilder(checkpoint_storage=buildtime_storage).participants(list(agents)).build()
 
         baseline_output: list[ChatMessage] | None = None
         async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):
@@ -336,7 +336,7 @@ async def test_sequential_register_participants_with_checkpointing() -> None:
     def create_agent2() -> _EchoAgent:
         return _EchoAgent(id="agent2", name="A2")
 
-    wf = SequentialBuilder().register_participants([create_agent1, create_agent2]).with_checkpointing(storage).build()
+    wf = SequentialBuilder(checkpoint_storage=storage).register_participants([create_agent1, create_agent2]).build()
 
     baseline_output: list[ChatMessage] | None = None
     async for ev in wf.run_stream("checkpoint with factories"):
@@ -357,7 +357,7 @@ async def test_sequential_register_participants_with_checkpointing() -> None:
     )
 
     wf_resume = (
-        SequentialBuilder().register_participants([create_agent1, create_agent2]).with_checkpointing(storage).build()
+        SequentialBuilder(checkpoint_storage=storage).register_participants([create_agent1, create_agent2]).build()
     )
 
     resumed_output: list[ChatMessage] | None = None

@@ -52,8 +52,10 @@ async def main() -> None:
 
     print("\nBuilding Magentic Workflow...")
 
+    # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
+    # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(intermediate_outputs=True)
         .participants([researcher_agent, coder_agent])
         .with_manager(
             agent=manager_agent,
@@ -61,9 +63,6 @@ async def main() -> None:
             max_stall_count=3,
             max_reset_count=2,
         )
-        # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
-        .with_intermediate_outputs()
         .build()
     )
 

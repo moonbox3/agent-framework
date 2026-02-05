@@ -321,8 +321,7 @@ async def _create_workflow(project_client, credential):
     # 7. booking_info_aggregation, booking_payment, activity_search → final_coordinator (final aggregation, fan-in)
 
     workflow = (
-        WorkflowBuilder(name="Travel Planning Workflow")
-        .set_start_executor(start_executor)
+        WorkflowBuilder(name="Travel Planning Workflow", start_executor=start_executor)
         .add_edge(start_executor, travel_request_handler)
         .add_fan_out_edges(travel_request_handler, [hotel_search_agent, flight_search_agent, activity_search_agent])
         .add_edge(hotel_search_agent, booking_info_aggregation_agent)

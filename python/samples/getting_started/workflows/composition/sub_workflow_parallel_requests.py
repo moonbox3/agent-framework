@@ -170,12 +170,11 @@ def build_resource_request_distribution_workflow() -> Workflow:
                 raise ValueError("Received more responses than expected")
 
     return (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="orchestrator")
         .register_executor(lambda: RequestDistribution("orchestrator"), name="orchestrator")
         .register_executor(lambda: ResourceRequester("resource_requester"), name="resource_requester")
         .register_executor(lambda: PolicyChecker("policy_checker"), name="policy_checker")
         .register_executor(lambda: ResultCollector("result_collector"), name="result_collector")
-        .set_start_executor("orchestrator")
         .add_edge("orchestrator", "resource_requester")
         .add_edge("orchestrator", "policy_checker")
         .add_edge("resource_requester", "result_collector")
@@ -289,7 +288,7 @@ class PolicyEngine(Executor):
 async def main() -> None:
     # Build the main workflow
     main_workflow = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="sub_workflow_executor")
         .register_executor(lambda: ResourceAllocator("resource_allocator"), name="resource_allocator")
         .register_executor(lambda: PolicyEngine("policy_engine"), name="policy_engine")
         .register_executor(
@@ -303,7 +302,6 @@ async def main() -> None:
             ),
             name="sub_workflow_executor",
         )
-        .set_start_executor("sub_workflow_executor")
         .add_edge("sub_workflow_executor", "resource_allocator")
         .add_edge("resource_allocator", "sub_workflow_executor")
         .add_edge("sub_workflow_executor", "policy_engine")

@@ -241,9 +241,9 @@ async def main() -> None:
         .register_executor(lambda: database_access, name="database_access")
     )
 
+    workflow_builder._start_executor = "store_email"  # Set start executor
     workflow = (
         workflow_builder
-        .set_start_executor("store_email")
         .add_edge("store_email", "email_analysis_agent")
         .add_edge("email_analysis_agent", "to_analysis_result")
         .add_multi_selection_edge_group(

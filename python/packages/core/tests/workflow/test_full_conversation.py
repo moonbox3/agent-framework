@@ -75,13 +75,7 @@ async def test_agent_executor_populates_full_conversation_non_streaming() -> Non
     agent_exec = AgentExecutor(agent, id="agent1-exec")
     capturer = _CaptureFullConversation(id="capture")
 
-    wf = (
-        WorkflowBuilder()
-        .set_start_executor(agent_exec)
-        .add_edge(agent_exec, capturer)
-        .with_output_from([capturer])
-        .build()
-    )
+    wf = WorkflowBuilder(start_executor=agent_exec, output_executors=[capturer]).add_edge(agent_exec, capturer).build()
 
     # Act: use run() instead of run_stream() to test non-streaming mode
     result = await wf.run("hello world")

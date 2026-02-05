@@ -138,10 +138,10 @@ async def run_agent_framework() -> None:
         HandoffBuilder(
             name="support_handoff",
             participants=[triage_agent, billing_agent, tech_support],
+            termination_condition=lambda conv: sum(1 for msg in conv if msg.role == "user") > 3,
         )
         .with_start_agent(triage_agent)
         .add_handoff(triage_agent, [billing_agent, tech_support])
-        .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role == "user") > 3)
         .build()
     )
 

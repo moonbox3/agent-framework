@@ -175,7 +175,9 @@ def create_workflow(checkpoint_storage: FileCheckpointStorage) -> Workflow:
     # module docstring. Because `WorkflowBuilder` is declarative, reading these
     # edges is often the quickest way to understand execution order.
     workflow_builder = (
-        WorkflowBuilder(max_iterations=6)
+        WorkflowBuilder(
+            max_iterations=6, start_executor="prepare_brief", checkpoint_storage=checkpoint_storage
+        )
         .register_agent(
             lambda: AzureOpenAIChatClient(credential=AzureCliCredential()).as_agent(
                 instructions="Write concise, warm release notes that sound human and helpful.",
@@ -186,11 +188,9 @@ def create_workflow(checkpoint_storage: FileCheckpointStorage) -> Workflow:
         )
         .register_executor(lambda: ReviewGateway(id="review_gateway", writer_id="writer"), name="review_gateway")
         .register_executor(lambda: BriefPreparer(id="prepare_brief", agent_id="writer"), name="prepare_brief")
-        .set_start_executor("prepare_brief")
         .add_edge("prepare_brief", "writer")
         .add_edge("writer", "review_gateway")
         .add_edge("review_gateway", "writer")  # revisions loop
-        .with_checkpointing(checkpoint_storage=checkpoint_storage)
     )
 
     return workflow_builder.build()

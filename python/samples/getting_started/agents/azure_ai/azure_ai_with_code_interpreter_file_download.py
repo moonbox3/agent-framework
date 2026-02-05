@@ -8,10 +8,8 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     CitationAnnotation,
-    Content,
     HostedCodeInterpreterTool,
     HostedFileContent,
-    tool,
 )
 from agent_framework.azure import AzureAIProjectAgentProvider
 from azure.identity.aio import AzureCliCredential

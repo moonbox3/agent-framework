@@ -86,7 +86,7 @@ async def run_agent_framework() -> None:
     )
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=1)
         .participants([python_expert, javascript_expert, database_expert])
         .with_orchestrator(
             agent=client.as_agent(
@@ -94,7 +94,6 @@ async def run_agent_framework() -> None:
                 instructions="Based on the conversation, select the most appropriate expert to respond next.",
             ),
         )
-        .with_max_rounds(1)
         .build()
     )
 

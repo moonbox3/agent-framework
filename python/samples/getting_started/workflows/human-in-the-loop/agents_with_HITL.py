@@ -188,8 +188,7 @@ async def main() -> None:
 
     # Build the workflow.
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(writer_agent)
+        WorkflowBuilder(start_executor=writer_agent)
         .add_edge(writer_agent, coordinator)
         .add_edge(coordinator, writer_agent)
         .add_edge(final_editor_agent, coordinator)

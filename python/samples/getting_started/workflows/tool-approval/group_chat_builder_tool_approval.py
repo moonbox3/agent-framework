@@ -149,16 +149,15 @@ async def main() -> None:
     )
 
     # 4. Build a group chat workflow with the selector function
+    # max_rounds=4: Set a hard limit to 4 rounds
+    # First round: QAEngineer speaks
+    # Second round: DevOpsEngineer speaks (check staging + create rollback)
+    # Third round: DevOpsEngineer speaks with an approval request (deploy to production)
+    # Fourth round: DevOpsEngineer speaks again after approval
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=4)
         .with_orchestrator(selection_func=select_next_speaker)
         .participants([qa_engineer, devops_engineer])
-        # Set a hard limit to 4 rounds
-        # First round: QAEngineer speaks
-        # Second round: DevOpsEngineer speaks (check staging + create rollback)
-        # Third round: DevOpsEngineer speaks with an approval request (deploy to production)
-        # Fourth round: DevOpsEngineer speaks again after approval
-        .with_max_rounds(4)
         .build()
     )
 

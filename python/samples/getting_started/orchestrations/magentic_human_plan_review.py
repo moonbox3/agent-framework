@@ -117,8 +117,11 @@ async def main() -> None:
 
     print("\nBuilding Magentic Workflow with Human Plan Review...")
 
+    # enable_plan_review=True: Request human input for plan review
+    # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
+    # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
-        MagenticBuilder()
+        MagenticBuilder(enable_plan_review=True, intermediate_outputs=True)
         .participants([researcher_agent, analyst_agent])
         .with_manager(
             agent=manager_agent,
@@ -126,11 +129,6 @@ async def main() -> None:
             max_stall_count=1,
             max_reset_count=2,
         )
-        # Request human input for plan review
-        .with_plan_review()
-        # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
-        .with_intermediate_outputs()
         .build()
     )
 

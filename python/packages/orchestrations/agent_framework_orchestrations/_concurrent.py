@@ -230,21 +230,33 @@ class ConcurrentBuilder:
 
 
         # Enable checkpoint persistence so runs can resume
-        workflow = ConcurrentBuilder().participants([agent1, agent2, agent3]).with_checkpointing(storage).build()
+        workflow = ConcurrentBuilder(checkpoint_storage=storage).participants([agent1, agent2, agent3]).build()
 
         # Enable request info before aggregation
         workflow = ConcurrentBuilder().participants([agent1, agent2]).with_request_info().build()
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        checkpoint_storage: CheckpointStorage | None = None,
+        intermediate_outputs: bool = False,
+    ) -> None:
+        """Initialize the ConcurrentBuilder.
+
+        Args:
+            checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
+            intermediate_outputs: If True, enables intermediate outputs from agent participants
+                before aggregation.
+        """
         self._participants: list[AgentProtocol | Executor] = []
         self._participant_factories: list[Callable[[], AgentProtocol | Executor]] = []
         self._aggregator: Executor | None = None
         self._aggregator_factory: Callable[[], Executor] | None = None
-        self._checkpoint_storage: CheckpointStorage | None = None
+        self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] | None = None
-        self._intermediate_outputs: bool = False
+        self._intermediate_outputs: bool = intermediate_outputs
 
     def register_participants(
         self,
@@ -446,15 +458,6 @@ class ConcurrentBuilder:
 
         return self
 
-    def with_checkpointing(self, checkpoint_storage: CheckpointStorage) -> "ConcurrentBuilder":
-        """Enable checkpoint persistence using the provided storage backend.
-
-        Args:
-            checkpoint_storage: CheckpointStorage instance for persisting workflow state
-        """
-        self._checkpoint_storage = checkpoint_storage
-        return self
-
     def with_request_info(
         self,
         *,
@@ -486,19 +489,6 @@ class ConcurrentBuilder:
         self._request_info_enabled = True
         self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)
 
-        return self
-
-    def with_intermediate_outputs(self) -> "ConcurrentBuilder":
-        """Enable intermediate outputs from agent participants before aggregation.
-
-        When enabled, the workflow returns each agent participant's response or yields
-        streaming updates as they become available. The output of the aggregator will
-        always be available as the final output of the workflow.
-
-        Returns:
-            Self for fluent chaining
-        """
-        self._intermediate_outputs = True
         return self
 
     def _resolve_participants(self) -> list[Executor]:
@@ -573,18 +563,14 @@ class ConcurrentBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
-        builder = WorkflowBuilder()
-        builder.set_start_executor(dispatcher)
+        builder = WorkflowBuilder(
+            start_executor=dispatcher,
+            checkpoint_storage=self._checkpoint_storage,
+            output_executors=[aggregator] if not self._intermediate_outputs else None,
+        )
         # Fan-out for parallel execution
         builder.add_fan_out_edges(dispatcher, participants)
         # Direct fan-in to aggregator
         builder.add_fan_in_edges(participants, aggregator)
-
-        if not self._intermediate_outputs:
-            # Constrain output to aggregator only
-            builder = builder.with_output_from([aggregator])
-
-        if self._checkpoint_storage is not None:
-            builder = builder.with_checkpointing(self._checkpoint_storage)
 
         return builder.build()

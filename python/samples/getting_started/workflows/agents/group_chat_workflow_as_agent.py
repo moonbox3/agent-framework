@@ -2,8 +2,9 @@
 
 import asyncio
 
-from agent_framework import ChatAgent, GroupChatBuilder
+from agent_framework import ChatAgent
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
+from agent_framework.orchestrations import GroupChatBuilder
 
 """
 Sample: Group Chat Orchestration
@@ -32,8 +33,10 @@ async def main() -> None:
         chat_client=OpenAIResponsesClient(),
     )
 
+    # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
+    # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(intermediate_outputs=True)
         .with_orchestrator(
             agent=OpenAIChatClient().as_agent(
                 name="Orchestrator",
@@ -41,9 +44,6 @@ async def main() -> None:
             )
         )
         .participants([researcher, writer])
-        # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
-        .with_intermediate_outputs()
         .build()
     )
 

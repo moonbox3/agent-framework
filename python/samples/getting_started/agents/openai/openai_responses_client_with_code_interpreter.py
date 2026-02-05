@@ -6,7 +6,6 @@ from agent_framework import (
     ChatAgent,
     CodeInterpreterToolCallContent,
     CodeInterpreterToolResultContent,
-    Content,
     HostedCodeInterpreterTool,
 )
 from agent_framework.openai import OpenAIResponsesClient

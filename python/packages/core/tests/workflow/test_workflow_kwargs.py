@@ -186,10 +186,9 @@ async def test_groupchat_kwargs_flow_to_agents() -> None:
         return names[(turn_count - 1) % len(names)]
 
     workflow = (
-        GroupChatBuilder()
+        GroupChatBuilder(max_rounds=2)  # Limit rounds to prevent infinite loop
         .participants([agent1, agent2])
         .with_orchestrator(selection_func=simple_selector)
-        .with_max_rounds(2)  # Limit rounds to prevent infinite loop
         .build()
     )
 
@@ -346,11 +345,10 @@ async def test_handoff_kwargs_flow_to_agents() -> None:
     agent2 = _KwargsCapturingAgent(name="specialist")
 
     workflow = (
-        HandoffBuilder()
+        HandoffBuilder(termination_condition=lambda conv: len(conv) >= 4)
         .participants([agent1, agent2])
         .with_start_agent(agent1)
         .with_autonomous_mode()
-        .with_termination_condition(lambda conv: len(conv) >= 4)
         .build()
     )
 

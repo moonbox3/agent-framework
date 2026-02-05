@@ -164,8 +164,7 @@ def create_email_validation_workflow() -> Workflow:
     email_domain_validator = EmailDomainValidator()
 
     return (
-        WorkflowBuilder()
-        .set_start_executor(email_format_validator)
+        WorkflowBuilder(start_executor=email_format_validator)
         .add_edge(email_format_validator, email_domain_validator)
         .build()
     )
@@ -181,8 +180,7 @@ async def test_basic_sub_workflow() -> None:
     workflow_executor = WorkflowExecutor(validation_workflow, "email_validation_workflow")
 
     main_workflow = (
-        WorkflowBuilder()
-        .set_start_executor(parent)
+        WorkflowBuilder(start_executor=parent)
         .add_edge(parent, workflow_executor)
         .add_edge(workflow_executor, parent)
         .build()
@@ -218,8 +216,7 @@ async def test_sub_workflow_with_interception():
     workflow_executor = WorkflowExecutor(validation_workflow, "email_workflow")
 
     main_workflow = (
-        WorkflowBuilder()
-        .set_start_executor(parent)
+        WorkflowBuilder(start_executor=parent)
         .add_edge(parent, workflow_executor)
         .add_edge(workflow_executor, parent)
         .build()
@@ -333,8 +330,7 @@ async def test_workflow_scoped_interception() -> None:
     executor_b = WorkflowExecutor(workflow_b, "workflow_b")
 
     main_workflow = (
-        WorkflowBuilder()
-        .set_start_executor(parent)
+        WorkflowBuilder(start_executor=parent)
         .add_edge(parent, executor_a)
         .add_edge(parent, executor_b)
         .add_edge(executor_a, parent)
@@ -415,8 +411,7 @@ async def test_concurrent_sub_workflow_execution() -> None:
     workflow_executor = WorkflowExecutor(validation_workflow, "email_workflow")
 
     main_workflow = (
-        WorkflowBuilder()
-        .set_start_executor(processor)
+        WorkflowBuilder(start_executor=processor)
         .add_edge(processor, workflow_executor)
         .add_edge(workflow_executor, processor)
         .build()

@@ -95,7 +95,7 @@ async def test_agent_executor_emits_tool_calls_in_streaming_mode() -> None:
     agent = _ToolCallingAgent(id="tool_agent", name="ToolAgent")
     agent_exec = AgentExecutor(agent, id="tool_exec")
 
-    workflow = WorkflowBuilder().set_start_executor(agent_exec).build()
+    workflow = WorkflowBuilder(start_executor=agent_exec).build()
 
     # Act: run in streaming mode
     events: list[WorkflowOutputEvent] = []
@@ -231,11 +231,7 @@ async def test_agent_executor_tool_call_with_approval() -> None:
     )
 
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(agent)
-        .add_edge(agent, test_executor)
-        .with_output_from([test_executor])
-        .build()
+        WorkflowBuilder(start_executor=agent, output_executors=[test_executor]).add_edge(agent, test_executor).build()
     )
 
     # Act
@@ -268,7 +264,7 @@ async def test_agent_executor_tool_call_with_approval_streaming() -> None:
         tools=[mock_tool_requiring_approval],
     )
 
-    workflow = WorkflowBuilder().set_start_executor(agent).add_edge(agent, test_executor).build()
+    workflow = WorkflowBuilder(start_executor=agent).add_edge(agent, test_executor).build()
 
     # Act
     request_info_events: list[RequestInfoEvent] = []
@@ -306,11 +302,7 @@ async def test_agent_executor_parallel_tool_call_with_approval() -> None:
     )
 
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(agent)
-        .add_edge(agent, test_executor)
-        .with_output_from([test_executor])
-        .build()
+        WorkflowBuilder(start_executor=agent, output_executors=[test_executor]).add_edge(agent, test_executor).build()
     )
 
     # Act
@@ -345,7 +337,7 @@ async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> No
         tools=[mock_tool_requiring_approval],
     )
 
-    workflow = WorkflowBuilder().set_start_executor(agent).add_edge(agent, test_executor).build()
+    workflow = WorkflowBuilder(start_executor=agent).add_edge(agent, test_executor).build()
 
     # Act
     request_info_events: list[RequestInfoEvent] = []

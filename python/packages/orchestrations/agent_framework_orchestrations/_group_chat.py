@@ -515,8 +515,23 @@ class GroupChatBuilder:
 
     DEFAULT_ORCHESTRATOR_ID: ClassVar[str] = "group_chat_orchestrator"
 
-    def __init__(self) -> None:
-        """Initialize the GroupChatBuilder."""
+    def __init__(
+        self,
+        *,
+        termination_condition: TerminationCondition | None = None,
+        max_rounds: int | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
+        intermediate_outputs: bool = False,
+    ) -> None:
+        """Initialize the GroupChatBuilder.
+
+        Args:
+            termination_condition: Optional callable that receives the conversation history and returns
+                True to terminate the conversation, False to continue.
+            max_rounds: Optional maximum number of orchestrator rounds to prevent infinite conversations.
+            checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
+            intermediate_outputs: If True, enables intermediate outputs from agent participants.
+        """
         self._participants: dict[str, AgentProtocol | Executor] = {}
         self._participant_factories: list[Callable[[], AgentProtocol | Executor]] = []
 
@@ -525,19 +540,19 @@ class GroupChatBuilder:
         self._orchestrator_factory: Callable[[], ChatAgent | BaseGroupChatOrchestrator] | None = None
         self._selection_func: GroupChatSelectionFunction | None = None
         self._agent_orchestrator: ChatAgent | None = None
-        self._termination_condition: TerminationCondition | None = None
-        self._max_rounds: int | None = None
+        self._termination_condition: TerminationCondition | None = termination_condition
+        self._max_rounds: int | None = max_rounds
         self._orchestrator_name: str | None = None
 
         # Checkpoint related members
-        self._checkpoint_storage: CheckpointStorage | None = None
+        self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
         # Request info related members
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] = set()
 
         # Intermediate outputs
-        self._intermediate_outputs = False
+        self._intermediate_outputs = intermediate_outputs
 
     @overload
     def with_orchestrator(self, *, agent: ChatAgent | Callable[[], ChatAgent]) -> "GroupChatBuilder":
@@ -766,95 +781,6 @@ class GroupChatBuilder:
 
         return self
 
-    def with_termination_condition(self, termination_condition: TerminationCondition) -> "GroupChatBuilder":
-        """Set a custom termination condition for the group chat workflow.
-
-        Args:
-            termination_condition: Callable that receives the conversation history and returns
-                                   True to terminate the conversation, False to continue.
-
-        Returns:
-            Self for fluent chaining
-
-        Example:
-
-        .. code-block:: python
-
-            from agent_framework import ChatMessage
-            from agent_framework_orchestrations import GroupChatBuilder
-
-
-            def stop_after_two_calls(conversation: list[ChatMessage]) -> bool:
-                calls = sum(1 for msg in conversation if msg.role == "assistant" and msg.author_name == "specialist")
-                return calls >= 2
-
-
-            specialist_agent = ...
-            workflow = (
-                GroupChatBuilder()
-                .with_orchestrator(selection_func=my_selection_function)
-                .participants([agent1, specialist_agent])
-                .with_termination_condition(stop_after_two_calls)
-                .build()
-            )
-        """
-        if self._orchestrator is not None or self._orchestrator_factory is not None:
-            logger.warning(
-                "Orchestrator has already been configured; setting termination condition on builder has no effect."
-            )
-
-        self._termination_condition = termination_condition
-        return self
-
-    def with_max_rounds(self, max_rounds: int | None) -> "GroupChatBuilder":
-        """Set a maximum number of orchestrator rounds to prevent infinite conversations.
-
-        When the round limit is reached, the workflow automatically completes with
-        a default completion message. Setting to None allows unlimited rounds.
-
-        Args:
-            max_rounds: Maximum number of orchestrator selection rounds, or None for unlimited
-
-        Returns:
-            Self for fluent chaining
-        """
-        if self._orchestrator is not None or self._orchestrator_factory is not None:
-            logger.warning("Orchestrator has already been configured; setting max rounds on builder has no effect.")
-
-        self._max_rounds = max_rounds
-        return self
-
-    def with_checkpointing(self, checkpoint_storage: CheckpointStorage) -> "GroupChatBuilder":
-        """Enable checkpointing for the built workflow using the provided storage.
-
-        Checkpointing allows the workflow to persist state and resume from interruption
-        points, enabling long-running conversations and failure recovery.
-
-        Args:
-            checkpoint_storage: Storage implementation for persisting workflow state
-
-        Returns:
-            Self for fluent chaining
-
-        Example:
-
-        .. code-block:: python
-
-            from agent_framework import MemoryCheckpointStorage
-            from agent_framework_orchestrations import GroupChatBuilder
-
-            storage = MemoryCheckpointStorage()
-            workflow = (
-                GroupChatBuilder()
-                .with_orchestrator(selection_func=my_selection_function)
-                .participants([agent1, agent2])
-                .with_checkpointing(storage)
-                .build()
-            )
-        """
-        self._checkpoint_storage = checkpoint_storage
-        return self
-
     def with_request_info(self, *, agents: Sequence[str | AgentProtocol] | None = None) -> "GroupChatBuilder":
         """Enable request info after agent participant responses.
 
@@ -882,19 +808,6 @@ class GroupChatBuilder:
         self._request_info_enabled = True
         self._request_info_filter = resolve_request_info_filter(list(agents) if agents else None)
 
-        return self
-
-    def with_intermediate_outputs(self) -> "GroupChatBuilder":
-        """Enable intermediate outputs from agent participants.
-
-        When enabled, the workflow returns each agent participant's response or yields
-        streaming updates as they become available. The output of the orchestrator will
-        always be available as the final output of the workflow.
-
-        Returns:
-            Self for fluent chaining
-        """
-        self._intermediate_outputs = True
         return self
 
     def _resolve_orchestrator(self, participants: Sequence[Executor]) -> Executor:
@@ -998,18 +911,15 @@ class GroupChatBuilder:
         orchestrator: Executor = self._resolve_orchestrator(participants)
 
         # Build workflow graph
-        workflow_builder = WorkflowBuilder().set_start_executor(orchestrator)
+        workflow_builder = WorkflowBuilder(
+            start_executor=orchestrator,
+            checkpoint_storage=self._checkpoint_storage,
+            output_executors=[orchestrator] if not self._intermediate_outputs else None,
+        )
         for participant in participants:
             # Orchestrator and participant bi-directional edges
             workflow_builder = workflow_builder.add_edge(orchestrator, participant)
             workflow_builder = workflow_builder.add_edge(participant, orchestrator)
-
-        if not self._intermediate_outputs:
-            # Constrain output to orchestrator only
-            workflow_builder = workflow_builder.with_output_from([orchestrator])
-
-        if self._checkpoint_storage is not None:
-            workflow_builder = workflow_builder.with_checkpointing(self._checkpoint_storage)
 
         return workflow_builder.build()
 

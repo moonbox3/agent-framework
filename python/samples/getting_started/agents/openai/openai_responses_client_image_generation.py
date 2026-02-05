@@ -3,7 +3,7 @@
 import asyncio
 import base64
 
-from agent_framework import Content, HostedImageGenerationTool, ImageGenerationToolResultContent
+from agent_framework import HostedImageGenerationTool, ImageGenerationToolResultContent
 from agent_framework.openai import OpenAIResponsesClient
 
 """

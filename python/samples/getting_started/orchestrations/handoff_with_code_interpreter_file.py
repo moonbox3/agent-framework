@@ -172,10 +172,11 @@ async def main() -> None:
 
         async with create_agents(credential) as (triage, code_specialist):
             workflow = (
-                HandoffBuilder()
+                HandoffBuilder(
+                    termination_condition=lambda conv: sum(1 for msg in conv if msg.role == "user") >= 2,
+                )
                 .participants([triage, code_specialist])
                 .with_start_agent(triage)
-                .with_termination_condition(lambda conv: sum(1 for msg in conv if msg.role == "user") >= 2)
                 .build()
             )
 

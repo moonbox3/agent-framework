@@ -55,11 +55,10 @@ async def main():
     # Step 1: Build the workflow with the defined edges.
     # Order matters. upper_case_executor runs first, then reverse_text_executor.
     workflow = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="upper_case_executor")
         .register_executor(lambda: to_upper_case, name="upper_case_executor")
         .register_executor(lambda: reverse_text, name="reverse_text_executor")
         .add_edge("upper_case_executor", "reverse_text_executor")
-        .set_start_executor("upper_case_executor")
         .build()
     )
 

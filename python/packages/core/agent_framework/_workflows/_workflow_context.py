@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import copy
 import inspect
 import logging
@@ -250,7 +252,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
 
     def __init__(
         self,
-        executor: "Executor",
+        executor: Executor,
         source_executor_ids: list[str],
         state: State,
         runner_context: RunnerContext,
@@ -349,7 +351,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
             event = WorkflowEvent.output(self._executor_id, output)
         await self._runner_context.add_event(event)
 
-    async def add_event(self, event: "WorkflowEvent[Any]") -> None:
+    async def add_event(self, event: WorkflowEvent[Any]) -> None:
         """Add an event to the workflow context."""
         if event.origin == WorkflowEventSource.EXECUTOR and event.type in _FRAMEWORK_LIFECYCLE_EVENT_TYPES:
             warning_msg = (

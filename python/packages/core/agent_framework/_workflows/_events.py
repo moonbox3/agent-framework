@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import sys
 import traceback as _traceback
 from collections.abc import Iterator
@@ -81,7 +83,7 @@ class WorkflowErrorDetails:
         *,
         executor_id: str | None = None,
         extra: dict[str, Any] | None = None,
-    ) -> "WorkflowErrorDetails":
+    ) -> WorkflowErrorDetails:
         tb = None
         try:
             tb = "".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -231,37 +233,37 @@ class WorkflowEvent(Generic[DataT]):
     # ==========================================================================
 
     @classmethod
-    def started(cls, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def started(cls, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create a 'started' event when a workflow run begins."""
         return cls("started", data=data)
 
     @classmethod
-    def status(cls, state: WorkflowRunState, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def status(cls, state: WorkflowRunState, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create a 'status' event for workflow state transitions."""
         return cls("status", data=data, state=state)
 
     @classmethod
-    def failed(cls, details: WorkflowErrorDetails, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def failed(cls, details: WorkflowErrorDetails, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create a 'failed' event when a workflow terminates with error."""
         return cls("failed", data=data, details=details)
 
     @classmethod
-    def warning(cls, message: str) -> "WorkflowEvent[str]":
+    def warning(cls, message: str) -> WorkflowEvent[str]:
         """Create a 'warning' event from user code."""
         return WorkflowEvent("warning", data=message)
 
     @classmethod
-    def error(cls, exception: Exception) -> "WorkflowEvent[Exception]":
+    def error(cls, exception: Exception) -> WorkflowEvent[Exception]:
         """Create an 'error' event from user code."""
         return WorkflowEvent("error", data=exception)
 
     @classmethod
-    def output(cls, executor_id: str, data: DataT) -> "WorkflowEvent[DataT]":
+    def output(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
         """Create an 'output' event when an executor yields final output."""
         return cls("output", executor_id=executor_id, data=data)
 
     @classmethod
-    def emit(cls, executor_id: str, data: DataT) -> "WorkflowEvent[DataT]":
+    def emit(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
         """Create a 'data' event when an executor emits data during execution.
 
         This is the primary method for executors to emit typed data
@@ -276,7 +278,7 @@ class WorkflowEvent(Generic[DataT]):
         source_executor_id: str,
         request_data: DataT,
         response_type: type[Any],
-    ) -> "WorkflowEvent[DataT]":
+    ) -> WorkflowEvent[DataT]:
         """Create a 'request_info' event when an executor requests external information."""
         return cls(
             "request_info",
@@ -288,27 +290,27 @@ class WorkflowEvent(Generic[DataT]):
         )
 
     @classmethod
-    def superstep_started(cls, iteration: int, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def superstep_started(cls, iteration: int, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create a 'superstep_started' event when a superstep begins."""
         return cls("superstep_started", iteration=iteration, data=data)
 
     @classmethod
-    def superstep_completed(cls, iteration: int, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def superstep_completed(cls, iteration: int, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create a 'superstep_completed' event when a superstep ends."""
         return cls("superstep_completed", iteration=iteration, data=data)
 
     @classmethod
-    def executor_invoked(cls, executor_id: str, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def executor_invoked(cls, executor_id: str, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create an 'executor_invoked' event when an executor handler is called."""
         return cls("executor_invoked", executor_id=executor_id, data=data)
 
     @classmethod
-    def executor_completed(cls, executor_id: str, data: DataT | None = None) -> "WorkflowEvent[DataT]":
+    def executor_completed(cls, executor_id: str, data: DataT | None = None) -> WorkflowEvent[DataT]:
         """Create an 'executor_completed' event when an executor handler completes."""
         return cls("executor_completed", executor_id=executor_id, data=data)
 
     @classmethod
-    def executor_failed(cls, executor_id: str, details: WorkflowErrorDetails) -> "WorkflowEvent[WorkflowErrorDetails]":
+    def executor_failed(cls, executor_id: str, details: WorkflowErrorDetails) -> WorkflowEvent[WorkflowErrorDetails]:
         """Create an 'executor_failed' event when an executor handler raises an error."""
         return WorkflowEvent("executor_failed", executor_id=executor_id, data=details, details=details)
 
@@ -333,7 +335,7 @@ class WorkflowEvent(Generic[DataT]):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WorkflowEvent[Any]":
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowEvent[Any]:
         """Create a REQUEST_INFO event from a dictionary."""
         for prop in ["data", "request_id", "source_executor_id", "request_type", "response_type"]:
             if prop not in data:

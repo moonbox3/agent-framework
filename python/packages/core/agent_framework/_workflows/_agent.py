@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import json
 import logging
 import sys
@@ -57,11 +59,11 @@ class WorkflowAgent(BaseAgent):
             return json.dumps(self.to_dict())
 
         @classmethod
-        def from_dict(cls, payload: dict[str, Any]) -> "WorkflowAgent.RequestInfoFunctionArgs":
+        def from_dict(cls, payload: dict[str, Any]) -> WorkflowAgent.RequestInfoFunctionArgs:
             return cls(request_id=payload.get("request_id", ""), data=payload.get("data"))
 
         @classmethod
-        def from_json(cls, raw: str) -> "WorkflowAgent.RequestInfoFunctionArgs":
+        def from_json(cls, raw: str) -> WorkflowAgent.RequestInfoFunctionArgs:
             try:
                 parsed: Any = json.loads(raw)
             except json.JSONDecodeError as exc:
@@ -72,7 +74,7 @@ class WorkflowAgent(BaseAgent):
 
     def __init__(
         self,
-        workflow: "Workflow",
+        workflow: Workflow,
         *,
         id: str | None = None,
         name: str | None = None,
@@ -109,15 +111,15 @@ class WorkflowAgent(BaseAgent):
             raise ValueError("Workflow's start executor cannot handle list[ChatMessage]")
 
         super().__init__(id=id, name=name, description=description, **kwargs)
-        self._workflow: "Workflow" = workflow
+        self._workflow: Workflow = workflow
         self._pending_requests: dict[str, WorkflowEvent[Any]] = {}
 
     @property
-    def workflow(self) -> "Workflow":
+    def workflow(self) -> Workflow:
         return self._workflow
 
     @property
-    def pending_requests(self) -> "dict[str, WorkflowEvent[Any]]":
+    def pending_requests(self) -> dict[str, WorkflowEvent[Any]]:
         return self._pending_requests
 
     # region Run Methods
@@ -486,7 +488,7 @@ class WorkflowAgent(BaseAgent):
 
     def _process_request_info_event(
         self,
-        event: "WorkflowEvent[Any]",
+        event: WorkflowEvent[Any],
     ) -> tuple[Content, Content]:
         """Convert a request_info event to FunctionCallContent and FunctionApprovalRequestContent.
 
@@ -519,7 +521,7 @@ class WorkflowAgent(BaseAgent):
     def _convert_workflow_event_to_agent_response_updates(
         self,
         response_id: str,
-        event: "WorkflowEvent[Any]",
+        event: WorkflowEvent[Any],
     ) -> list[AgentResponseUpdate]:
         """Convert a workflow event to a list of AgentResponseUpdate objects.
 

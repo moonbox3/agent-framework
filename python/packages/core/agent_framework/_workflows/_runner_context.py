@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
@@ -51,7 +53,7 @@ class Message:
     source_span_ids: list[str] | None = None  # Publishing span IDs for linking from multiple sources
 
     # For response messages, the original request data
-    original_request_info_event: "WorkflowEvent[Any] | None" = None
+    original_request_info_event: WorkflowEvent[Any] | None = None
 
     # Backward compatibility properties
     @property
@@ -77,7 +79,7 @@ class Message:
         }
 
     @staticmethod
-    def from_dict(data: dict[str, Any]) -> "Message":
+    def from_dict(data: dict[str, Any]) -> Message:
         """Create a Message from a dictionary."""
         # Validation
         if "data" not in data:
@@ -254,7 +256,7 @@ class RunnerContext(Protocol):
         """
         ...
 
-    async def add_request_info_event(self, event: "WorkflowEvent[Any]") -> None:
+    async def add_request_info_event(self, event: WorkflowEvent[Any]) -> None:
         """Add a request_info event to the context and track it for correlation.
 
         Args:
@@ -271,7 +273,7 @@ class RunnerContext(Protocol):
         """
         ...
 
-    async def get_pending_request_info_events(self) -> "dict[str, WorkflowEvent[Any]]":
+    async def get_pending_request_info_events(self) -> dict[str, WorkflowEvent[Any]]:
         """Get the mapping of request IDs to their corresponding request_info events.
 
         Returns:
@@ -470,7 +472,7 @@ class InProcRunnerContext:
             "pending_request_info_events": serialized_pending_request_info_events,
         }
 
-    async def add_request_info_event(self, event: "WorkflowEvent[Any]") -> None:
+    async def add_request_info_event(self, event: WorkflowEvent[Any]) -> None:
         """Add a request_info event to the context and track it for correlation.
 
         Args:
@@ -514,7 +516,7 @@ class InProcRunnerContext:
 
         await self.send_message(response_msg)
 
-    async def get_pending_request_info_events(self) -> "dict[str, WorkflowEvent[Any]]":
+    async def get_pending_request_info_events(self) -> dict[str, WorkflowEvent[Any]]:
         """Get the mapping of request IDs to their corresponding request_info events.
 
         Returns:

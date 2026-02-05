@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import asyncio
 import functools
 import hashlib
@@ -54,9 +56,7 @@ class WorkflowRunResult(list[WorkflowEvent]):
     - status_timeline(): Access the complete status event history
     """
 
-    def __init__(
-        self, events: "list[WorkflowEvent[Any]]", status_events: "list[WorkflowEvent[Any]] | None" = None
-    ) -> None:
+    def __init__(self, events: list[WorkflowEvent[Any]], status_events: list[WorkflowEvent[Any]] | None = None) -> None:
         super().__init__(events)
         self._status_events: list[WorkflowEvent[Any]] = status_events or []
 
@@ -68,7 +68,7 @@ class WorkflowRunResult(list[WorkflowEvent]):
         """
         return [event.data for event in self if event.type == "output"]
 
-    def get_request_info_events(self) -> "list[WorkflowEvent[Any]]":
+    def get_request_info_events(self) -> list[WorkflowEvent[Any]]:
         """Get all request info events from the workflow run result.
 
         Returns:
@@ -89,7 +89,7 @@ class WorkflowRunResult(list[WorkflowEvent]):
             "or handle the absence of status explicitly."
         )
 
-    def status_timeline(self) -> "list[WorkflowEvent[Any]]":
+    def status_timeline(self) -> list[WorkflowEvent[Any]]:
         """Return the list of status events emitted during the run (control-plane)."""
         return list(self._status_events)
 
@@ -773,7 +773,7 @@ class Workflow(DictConvertible):
             raise ValueError(f"Executor with ID {executor_id} not found.")
         return self.executors[executor_id]
 
-    def _should_yield_output_event(self, event: "WorkflowEvent[Any]") -> bool:
+    def _should_yield_output_event(self, event: WorkflowEvent[Any]) -> bool:
         """Determine if an output event should be yielded as a workflow output.
 
         Args:

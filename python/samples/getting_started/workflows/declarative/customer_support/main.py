@@ -26,7 +26,6 @@ import logging
 import uuid
 from pathlib import Path
 
-from agent_framework import WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.declarative import (
     AgentExternalInputRequest,

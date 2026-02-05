@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agent_framework import WorkflowBuilder, WorkflowContext, WorkflowEvent, executor
+from agent_framework import WorkflowBuilder, WorkflowContext, executor
 from typing_extensions import Never
 
 """
@@ -14,7 +14,8 @@ The second reverses the text and yields the workflow output. Events are printed 
 Purpose:
 Show how to declare executors with the @executor decorator, connect them with WorkflowBuilder,
 pass intermediate values using ctx.send_message, and yield final output using ctx.yield_output().
-Demonstrate how streaming exposes executor_invoked events (type='executor_invoked') and executor_completed events (type='executor_completed') for observability.
+Demonstrate how streaming exposes executor_invoked events (type='executor_invoked') and 
+executor_completed events (type='executor_completed') for observability.
 
 Prerequisites:
 - No external services required.

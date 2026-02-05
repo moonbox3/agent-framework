@@ -40,7 +40,7 @@ from agent_framework import AgentProtocol, ChatAgent
 from agent_framework._middleware import FunctionInvocationContext, FunctionMiddleware
 from agent_framework._threads import AgentThread
 from agent_framework._tools import FunctionTool, tool
-from agent_framework._types import AgentResponse, ChatMessage
+from agent_framework._types import AgentResponse, AgentResponseUpdate, ChatMessage
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._base_group_chat_orchestrator import TerminationCondition
@@ -364,7 +364,9 @@ class HandoffAgentExecutor(AgentExecutor):
         return _handoff_tool
 
     @override
-    async def _run_agent_and_emit(self, ctx: WorkflowContext[AgentExecutorResponse, AgentResponse]) -> None:
+    async def _run_agent_and_emit(
+        self, ctx: WorkflowContext[AgentExecutorResponse, AgentResponse | AgentResponseUpdate]
+    ) -> None:
         """Override to support handoff."""
         # When the full conversation is empty, it means this is the first run.
         # Broadcast the initial cache to all other agents. Subsequent runs won't
@@ -382,10 +384,10 @@ class HandoffAgentExecutor(AgentExecutor):
         # Run the agent
         if ctx.is_streaming():
             # Streaming mode: emit incremental updates
-            response = await self._run_agent_streaming(cast(WorkflowContext, ctx))
+            response = await self._run_agent_streaming(cast(WorkflowContext[Never, AgentResponseUpdate], ctx))
         else:
             # Non-streaming mode: use run() and emit single event
-            response = await self._run_agent(cast(WorkflowContext, ctx))
+            response = await self._run_agent(cast(WorkflowContext[Never, AgentResponse], ctx))
 
         # Clear the cache after running the agent
         self._cache.clear()
@@ -465,7 +467,9 @@ class HandoffAgentExecutor(AgentExecutor):
 
         # Append the user response messages to the cache
         self._cache.extend(response)
-        await self._run_agent_and_emit(ctx)
+        await self._run_agent_and_emit(
+            cast(WorkflowContext[AgentExecutorResponse, AgentResponse | AgentResponseUpdate], ctx)
+        )
 
     async def _broadcast_messages(
         self,
@@ -561,7 +565,10 @@ class HandoffBuilder:
     The final conversation history as a list of ChatMessage once the group chat completes.
 
     Note:
-    Agents in handoff workflows must be ChatAgent instances and support local tool calls.
+    1. Agents in handoff workflows must be ChatAgent instances and support local tool calls.
+    2. Handoff doesn't support intermediate outputs from agents. All outputs are returned as
+       they become available. This is because agents in handoff workflows are not considered
+       sub-agents of a central orchestrator, thus all outputs are directly emitted.
     """
 
     def __init__(

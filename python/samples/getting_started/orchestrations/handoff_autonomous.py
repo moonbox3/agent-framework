@@ -6,10 +6,9 @@ from typing import cast
 
 from agent_framework import (
     AgentResponseUpdate,
-    AgentRunUpdateEvent,
     ChatAgent,
     ChatMessage,
-    WorkflowEvent,
+    HandoffSentEvent,
     WorkflowOutputEvent,
     resolve_agent_id,
 )
@@ -74,31 +73,6 @@ def create_agents(
     return coordinator, research_agent, summary_agent
 
 
-last_response_id: str | None = None
-
-
-def _display_event(event: WorkflowEvent) -> None:
-    """Print the final conversation snapshot from workflow output events."""
-    if isinstance(event, AgentRunUpdateEvent) and event.data:
-        update: AgentResponseUpdate = event.data
-        if not update.text:
-            return
-        global last_response_id
-        if update.response_id != last_response_id:
-            last_response_id = update.response_id
-            print(f"\n- {update.author_name}: ", flush=True, end="")
-        print(event.data, flush=True, end="")
-    elif isinstance(event, WorkflowOutputEvent):
-        conversation = cast(list[ChatMessage], event.data)
-        print("\n=== Final Conversation (Autonomous with Iteration) ===")
-        for message in conversation:
-            speaker = message.author_name or message.role
-            text_preview = message.text[:200] + "..." if len(message.text) > 200 else message.text
-            print(f"- {speaker}: {text_preview}")
-        print(f"\nTotal messages: {len(conversation)}")
-        print("=====================================================")
-
-
 async def main() -> None:
     """Run an autonomous handoff workflow with specialist iteration enabled."""
     chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
@@ -135,8 +109,32 @@ async def main() -> None:
 
     request = "Perform a comprehensive research on Microsoft Agent Framework."
     print("Request:", request)
+
+    last_response_id: str | None = None
     async for event in workflow.run_stream(request):
-        _display_event(event)
+        if isinstance(event, HandoffSentEvent):
+            print(f"\nHandoff Event: from {event.source} to {event.target}\n")
+        elif isinstance(event, WorkflowOutputEvent):
+            data = event.data
+            if isinstance(data, AgentResponseUpdate):
+                if not data.text:
+                    # Skip updates that don't have text content
+                    # These can be tool calls or other non-text events
+                    continue
+                rid = data.response_id
+                if rid != last_response_id:
+                    if last_response_id is not None:
+                        print("\n")
+                    print(f"{data.author_name}:", end=" ", flush=True)
+                    last_response_id = rid
+                print(data.text, end="", flush=True)
+            else:
+                # The output of the group chat workflow is a collection of chat messages from all participants
+                outputs = cast(list[ChatMessage], event.data)
+                print("\n" + "=" * 80)
+                print("\nFinal Conversation Transcript:\n")
+                for message in outputs:
+                    print(f"{message.author_name or message.role}: {message.text}\n")
 
     """
     Expected behavior:

@@ -16,7 +16,7 @@ from agent_framework import (  # Core chat primitives used to form LLM requests
     WorkflowBuilder,  # Fluent builder for assembling the graph
     WorkflowContext,  # Per-run context and event bus
     executor,  # Decorator to turn a function into a workflow executor
-    )
+)
 from agent_framework.azure import AzureOpenAIChatClient  # Thin client for Azure OpenAI chat models
 from azure.identity import AzureCliCredential  # Uses your az CLI login for credentials
 from pydantic import BaseModel  # Structured outputs with validation

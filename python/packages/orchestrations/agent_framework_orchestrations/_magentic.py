@@ -1387,6 +1387,9 @@ class MagenticBuilder:
 
         self._checkpoint_storage: CheckpointStorage | None = None
 
+        # Intermediate outputs
+        self._intermediate_outputs = False
+
     def register_participants(
         self,
         participant_factories: Sequence[Callable[[], AgentProtocol | Executor]],
@@ -1902,6 +1905,19 @@ class MagenticBuilder:
 
         return self
 
+    def with_intermediate_outputs(self) -> Self:
+        """Enable intermediate outputs from agent participants before aggregation.
+
+        When enabled, the workflow returns each agent participant's response or yields
+        streaming updates as they become available. The output of the orchestrator will
+        always be available as the final output of the workflow.
+
+        Returns:
+            Self for fluent chaining
+        """
+        self._intermediate_outputs = True
+        return self
+
     def _resolve_orchestrator(self, participants: Sequence[Executor]) -> Executor:
         """Determine the orchestrator to use for the workflow.
 
@@ -1974,6 +1990,10 @@ class MagenticBuilder:
             workflow_builder = workflow_builder.add_edge(participant, orchestrator)
         if self._checkpoint_storage is not None:
             workflow_builder = workflow_builder.with_checkpointing(self._checkpoint_storage)
+
+        if not self._intermediate_outputs:
+            # Constrain output to orchestrator only
+            workflow_builder = workflow_builder.with_output_from([orchestrator])
 
         return workflow_builder.build()
 

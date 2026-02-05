@@ -180,6 +180,7 @@ class Workflow(DictConvertible):
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         name: str | None = None,
         description: str | None = None,
+        output_executors: list[str] | None = None,
         **kwargs: Any,
     ):
         """Initialize the workflow with a list of edges.
@@ -192,6 +193,8 @@ class Workflow(DictConvertible):
             max_iterations: The maximum number of iterations the workflow will run for convergence.
             name: Optional human-readable name for the workflow.
             description: Optional description of what the workflow does.
+            output_executors: Optional list of executor IDs whose outputs will be considered workflow outputs.
+                              If None or empty, all executor outputs are treated as workflow outputs.
             kwargs: Additional keyword arguments. Unused in this implementation.
         """
         self.edge_groups = list(edge_groups)
@@ -201,6 +204,10 @@ class Workflow(DictConvertible):
         self.id = str(uuid.uuid4())
         self.name = name
         self.description = description
+
+        # `WorkflowOutputEvent`s from these executors are treated as workflow outputs.
+        # If None or empty, all executor outputs are considered workflow outputs.
+        self._output_executors = list(output_executors) if output_executors else list(self.executors.keys())
 
         # Store non-serializable runtime objects as private attributes
         self._runner_context = runner_context
@@ -241,6 +248,7 @@ class Workflow(DictConvertible):
             "max_iterations": self.max_iterations,
             "edge_groups": [group.to_dict() for group in self.edge_groups],
             "executors": {executor_id: executor.to_dict() for executor_id, executor in self.executors.items()},
+            "output_executors": self._output_executors,
         }
 
         # Add optional name and description if provided
@@ -276,6 +284,10 @@ class Workflow(DictConvertible):
             The starting executor instance.
         """
         return self.executors[self.start_executor_id]
+
+    def get_output_executors(self) -> list[Executor]:
+        """Get the list of output executors in the workflow."""
+        return [self.executors[executor_id] for executor_id in self._output_executors]
 
     def get_executors_list(self) -> list[Executor]:
         """Get the list of executors in the workflow."""
@@ -539,6 +551,8 @@ class Workflow(DictConvertible):
                 streaming=True,
                 run_kwargs=kwargs if kwargs else None,
             ):
+                if isinstance(event, WorkflowOutputEvent) and not self._should_yield_output_event(event):
+                    continue
                 yield event
         finally:
             if checkpoint_storage is not None:
@@ -562,6 +576,8 @@ class Workflow(DictConvertible):
                 reset_context=False,  # Don't reset context when sending responses
                 streaming=True,
             ):
+                if isinstance(event, WorkflowOutputEvent) and not self._should_yield_output_event(event):
+                    continue
                 yield event
         finally:
             self._reset_running_flag()
@@ -687,6 +703,8 @@ class Workflow(DictConvertible):
                 if include_status_events:
                     filtered.append(ev)
                 continue
+            if isinstance(ev, WorkflowOutputEvent) and not self._should_yield_output_event(ev):
+                continue
             filtered.append(ev)
 
         return WorkflowRunResult(filtered, status_events)
@@ -710,7 +728,13 @@ class Workflow(DictConvertible):
                 )
             ]
             status_events = [e for e in events if isinstance(e, WorkflowStatusEvent)]
-            filtered_events = [e for e in events if not isinstance(e, (WorkflowStatusEvent, WorkflowStartedEvent))]
+            filtered_events: list[WorkflowEvent] = []
+            for e in events:
+                if isinstance(e, WorkflowOutputEvent) and not self._should_yield_output_event(e):
+                    continue
+                if isinstance(e, (WorkflowStatusEvent, WorkflowStartedEvent)):
+                    continue
+                filtered_events.append(e)
             return WorkflowRunResult(filtered_events, status_events)
         finally:
             self._reset_running_flag()
@@ -749,6 +773,22 @@ class Workflow(DictConvertible):
         if executor_id not in self.executors:
             raise ValueError(f"Executor with ID {executor_id} not found.")
         return self.executors[executor_id]
+
+    def _should_yield_output_event(self, event: WorkflowOutputEvent) -> bool:
+        """Determine if a WorkflowOutputEvent should be yielded as a workflow output.
+
+        Args:
+            event: The WorkflowOutputEvent to evaluate.
+
+        Returns:
+            True if the event should be yielded as a workflow output, False otherwise.
+        """
+        # If no specific output executors are defined, yield all outputs
+        if not self._output_executors:
+            return True
+
+        # Check if the event's source executor is in the list of output executors
+        return event.executor_id in self._output_executors
 
     # Graph signature helpers
 

@@ -9,7 +9,7 @@ import pytest
 
 agentlightning = pytest.importorskip("agentlightning")
 
-from agent_framework import AgentExecutor, AgentResponse, ChatAgent, WorkflowBuilder, Workflow, WorkflowEvent
+from agent_framework import AgentExecutor, AgentResponse, ChatAgent, WorkflowBuilder, Workflow
 from agent_framework_lab_lightning import AgentFrameworkTracer
 from agent_framework.openai import OpenAIChatClient
 from agentlightning import TracerTraceToTriplet

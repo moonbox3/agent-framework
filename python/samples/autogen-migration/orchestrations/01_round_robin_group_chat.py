@@ -7,7 +7,7 @@ the task in a round-robin fashion.
 
 import asyncio
 
-from agent_framework import AgentResponseUpdate, WorkflowEvent
+from agent_framework import AgentResponseUpdate
 
 
 async def run_autogen() -> None:
@@ -55,8 +55,8 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's SequentialBuilder for sequential agent orchestration."""
-    from agent_framework import SequentialBuilder
     from agent_framework.openai import OpenAIChatClient
+    from agent_framework.orchestrations import SequentialBuilder
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
 

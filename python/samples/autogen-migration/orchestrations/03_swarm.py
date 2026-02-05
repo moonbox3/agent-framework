@@ -7,7 +7,8 @@ to other specialized agents based on the task requirements.
 
 import asyncio
 
-from agent_framework import AgentResponseUpdate, WorkflowEvent
+from agent_framework import WorkflowEvent
+from orderedmultidict import Any
 
 
 async def run_autogen() -> None:
@@ -99,11 +100,10 @@ async def run_agent_framework() -> None:
     """Agent Framework's HandoffBuilder for agent coordination."""
     from agent_framework import (
         AgentResponseUpdate,
-        HandoffBuilder,
-        HandoffUserInputRequest,
         WorkflowRunState,
     )
     from agent_framework.openai import OpenAIChatClient
+    from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
 
@@ -174,7 +174,7 @@ async def run_agent_framework() -> None:
             if event.data:
                 print(event.data.text, end="", flush=True)
         elif event.type == "request_info":
-            if isinstance(event.data, HandoffUserInputRequest):
+            if isinstance(event.data, HandoffAgentUserRequest):
                 pending_requests.append(event)
         elif event.type == "status":
             if event.state in {WorkflowRunState.IDLE_WITH_PENDING_REQUESTS} and stream_line_open:
@@ -188,7 +188,7 @@ async def run_agent_framework() -> None:
         print("---------- user ----------")
         print(user_response)
 
-        responses = {req.request_id: user_response for req in pending_requests}
+        responses: dict[str, Any] = {req.request_id: user_response for req in pending_requests}  # type: ignore
         pending_requests = []
         current_executor = None
         stream_line_open = False
@@ -206,7 +206,7 @@ async def run_agent_framework() -> None:
                 if event.data:
                     print(event.data.text, end="", flush=True)
             elif event.type == "request_info":
-                if isinstance(event.data, HandoffUserInputRequest):
+                if isinstance(event.data, HandoffAgentUserRequest):
                     pending_requests.append(event)
             elif event.type == "status":
                 if (

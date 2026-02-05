@@ -61,8 +61,8 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's GroupChatBuilder with LLM-based speaker selection."""
-    from agent_framework import GroupChatBuilder
     from agent_framework.openai import OpenAIChatClient
+    from agent_framework.orchestrations import GroupChatBuilder
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
 

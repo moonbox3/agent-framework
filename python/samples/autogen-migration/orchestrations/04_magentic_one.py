@@ -66,8 +66,8 @@ async def run_autogen() -> None:
 
 async def run_agent_framework() -> None:
     """Agent Framework's MagenticBuilder for orchestrated collaboration."""
-    from agent_framework.orchestrations import MagenticBuilder
     from agent_framework.openai import OpenAIChatClient
+    from agent_framework.orchestrations import MagenticBuilder
 
     client = OpenAIChatClient(model_id="gpt-4.1-mini")
 

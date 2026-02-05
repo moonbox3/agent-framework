@@ -15,7 +15,6 @@ from agent_framework import (
     Executor,
     TypeCompatibilityError,
     WorkflowContext,
-    WorkflowEvent,
     WorkflowRunState,
     handler,
 )

@@ -182,12 +182,15 @@ class MessageMapper:
 
             # Handle WorkflowEvent with type='data' wrapping AgentResponseUpdate
             # This must be checked BEFORE generic WorkflowEvent check
-            if isinstance(raw_event, WorkflowEvent) and raw_event.type == "data":
-                # Extract the AgentResponseUpdate from the event's data attribute
-                if raw_event.data and isinstance(raw_event.data, AgentResponseUpdate):
-                    # Preserve executor_id in context for proper output routing
-                    context["current_executor_id"] = raw_event.executor_id
-                    return await self._convert_agent_update(raw_event.data, context)
+            if (
+                isinstance(raw_event, WorkflowEvent)
+                and raw_event.type == "data"
+                and raw_event.data
+                and isinstance(raw_event.data, AgentResponseUpdate)
+            ):
+                # Preserve executor_id in context for proper output routing
+                context["current_executor_id"] = raw_event.executor_id
+                return await self._convert_agent_update(raw_event.data, context)
 
             # Handle complete agent response (AgentResponse) - for non-streaming agent execution
             if isinstance(raw_event, AgentResponse):
@@ -1002,98 +1005,98 @@ class MessageMapper:
             # Executor-level events (output items)
             # Check for executor lifecycle events via event.type
             if event_type == "executor_invoked":
-                    executor_id = getattr(event, "executor_id", "unknown")
-                    item_id = f"exec_{executor_id}_{uuid4().hex[:8]}"
-                    context[f"exec_item_{executor_id}"] = item_id
-                    context["output_index"] = context.get("output_index", -1) + 1
+                executor_id = getattr(event, "executor_id", "unknown")
+                item_id = f"exec_{executor_id}_{uuid4().hex[:8]}"
+                context[f"exec_item_{executor_id}"] = item_id
+                context["output_index"] = context.get("output_index", -1) + 1
 
-                    # Track current executor for routing Magentic agent events
-                    # This allows MagenticAgentDeltaEvent to route to the executor's item
-                    context["current_executor_id"] = executor_id
+                # Track current executor for routing Magentic agent events
+                # This allows MagenticAgentDeltaEvent to route to the executor's item
+                context["current_executor_id"] = executor_id
 
-                    # Create ExecutorActionItem with proper type
-                    executor_item = ExecutorActionItem(
-                        type="executor_action",
-                        id=item_id,
-                        executor_id=executor_id,
-                        status="in_progress",
-                        metadata=getattr(event, "metadata", {}),
+                # Create ExecutorActionItem with proper type
+                executor_item = ExecutorActionItem(
+                    type="executor_action",
+                    id=item_id,
+                    executor_id=executor_id,
+                    status="in_progress",
+                    metadata=getattr(event, "metadata", {}),
+                )
+
+                # Use our custom event type that accepts ExecutorActionItem
+                return [
+                    CustomResponseOutputItemAddedEvent(
+                        type="response.output_item.added",
+                        output_index=context["output_index"],
+                        sequence_number=self._next_sequence(context),
+                        item=executor_item,
                     )
-
-                    # Use our custom event type that accepts ExecutorActionItem
-                    return [
-                        CustomResponseOutputItemAddedEvent(
-                            type="response.output_item.added",
-                            output_index=context["output_index"],
-                            sequence_number=self._next_sequence(context),
-                            item=executor_item,
-                        )
-                    ]
+                ]
 
             if event_type == "executor_completed":
-                    executor_id = getattr(event, "executor_id", "unknown")
-                    item_id = context.get(f"exec_item_{executor_id}", f"exec_{executor_id}_unknown")
+                executor_id = getattr(event, "executor_id", "unknown")
+                item_id = context.get(f"exec_item_{executor_id}", f"exec_{executor_id}_unknown")
 
-                    # Clear current executor tracking when executor completes
-                    if context.get("current_executor_id") == executor_id:
-                        context.pop("current_executor_id", None)
+                # Clear current executor tracking when executor completes
+                if context.get("current_executor_id") == executor_id:
+                    context.pop("current_executor_id", None)
 
-                    # Create ExecutorActionItem with completed status
-                    # executor_completed event (type='executor_completed') uses 'data' field, not 'result'
-                    # Serialize the result data to ensure it's JSON-serializable
-                    # (AgentExecutorResponse contains AgentResponse/ChatMessage which are SerializationMixin)
-                    raw_result = getattr(event, "data", None)
-                    serialized_result = self._serialize_value(raw_result) if raw_result is not None else None
-                    executor_item = ExecutorActionItem(
-                        type="executor_action",
-                        id=item_id,
-                        executor_id=executor_id,
-                        status="completed",
-                        result=serialized_result,
+                # Create ExecutorActionItem with completed status
+                # executor_completed event (type='executor_completed') uses 'data' field, not 'result'
+                # Serialize the result data to ensure it's JSON-serializable
+                # (AgentExecutorResponse contains AgentResponse/ChatMessage which are SerializationMixin)
+                raw_result = getattr(event, "data", None)
+                serialized_result = self._serialize_value(raw_result) if raw_result is not None else None
+                executor_item = ExecutorActionItem(
+                    type="executor_action",
+                    id=item_id,
+                    executor_id=executor_id,
+                    status="completed",
+                    result=serialized_result,
+                )
+
+                # Use our custom event type
+                return [
+                    CustomResponseOutputItemDoneEvent(
+                        type="response.output_item.done",
+                        output_index=context.get("output_index", 0),
+                        sequence_number=self._next_sequence(context),
+                        item=executor_item,
                     )
-
-                    # Use our custom event type
-                    return [
-                        CustomResponseOutputItemDoneEvent(
-                            type="response.output_item.done",
-                            output_index=context.get("output_index", 0),
-                            sequence_number=self._next_sequence(context),
-                            item=executor_item,
-                        )
-                    ]
+                ]
 
             if event_type == "executor_failed":
-                    executor_id = getattr(event, "executor_id", "unknown")
-                    item_id = context.get(f"exec_item_{executor_id}", f"exec_{executor_id}_unknown")
-                    # executor_failed event (type='executor_failed') uses 'details' property (WorkflowErrorDetails), not 'error'
-                    # This matches WorkflowEvent.details which returns self.data for executor_failed type
-                    details = getattr(event, "details", None)
-                    if details:
-                        err_msg = getattr(details, "message", None) or str(details)
-                        extra = getattr(details, "extra", None)
-                        if extra:
-                            err_msg = f"{err_msg} (extra: {extra})"
-                    else:
-                        err_msg = None
+                executor_id = getattr(event, "executor_id", "unknown")
+                item_id = context.get(f"exec_item_{executor_id}", f"exec_{executor_id}_unknown")
+                # executor_failed event (type='executor_failed') uses 'details' property (WorkflowErrorDetails)
+                # not 'error'. This matches WorkflowEvent.details which returns self.data for executor_failed type
+                details = getattr(event, "details", None)
+                if details:
+                    err_msg = getattr(details, "message", None) or str(details)
+                    extra = getattr(details, "extra", None)
+                    if extra:
+                        err_msg = f"{err_msg} (extra: {extra})"
+                else:
+                    err_msg = None
 
-                    # Create ExecutorActionItem with failed status
-                    executor_item = ExecutorActionItem(
-                        type="executor_action",
-                        id=item_id,
-                        executor_id=executor_id,
-                        status="failed",
-                        error={"message": err_msg} if err_msg else None,
+                # Create ExecutorActionItem with failed status
+                executor_item = ExecutorActionItem(
+                    type="executor_action",
+                    id=item_id,
+                    executor_id=executor_id,
+                    status="failed",
+                    error={"message": err_msg} if err_msg else None,
+                )
+
+                # Use our custom event type
+                return [
+                    CustomResponseOutputItemDoneEvent(
+                        type="response.output_item.done",
+                        output_index=context.get("output_index", 0),
+                        sequence_number=self._next_sequence(context),
+                        item=executor_item,
                     )
-
-                    # Use our custom event type
-                    return [
-                        CustomResponseOutputItemDoneEvent(
-                            type="response.output_item.done",
-                            output_index=context.get("output_index", 0),
-                            sequence_number=self._next_sequence(context),
-                            item=executor_item,
-                        )
-                    ]
+                ]
 
             # Handle request_info events specially - emit as HIL event with schema
             if event_type == "request_info":
@@ -1173,9 +1176,7 @@ class MessageMapper:
                 # Extract relevant data based on event type
                 if event_type == "status":
                     event_data["state"] = str(getattr(event, "state", "unknown"))
-                elif event_type == "warning":
-                    event_data["message"] = str(getattr(event, "data", ""))
-                elif event_type == "error":
+                elif event_type == "warning" or event_type == "error":
                     event_data["message"] = str(getattr(event, "data", ""))
 
                 # Create a trace event for debugging

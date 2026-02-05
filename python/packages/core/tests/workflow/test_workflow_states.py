@@ -36,9 +36,7 @@ async def test_executor_failed_and_workflow_failed_events_streaming():
             events.append(ev)
 
     # executor_failed event (type='executor_failed') should be emitted before workflow failed event
-    executor_failed_events = [
-        e for e in events if isinstance(e, WorkflowEvent) and e.type == "executor_failed"
-    ]
+    executor_failed_events = [e for e in events if isinstance(e, WorkflowEvent) and e.type == "executor_failed"]
     assert executor_failed_events, "executor_failed event should be emitted when start executor fails"
     assert executor_failed_events[0].executor_id == "f"
     assert executor_failed_events[0].origin is WorkflowEventSource.FRAMEWORK
@@ -96,9 +94,7 @@ async def test_executor_failed_event_from_second_executor_in_chain():
             events.append(ev)
 
     # executor_failed event should be emitted for the failing executor
-    executor_failed_events = [
-        e for e in events if isinstance(e, WorkflowEvent) and e.type == "executor_failed"
-    ]
+    executor_failed_events = [e for e in events if isinstance(e, WorkflowEvent) and e.type == "executor_failed"]
     assert executor_failed_events, "executor_failed event should be emitted when second executor fails"
     assert executor_failed_events[0].executor_id == "failing"
     assert executor_failed_events[0].origin is WorkflowEventSource.FRAMEWORK
@@ -175,7 +171,8 @@ async def test_started_and_completed_event_origins():
 
     # Check for IDLE status indicating completion
     idle_status = next(
-        (e for e in events if isinstance(e, WorkflowEvent) and e.type == "status" and e.state == WorkflowRunState.IDLE), None
+        (e for e in events if isinstance(e, WorkflowEvent) and e.type == "status" and e.state == WorkflowRunState.IDLE),
+        None,
     )
     assert idle_status is not None
     assert idle_status.origin is WorkflowEventSource.FRAMEWORK

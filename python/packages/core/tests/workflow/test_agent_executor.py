@@ -12,7 +12,6 @@ from agent_framework import (
     ChatMessage,
     ChatMessageStore,
     Content,
-    WorkflowEvent,
     WorkflowRunState,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorResponse

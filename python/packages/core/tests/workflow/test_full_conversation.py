@@ -18,7 +18,6 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowEvent,
     WorkflowRunState,
     handler,
 )

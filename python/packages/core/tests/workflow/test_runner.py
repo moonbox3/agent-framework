@@ -135,7 +135,7 @@ async def test_runner_run_until_convergence_not_completed():
         match="Runner did not converge after 5 iterations.",
     ):
         async for event in runner.run_until_convergence():
-            assert not event.type == "status" or event.state != WorkflowRunState.IDLE
+            assert event.type != "status" or event.state != WorkflowRunState.IDLE
 
 
 async def test_runner_already_running():

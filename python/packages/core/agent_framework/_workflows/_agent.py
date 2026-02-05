@@ -607,31 +607,33 @@ class WorkflowAgent(BaseAgent):
         if event.type == "request_info":
             # Store the pending request for later correlation
             request_id = event.request_id
-            if request_id:
-                self.pending_requests[request_id] = event
+            if not request_id:
+                raise ValueError("request_info event must have a request_id")
 
-                args = self.RequestInfoFunctionArgs(request_id=request_id, data=event.data).to_dict()
+            self.pending_requests[request_id] = event
 
-                function_call = Content.from_function_call(
-                    call_id=request_id,
-                    name=self.REQUEST_INFO_FUNCTION_NAME,
-                    arguments=args,
+            args = self.RequestInfoFunctionArgs(request_id=request_id, data=event.data).to_dict()
+
+            function_call = Content.from_function_call(
+                call_id=request_id,
+                name=self.REQUEST_INFO_FUNCTION_NAME,
+                arguments=args,
+            )
+            approval_request = Content.from_function_approval_request(
+                id=request_id,
+                function_call=function_call,
+                additional_properties={"request_id": request_id},
+            )
+            return [
+                AgentResponseUpdate(
+                    contents=[function_call, approval_request],
+                    role="assistant",
+                    author_name=self.name,
+                    response_id=response_id,
+                    message_id=str(uuid.uuid4()),
+                    created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 )
-                approval_request = Content.from_function_approval_request(
-                    id=request_id,
-                    function_call=function_call,
-                    additional_properties={"request_id": request_id},
-                )
-                return [
-                    AgentResponseUpdate(
-                        contents=[function_call, approval_request],
-                        role="assistant",
-                        author_name=self.name,
-                        response_id=response_id,
-                        message_id=str(uuid.uuid4()),
-                        created_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    )
-                ]
+            ]
 
         # Ignore workflow-internal events
         return []

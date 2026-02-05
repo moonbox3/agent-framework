@@ -7,7 +7,7 @@ import uuid
 from copy import copy
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
 from ._checkpoint_encoding import decode_checkpoint_value, encode_checkpoint_value

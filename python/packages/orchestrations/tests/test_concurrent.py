@@ -10,7 +10,6 @@ from agent_framework import (
     ChatMessage,
     Executor,
     WorkflowContext,
-    WorkflowEvent,
     WorkflowRunState,
     handler,
 )

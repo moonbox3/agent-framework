@@ -193,7 +193,8 @@ async def test_fan_out():
 
     events = await workflow.run(NumberMessage(data=0))
 
-    # Each executor will emit two events: executor_invoked (type='executor_invoked') and executor_completed (type='executor_completed')
+    # Each executor will emit two events: executor_invoked (type='executor_invoked')
+    # and executor_completed (type='executor_completed')
     # executor_b will also emit an output event (type='output')
     # Each superstep will emit a started event (type='started') and status event (type='status')
     # This workflow will converge in 2 supersteps because executor_c will send one more message
@@ -217,7 +218,8 @@ async def test_fan_out_multiple_completed_events():
 
     events = await workflow.run(NumberMessage(data=0))
 
-    # Each executor will emit two events: executor_invoked (type='executor_invoked') and executor_completed (type='executor_completed')
+    # Each executor will emit two events: executor_invoked (type='executor_invoked')
+    # and executor_completed (type='executor_completed')
     # executor_b and executor_c will also emit an output event (type='output')
     # Each superstep will emit a started event (type='started') and status event (type='status')
     # This workflow will converge in 1 superstep because executor_a and executor_b will not send further messages
@@ -245,7 +247,8 @@ async def test_fan_in():
 
     events = await workflow.run(NumberMessage(data=0))
 
-    # Each executor will emit two events: executor_invoked (type='executor_invoked') and executor_completed (type='executor_completed')
+    # Each executor will emit two events: executor_invoked (type='executor_invoked')
+    # and executor_completed (type='executor_completed')
     # aggregator will also emit an output event (type='output')
     # Each superstep will emit a started event (type='started') and status event (type='status')
     assert len(events) == 13
@@ -461,9 +464,7 @@ async def test_workflow_run_stream_from_checkpoint_with_responses(
             events.append(event)
 
         # Verify that the pending request event was emitted
-        assert next(
-            event for event in events if event.type == "request_info" and event.request_id == "request_123"
-        )
+        assert next(event for event in events if event.type == "request_info" and event.request_id == "request_123")
 
         assert len(events) > 0  # Just ensure we processed some events
 
@@ -730,10 +731,7 @@ async def test_workflow_with_simple_cycle_and_exit_condition():
     from agent_framework import WorkflowEvent
 
     executor_events = [
-        e
-        for e in events
-        if isinstance(e, WorkflowEvent)
-        and e.type in ("executor_invoked", "executor_completed")
+        e for e in events if isinstance(e, WorkflowEvent) and e.type in ("executor_invoked", "executor_completed")
     ]
     executor_ids = {e.executor_id for e in executor_events}
     assert "exec_a" in executor_ids, "Should have events from executor A"
@@ -881,7 +879,7 @@ class _StreamingTestAgent(BaseAgent):
 
 
 async def test_agent_streaming_vs_non_streaming() -> None:
-    """Test run() emits output events with AgentResponse while run_stream() emits output events with AgentResponseUpdate."""
+    """Test run() emits output events with AgentResponse while run_stream() emits events with AgentResponseUpdate."""
     agent = _StreamingTestAgent(id="test_agent", name="TestAgent", reply_text="Hello World")
     agent_exec = AgentExecutor(agent, id="agent_exec")
 
@@ -892,9 +890,7 @@ async def test_agent_streaming_vs_non_streaming() -> None:
 
     # Filter for agent events (result is a list of events)
     agent_run_events = [e for e in result if e.type == "output" and isinstance(e.data, AgentResponse)]
-    agent_update_events = [
-        e for e in result if e.type == "output" and isinstance(e.data, AgentResponseUpdate)
-    ]
+    agent_update_events = [e for e in result if e.type == "output" and isinstance(e.data, AgentResponseUpdate)]
 
     # In non-streaming mode, should have output event with AgentResponse, no AgentResponseUpdate
     assert len(agent_run_events) == 1, "Expected exactly one output event with AgentResponse in non-streaming mode"
@@ -910,9 +906,7 @@ async def test_agent_streaming_vs_non_streaming() -> None:
 
     # Filter for agent events
     agent_response = [
-        cast(AgentResponse, e.data)
-        for e in stream_events
-        if e.type == "output" and isinstance(e.data, AgentResponse)
+        cast(AgentResponse, e.data) for e in stream_events if e.type == "output" and isinstance(e.data, AgentResponse)
     ]
     agent_response_updates = [
         e.data for e in stream_events if e.type == "output" and isinstance(e.data, AgentResponseUpdate)

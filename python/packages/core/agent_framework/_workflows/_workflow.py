@@ -603,7 +603,8 @@ class Workflow(DictConvertible):
                                - With checkpoint_id: Used to load and restore the specified checkpoint
                                - Without checkpoint_id: Enables checkpointing for this run, overriding
                                  build-time configuration
-            include_status_events: Whether to include status events (WorkflowEvent with type='status') in the result list.
+            include_status_events: Whether to include status events (WorkflowEvent with type='status')
+                in the result list.
             **kwargs: Additional keyword arguments to pass through to agent invocations.
                      These are stored in State and accessible in @tool functions
                      via the **kwargs parameter.

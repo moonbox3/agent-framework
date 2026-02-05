@@ -264,7 +264,9 @@ class AgentFrameworkExecutor:
                         # Log request_info event (type='request_info') for debugging HIL flow
                         event_class = event.__class__.__name__ if hasattr(event, "__class__") else type(event).__name__
                         if event_class == "RequestInfoEvent":
-                            logger.info("🔔 [EXECUTOR] request_info event (type='request_info') detected from workflow!")
+                            logger.info(
+                                "🔔 [EXECUTOR] request_info event (type='request_info') detected from workflow!"
+                            )
                             logger.info(f"   request_id: {getattr(event, 'request_id', 'N/A')}")
                             logger.info(f"   source_executor_id: {getattr(event, 'source_executor_id', 'N/A')}")
                             logger.info(f"   request_type: {getattr(event, 'request_type', 'N/A')}")
@@ -526,7 +528,8 @@ class AgentFrameworkExecutor:
                         logger.warning(f"Could not convert HIL responses to proper types: {e}")
 
                     async for event in workflow.send_responses_streaming(hil_responses):
-                        # Enrich new request_info events (type='request_info') that may come from subsequent HIL requests
+                        # Enrich new request_info events (type='request_info')
+                        # that may come from subsequent HIL requests
                         if event.type == "request_info":
                             self._enrich_request_info_event_with_response_schema(event, workflow)
 
@@ -1024,7 +1027,9 @@ class AgentFrameworkExecutor:
             return raw_input
 
     def _enrich_request_info_event_with_response_schema(self, event: Any, workflow: Any) -> None:
-        """Extract response type from workflow executor and attach response schema to request_info event (type='request_info').
+        """Extract response type from workflow executor.
+
+        Attach response schema to request_info event (type='request_info').
 
         Args:
             event: request_info event (type='request_info') to enrich

@@ -109,10 +109,8 @@ def workflow_two_agents():
 async def test_openai_workflow_two_agents(workflow_two_agents: Workflow):
     events = await workflow_two_agents.run("Please analyze the quarterly sales data")
 
-    # Get all data events with AgentResponse
-    agent_outputs = [
-        event.data for event in events if event.type == "data" and isinstance(event.data, AgentResponse)
-    ]
+    # Get all output events with AgentResponse
+    agent_outputs = [event.data for event in events if event.type == "output" and isinstance(event.data, AgentResponse)]
 
     # Check that we have outputs from both agents
     assert len(agent_outputs) == 2

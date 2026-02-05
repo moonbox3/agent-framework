@@ -287,7 +287,9 @@ class Executor(RequestInfoMixin, DictConvertible):
                 sent_messages = context.get_sent_messages()
                 yielded_outputs = context.get_yielded_outputs()
                 completion_data = sent_messages + yielded_outputs
-                completed_event = WorkflowEvent.executor_completed(self.id, completion_data if completion_data else None)
+                completed_event = WorkflowEvent.executor_completed(
+                    self.id, completion_data if completion_data else None
+                )
             await context.add_event(completed_event)
 
     def _create_context_for_handler(

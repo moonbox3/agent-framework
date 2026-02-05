@@ -381,10 +381,7 @@ class TestRequestInfoAndResponse:
                 # Should re-emit the pending request info event
                 if event.type == "request_info" and event.request_id == request_info_event.request_id:
                     restored_request_event = event
-                elif (
-                    event.type == "status"
-                    and event.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
-                ):
+                elif event.type == "status" and event.state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
                     completed = True
 
             assert completed, "Workflow should reach idle with pending requests state after restoration"

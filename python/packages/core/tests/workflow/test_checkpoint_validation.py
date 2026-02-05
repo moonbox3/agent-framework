@@ -7,7 +7,6 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowCheckpointException,
     WorkflowContext,
-    WorkflowEvent,
     WorkflowRunState,
     handler,
 )

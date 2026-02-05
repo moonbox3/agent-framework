@@ -899,7 +899,7 @@ async def test_magentic_checkpoint_restore_no_duplicate_history():
 
     latest_checkpoint = checkpoints[-1]
 
-    # Load checkpoint and verify no duplicates in shared state
+    # Load checkpoint and verify no duplicates in state
     checkpoint_data = await storage.load_checkpoint(latest_checkpoint.checkpoint_id)
     assert checkpoint_data is not None
 

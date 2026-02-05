@@ -87,7 +87,7 @@ class MockExecutorRequestApproval(Executor):
     @handler
     async def mock_handler_a(self, message: NumberMessage, ctx: WorkflowContext) -> None:
         """A mock handler that requests approval."""
-        await ctx.set_shared_state(self.id, message.data)
+        ctx.set_state(self.id, message.data)
         await ctx.request_info(MockRequest(prompt="Mock approval request"), ApprovalMessage)
 
     @response_handler
@@ -98,7 +98,7 @@ class MockExecutorRequestApproval(Executor):
         ctx: WorkflowContext[NumberMessage, int],
     ) -> None:
         """A mock handler that processes the approval response."""
-        data = await ctx.get_shared_state(self.id)
+        data = ctx.get_state(self.id)
         assert isinstance(data, int)
         if response.approved:
             await ctx.yield_output(data)
@@ -368,7 +368,7 @@ async def test_workflow_run_stream_from_checkpoint_with_external_storage(
         test_checkpoint = WorkflowCheckpoint(
             workflow_id="test-workflow",
             messages={},
-            shared_state={},
+            state={},
             iteration_count=0,
         )
         checkpoint_id = await storage.save_checkpoint(test_checkpoint)
@@ -403,7 +403,7 @@ async def test_workflow_run_from_checkpoint_non_streaming(simple_executor: Execu
         test_checkpoint = WorkflowCheckpoint(
             workflow_id="test-workflow",
             messages={},
-            shared_state={},
+            state={},
             iteration_count=0,
         )
         checkpoint_id = await storage.save_checkpoint(test_checkpoint)
@@ -436,7 +436,7 @@ async def test_workflow_run_stream_from_checkpoint_with_responses(
         test_checkpoint = WorkflowCheckpoint(
             workflow_id="test-workflow",
             messages={},
-            shared_state={},
+            state={},
             pending_request_info_events={
                 "request_123": RequestInfoEvent(
                     request_id="request_123",
@@ -480,7 +480,7 @@ class StateTrackingMessage:
 
 
 class StateTrackingExecutor(Executor):
-    """An executor that tracks state in shared state to test context reset behavior."""
+    """An executor that tracks state in workflow state to test context reset behavior."""
 
     @handler
     async def handle_message(
@@ -488,19 +488,16 @@ class StateTrackingExecutor(Executor):
         message: StateTrackingMessage,
         ctx: WorkflowContext[StateTrackingMessage, list[str]],
     ) -> None:
-        """Handle the message and track it in shared state."""
-        # Get existing messages from shared state
-        try:
-            existing_messages = await ctx.get_shared_state("processed_messages")
-        except KeyError:
-            existing_messages = []
+        """Handle the message and track it in workflow state."""
+        # Get existing messages from workflow state
+        existing_messages = ctx.get_state("processed_messages") or []
 
         # Record this message
         message_record = f"{message.run_id}:{message.data}"
         existing_messages.append(message_record)  # type: ignore
 
-        # Update shared state
-        await ctx.set_shared_state("processed_messages", existing_messages)
+        # Update workflow state
+        ctx.set_state("processed_messages", existing_messages)
 
         # Yield output
         await ctx.yield_output(existing_messages.copy())  # type: ignore
@@ -511,7 +508,7 @@ async def test_workflow_multiple_runs_no_state_collision():
     with tempfile.TemporaryDirectory() as temp_dir:
         storage = FileCheckpointStorage(temp_dir)
 
-        # Create executor that tracks state in shared state
+        # Create executor that tracks state in workflow state
         state_executor = StateTrackingExecutor(id="state_executor")
 
         # Build workflow with checkpointing

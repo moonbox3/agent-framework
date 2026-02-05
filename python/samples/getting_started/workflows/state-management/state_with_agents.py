@@ -21,14 +21,14 @@ from pydantic import BaseModel
 from typing_extensions import Never
 
 """
-Sample: Shared state with agents and conditional routing.
+Sample: Workflow state with agents and conditional routing.
 
 Store an email once by id, classify it with a detector agent, then either draft a reply with an assistant
 agent or finish with a spam notice. Stream events as the workflow runs.
 
 Purpose:
 Show how to:
-- Use shared state to decouple large payloads from messages and pass around lightweight references.
+- Use workflow state to decouple large payloads from messages and pass around lightweight references.
 - Enforce structured agent outputs with Pydantic models via response_format for robust parsing.
 - Route using conditional edges based on a typed intermediate DetectionResult.
 - Compose agent backed executors with function style executors and yield the final output when the workflow completes.
@@ -58,7 +58,7 @@ class EmailResponse(BaseModel):
 
 @dataclass
 class DetectionResult:
-    """Internal detection result enriched with the shared state email_id for later lookups."""
+    """Internal detection result enriched with the state email_id for later lookups."""
 
     is_spam: bool
     reason: str
@@ -67,7 +67,7 @@ class DetectionResult:
 
 @dataclass
 class Email:
-    """In memory record stored in shared state to avoid re-sending large bodies on edges."""
+    """In memory record stored in state to avoid re-sending large bodies on edges."""
 
     email_id: str
     email_content: str
@@ -91,7 +91,7 @@ def get_condition(expected_result: bool):
 
 @executor(id="store_email")
 async def store_email(email_text: str, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
-    """Persist the raw email content in shared state and trigger spam detection.
+    """Persist the raw email content in state and trigger spam detection.
 
     Responsibilities:
     - Generate a unique email_id (UUID) for downstream retrieval.
@@ -99,8 +99,8 @@ async def store_email(email_text: str, ctx: WorkflowContext[AgentExecutorRequest
     - Emit an AgentExecutorRequest asking the detector to respond.
     """
     new_email = Email(email_id=str(uuid4()), email_content=email_text)
-    await ctx.set_shared_state(f"{EMAIL_STATE_PREFIX}{new_email.email_id}", new_email)
-    await ctx.set_shared_state(CURRENT_EMAIL_ID_KEY, new_email.email_id)
+    ctx.set_state(f"{EMAIL_STATE_PREFIX}{new_email.email_id}", new_email)
+    ctx.set_state(CURRENT_EMAIL_ID_KEY, new_email.email_id)
 
     await ctx.send_message(
         AgentExecutorRequest(messages=[ChatMessage("user", text=new_email.email_content)], should_respond=True)
@@ -113,11 +113,11 @@ async def to_detection_result(response: AgentExecutorResponse, ctx: WorkflowCont
 
     Steps:
     1) Validate the agent's JSON output into DetectionResultAgent.
-    2) Retrieve the current email_id from shared state.
+    2) Retrieve the current email_id from workflow state.
     3) Send a typed DetectionResult for conditional routing.
     """
     parsed = DetectionResultAgent.model_validate_json(response.agent_response.text)
-    email_id: str = await ctx.get_shared_state(CURRENT_EMAIL_ID_KEY)
+    email_id: str = ctx.get_state(CURRENT_EMAIL_ID_KEY)
     await ctx.send_message(DetectionResult(is_spam=parsed.is_spam, reason=parsed.reason, email_id=email_id))
 
 
@@ -131,8 +131,8 @@ async def submit_to_email_assistant(detection: DetectionResult, ctx: WorkflowCon
     if detection.is_spam:
         raise RuntimeError("This executor should only handle non-spam messages.")
 
-    # Load the original content by id from shared state and forward it to the assistant.
-    email: Email = await ctx.get_shared_state(f"{EMAIL_STATE_PREFIX}{detection.email_id}")
+    # Load the original content by id from workflow state and forward it to the assistant.
+    email: Email = ctx.get_state(f"{EMAIL_STATE_PREFIX}{detection.email_id}")
     await ctx.send_message(
         AgentExecutorRequest(messages=[ChatMessage("user", text=email.email_content)], should_respond=True)
     )
@@ -181,7 +181,7 @@ def create_email_assistant_agent() -> ChatAgent:
 
 
 async def main() -> None:
-    """Build and run the shared state with agents and conditional routing workflow."""
+    """Build and run the workflow state with agents and conditional routing workflow."""
 
     # Build the workflow graph with conditional edges.
     # Flow:

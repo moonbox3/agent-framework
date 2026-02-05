@@ -335,7 +335,7 @@ async def main() -> None:
     print("\n=== Stage 1: run until sub-workflow requests human review ===")
 
     request_id: str | None = None
-    async for event in workflow.run_stream("Contoso Gadget Launch"):
+    async for event in workflow.run("Contoso Gadget Launch", stream=True):
         if event.type == "request_info" and request_id is None:
             request_id = event.request_id
             print(f"Captured review request id: {request_id}")
@@ -366,7 +366,7 @@ async def main() -> None:
     workflow2 = build_parent_workflow(storage)
 
     request_info_event: WorkflowEvent | None = None
-    async for event in workflow2.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
+    async for event in workflow2.run(checkpoint_id=resume_checkpoint.checkpoint_id, stream=True):
         if event.type == "request_info":
             request_info_event = event
 

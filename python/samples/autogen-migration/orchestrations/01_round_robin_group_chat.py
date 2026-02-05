@@ -82,7 +82,7 @@ async def run_agent_framework() -> None:
     # Run the workflow
     print("[Agent Framework] Sequential conversation:")
     current_executor = None
-    async for event in workflow.run_stream("Create a brief summary about electric vehicles"):
+    async for event in workflow.run("Create a brief summary about electric vehicles", stream=True):
         if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             # Print executor name header when switching to a new agent
             if current_executor != event.executor_id:
@@ -152,8 +152,8 @@ async def run_agent_framework_with_cycle() -> None:
     # Run the workflow
     print("[Agent Framework with Cycle] Cyclic conversation:")
     current_executor = None
-    async for event in workflow.run_stream("Create a brief summary about electric vehicles"):
-        if event.type == "output":
+    async for event in workflow.run("Create a brief summary about electric vehicles", stream=True):
+        if event.type == "output" and not isinstance(event.data, AgentResponseUpdate):
             print("\n---------- Workflow Output ----------")
             print(event.data)
         elif event.type == "output" and isinstance(event.data, AgentResponseUpdate):

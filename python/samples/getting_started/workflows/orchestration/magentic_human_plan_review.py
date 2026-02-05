@@ -77,7 +77,7 @@ async def main() -> None:
     print("\nStarting workflow execution...")
     print("=" * 60)
 
-    pending_request: WorkflowEvent[MagenticPlanReviewRequest] | None = None
+    pending_request: WorkflowEvent | None = None
     pending_responses: dict[str, object] | None = None
     output_event: WorkflowEvent | None = None
 
@@ -85,7 +85,7 @@ async def main() -> None:
         if pending_responses is not None:
             stream = workflow.send_responses_streaming(pending_responses)
         else:
-            stream = workflow.run_stream(task)
+            stream = workflow.run(task, stream=True)
 
         last_message_id: str | None = None
         async for event in stream:
@@ -99,7 +99,7 @@ async def main() -> None:
                 print(event.data, end="", flush=True)
 
             elif event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
-                pending_request = cast(WorkflowEvent[MagenticPlanReviewRequest], event)
+                pending_request = event
 
             elif event.type == "output":
                 output_event = event

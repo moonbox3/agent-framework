@@ -9,6 +9,7 @@ from agent_framework import (
     ChatAgent,  # Tracing event for agent execution steps
     ChatMessage,  # Chat message structure
     Executor,  # Base class for custom Python executors
+    Role,  # Enum of chat roles (user, assistant, system)
     WorkflowBuilder,  # Fluent builder for wiring the workflow graph
     WorkflowContext,  # Per run context and event bus
     WorkflowEvent,  # Unified event class for workflow events
@@ -42,7 +43,7 @@ class DispatchToExperts(Executor):
     @handler
     async def dispatch(self, prompt: str, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         # Wrap the incoming prompt as a user message for each expert and request a response.
-        initial_message = ChatMessage("user", text=prompt)
+        initial_message = ChatMessage(Role.USER, text=prompt)
         await ctx.send_message(AgentExecutorRequest(messages=[initial_message], should_respond=True))
 
 
@@ -137,7 +138,9 @@ async def main() -> None:
     )
 
     # 3) Run with a single prompt and print progress plus the final consolidated output
-    async for event in workflow.run_stream("We are launching a new budget-friendly electric bike for urban commuters."):
+    async for event in workflow.run(
+        "We are launching a new budget-friendly electric bike for urban commuters.", stream=True
+    ):
         if event.type == "executor_invoked":
             # Show when executors are invoked and completed for lightweight observability.
             print(f"{event.executor_id} invoked")

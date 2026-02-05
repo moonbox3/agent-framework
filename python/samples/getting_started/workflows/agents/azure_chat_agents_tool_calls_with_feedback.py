@@ -191,15 +191,15 @@ def create_final_editor_agent() -> ChatAgent:
     )
 
 
-def display_agent_run_update(event: WorkflowEvent[AgentResponseUpdate], last_executor: str | None) -> None:
+def display_agent_run_update(event: WorkflowEvent, last_executor: str | None) -> None:
     """Display an AgentRunUpdateEvent in a readable format."""
     printed_tool_calls: set[str] = set()
     printed_tool_results: set[str] = set()
     executor_id = event.executor_id
     update = event.data
     # Extract and print any new tool calls or results from the update.
-    function_calls = [c for c in update.contents if isinstance(c, Content.from_function_call(c))]  # type: ignore[union-attr]
-    function_results = [c for c in update.contents if isinstance(c, Content.from_function_result(c))]  # type: ignore[union-attr]
+    function_calls = [c for c in update.contents if c.type == "function_call"]  # type: ignore[union-attr]
+    function_results = [c for c in update.contents if c.type == "function_result"]  # type: ignore[union-attr]
     if executor_id != last_executor:
         if last_executor is not None:
             print()
@@ -274,8 +274,9 @@ async def main() -> None:
     while not completed:
         last_executor: str | None = None
         if initial_run:
-            stream = workflow.run_stream(
-                "Create a short launch blurb for the LumenX desk lamp. Emphasize adjustability and warm lighting."
+            stream = workflow.run(
+                "Create a short launch blurb for the LumenX desk lamp. Emphasize adjustability and warm lighting.",
+                stream=True,
             )
             initial_run = False
         elif pending_responses is not None:
@@ -292,7 +293,7 @@ async def main() -> None:
                 and isinstance(event.data, AgentResponseUpdate)
                 and display_agent_run_update_switch
             ):
-                display_agent_run_update(event, last_executor)  # type: ignore[arg-type]
+                display_agent_run_update(event, last_executor)
             if event.type == "request_info" and isinstance(event.data, DraftFeedbackRequest):
                 # Stash the request so we can prompt the human after the stream completes.
                 requests.append((event.request_id, event.data))

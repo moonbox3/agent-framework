@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import sys
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncIterable, Awaitable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
@@ -149,29 +149,27 @@ class StubAgent(BaseAgent):
         super().__init__(name=agent_name, description=f"Stub agent {agent_name}", **kwargs)
         self._reply_text = reply_text
 
-    async def run(  # type: ignore[override]
+    def run(  # type: ignore[override]
         self,
         messages: str | ChatMessage | Sequence[str | ChatMessage] | None = None,
         *,
+        stream: bool = False,
         thread: AgentThread | None = None,
         **kwargs: Any,
-    ) -> AgentResponse:
-        response = ChatMessage("assistant", [self._reply_text], author_name=self.name)
-        return AgentResponse(messages=[response])
+    ) -> Awaitable[AgentResponse] | AsyncIterable[AgentResponseUpdate]:
+        if stream:
+            return self._run_stream()
 
-    def run_stream(  # type: ignore[override]
-        self,
-        messages: str | ChatMessage | Sequence[str | ChatMessage] | None = None,
-        *,
-        thread: AgentThread | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterable[AgentResponseUpdate]:
-        async def _stream() -> AsyncIterable[AgentResponseUpdate]:
-            yield AgentResponseUpdate(
-                contents=[Content.from_text(text=self._reply_text)], role="assistant", author_name=self.name
-            )
+        async def _run() -> AgentResponse:
+            response = ChatMessage("assistant", [self._reply_text], author_name=self.name)
+            return AgentResponse(messages=[response])
 
-        return _stream()
+        return _run()
+
+    async def _run_stream(self) -> AsyncIterable[AgentResponseUpdate]:
+        yield AgentResponseUpdate(
+            contents=[Content.from_text(text=self._reply_text)], role="assistant", author_name=self.name
+        )
 
 
 class DummyExec(Executor):
@@ -195,7 +193,7 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
 
     outputs: list[ChatMessage] = []
     orchestrator_event_count = 0
-    async for event in workflow.run_stream("compose summary"):
+    async for event in workflow.run("compose summary", stream=True):
         if event.type == "output":
             msg = event.data
             if isinstance(msg, list):
@@ -246,7 +244,7 @@ async def test_magentic_workflow_plan_review_approval_to_completion():
     wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).with_plan_review().build()
 
     req_event: WorkflowEvent | None = None
-    async for ev in wf.run_stream("do work"):
+    async for ev in wf.run("do work", stream=True):
         if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
@@ -291,7 +289,7 @@ async def test_magentic_plan_review_with_revise():
 
     # Wait for the initial plan review request
     req_event: WorkflowEvent | None = None
-    async for ev in wf.run_stream("do work"):
+    async for ev in wf.run("do work", stream=True):
         if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
@@ -334,7 +332,7 @@ async def test_magentic_orchestrator_round_limit_produces_partial_result():
     )
 
     events: list[WorkflowEvent] = []
-    async for ev in wf.run_stream("round limit test"):
+    async for ev in wf.run("round limit test", stream=True):
         events.append(ev)
 
     idle_status = next(
@@ -367,7 +365,7 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     task_text = "checkpoint task"
     req_event: WorkflowEvent | None = None
-    async for ev in wf.run_stream(task_text):
+    async for ev in wf.run(task_text, stream=True):
         if ev.type == "request_info" and ev.request_type is MagenticPlanReviewRequest:
             req_event = ev
     assert req_event is not None
@@ -390,8 +388,9 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     completed: WorkflowEvent | None = None
     req_event = None
-    async for event in wf_resume.run_stream(
+    async for event in wf_resume.run(
         resume_checkpoint.checkpoint_id,
+        stream=True,
     ):
         if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
             req_event = event
@@ -416,26 +415,24 @@ async def test_magentic_checkpoint_resume_round_trip():
 class StubManagerAgent(BaseAgent):
     """Stub agent for testing StandardMagenticManager."""
 
-    async def run(
+    def run(
         self,
         messages: str | ChatMessage | Sequence[str | ChatMessage] | None = None,
         *,
+        stream: bool = False,
         thread: Any = None,
         **kwargs: Any,
-    ) -> AgentResponse:
-        return AgentResponse(messages=[ChatMessage("assistant", ["ok"])])
+    ) -> Awaitable[AgentResponse] | AsyncIterable[AgentResponseUpdate]:
+        if stream:
+            return self._run_stream()
 
-    def run_stream(
-        self,
-        messages: str | ChatMessage | Sequence[str | ChatMessage] | None = None,
-        *,
-        thread: Any = None,
-        **kwargs: Any,
-    ) -> AsyncIterable[AgentResponseUpdate]:
-        async def _gen() -> AsyncIterable[AgentResponseUpdate]:
-            yield AgentResponseUpdate(message_deltas=[ChatMessage("assistant", ["ok"])])
+        async def _run() -> AgentResponse:
+            return AgentResponse(messages=[ChatMessage("assistant", ["ok"])])
 
-        return _gen()
+        return _run()
+
+    async def _run_stream(self) -> AsyncIterable[AgentResponseUpdate]:
+        yield AgentResponseUpdate(message_deltas=[ChatMessage("assistant", ["ok"])])
 
 
 async def test_standard_manager_plan_and_replan_via_complete_monkeypatch():
@@ -535,15 +532,21 @@ class StubThreadAgent(BaseAgent):
     def __init__(self, name: str | None = None) -> None:
         super().__init__(name=name or "agentA")
 
-    async def run_stream(self, messages=None, *, thread=None, **kwargs):  # type: ignore[override]
+    def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):  # type: ignore[override]
+        if stream:
+            return self._run_stream()
+
+        async def _run():
+            return AgentResponse(messages=[ChatMessage("assistant", ["thread-ok"], author_name=self.name)])
+
+        return _run()
+
+    async def _run_stream(self):
         yield AgentResponseUpdate(
             contents=[Content.from_text(text="thread-ok")],
             author_name=self.name,
             role="assistant",
         )
-
-    async def run(self, messages=None, *, thread=None, **kwargs):  # type: ignore[override]
-        return AgentResponse(messages=[ChatMessage("assistant", ["thread-ok"], author_name=self.name)])
 
 
 class StubAssistantsClient:
@@ -557,15 +560,21 @@ class StubAssistantsAgent(BaseAgent):
         super().__init__(name="agentA")
         self.chat_client = StubAssistantsClient()  # type name contains 'AssistantsClient'
 
-    async def run_stream(self, messages=None, *, thread=None, **kwargs):  # type: ignore[override]
+    def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):  # type: ignore[override]
+        if stream:
+            return self._run_stream()
+
+        async def _run():
+            return AgentResponse(messages=[ChatMessage("assistant", ["assistants-ok"], author_name=self.name)])
+
+        return _run()
+
+    async def _run_stream(self):
         yield AgentResponseUpdate(
             contents=[Content.from_text(text="assistants-ok")],
             author_name=self.name,
             role="assistant",
         )
-
-    async def run(self, messages=None, *, thread=None, **kwargs):  # type: ignore[override]
-        return AgentResponse(messages=[ChatMessage("assistant", ["assistants-ok"], author_name=self.name)])
 
 
 async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[ChatMessage]:
@@ -581,7 +590,7 @@ async def _collect_agent_responses_setup(participant: AgentProtocol) -> list[Cha
 
     # Run a bounded stream to allow one invoke and then completion
     events: list[WorkflowEvent] = []
-    async for ev in wf.run_stream("task"):  # plan review disabled
+    async for ev in wf.run("task", stream=True):  # plan review disabled
         events.append(ev)
         # Capture streaming updates (type="output" with AgentResponseUpdate data)
         if ev.type == "output" and isinstance(ev.data, AgentResponseUpdate):
@@ -631,7 +640,7 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
         .build()
     )
 
-    async for event in workflow.run_stream("inner-loop task"):
+    async for event in workflow.run("inner-loop task", stream=True):
         if event.type == "output":
             break
 
@@ -647,7 +656,7 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
     )
 
     completed: WorkflowEvent | None = None
-    async for event in resumed.run_stream(checkpoint_id=inner_loop_checkpoint.checkpoint_id):  # type: ignore[reportUnknownMemberType]
+    async for event in resumed.run(checkpoint_id=inner_loop_checkpoint.checkpoint_id, stream=True):  # type: ignore[reportUnknownMemberType]
         if event.type == "output":
             completed = event
 
@@ -669,7 +678,7 @@ async def test_magentic_checkpoint_resume_from_saved_state():
         .build()
     )
 
-    async for event in workflow.run_stream("checkpoint resume task"):
+    async for event in workflow.run("checkpoint resume task", stream=True):
         if event.type == "output":
             break
 
@@ -687,7 +696,7 @@ async def test_magentic_checkpoint_resume_from_saved_state():
     )
 
     completed: WorkflowEvent | None = None
-    async for event in resumed_workflow.run_stream(checkpoint_id=resumed_state.checkpoint_id):
+    async for event in resumed_workflow.run(checkpoint_id=resumed_state.checkpoint_id, stream=True):
         if event.type == "output":
             completed = event
 
@@ -709,7 +718,7 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     )
 
     req_event: WorkflowEvent | None = None
-    async for event in workflow.run_stream("task"):
+    async for event in workflow.run("task", stream=True):
         if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
             req_event = event
 
@@ -729,7 +738,8 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     )
 
     with pytest.raises(WorkflowCheckpointException, match="Workflow graph has changed"):
-        async for _ in renamed_workflow.run_stream(
+        async for _ in renamed_workflow.run(
+            stream=True,
             checkpoint_id=target_checkpoint.checkpoint_id,  # type: ignore[reportUnknownMemberType]
         ):
             pass
@@ -765,7 +775,7 @@ async def test_magentic_stall_and_reset_reach_limits():
     wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).build()
 
     events: list[WorkflowEvent] = []
-    async for ev in wf.run_stream("test limits"):
+    async for ev in wf.run("test limits", stream=True):
         events.append(ev)
 
     idle_status = next(
@@ -790,7 +800,7 @@ async def test_magentic_checkpoint_runtime_only() -> None:
     wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).build()
 
     baseline_output: ChatMessage | None = None
-    async for ev in wf.run_stream("runtime checkpoint test", checkpoint_storage=storage):
+    async for ev in wf.run("runtime checkpoint test", checkpoint_storage=storage, stream=True):
         if ev.type == "output":
             baseline_output = ev.data  # type: ignore[assignment]
         if ev.type == "status" and ev.state in (
@@ -828,7 +838,7 @@ async def test_magentic_checkpoint_runtime_overrides_buildtime() -> None:
         )
 
         baseline_output: ChatMessage | None = None
-        async for ev in wf.run_stream("override test", checkpoint_storage=runtime_storage):
+        async for ev in wf.run("override test", checkpoint_storage=runtime_storage, stream=True):
             if ev.type == "output":
                 baseline_output = ev.data  # type: ignore[assignment]
             if ev.type == "status" and ev.state in (
@@ -887,7 +897,7 @@ async def test_magentic_checkpoint_restore_no_duplicate_history():
         ChatMessage("user", ["task_msg"]),
     ]
 
-    async for event in wf.run_stream(conversation):
+    async for event in wf.run(conversation, stream=True):
         if event.type == "status" and event.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
@@ -997,7 +1007,7 @@ async def test_magentic_with_participant_factories():
     assert call_count == 1
 
     outputs: list[WorkflowEvent] = []
-    async for event in workflow.run_stream("test task"):
+    async for event in workflow.run("test task", stream=True):
         if event.type == "output":
             outputs.append(event)
 
@@ -1044,7 +1054,7 @@ async def test_magentic_participant_factories_with_checkpointing():
     )
 
     outputs: list[WorkflowEvent] = []
-    async for event in workflow.run_stream("checkpoint test"):
+    async for event in workflow.run("checkpoint test", stream=True):
         if event.type == "output":
             outputs.append(event)
 
@@ -1101,7 +1111,7 @@ async def test_magentic_with_manager_factory():
     assert factory_call_count == 1
 
     outputs: list[WorkflowEvent] = []
-    async for event in workflow.run_stream("test task"):
+    async for event in workflow.run("test task", stream=True):
         if event.type == "output":
             outputs.append(event)
 
@@ -1130,7 +1140,7 @@ async def test_magentic_with_agent_factory():
 
     # Verify workflow can be started (may not complete successfully due to stub behavior)
     event_count = 0
-    async for _ in workflow.run_stream("test task"):
+    async for _ in workflow.run("test task", stream=True):
         event_count += 1
         if event_count > 10:
             break

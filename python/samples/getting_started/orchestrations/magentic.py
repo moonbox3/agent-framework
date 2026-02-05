@@ -105,7 +105,7 @@ async def main() -> None:
     # Keep track of the last executor to format output nicely in streaming mode
     last_response_id: str | None = None
     output_event: WorkflowEvent | None = None
-    async for event in workflow.run_stream(task):
+    async for event in workflow.run(task, stream=True):
         if event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             response_id = event.data.response_id
             if response_id != last_response_id:

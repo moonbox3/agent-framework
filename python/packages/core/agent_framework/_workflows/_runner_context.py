@@ -205,7 +205,7 @@ class RunnerContext(Protocol):
         """Set whether agents should stream incremental updates.
 
         Args:
-            streaming: True for streaming mode (run_stream), False for non-streaming (run).
+            streaming: True for streaming mode (stream=True), False for non-streaming (stream=False).
         """
         ...
 
@@ -303,7 +303,7 @@ class InProcRunnerContext:
         self._runtime_checkpoint_storage: CheckpointStorage | None = None
         self._workflow_id: str | None = None
 
-        # Streaming flag - set by workflow's run_stream() vs run()
+        # Streaming flag - set by workflow's run(..., stream=True) vs run(..., stream=False)
         self._streaming: bool = False
 
     # region Messaging and Events
@@ -444,7 +444,7 @@ class InProcRunnerContext:
         """Set whether agents should stream incremental updates.
 
         Args:
-            streaming: True for streaming mode (run_stream), False for non-streaming (run).
+            streaming: True for streaming mode (run(stream=True)), False for non-streaming.
         """
         self._streaming = streaming
 

@@ -27,12 +27,11 @@ from typing import Any
 
 from agent_framework import (
     AgentExecutorResponse,
-    AgentRequestInfoResponse,
     ChatMessage,
     WorkflowEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework.orchestrations import ConcurrentBuilder
+from agent_framework.orchestrations import AgentRequestInfoResponse, ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 # Store chat client at module level for aggregator access

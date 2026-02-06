@@ -15,7 +15,6 @@ from agent_framework import (
     ChatMessage,
     Content,
     Executor,
-    GroupChatRequestMessage,
     Workflow,
     WorkflowCheckpoint,
     WorkflowCheckpointException,
@@ -26,6 +25,7 @@ from agent_framework import (
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
 from agent_framework.orchestrations import (
+    GroupChatRequestMessage,
     MagenticBuilder,
     MagenticContext,
     MagenticManagerBase,

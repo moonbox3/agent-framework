@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .._types import ChatMessage
+from agent_framework._types import ChatMessage
 
 
 def _new_chat_message_list() -> list[ChatMessage]:
@@ -59,7 +59,7 @@ class OrchestrationState:
         Returns:
             Dict with encoded conversation and metadata for persistence
         """
-        from ._conversation_state import encode_chat_messages
+        from agent_framework._workflows._conversation_state import encode_chat_messages
 
         result: dict[str, Any] = {
             "conversation": encode_chat_messages(self.conversation),
@@ -80,7 +80,7 @@ class OrchestrationState:
         Returns:
             Restored OrchestrationState instance
         """
-        from ._conversation_state import decode_chat_messages
+        from agent_framework._workflows._conversation_state import decode_chat_messages
 
         task = None
         if "task" in data:

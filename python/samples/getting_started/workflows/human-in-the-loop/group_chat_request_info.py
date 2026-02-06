@@ -28,12 +28,11 @@ from typing import cast
 
 from agent_framework import (
     AgentExecutorResponse,
-    AgentRequestInfoResponse,
     ChatMessage,
     WorkflowEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework.orchestrations import GroupChatBuilder
+from agent_framework.orchestrations import AgentRequestInfoResponse, GroupChatBuilder
 from azure.identity import AzureCliCredential
 
 

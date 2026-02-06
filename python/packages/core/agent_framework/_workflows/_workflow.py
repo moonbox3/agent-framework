@@ -32,7 +32,7 @@ from ._model_utils import DictConvertible
 from ._runner import Runner
 from ._runner_context import RunnerContext
 from ._state import State
-from ._typing_utils import is_instance_of
+from ._typing_utils import is_instance_of, try_coerce_to_type
 
 logger = logging.getLogger(__name__)
 
@@ -685,20 +685,24 @@ class Workflow(DictConvertible):
         if not pending_requests:
             raise RuntimeError("No pending requests found in workflow context.")
 
-        # Validate responses against pending requests
+        # Validate and coerce responses against pending requests
+        coerced_responses: dict[str, Any] = {}
         for request_id, response in responses.items():
             if request_id not in pending_requests:
                 raise ValueError(f"Response provided for unknown request ID: {request_id}")
             pending_request = pending_requests[request_id]
+            # Try to coerce raw values (e.g., dicts from JSON) to the expected type
+            response = try_coerce_to_type(response, pending_request.response_type)
             if not is_instance_of(response, pending_request.response_type):
                 raise ValueError(
                     f"Response type mismatch for request ID {request_id}: "
                     f"expected {pending_request.response_type}, got {type(response)}"
                 )
+            coerced_responses[request_id] = response
 
         await asyncio.gather(*[
             self._runner_context.send_request_info_response(request_id, response)
-            for request_id, response in responses.items()
+            for request_id, response in coerced_responses.items()
         ])
 
     def _get_executor_by_id(self, executor_id: str) -> Executor:

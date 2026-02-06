@@ -23,22 +23,21 @@ from azure.identity import AzureCliCredential
 """
 Sample: Handoff Workflow with Tool Approvals + Checkpoint Resume
 
-Demonstrates the two-step pattern for resuming a handoff workflow from a checkpoint
-while handling both HandoffAgentUserRequest prompts and function approval request Content
-for tool calls (e.g., submit_refund).
+Demonstrates resuming a handoff workflow from a checkpoint while handling both
+HandoffAgentUserRequest prompts and function approval request Content for tool calls
+(e.g., submit_refund).
 
 Scenario:
 1. User starts a conversation with the workflow.
 2. Agents may emit user input requests or tool approval requests.
 3. Workflow writes a checkpoint capturing pending requests and pauses.
 4. Process can exit/restart.
-5. On resume: Load the checkpoint, surface pending approvals/user prompts, and provide responses.
+5. On resume: Restore checkpoint and provide responses in a single call.
 6. Workflow continues from the saved state.
 
 Pattern:
-- Step 1: workflow.run(checkpoint_id=..., stream=True) to restore checkpoint and pending requests.
-- Step 2: workflow.run(stream=True, responses=responses) to supply human replies and approvals.
-- Two-step approach is required because run(responses=...) does not accept checkpoint_id.
+- workflow.run(stream=True, checkpoint_id=..., responses=responses) restores the checkpoint
+  and sends human replies/approvals in a single call.
 
 Prerequisites:
 - Azure CLI authentication (az login).
@@ -228,13 +227,10 @@ async def resume_with_responses(
     approve_tools: bool | None = None,
 ) -> tuple[list[WorkflowEvent], str | None]:
     """
-    Two-step resume pattern (answers customer questions and tool approvals):
+    Resume from checkpoint and send responses in a single call.
 
-    Step 1: Restore checkpoint to load pending requests into workflow state
-    Step 2: Send user responses using run(stream=True, responses=responses)
-
-    This is the current pattern required because run(responses=...)
-    doesn't accept a checkpoint_id parameter.
+    Uses workflow.run(stream=True, checkpoint_id=..., responses=...) to restore
+    the checkpoint and deliver human replies/approvals atomically.
     """
     print(f"\n{'=' * 60}")
     print("RESUMING WORKFLOW WITH HUMAN INPUT")
@@ -253,10 +249,9 @@ async def resume_with_responses(
     checkpoints.sort(key=lambda cp: cp.timestamp, reverse=True)
     latest_checkpoint = checkpoints[0]
 
-    print(f"Step 1: Restoring checkpoint {latest_checkpoint.checkpoint_id}")
+    print(f"Restoring checkpoint {latest_checkpoint.checkpoint_id}")
 
-    # Step 1: Restore the checkpoint to load pending requests into memory
-    # The checkpoint restoration re-emits pending request_info events
+    # First, restore checkpoint to discover pending requests
     restored_requests: list[WorkflowEvent] = []
     async for event in workflow.run(checkpoint_id=latest_checkpoint.checkpoint_id, stream=True):  # type: ignore[attr-defined]
         if event.type == "request_info":
@@ -274,7 +269,7 @@ async def resume_with_responses(
         user_response=user_response,
         approve_tools=approve_tools,
     )
-    print(f"Step 2: Sending responses for {len(responses)} request(s)")
+    print(f"Sending responses for {len(responses)} request(s)")
 
     new_pending_requests: list[WorkflowEvent] = []
 
@@ -309,7 +304,7 @@ async def main() -> None:
     This sample shows:
     1. Starting a workflow and getting a HandoffAgentUserRequest
     2. Pausing (checkpoint is saved automatically)
-    3. Resuming from checkpoint with a user response or tool approval (two-step pattern)
+    3. Resuming from checkpoint with a user response or tool approval
     4. Continuing the conversation until completion
     """
 

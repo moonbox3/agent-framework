@@ -66,7 +66,7 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
                 # To make the type checker happy, we cast event.data to the expected type
                 outputs = cast(list[ChatMessage], event.data)
                 for msg in outputs:
-                    speaker = msg.author_name or msg.role.value
+                    speaker = msg.author_name or msg.role
                     print(f"[{speaker}]: {msg.text}")
 
     responses: dict[str, MagenticPlanReviewResponse] = {}

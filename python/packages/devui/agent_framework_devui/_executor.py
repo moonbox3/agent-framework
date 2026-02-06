@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agent_framework import AgentProtocol, Content
+from agent_framework import AgentProtocol, Content, Workflow
 
 from ._conversations import ConversationStore, InMemoryConversationStore
 from ._discovery import EntityDiscovery
@@ -262,8 +262,7 @@ class AgentFrameworkExecutor:
                 elif entity_info.type == "workflow":
                     async for event in self._execute_workflow(entity_obj, request, trace_collector):
                         # Log request_info event (type='request_info') for debugging HIL flow
-                        event_class = event.__class__.__name__ if hasattr(event, "__class__") else type(event).__name__
-                        if event_class == "RequestInfoEvent":
+                        if event.type == "request_info":
                             logger.info(
                                 "🔔 [EXECUTOR] request_info event (type='request_info') detected from workflow!"
                             )
@@ -361,7 +360,7 @@ class AgentFrameworkExecutor:
             yield {"type": "error", "message": f"Agent execution error: {e!s}"}
 
     async def _execute_workflow(
-        self, workflow: Any, request: AgentFrameworkRequest, trace_collector: Any
+        self, workflow: Workflow, request: AgentFrameworkRequest, trace_collector: Any
     ) -> AsyncGenerator[Any, None]:
         """Execute Agent Framework workflow with checkpoint support via conversation items.
 

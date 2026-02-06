@@ -186,14 +186,14 @@ async def main() -> None:
     )
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
+    # Runs are not isolated; state is preserved across multiple calls to run.
     stream = workflow.run("Analyze the impact of large language models on software development.", stream=True)
 
     pending_responses = await process_event_stream(stream)
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
 

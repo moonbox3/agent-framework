@@ -193,7 +193,7 @@ async def run_agent_framework() -> None:
         current_executor = None
         stream_line_open = False
 
-        async for event in workflow.send_responses_streaming(responses):
+        async for event in workflow.run(stream=True, responses=responses):
             if isinstance(event, WorkflowOutputEvent) and isinstance(event.data, AgentResponseUpdate):
                 # Print executor name header when switching to a new agent
                 if current_executor != event.executor_id:

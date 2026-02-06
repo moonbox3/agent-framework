@@ -40,8 +40,8 @@ Scenario:
 
 Pattern:
 - Step 1: workflow.run(checkpoint_id=..., stream=True) to restore checkpoint and pending requests.
-- Step 2: workflow.send_responses_streaming(responses) to supply human replies and approvals.
-- Two-step approach is required because send_responses_streaming does not accept checkpoint_id.
+- Step 2: workflow.run(stream=True, responses=responses) to supply human replies and approvals.
+- Two-step approach is required because run(responses=...) does not accept checkpoint_id.
 
 Prerequisites:
 - Azure CLI authentication (az login).
@@ -230,9 +230,9 @@ async def resume_with_responses(
     Two-step resume pattern (answers customer questions and tool approvals):
 
     Step 1: Restore checkpoint to load pending requests into workflow state
-    Step 2: Send user responses using send_responses_streaming
+    Step 2: Send user responses using run(stream=True, responses=responses)
 
-    This is the current pattern required because send_responses_streaming
+    This is the current pattern required because run(responses=...)
     doesn't accept a checkpoint_id parameter.
     """
     print(f"\n{'=' * 60}")
@@ -277,7 +277,7 @@ async def resume_with_responses(
 
     new_pending_requests: list[RequestInfoEvent] = []
 
-    async for event in workflow.send_responses_streaming(responses):
+    async for event in workflow.run(stream=True, responses=responses):
         if isinstance(event, WorkflowStatusEvent):
             print(f"[Status] {event.state}")
 

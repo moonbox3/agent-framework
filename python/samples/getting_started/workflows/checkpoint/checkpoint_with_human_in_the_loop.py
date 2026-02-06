@@ -245,7 +245,7 @@ async def run_interactive_session(
 
     while True:
         if responses:
-            event_stream = workflow.send_responses_streaming(responses)
+            event_stream = workflow.run(stream=True, responses=responses)
             requests.clear()
             responses = None
         else:

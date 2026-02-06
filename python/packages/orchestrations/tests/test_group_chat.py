@@ -786,7 +786,7 @@ async def test_group_chat_with_request_info_filtering():
 
     # Continue the workflow with a response
     outputs: list[WorkflowOutputEvent] = []
-    async for event in workflow.send_responses_streaming({
+    async for event in workflow.run(stream=True, responses={
         request_event.request_id: AgentRequestInfoResponse.approve()
     }):
         if isinstance(event, WorkflowOutputEvent):

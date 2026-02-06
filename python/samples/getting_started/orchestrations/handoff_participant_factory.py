@@ -211,9 +211,9 @@ async def _run_workflow(workflow: Workflow, user_inputs: list[str]) -> None:
             responses = {req.request_id: HandoffAgentUserRequest.terminate() for req in pending_requests}
 
         # Send responses and get new events
-        # We use send_responses_streaming() to get events as they occur, allowing us to
-        # display agent responses in real-time and handle new requests as they arrive
-        workflow_result = await workflow.send_responses(responses)
+        # We use run(responses=...) to get events, allowing us to
+        # display agent responses and handle new requests as they arrive
+        workflow_result = await workflow.run(responses=responses)
         pending_requests = _handle_events(workflow_result)
 
 

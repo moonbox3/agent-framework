@@ -85,7 +85,7 @@ async def main() -> None:
 
     while not output_event:
         if pending_responses is not None:
-            stream = workflow.send_responses_streaming(pending_responses)
+            stream = workflow.run(stream=True, responses=pending_responses)
         else:
             stream = workflow.run(task, stream=True)
 

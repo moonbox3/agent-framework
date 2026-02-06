@@ -383,7 +383,7 @@ async def test_workflow_run_stream_from_checkpoint_with_external_storage(
         try:
             events: list[WorkflowEvent] = []
             async for event in workflow_without_checkpointing.run(
-                checkpoint_id=checkpoint_id, checkpoint_storage=storage
+                checkpoint_id=checkpoint_id, checkpoint_storage=storage, stream=True
             ):
                 events.append(event)
                 if len(events) >= 2:  # Limit to avoid infinite loops
@@ -956,11 +956,11 @@ async def test_workflow_run_parameter_validation(simple_executor: Executor) -> N
             pass
 
     # Invalid: none of message or checkpoint_id
-    with pytest.raises(ValueError, match="Must provide either"):
+    with pytest.raises(ValueError, match="Must provide at least one of"):
         await workflow.run()
 
     # Invalid: none of message or checkpoint_id (streaming)
-    with pytest.raises(ValueError, match="Must provide either"):
+    with pytest.raises(ValueError, match="Must provide at least one of"):
         async for _ in workflow.run(stream=True):
             pass
 
@@ -1178,8 +1178,8 @@ async def test_output_executors_filtering_with_fan_in() -> None:
     assert outputs[0] == 40
 
 
-async def test_output_executors_filtering_with_send_responses() -> None:
-    """Test output filtering works correctly with send_responses method."""
+async def test_output_executors_filtering_with_run_responses() -> None:
+    """Test output filtering works correctly with run(responses=...) method."""
     executor = MockExecutorRequestApproval(id="approval_executor")
 
     workflow = WorkflowBuilder().set_start_executor(executor).with_output_from([executor]).build()
@@ -1193,7 +1193,7 @@ async def test_output_executors_filtering_with_send_responses() -> None:
 
     # Send approval response
     responses = {request_events[0].request_id: ApprovalMessage(approved=True)}
-    response_result = await workflow.send_responses(responses)
+    response_result = await workflow.run(responses=responses)
     outputs = response_result.get_outputs()
 
     # Output should be yielded since approval_executor is in output_executors
@@ -1201,8 +1201,8 @@ async def test_output_executors_filtering_with_send_responses() -> None:
     assert outputs[0] == 42
 
 
-async def test_output_executors_filtering_with_send_responses_streaming() -> None:
-    """Test output filtering works correctly with send_responses_streaming method."""
+async def test_output_executors_filtering_with_run_responses_streaming() -> None:
+    """Test output filtering works correctly with run(responses=..., stream=True) method."""
     executor = MockExecutorRequestApproval(id="approval_executor")
 
     workflow = WorkflowBuilder().set_start_executor(executor).build()
@@ -1222,7 +1222,7 @@ async def test_output_executors_filtering_with_send_responses_streaming() -> Non
     # Send approval response via streaming
     responses = {request_events[0].request_id: ApprovalMessage(approved=True)}
     output_events: list[WorkflowOutputEvent] = []
-    async for event in workflow.send_responses_streaming(responses):
+    async for event in workflow.run(responses=responses, stream=True):
         if isinstance(event, WorkflowOutputEvent):
             output_events.append(event)
 

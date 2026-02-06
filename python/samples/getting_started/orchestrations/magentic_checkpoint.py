@@ -31,7 +31,7 @@ Concepts highlighted here:
    must keep stable IDs so the checkpoint state aligns when we rebuild the graph.
 2. **Executor snapshotting** - checkpoints capture the pending plan-review request
    map, at superstep boundaries.
-3. **Resume with responses** - `Workflow.send_responses_streaming` accepts a
+3. **Resume with responses** - `Workflow.run(responses=...)` accepts a
    `responses` mapping so we can inject the stored human reply during restoration.
 
 Prerequisites:
@@ -159,7 +159,7 @@ async def main() -> None:
 
     # Supply the approval and continue to run to completion.
     final_event: WorkflowOutputEvent | None = None
-    async for event in resumed_workflow.send_responses_streaming({request_info_event.request_id: approval}):
+    async for event in resumed_workflow.run(stream=True, responses={request_info_event.request_id: approval}):
         if isinstance(event, WorkflowOutputEvent):
             final_event = event
 

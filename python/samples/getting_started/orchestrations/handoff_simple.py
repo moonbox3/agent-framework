@@ -260,9 +260,9 @@ async def main() -> None:
             }
 
         # Send responses and get new events
-        # We use send_responses() to get events from the workflow, allowing us to
+        # We use run(responses=...) to get events from the workflow, allowing us to
         # display agent responses and handle new requests as they arrive
-        events = await workflow.send_responses(responses)
+        events = await workflow.run(responses=responses)
         pending_requests = _handle_events(events)
 
     """

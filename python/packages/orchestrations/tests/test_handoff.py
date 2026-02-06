@@ -257,7 +257,7 @@ async def test_handoff_async_termination_condition() -> None:
     assert requests
 
     events = await _drain(
-        workflow.send_responses_streaming({
+        workflow.run(stream=True, responses={
             requests[-1].request_id: [ChatMessage(role="user", text="Second user message")]
         })
     )
@@ -510,7 +510,7 @@ async def test_handoff_with_participant_factories():
 
     # Follow-up message
     events = await _drain(
-        workflow.send_responses_streaming({requests[-1].request_id: [ChatMessage(role="user", text="More details")]})
+        workflow.run(stream=True, responses={requests[-1].request_id: [ChatMessage(role="user", text="More details")]})
     )
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert outputs
@@ -584,7 +584,7 @@ async def test_handoff_with_participant_factories_and_add_handoff():
 
     # Second user message - specialist_a hands off to specialist_b
     events = await _drain(
-        workflow.send_responses_streaming({requests[-1].request_id: [ChatMessage(role="user", text="Need escalation")]})
+        workflow.run(stream=True, responses={requests[-1].request_id: [ChatMessage(role="user", text="Need escalation")]})
     )
     requests = [ev for ev in events if isinstance(ev, RequestInfoEvent)]
     assert requests
@@ -619,7 +619,7 @@ async def test_handoff_participant_factories_with_checkpointing():
     assert requests
 
     events = await _drain(
-        workflow.send_responses_streaming({requests[-1].request_id: [ChatMessage(role="user", text="follow up")]})
+        workflow.run(stream=True, responses={requests[-1].request_id: [ChatMessage(role="user", text="follow up")]})
     )
     outputs = [ev for ev in events if isinstance(ev, WorkflowOutputEvent)]
     assert outputs, "Should have workflow output after termination condition is met"

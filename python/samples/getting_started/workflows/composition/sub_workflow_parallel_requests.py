@@ -347,7 +347,7 @@ async def main() -> None:
             else:
                 print(f"Unknown request info event data type: {type(event.data)}")
 
-        run_result = await main_workflow.send_responses(responses)
+        run_result = await main_workflow.run(responses=responses)
 
     outputs = run_result.get_outputs()
     if outputs:

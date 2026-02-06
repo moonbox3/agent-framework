@@ -200,7 +200,7 @@ async def main() -> None:
                 print(f"\nUser: {user_input}")
 
                 responses = {request.request_id: HandoffAgentUserRequest.create_response(user_input)}
-                events = await _drain(workflow.send_responses_streaming(responses))
+                events = await _drain(workflow.run(stream=True, responses=responses))
                 requests, file_ids = _handle_events(events)
                 all_file_ids.extend(file_ids)
                 input_index += 1

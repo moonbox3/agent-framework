@@ -283,7 +283,7 @@ async def main() -> None:
             )
             initial_run = False
         elif pending_responses is not None:
-            stream = workflow.send_responses_streaming(pending_responses)
+            stream = workflow.run(stream=True, responses=pending_responses)
             pending_responses = None
         else:
             break

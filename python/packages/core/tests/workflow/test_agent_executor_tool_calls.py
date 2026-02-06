@@ -268,7 +268,7 @@ async def test_agent_executor_tool_call_with_approval() -> None:
     assert approval_request.data.function_call.arguments == '{"query": "test"}'
 
     # Act
-    events = await workflow.send_responses({
+    events = await workflow.run(responses={
         approval_request.request_id: approval_request.data.to_function_approval_response(True)
     })
 
@@ -304,7 +304,7 @@ async def test_agent_executor_tool_call_with_approval_streaming() -> None:
 
     # Act
     output: str | None = None
-    async for event in workflow.send_responses_streaming({
+    async for event in workflow.run(stream=True, responses={
         approval_request.request_id: approval_request.data.to_function_approval_response(True)
     }):
         if isinstance(event, WorkflowOutputEvent):
@@ -347,7 +347,7 @@ async def test_agent_executor_parallel_tool_call_with_approval() -> None:
         approval_request.request_id: approval_request.data.to_function_approval_response(True)  # type: ignore
         for approval_request in events.get_request_info_events()
     }
-    events = await workflow.send_responses(responses)
+    events = await workflow.run(responses=responses)
 
     # Assert
     final_response = events.get_outputs()
@@ -386,7 +386,7 @@ async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> No
     }
 
     output: str | None = None
-    async for event in workflow.send_responses_streaming(responses):
+    async for event in workflow.run(stream=True, responses=responses):
         if isinstance(event, WorkflowOutputEvent):
             output = event.data
 

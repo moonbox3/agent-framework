@@ -1521,7 +1521,7 @@ class MagenticBuilder:
                         if request.kind == MagenticHumanInterventionKind.PLAN_REVIEW:
                             # Review plan and respond
                             reply = MagenticHumanInterventionReply(decision=MagenticHumanInterventionDecision.APPROVE)
-                            await workflow.send_responses({event.request_id: reply})
+                            await workflow.run(responses={event.request_id: reply})
 
         See Also:
             - :class:`MagenticHumanInterventionRequest`: Event emitted for review

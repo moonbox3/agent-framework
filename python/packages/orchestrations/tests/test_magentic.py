@@ -255,7 +255,7 @@ async def test_magentic_workflow_plan_review_approval_to_completion():
 
     completed = False
     output: list[ChatMessage] | None = None
-    async for ev in wf.send_responses_streaming(responses={req_event.request_id: req_event.data.approve()}):
+    async for ev in wf.run(stream=True, responses={req_event.request_id: req_event.data.approve()}):
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
         elif isinstance(ev, WorkflowOutputEvent):
@@ -301,16 +301,16 @@ async def test_magentic_plan_review_with_revise():
     # Send a revise response
     saw_second_review = False
     completed = False
-    async for ev in wf.send_responses_streaming(
-        responses={req_event.request_id: req_event.data.revise("Looks good; consider Z")}
+    async for ev in wf.run(
+        stream=True, responses={req_event.request_id: req_event.data.revise("Looks good; consider Z")}
     ):
         if isinstance(ev, RequestInfoEvent) and ev.request_type is MagenticPlanReviewRequest:
             saw_second_review = True
             req_event = ev
 
     # Approve the second review
-    async for ev in wf.send_responses_streaming(
-        responses={req_event.request_id: req_event.data.approve()}  # type: ignore[union-attr]
+    async for ev in wf.run(
+        stream=True, responses={req_event.request_id: req_event.data.approve()}  # type: ignore[union-attr]
     ):
         if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
             completed = True
@@ -401,7 +401,7 @@ async def test_magentic_checkpoint_resume_round_trip():
     assert isinstance(req_event.data, MagenticPlanReviewRequest)
 
     responses = {req_event.request_id: req_event.data.approve()}
-    async for event in wf_resume.send_responses_streaming(responses=responses):
+    async for event in wf_resume.run(stream=True, responses=responses):
         if isinstance(event, WorkflowOutputEvent):
             completed = event
     assert completed is not None

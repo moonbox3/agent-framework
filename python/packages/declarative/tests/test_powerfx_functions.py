@@ -254,7 +254,7 @@ class TestMessageTextEdgeCases:
     def test_message_text_dict_with_text_attr_content(self):
         """Test message with content that has text attribute."""
 
-        class ContentWithText:
+        class ContentWithText:  # noqa: B903
             def __init__(self, text: str):
                 self.text = text
 
@@ -274,7 +274,7 @@ class TestMessageTextEdgeCases:
     def test_message_text_list_with_content_objects(self):
         """Test message_text with list items having content attribute."""
 
-        class MessageObj:
+        class MessageObj:  # noqa: B903
             def __init__(self, content: str):
                 self.content = content
 
@@ -285,7 +285,7 @@ class TestMessageTextEdgeCases:
     def test_message_text_list_with_content_text_attr(self):
         """Test message_text with content having text attribute."""
 
-        class ContentWithText:
+        class ContentWithText:  # noqa: B903
             def __init__(self, text: str):
                 self.text = text
 
@@ -591,7 +591,7 @@ class TestConcatTextEdgeCases:
     def test_concat_text_with_field_attr(self):
         """Test concat_text with field as object attribute."""
 
-        class Item:
+        class Item:  # noqa: B903
             def __init__(self, name: str):
                 self.name = name
 
@@ -657,7 +657,7 @@ class TestSearchTableEdgeCases:
     def test_search_table_with_object_attr(self):
         """Test search_table with object attributes."""
 
-        class Item:
+        class Item:  # noqa: B903
             def __init__(self, name: str):
                 self.name = name
 

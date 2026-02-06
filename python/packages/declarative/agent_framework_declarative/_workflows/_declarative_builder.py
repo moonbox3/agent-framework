@@ -14,8 +14,6 @@ action definitions and creates a proper workflow graph with:
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from agent_framework._workflows import (
     Workflow,
     WorkflowBuilder,
@@ -40,6 +38,9 @@ from ._executors_control_flow import (
 )
 from ._executors_external_input import EXTERNAL_INPUT_EXECUTORS
 from ._executors_tools import TOOL_ACTION_EXECUTORS, InvokeFunctionToolExecutor
+
+logger = logging.getLogger(__name__)
+
 
 # Combined mapping of all action kinds to executor classes
 ALL_ACTION_EXECUTORS = {

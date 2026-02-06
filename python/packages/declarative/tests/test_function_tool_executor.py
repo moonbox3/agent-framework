@@ -10,7 +10,6 @@ These tests verify:
 - WorkflowFactory registration
 """
 
-
 import pytest
 
 from agent_framework_declarative._workflows import (
@@ -709,7 +708,7 @@ class TestInvokeFunctionToolBuilder:
         }
 
         builder = DeclarativeWorkflowBuilder(yaml_def, tools={"dummy": dummy})
-        workflow = builder.build()
+        _ = builder.build()
 
         # Verify the executor was created
         assert "my_tool" in builder._executors

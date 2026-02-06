@@ -123,7 +123,7 @@ class DeclarativeWorkflowBuilder:
             yaml_definition: The parsed YAML workflow definition
             workflow_id: Optional ID for the workflow (defaults to name from YAML)
             agents: Registry of agent instances by name (for InvokeAzureAgent actions)
-            tools: Registry of tool/function instances by name (for FunctionTool actions)
+            tools: Registry of tool/function instances by name (for InvokeFunctionTool actions)
             checkpoint_storage: Optional checkpoint storage for pause/resume support
             validate: Whether to validate the workflow definition before building (default: True)
         """

@@ -403,7 +403,7 @@ class TestInvokeAzureAgentHandler:
 
     @pytest.mark.asyncio
     async def test_streaming_agent_with_run_stream(self):
-        """Test invocation of streaming agent with run_stream method."""
+        """Test invocation of streaming agent with run(stream=True) method."""
         from typing import Any
         from unittest.mock import MagicMock
 
@@ -424,11 +424,11 @@ class TestInvokeAzureAgentHandler:
         mock_chunk2.text = " World"
         mock_chunk2.tool_calls = []
 
-        async def mock_run_stream(messages: list[Any]):
+        async def mock_run(messages: list[Any], stream: bool = False):
             yield mock_chunk1
             yield mock_chunk2
 
-        mock_agent.run_stream = mock_run_stream
+        mock_agent.run = mock_run
 
         state = WorkflowState()
         state.set("conversation.messages", [ChatMessage(role="user", text="Test")])
@@ -699,10 +699,10 @@ class TestInvokePromptAgentHandler:
         mock_chunk = MagicMock()
         mock_chunk.text = "Chunk"
 
-        async def mock_run_stream(messages: list[Any]):
+        async def mock_run(messages: list[Any], stream: bool = False):
             yield mock_chunk
 
-        mock_agent.run_stream = mock_run_stream
+        mock_agent.run = mock_run
 
         ctx = create_action_context(
             action={"kind": "InvokePromptAgent", "agent": "testAgent", "outputPath": "Local.result"},

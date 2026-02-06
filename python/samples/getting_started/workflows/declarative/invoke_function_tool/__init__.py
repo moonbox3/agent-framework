@@ -2,6 +2,6 @@
 
 """Invoke Function Tool sample workflow.
 
-This sample demonstrates using the FunctionTool action to invoke
+This sample demonstrates using the InvokeFunctionTool action to invoke
 registered Python functions from declarative workflows.
 """

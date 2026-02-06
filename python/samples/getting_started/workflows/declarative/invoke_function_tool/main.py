@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Invoke Function Tool sample - demonstrates FunctionTool workflow actions.
+"""Invoke Function Tool sample - demonstrates InvokeFunctionTool workflow actions.
 
 This sample shows how to:
 1. Define Python functions that can be called from workflows
 2. Register functions with WorkflowFactory.register_tool()
-3. Use the FunctionTool action in YAML to invoke registered functions
+3. Use the InvokeFunctionTool action in YAML to invoke registered functions
 4. Pass arguments using expression syntax (=Local.variable)
 5. Capture function output in workflow variables
 

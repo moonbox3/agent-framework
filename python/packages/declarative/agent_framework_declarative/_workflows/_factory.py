@@ -134,7 +134,7 @@ class WorkflowFactory:
         self._agent_factory = agent_factory or AgentFactory(env_file_path=env_file)
         self._agents: dict[str, AgentProtocol | AgentExecutor] = dict(agents) if agents else {}
         self._bindings: dict[str, Any] = dict(bindings) if bindings else {}
-        self._tools: dict[str, Any] = {}  # Tool registry for FunctionTool actions
+        self._tools: dict[str, Any] = {}  # Tool registry for InvokeFunctionTool actions
         self._checkpoint_storage = checkpoint_storage
 
     def create_workflow_from_yaml_path(
@@ -596,14 +596,14 @@ class WorkflowFactory:
         return self
 
     def register_tool(self, name: str, func: Any) -> "WorkflowFactory":
-        """Register a tool function with the factory for use in FunctionTool actions.
+        """Register a tool function with the factory for use in InvokeFunctionTool actions.
 
-        Registered tools are available to FunctionTool actions by name via the functionName field.
+        Registered tools are available to InvokeFunctionTool actions by name via the functionName field.
         This method supports fluent chaining.
 
         Args:
             name: The name to register the function under. Must match the functionName
-                referenced in FunctionTool actions.
+                referenced in InvokeFunctionTool actions.
             func: The function to register (can be sync or async).
 
         Returns:
@@ -624,7 +624,7 @@ class WorkflowFactory:
                     return {"data": "..."}
 
 
-                # Register functions for use in FunctionTool workflow actions
+                # Register functions for use in InvokeFunctionTool workflow actions
                 factory = (
                     WorkflowFactory().register_tool("get_weather", get_weather).register_tool("fetch_data", fetch_data)
                 )
@@ -636,7 +636,7 @@ class WorkflowFactory:
             .. code-block:: yaml
 
                 actions:
-                  - kind: FunctionTool
+                  - kind: InvokeFunctionTool
                     id: call_weather
                     functionName: get_weather
                     arguments:
@@ -645,6 +645,8 @@ class WorkflowFactory:
                     output:
                       result: Local.weatherData
         """
+        if not callable(func):
+            raise TypeError(f"Expected a callable for tool '{name}', got {type(func).__name__}")
         self._tools[name] = func
         return self
 

@@ -36,10 +36,12 @@ from ._executors_agents import TOOL_REGISTRY_KEY
 
 logger = logging.getLogger(__name__)
 
-# Registry key for function tools in SharedState - reuse existing key for compatibility
+# Registry key for function tools in State - reuse existing key so functions registered
+# at runtime are discoverable by both agent-based and function-based tool executors.
 FUNCTION_TOOL_REGISTRY_KEY = TOOL_REGISTRY_KEY
 
-# State key for storing approval state during yield/resume
+# State key prefix for storing approval state during yield/resume.
+# The executor's ID is appended to create a per-executor key.
 TOOL_APPROVAL_STATE_KEY = "_tool_approval_state"
 
 
@@ -95,7 +97,7 @@ class ToolApprovalResponse:
 class ToolApprovalState:
     """State saved during approval yield for resumption.
 
-    Stored in SharedState under TOOL_APPROVAL_STATE_KEY when requireApproval=true.
+    Stored in State under a per-executor key when requireApproval=true.
     Retrieved by handle_approval_response() to continue execution.
     """
 
@@ -162,7 +164,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
     """Base class for tool invocation executors.
 
     Provides common functionality for all tool-like executors:
-    - Tool registry lookup (SharedState + WorkflowFactory registration)
+    - Tool registry lookup (State + WorkflowFactory registration)
     - Approval flow (request_info pattern with yield/resume)
     - Output formatting (messages as ChatMessage list + result variable)
     - Error handling (stores error in output, doesn't raise)
@@ -225,14 +227,14 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         """
         pass
 
-    async def _get_tool(
+    def _get_tool(
         self,
         function_name: str,
         ctx: WorkflowContext[Any, Any],
     ) -> Any | None:
         """Get tool from registry.
 
-        Checks both WorkflowFactory registry (self._tools) and SharedState registry.
+        Checks both WorkflowFactory registry (self._tools) and State registry.
 
         Args:
             function_name: Name of the function
@@ -246,14 +248,14 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         if tool is not None:
             return tool
 
-        # Check SharedState registry (for runtime registration)
+        # Check State registry (for runtime registration)
         try:
-            tool_registry: dict[str, Any] | None = await ctx.shared_state.get(FUNCTION_TOOL_REGISTRY_KEY)
+            tool_registry: dict[str, Any] | None = ctx.state.get(FUNCTION_TOOL_REGISTRY_KEY)
             if tool_registry:
                 return tool_registry.get(function_name)
         except KeyError:
             logger.debug(
-                "%s: tool registry key '%s' not found in shared state "
+                "%s: tool registry key '%s' not found in state "
                 "(this is normal if tools are only registered via WorkflowFactory)",
                 self.__class__.__name__,
                 FUNCTION_TOOL_REGISTRY_KEY,
@@ -280,7 +282,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             str(result_var) if result_var else None,
         )
 
-    async def _store_result(
+    def _store_result(
         self,
         result: ToolInvocationResult,
         state: DeclarativeWorkflowState,
@@ -298,13 +300,13 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         # Store messages if variable specified
         if messages_var:
             path = _normalize_variable_path(messages_var)
-            await state.set(path, result.messages)
+            state.set(path, result.messages)
 
         # Store result if variable specified
         if result_var:
             path = _normalize_variable_path(result_var)
             if result.rejected:
-                await state.set(
+                state.set(
                     path,
                     {
                         "approved": False,
@@ -313,9 +315,9 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                     },
                 )
             elif result.success:
-                await state.set(path, result.result)
+                state.set(path, result.result)
             else:
-                await state.set(
+                state.set(
                     path,
                     {
                         "error": result.error,
@@ -398,7 +400,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             ToolInvocationResult with outcome
         """
         # Get tool from registry
-        tool = await self._get_tool(function_name, ctx)
+        tool = self._get_tool(function_name, ctx)
         if tool is None:
             error_msg = f"Function '{function_name}' not found in registry"
             logger.error(f"{self.__class__.__name__}: {error_msg}")
@@ -452,7 +454,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         """Handle the tool invocation with optional approval flow.
 
         When requireApproval=true:
-        1. Saves invocation state to SharedState
+        1. Saves invocation state to State (keyed by executor ID)
         2. Emits ToolApprovalRequest via ctx.request_info()
         3. Workflow yields (returns without ActionComplete)
         4. Resumes in handle_approval_response() when user responds
@@ -468,16 +470,16 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             error_msg = f"Action '{self.id}' is missing required 'functionName' field"
             logger.error(f"{self.__class__.__name__}: {error_msg}")
             if result_var:
-                await state.set(_normalize_variable_path(result_var), {"error": error_msg})
+                state.set(_normalize_variable_path(result_var), {"error": error_msg})
             await ctx.send_message(ActionComplete())
             return
 
-        function_name = await state.eval_if_expression(function_name_expr)
+        function_name = state.eval_if_expression(function_name_expr)
         if not function_name:
             error_msg = f"Action '{self.id}': functionName expression evaluated to empty"
             logger.error(f"{self.__class__.__name__}: {error_msg}")
             if result_var:
-                await state.set(_normalize_variable_path(result_var), {"error": error_msg})
+                state.set(_normalize_variable_path(result_var), {"error": error_msg})
             await ctx.send_message(ActionComplete())
             return
         function_name = str(function_name)
@@ -493,20 +495,20 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             )
         elif isinstance(arguments_def, dict):
             for key, value in arguments_def.items():
-                arguments[key] = await state.eval_if_expression(value)
+                arguments[key] = state.eval_if_expression(value)
 
         # Get conversation ID if specified
         conversation_id_expr = self._action_def.get("conversationId")
         conversation_id = None
         if conversation_id_expr:
-            evaluated_id = await state.eval_if_expression(conversation_id_expr)
+            evaluated_id = state.eval_if_expression(conversation_id_expr)
             conversation_id = str(evaluated_id) if evaluated_id else None
 
         # Check if approval is required
         require_approval = self._action_def.get("requireApproval", False)
 
         if require_approval:
-            # Save state for resumption
+            # Save state for resumption (keyed by executor ID to avoid collisions)
             approval_state = ToolApprovalState(
                 function_name=function_name,
                 arguments=arguments,
@@ -514,7 +516,8 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                 output_result_var=result_var,
                 conversation_id=conversation_id,
             )
-            await ctx.shared_state.set(TOOL_APPROVAL_STATE_KEY, approval_state)
+            approval_key = f"{TOOL_APPROVAL_STATE_KEY}_{self.id}"
+            ctx.state.set(approval_key, approval_state)
 
             # Emit approval request - workflow yields here
             request = ToolApprovalRequest(
@@ -536,7 +539,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             ctx=ctx,
         )
 
-        await self._store_result(result, state, messages_var, result_var)
+        self._store_result(result, state, messages_var, result_var)
         await ctx.send_message(ActionComplete())
 
     @response_handler
@@ -551,24 +554,25 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         Called when the workflow resumes after yielding for approval.
         Either executes the tool (if approved) or stores rejection status.
         """
-        state = self._get_state(ctx.shared_state)
+        state = self._get_state(ctx.state)
+        approval_key = f"{TOOL_APPROVAL_STATE_KEY}_{self.id}"
 
         # Retrieve saved invocation state
         try:
-            approval_state: ToolApprovalState = await ctx.shared_state.get(TOOL_APPROVAL_STATE_KEY)
+            approval_state: ToolApprovalState = ctx.state.get(approval_key)
         except KeyError:
             error_msg = "Approval state not found, cannot resume tool invocation"
             logger.error(f"{self.__class__.__name__}: {error_msg}")
             # Try to store error - get output config from action def as fallback
             _, result_var = self._get_output_config()
             if result_var and state:
-                await state.set(_normalize_variable_path(result_var), {"error": error_msg})
+                state.set(_normalize_variable_path(result_var), {"error": error_msg})
             await ctx.send_message(ActionComplete())
             return
 
         # Clean up approval state
         try:
-            await ctx.shared_state.delete(TOOL_APPROVAL_STATE_KEY)
+            ctx.state.delete(approval_key)
         except KeyError:
             logger.warning(f"{self.__class__.__name__}: approval state already deleted")
 
@@ -593,7 +597,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                     )
                 ],
             )
-            await self._store_result(result, state, messages_var, result_var)
+            self._store_result(result, state, messages_var, result_var)
             await ctx.send_message(ActionComplete())
             return
 
@@ -605,7 +609,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             ctx=ctx,
         )
 
-        await self._store_result(result, state, messages_var, result_var)
+        self._store_result(result, state, messages_var, result_var)
         await ctx.send_message(ActionComplete())
 
 
@@ -639,7 +643,7 @@ class InvokeFunctionToolExecutor(BaseToolExecutor):
     Tool Registration:
         Tools can be registered via:
         1. WorkflowFactory.register_tool("name", func) - preferred
-        2. Setting FUNCTION_TOOL_REGISTRY_KEY in SharedState at runtime
+        2. Setting FUNCTION_TOOL_REGISTRY_KEY in State at runtime
 
     Examples:
         .. code-block:: python

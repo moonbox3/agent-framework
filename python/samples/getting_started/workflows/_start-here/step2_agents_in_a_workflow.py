@@ -65,7 +65,7 @@ async def main():
     """
     writer: "Charge Ahead: Affordable Adventure Awaits!"
 
-    reviewer: - Consider emphasizing both affordability and fun in a more dynamic way. 
+    reviewer: - Consider emphasizing both affordability and fun in a more dynamic way.
     - Try using a catchy phrase that includes a play on words, like “Electrify Your Drive: Fun Meets Affordability!”
     - Ensure the slogan is succinct while capturing the essence of the car's unique selling proposition.
 

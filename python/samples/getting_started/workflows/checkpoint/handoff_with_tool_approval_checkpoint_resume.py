@@ -32,12 +32,15 @@ Scenario:
 2. Agents may emit user input requests or tool approval requests.
 3. Workflow writes a checkpoint capturing pending requests and pauses.
 4. Process can exit/restart.
-5. On resume: Restore checkpoint and provide responses in a single call.
+5. On resume: Restore checkpoint, inspect pending requests, then provide responses.
 6. Workflow continues from the saved state.
 
 Pattern:
-- workflow.run(stream=True, checkpoint_id=..., responses=responses) restores the checkpoint
-  and sends human replies/approvals in a single call.
+- workflow.run(checkpoint_id=..., stream=True) to restore checkpoint and discover pending requests.
+- workflow.run(stream=True, responses=responses) to supply human replies and approvals.
+  (Two steps are needed here because the sample must inspect request types before building responses.
+  When response payloads are already known, use the single-call form:
+  workflow.run(stream=True, checkpoint_id=..., responses=responses).)
 
 Prerequisites:
 - Azure CLI authentication (az login).
@@ -227,10 +230,13 @@ async def resume_with_responses(
     approve_tools: bool | None = None,
 ) -> tuple[list[WorkflowEvent], str | None]:
     """
-    Resume from checkpoint and send responses in a single call.
+    Resume from checkpoint and send responses.
 
-    Uses workflow.run(stream=True, checkpoint_id=..., responses=...) to restore
-    the checkpoint and deliver human replies/approvals atomically.
+    Step 1: Restore checkpoint to discover pending request types.
+    Step 2: Build typed responses and send via workflow.run(responses=...).
+
+    When response payloads are already known, these can be combined into a single
+    workflow.run(stream=True, checkpoint_id=..., responses=...) call.
     """
     print(f"\n{'=' * 60}")
     print("RESUMING WORKFLOW WITH HUMAN INPUT")

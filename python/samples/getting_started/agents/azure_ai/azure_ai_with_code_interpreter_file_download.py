@@ -10,6 +10,7 @@ from agent_framework import (
     CitationAnnotation,
     HostedCodeInterpreterTool,
     HostedFileContent,
+    TextContent,
 )
 from agent_framework.azure import AzureAIProjectAgentProvider
 from azure.identity.aio import AzureCliCredential
@@ -176,7 +177,7 @@ async def streaming_example() -> None:
         file_contents_found: list[HostedFileContent] = []
         text_chunks: list[str] = []
 
-        async for update in agent.run_stream(QUERY):
+        async for update in agent.run(QUERY, stream=True):
             if isinstance(update, AgentResponseUpdate):
                 for content in update.contents:
                     if content.type == "text":

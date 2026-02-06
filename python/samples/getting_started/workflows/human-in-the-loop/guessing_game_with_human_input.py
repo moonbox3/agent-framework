@@ -10,11 +10,9 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatMessage,
     Executor,
-    RequestInfoEvent,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowEvent,
-    WorkflowOutputEvent,
     handler,
     response_handler,
 )
@@ -31,12 +29,12 @@ the workflow completes when idle with no pending work.
 
 Purpose:
 Show how to integrate a human step in the middle of an LLM workflow by using
-`request_info` and `send_responses_streaming`.
+`request_info` and `run(responses=..., stream=True)`.
 
 Demonstrate:
 - Alternating turns between an AgentExecutor and a human, driven by events.
 - Using Pydantic response_format to enforce structured JSON output from the agent instead of regex parsing.
-- Driving the loop in application code with run_stream and responses parameter.
+- Driving the loop in application code with run and responses parameter.
 
 Prerequisites:
 - Azure OpenAI configured for AzureOpenAIChatClient with required environment variables.
@@ -44,11 +42,11 @@ Prerequisites:
 - Basic familiarity with WorkflowBuilder, executors, edges, events, and streaming runs.
 """
 
-# How human-in-the-loop is achieved via `request_info` and `send_responses_streaming`:
+# How human-in-the-loop is achieved via `request_info` and `run(responses=..., stream=True)`:
 # - An executor (TurnManager) calls `ctx.request_info` with a payload (HumanFeedbackRequest).
-# - The workflow run pauses and emits a RequestInfoEvent with the payload and the request_id.
+# - The workflow run pauses and emits a  with the payload and the request_id.
 # - The application captures the event, prompts the user, and collects replies.
-# - The application calls `send_responses_streaming` with a map of request_ids to replies.
+# - The application calls `run(stream=True, responses=...)` with a map of request_ids to replies.
 # - The workflow resumes, and the response is delivered to the executor method decorated with @response_handler.
 # - The executor can then continue the workflow, e.g., by sending a new message to the agent.
 
@@ -132,11 +130,13 @@ class TurnManager(Executor):
             return
 
         # Provide feedback to the agent to try again.
-        # We keep the agent's output strictly JSON to ensure stable parsing on the next turn.
-        user_msg = ChatMessage(
-            "user",
-            text=(f'Feedback: {reply}. Return ONLY a JSON object matching the schema {{"guess": <int 1..10>}}.'),
+        # response_format=GuessOutput on the agent ensures JSON output, so we just need to guide the logic.
+        last_guess = original_request.prompt.split(": ")[1].split(".")[0]
+        feedback_text = (
+            f"Feedback: {reply}. Your last guess was {last_guess}. "
+            f"Use this feedback to adjust and make your next guess (1-10)."
         )
+        user_msg = ChatMessage("user", text=feedback_text)
         await ctx.send_message(AgentExecutorRequest(messages=[user_msg], should_respond=True))
 
 
@@ -147,9 +147,9 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: list[tuple[str, HumanFeedbackRequest]] = []
     async for event in stream:
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, HumanFeedbackRequest):
+        if event.type == "request_info" and isinstance(event.data, HumanFeedbackRequest):
             requests.append((event.request_id, event.data))
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             if isinstance(event.data, AgentResponseUpdate):
                 update = event.data
                 response_id = update.response_id
@@ -204,14 +204,14 @@ async def main() -> None:
     ).build()
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
-    stream = workflow.run_stream("start")
+    # Runs are not isolated; state is preserved across multiple calls to run.
+    stream = workflow.run("start", stream=True)
 
     pending_responses = await process_event_stream(stream)
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
     """

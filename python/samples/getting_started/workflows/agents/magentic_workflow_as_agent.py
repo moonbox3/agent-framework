@@ -5,9 +5,9 @@ import asyncio
 from agent_framework import (
     ChatAgent,
     HostedCodeInterpreterTool,
-    MagenticBuilder,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
+from agent_framework.orchestrations import MagenticBuilder
 
 """
 Sample: Build a Magentic orchestration and wrap it as an agent.
@@ -29,8 +29,6 @@ async def main() -> None:
             "You are a Researcher. You find information without additional computation or quantitative analysis."
         ),
         # This agent requires the gpt-4o-search-preview model to perform web searches.
-        # Feel free to explore with other agents that support web search, for example,
-        # the `OpenAIResponseAgent` or `AzureAgentProtocol` with bing grounding.
         chat_client=OpenAIChatClient(model_id="gpt-4o-search-preview"),
     )
 
@@ -84,7 +82,7 @@ async def main() -> None:
         workflow_agent = workflow.as_agent(name="MagenticWorkflowAgent")
 
         last_response_id: str | None = None
-        async for update in workflow_agent.run_stream(task):
+        async for update in workflow_agent.run(task, stream=True):
             # Fallback for any other events with text
             if last_response_id != update.response_id:
                 if last_response_id is not None:

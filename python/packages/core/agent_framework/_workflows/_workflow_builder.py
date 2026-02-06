@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .._agents import AgentProtocol
+from .._agents import SupportsAgentRun
 from .._threads import AgentThread
 from ..observability import OtelAttr, capture_exception, create_workflow_span
 from ._agent_executor import AgentExecutor
@@ -157,8 +157,8 @@ class WorkflowBuilder:
         description: str | None = None,
         *,
         checkpoint_storage: CheckpointStorage | None = None,
-        output_executors: list[Executor | AgentProtocol | str] | None = None,
-        start_executor: Executor | AgentProtocol | str | None = None,
+        output_executors: list[Executor | SupportsAgentRun | str] | None = None,
+        start_executor: Executor | SupportsAgentRun | str | None = None,
     ):
         """Initialize the WorkflowBuilder with an empty list of edges and no starting executor.
 
@@ -170,7 +170,7 @@ class WorkflowBuilder:
             output_executors: Optional list of executors whose outputs should be collected.
                 If not provided, outputs from all executors are collected.
             start_executor: Optional starting executor for the workflow. Can be an Executor instance,
-                AgentProtocol instance, or the name of a registered executor factory.
+                SupportsAgentRun instance, or the name of a registered executor factory.
         """
         self._edge_groups: list[EdgeGroup] = []
         self._executors: dict[str, Executor] = {}
@@ -179,7 +179,7 @@ class WorkflowBuilder:
         self._max_iterations: int = max_iterations
         self._name: str | None = name
         self._description: str | None = description
-        # Maps underlying AgentProtocol object id -> wrapped Executor so we reuse the same wrapper
+        # Maps underlying SupportsAgentRun object id -> wrapped Executor so we reuse the same wrapper
         # across set_start_executor / add_edge calls. This avoids multiple AgentExecutor instances
         # being created for the same agent.
         self._agent_wrappers: dict[str, Executor] = {}
@@ -195,7 +195,7 @@ class WorkflowBuilder:
         self._executor_registry: dict[str, Callable[[], Executor]] = {}
 
         # Output executors filter; if set, only outputs from these executors are yielded
-        self._output_executors: list[Executor | AgentProtocol | str] = output_executors if output_executors else []
+        self._output_executors: list[Executor | SupportsAgentRun | str] = output_executors if output_executors else []
 
         # Set start executor if provided
         if start_executor is not None:
@@ -220,8 +220,8 @@ class WorkflowBuilder:
 
         return executor.id
 
-    def _maybe_wrap_agent(self, candidate: Executor | AgentProtocol) -> Executor:
-        """If the provided object implements AgentProtocol, wrap it in an AgentExecutor.
+    def _maybe_wrap_agent(self, candidate: Executor | SupportsAgentRun) -> Executor:
+        """If the provided object implements SupportsAgentRun, wrap it in an AgentExecutor.
 
         This allows fluent builder APIs to directly accept agents instead of
         requiring callers to manually instantiate AgentExecutor.
@@ -233,13 +233,13 @@ class WorkflowBuilder:
             An Executor instance, wrapping the agent if necessary.
         """
         try:  # Local import to avoid hard dependency at import time
-            from agent_framework import AgentProtocol  # type: ignore
+            from agent_framework import SupportsAgentRun  # type: ignore
         except Exception:  # pragma: no cover - defensive
-            AgentProtocol = object  # type: ignore
+            SupportsAgentRun = object  # type: ignore
 
         if isinstance(candidate, Executor):  # Already an executor
             return candidate
-        if isinstance(candidate, AgentProtocol):  # type: ignore[arg-type]
+        if isinstance(candidate, SupportsAgentRun):  # type: ignore[arg-type]
             # Reuse existing wrapper for the same agent instance if present
             agent_instance_id = str(id(candidate))
             existing = self._agent_wrappers.get(agent_instance_id)
@@ -256,7 +256,7 @@ class WorkflowBuilder:
             return wrapper
 
         raise TypeError(
-            f"WorkflowBuilder expected an Executor or AgentProtocol instance; got {type(candidate).__name__}."
+            f"WorkflowBuilder expected an Executor or SupportsAgentRun instance; got {type(candidate).__name__}."
         )
 
     def register_executor(self, factory_func: Callable[[], Executor], name: str | list[str]) -> Self:
@@ -331,7 +331,7 @@ class WorkflowBuilder:
 
     def register_agent(
         self,
-        factory_func: Callable[[], AgentProtocol],
+        factory_func: Callable[[], SupportsAgentRun],
         name: str,
         agent_thread: AgentThread | None = None,
     ) -> Self:
@@ -342,7 +342,7 @@ class WorkflowBuilder:
         enabling deferred initialization and potentially reducing startup time.
 
         Args:
-            factory_func: A callable that returns an AgentProtocol instance when called.
+            factory_func: A callable that returns an SupportsAgentRun instance when called.
             name: The name of the registered agent factory. This doesn't have to match
                   the agent's internal name. But it must be unique within the workflow.
             agent_thread: The thread to use for running the agent. If None, a new thread will be created when
@@ -384,8 +384,8 @@ class WorkflowBuilder:
 
     def add_edge(
         self,
-        source: Executor | AgentProtocol | str,
-        target: Executor | AgentProtocol | str,
+        source: Executor | SupportsAgentRun | str,
+        target: Executor | SupportsAgentRun | str,
         condition: EdgeCondition | None = None,
     ) -> Self:
         """Add a directed edge between two executors.
@@ -448,8 +448,8 @@ class WorkflowBuilder:
             not isinstance(source, str) and isinstance(target, str)
         ):
             raise ValueError(
-                "Both source and target must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "Both source and target must be either registered factory names (str) or "
+                "Executor/SupportsAgentRun instances."
             )
 
         if isinstance(source, str) and isinstance(target, str):
@@ -457,7 +457,7 @@ class WorkflowBuilder:
             self._edge_registry.append(_EdgeRegistration(source=source, target=target, condition=condition))
             return self
 
-        # Both are Executor/AgentProtocol instances; wrap and add now
+        # Both are Executor/SupportsAgentRun instances; wrap and add now
         source_exec = self._maybe_wrap_agent(source)  # type: ignore[arg-type]
         target_exec = self._maybe_wrap_agent(target)  # type: ignore[arg-type]
         source_id = self._add_executor(source_exec)
@@ -467,8 +467,8 @@ class WorkflowBuilder:
 
     def add_fan_out_edges(
         self,
-        source: Executor | AgentProtocol | str,
-        targets: Sequence[Executor | AgentProtocol | str],
+        source: Executor | SupportsAgentRun | str,
+        targets: Sequence[Executor | SupportsAgentRun | str],
     ) -> Self:
         """Add multiple edges to the workflow where messages from the source will be sent to all targets.
 
@@ -526,8 +526,8 @@ class WorkflowBuilder:
             not isinstance(source, str) and any(isinstance(t, str) for t in targets)
         ):
             raise ValueError(
-                "Both source and targets must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "Both source and targets must be either registered factory names (str) or "
+                "Executor/SupportsAgentRun instances."
             )
 
         if isinstance(source, str) and all(isinstance(t, str) for t in targets):
@@ -535,7 +535,7 @@ class WorkflowBuilder:
             self._edge_registry.append(_FanOutEdgeRegistration(source=source, targets=list(targets)))  # type: ignore
             return self
 
-        # Both are Executor/AgentProtocol instances; wrap and add now
+        # Both are Executor/SupportsAgentRun instances; wrap and add now
         source_exec = self._maybe_wrap_agent(source)  # type: ignore[arg-type]
         target_execs = [self._maybe_wrap_agent(t) for t in targets]  # type: ignore[arg-type]
         source_id = self._add_executor(source_exec)
@@ -546,7 +546,7 @@ class WorkflowBuilder:
 
     def add_switch_case_edge_group(
         self,
-        source: Executor | AgentProtocol | str,
+        source: Executor | SupportsAgentRun | str,
         cases: Sequence[Case | Default],
     ) -> Self:
         """Add an edge group that represents a switch-case statement.
@@ -625,7 +625,7 @@ class WorkflowBuilder:
         ):
             raise ValueError(
                 "Both source and case targets must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "or Executor/SupportsAgentRun instances."
             )
 
         if isinstance(source, str) and all(isinstance(case.target, str) for case in cases):
@@ -633,7 +633,7 @@ class WorkflowBuilder:
             self._edge_registry.append(_SwitchCaseEdgeGroupRegistration(source=source, cases=list(cases)))  # type: ignore
             return self
 
-        # Source is an Executor/AgentProtocol instance; wrap and add now
+        # Source is an Executor/SupportsAgentRun instance; wrap and add now
         source_exec = self._maybe_wrap_agent(source)  # type: ignore[arg-type]
         source_id = self._add_executor(source_exec)
         # Convert case data types to internal types that only uses target_id.
@@ -652,8 +652,8 @@ class WorkflowBuilder:
 
     def add_multi_selection_edge_group(
         self,
-        source: Executor | AgentProtocol | str,
-        targets: Sequence[Executor | AgentProtocol | str],
+        source: Executor | SupportsAgentRun | str,
+        targets: Sequence[Executor | SupportsAgentRun | str],
         selection_func: Callable[[Any, list[str]], list[str]],
     ) -> Self:
         """Add an edge group that represents a multi-selection execution model.
@@ -735,8 +735,8 @@ class WorkflowBuilder:
             not isinstance(source, str) and any(isinstance(t, str) for t in targets)
         ):
             raise ValueError(
-                "Both source and targets must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "Both source and targets must be either registered factory names (str) or "
+                "Executor/SupportsAgentRun instances."
             )
 
         if isinstance(source, str) and all(isinstance(t, str) for t in targets):
@@ -750,7 +750,7 @@ class WorkflowBuilder:
             )
             return self
 
-        # Both are Executor/AgentProtocol instances; wrap and add now
+        # Both are Executor/SupportsAgentRun instances; wrap and add now
         source_exec = self._maybe_wrap_agent(source)  # type: ignore
         target_execs = [self._maybe_wrap_agent(t) for t in targets]  # type: ignore
         source_id = self._add_executor(source_exec)
@@ -761,8 +761,8 @@ class WorkflowBuilder:
 
     def add_fan_in_edges(
         self,
-        sources: Sequence[Executor | AgentProtocol | str],
-        target: Executor | AgentProtocol | str,
+        sources: Sequence[Executor | SupportsAgentRun | str],
+        target: Executor | SupportsAgentRun | str,
     ) -> Self:
         """Add multiple edges from sources to a single target executor.
 
@@ -819,8 +819,8 @@ class WorkflowBuilder:
             not all(isinstance(s, str) for s in sources) and isinstance(target, str)
         ):
             raise ValueError(
-                "Both sources and target must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "Both sources and target must be either registered factory names (str) or "
+                "Executor/SupportsAgentRun instances."
             )
 
         if all(isinstance(s, str) for s in sources) and isinstance(target, str):
@@ -828,7 +828,7 @@ class WorkflowBuilder:
             self._edge_registry.append(_FanInEdgeRegistration(sources=list(sources), target=target))  # type: ignore
             return self
 
-        # Both are Executor/AgentProtocol instances; wrap and add now
+        # Both are Executor/SupportsAgentRun instances; wrap and add now
         source_execs = [self._maybe_wrap_agent(s) for s in sources]  # type: ignore
         target_exec = self._maybe_wrap_agent(target)  # type: ignore
         source_ids = [self._add_executor(s) for s in source_execs]
@@ -837,7 +837,7 @@ class WorkflowBuilder:
 
         return self
 
-    def add_chain(self, executors: Sequence[Executor | AgentProtocol | str]) -> Self:
+    def add_chain(self, executors: Sequence[Executor | SupportsAgentRun | str]) -> Self:
         """Add a chain of executors to the workflow.
 
         The output of each executor in the chain will be sent to the next executor in the chain.
@@ -897,7 +897,7 @@ class WorkflowBuilder:
         if not all(isinstance(e, str) for e in executors) and any(isinstance(e, str) for e in executors):
             raise ValueError(
                 "All executors in the chain must be either registered factory names (str) "
-                "or Executor/AgentProtocol instances."
+                "or Executor/SupportsAgentRun instances."
             )
 
         if all(isinstance(e, str) for e in executors):
@@ -906,18 +906,18 @@ class WorkflowBuilder:
                 self.add_edge(executors[i], executors[i + 1])
             return self
 
-        # All are Executor/AgentProtocol instances; wrap and add now
+        # All are Executor/SupportsAgentRun instances; wrap and add now
         # Wrap each candidate first to ensure stable IDs before adding edges
         wrapped: list[Executor] = [self._maybe_wrap_agent(e) for e in executors]  # type: ignore[arg-type]
         for i in range(len(wrapped) - 1):
             self.add_edge(wrapped[i], wrapped[i + 1])
         return self
 
-    def _set_start_executor(self, executor: Executor | AgentProtocol | str) -> None:
+    def _set_start_executor(self, executor: Executor | SupportsAgentRun | str) -> None:
         """Set the starting executor for the workflow (internal method).
 
         Args:
-            executor: The starting executor, which can be an Executor instance, AgentProtocol instance,
+            executor: The starting executor, which can be an Executor instance, SupportsAgentRun instance,
                 or the name of a registered executor factory.
         """
         if self._start_executor is not None:
@@ -1086,7 +1086,11 @@ class WorkflowBuilder:
                         if isinstance(factory_name, str)
                     ]
                     + [ex.id for ex in self._output_executors if isinstance(ex, Executor)]
-                    + [resolve_agent_id(agent) for agent in self._output_executors if isinstance(agent, AgentProtocol)]
+                    + [
+                        resolve_agent_id(agent)
+                        for agent in self._output_executors
+                        if isinstance(agent, SupportsAgentRun)
+                    ]
                 )
 
                 # Perform validation before creating the workflow

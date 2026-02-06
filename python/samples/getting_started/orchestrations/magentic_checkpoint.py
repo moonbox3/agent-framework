@@ -9,11 +9,9 @@ from agent_framework import (
     ChatAgent,
     ChatMessage,
     FileCheckpointStorage,
-    RequestInfoEvent,
     WorkflowCheckpoint,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.orchestrations import MagenticBuilder, MagenticPlanReviewRequest
@@ -31,7 +29,7 @@ Concepts highlighted here:
    must keep stable IDs so the checkpoint state aligns when we rebuild the graph.
 2. **Executor snapshotting** - checkpoints capture the pending plan-review request
    map, at superstep boundaries.
-3. **Resume with responses** - `Workflow.send_responses_streaming` accepts a
+3. **Resume with responses** - `Workflow.run(responses=...)` accepts a
    `responses` mapping so we can inject the stored human reply during restoration.
 
 Prerequisites:
@@ -103,16 +101,16 @@ async def main() -> None:
     print("\n=== Stage 1: run until plan review request (checkpointing active) ===")
     workflow = build_workflow(checkpoint_storage)
 
-    # Run the workflow until the first RequestInfoEvent is surfaced. The event carries the
+    # Run the workflow until the first  is surfaced. The event carries the
     # request_id we must reuse on resume. In a real system this is where the UI would present
     # the plan for human review.
     plan_review_request: MagenticPlanReviewRequest | None = None
-    async for event in workflow.run_stream(TASK):
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+    async for event in workflow.run(TASK, stream=True):
+        if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
             plan_review_request = event.data
             print(f"Captured plan review request: {event.request_id}")
 
-        if isinstance(event, WorkflowStatusEvent) and event.state is WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
+        if event.type == "status" and event.state is WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
             break
 
     if plan_review_request is None:
@@ -145,9 +143,9 @@ async def main() -> None:
     approval = plan_review_request.approve()
 
     # Resume execution and capture the re-emitted plan review request.
-    request_info_event: RequestInfoEvent | None = None
-    async for event in resumed_workflow.run_stream(checkpoint_id=resume_checkpoint.checkpoint_id):
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, MagenticPlanReviewRequest):
+    request_info_event: WorkflowEvent | None = None
+    async for event in resumed_workflow.run(checkpoint_id=resume_checkpoint.checkpoint_id, stream=True):
+        if event.type == "request_info" and isinstance(event.data, MagenticPlanReviewRequest):
             request_info_event = event
 
     if request_info_event is None:
@@ -156,9 +154,9 @@ async def main() -> None:
     print(f"Resumed plan review request: {request_info_event.request_id}")
 
     # Supply the approval and continue to run to completion.
-    final_event: WorkflowOutputEvent | None = None
-    async for event in resumed_workflow.send_responses_streaming({request_info_event.request_id: approval}):
-        if isinstance(event, WorkflowOutputEvent):
+    final_event: WorkflowEvent | None = None
+    async for event in resumed_workflow.run(stream=True, responses={request_info_event.request_id: approval}):
+        if event.type == "output":
             final_event = event
 
     if final_event is None:
@@ -216,12 +214,12 @@ async def main() -> None:
     if pending_messages == 0:
         print("Checkpoint has no pending messages; no additional work expected on resume.")
 
-    final_event_post: WorkflowOutputEvent | None = None
+    final_event_post: WorkflowEvent | None = None
     post_emitted_events = False
     post_plan_workflow = build_workflow(checkpoint_storage)
-    async for event in post_plan_workflow.run_stream(checkpoint_id=post_plan_checkpoint.checkpoint_id):
+    async for event in post_plan_workflow.run(checkpoint_id=post_plan_checkpoint.checkpoint_id, stream=True):
         post_emitted_events = True
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             final_event_post = event
 
     if final_event_post is None:

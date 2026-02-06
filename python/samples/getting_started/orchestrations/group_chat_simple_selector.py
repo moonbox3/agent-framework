@@ -7,7 +7,6 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
-    WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.orchestrations import GroupChatBuilder, GroupChatState
@@ -95,6 +94,12 @@ async def main() -> None:
         )
         .participants([expert, verifier, clarifier, skeptic])
         .with_orchestrator(selection_func=round_robin_selector)
+        # Set a hard termination condition: stop after 6 messages (user task + one full rounds + 1)
+        # One round is expert -> verifier -> clarifier -> skeptic, after which the expert gets to respond again.
+        # This will end the conversation after the expert has spoken 2 times (one iteration loop)
+        # Note: it's possible that the expert gets it right the first time and the other participants
+        # have nothing to add, but for demo purposes we want to see at least one full round of interaction.
+        .with_termination_condition(lambda conversation: len(conversation) >= 6)
         .build()
     )
 
@@ -106,8 +111,8 @@ async def main() -> None:
 
     # Keep track of the last response to format output nicely in streaming mode
     last_response_id: str | None = None
-    async for event in workflow.run_stream(task):
-        if isinstance(event, WorkflowOutputEvent):
+    async for event in workflow.run(task, stream=True):
+        if event.type == "output":
             data = event.data
             if isinstance(data, AgentResponseUpdate):
                 rid = data.response_id
@@ -117,7 +122,7 @@ async def main() -> None:
                     print(f"{data.author_name}:", end=" ", flush=True)
                     last_response_id = rid
                 print(data.text, end="", flush=True)
-            else:
+            elif event.type == "output":
                 # The output of the group chat workflow is a collection of chat messages from all participants
                 outputs = cast(list[ChatMessage], event.data)
                 print("\n" + "=" * 80)

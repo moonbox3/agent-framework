@@ -128,11 +128,7 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: list[tuple[str, DraftFeedbackRequest]] = []
     async for event in stream:
-        if (
-            event.type == "request_info"
-            and isinstance(event.data, DraftFeedbackRequest)
-            and event.request_id is not None
-        ):
+        if event.type == "request_info" and isinstance(event.data, DraftFeedbackRequest):
             requests.append((event.request_id, event.data))
         elif event.type == "output" and isinstance(event.data, AgentResponseUpdate):
             # This workflow should only produce AgentResponseUpdate as outputs.

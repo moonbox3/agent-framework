@@ -7,12 +7,11 @@ from typing import Annotated, cast
 from agent_framework import (
     ChatMessage,
     Content,
-    GroupChatBuilder,
-    GroupChatState,
     WorkflowEvent,
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
+from agent_framework.orchestrations import GroupChatBuilder, GroupChatState
 
 """
 Sample: Group Chat Workflow with Tool Approval Requests
@@ -106,7 +105,7 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
             print("Workflow summary:")
             outputs = cast(list[ChatMessage], event.data)
             for msg in outputs:
-                speaker = msg.author_name or msg.role.value
+                speaker = msg.author_name or msg.role
                 print(f"[{speaker}]: {msg.text}")
 
     responses: dict[str, Content] = {}

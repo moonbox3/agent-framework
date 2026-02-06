@@ -96,11 +96,7 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, AgentExecutorResponse] = {}
     async for event in stream:
-        if (
-            event.type == "request_info"
-            and isinstance(event.data, AgentExecutorResponse)
-            and event.request_id is not None
-        ):
+        if event.type == "request_info" and isinstance(event.data, AgentExecutorResponse):
             requests[event.request_id] = event.data
 
         if event.type == "output":

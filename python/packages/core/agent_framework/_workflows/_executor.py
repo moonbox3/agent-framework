@@ -538,8 +538,8 @@ def handler(
     output: type | types.UnionType | str | None = None,
     workflow_output: type | types.UnionType | str | None = None,
 ) -> Callable[
-    [Callable[[ExecutorT, Any, ContextT], Awaitable[Any]]],
-    Callable[[ExecutorT, Any, ContextT], Awaitable[Any]],
+    [Callable[..., Awaitable[Any]]],
+    Callable[..., Awaitable[Any]],
 ]: ...
 
 
@@ -724,9 +724,15 @@ def _validate_handler_signature(
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    output_types, workflow_output_types = validate_workflow_context_annotation(
-        ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
-    )
+    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+        # When explicit types are provided via @handler(input=..., output=...),
+        # the ctx parameter doesn't need a type annotation - types come from the decorator.
+        output_types: list[type[Any] | types.UnionType] = []
+        workflow_output_types: list[type[Any] | types.UnionType] = []
+    else:
+        output_types, workflow_output_types = validate_workflow_context_annotation(
+            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+        )
 
     message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
     ctx_annotation = ctx_param.annotation

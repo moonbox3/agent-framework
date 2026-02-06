@@ -2,8 +2,8 @@
 
 import asyncio
 
-from agent_framework import ConcurrentBuilder
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 """

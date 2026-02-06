@@ -7,7 +7,6 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowEvent,
     handler,
 )
 from typing_extensions import Never

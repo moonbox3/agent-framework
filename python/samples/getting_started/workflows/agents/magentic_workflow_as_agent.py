@@ -5,9 +5,9 @@ import asyncio
 from agent_framework import (
     ChatAgent,
     HostedCodeInterpreterTool,
-    MagenticBuilder,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
+from agent_framework.orchestrations import MagenticBuilder
 
 """
 Sample: Build a Magentic orchestration and wrap it as an agent.

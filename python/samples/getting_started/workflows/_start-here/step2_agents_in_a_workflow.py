@@ -57,7 +57,6 @@ async def main():
     # of `AgentResponse` from the agents in the workflow.
     outputs = cast(list[AgentResponse], outputs)
     for output in outputs:
-        # TODO: author_name should be available in AgentResponse
         print(f"{output.messages[0].author_name}: {output.text}\n")
 
     # Summarize the final run state (e.g., COMPLETED)

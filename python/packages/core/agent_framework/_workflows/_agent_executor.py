@@ -332,10 +332,16 @@ class AgentExecutor(Executor):
         """
         run_kwargs: dict[str, Any] = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
 
+        # Build options dict with additional_function_arguments for tool kwargs propagation
+        options: dict[str, Any] | None = None
+        if run_kwargs:
+            options = {"additional_function_arguments": run_kwargs}
+
         response = await self._agent.run(
             self._cache,
             stream=False,
             thread=self._agent_thread,
+            options=options,
             **run_kwargs,
         )
         await ctx.yield_output(response)
@@ -360,12 +366,18 @@ class AgentExecutor(Executor):
         """
         run_kwargs: dict[str, Any] = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY) or {}
 
+        # Build options dict with additional_function_arguments for tool kwargs propagation
+        options: dict[str, Any] | None = None
+        if run_kwargs:
+            options = {"additional_function_arguments": run_kwargs}
+
         updates: list[AgentResponseUpdate] = []
         user_input_requests: list[Content] = []
         async for update in self._agent.run(
             self._cache,
             stream=True,
             thread=self._agent_thread,
+            options=options,
             **run_kwargs,
         ):
             updates.append(update)

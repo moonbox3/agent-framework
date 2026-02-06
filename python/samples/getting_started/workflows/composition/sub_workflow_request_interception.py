@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import dataclass
 
 from agent_framework import (
-    WorkflowEvent,
     Executor,
     SubWorkflowRequestMessage,
     SubWorkflowResponseMessage,
@@ -12,7 +11,6 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowContext,
     WorkflowExecutor,
-    
     handler,
     response_handler,
 )

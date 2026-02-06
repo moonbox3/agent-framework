@@ -205,10 +205,10 @@ class WorkflowEvent(Generic[DataT]):
         self.state = state
         self.details = details
         self.executor_id = executor_id
-        self.request_id = request_id
-        self.source_executor_id = source_executor_id
-        self.request_type = request_type
-        self.response_type = response_type
+        self._request_id = request_id
+        self._source_executor_id = source_executor_id
+        self._request_type = request_type
+        self._response_type = response_type
         self.iteration = iteration
 
     def __repr__(self) -> str:
@@ -220,11 +220,11 @@ class WorkflowEvent(Generic[DataT]):
             parts.append(f"executor_id={self.executor_id!r}")
         if self.iteration is not None:
             parts.append(f"iteration={self.iteration}")
-        if self.request_id is not None:
-            parts.append(f"request_id={self.request_id!r}")
+        if self._request_id is not None:
+            parts.append(f"request_id={self._request_id!r}")
         if self.data is not None:
             parts.append(f"data={self.data!r}")
-        return f"WorkflowEvent({', '.join(parts)})"
+        return f"WorkflowEvent({', '.join(parts)})"  # pragma: no cover
 
     # ==========================================================================
     # Factory methods
@@ -313,6 +313,70 @@ class WorkflowEvent(Generic[DataT]):
         return WorkflowEvent("executor_failed", executor_id=executor_id, data=details, details=details)
 
     # ==========================================================================
+    # Property for type-safe access
+    # ==========================================================================
+
+    @property
+    def request_id(self) -> str:
+        """Get request_id for request_info events.
+
+        Returns:
+            The request ID as a non-None string.
+
+        Raises:
+            RuntimeError: If called on an event that is not a request_info event,
+                or if the event is malformed (request_info without request_id).
+        """
+        if self.type != "request_info" or self._request_id is None:
+            raise RuntimeError(f"request_id is only available for request_info events, got type={self.type!r}")
+        return self._request_id
+
+    @property
+    def source_executor_id(self) -> str:
+        """Get source_executor_id for request_info events.
+
+        Returns:
+            The source executor ID as a non-None string.
+
+        Raises:
+            RuntimeError: If called on an event that is not a request_info event,
+                or if the event is malformed (request_info without source_executor_id).
+        """
+        if self.type != "request_info" or self._source_executor_id is None:
+            raise RuntimeError(f"source_executor_id is only available for request_info events, got type={self.type!r}")
+        return self._source_executor_id
+
+    @property
+    def request_type(self) -> type[Any]:
+        """Get request_type for request_info events.
+
+        Returns:
+            The request data type as a non-None type object.
+
+        Raises:
+            RuntimeError: If called on an event that is not a request_info event,
+                or if the event is malformed (request_info without request_type).
+        """
+        if self.type != "request_info" or self._request_type is None:
+            raise RuntimeError(f"request_type is only available for request_info events, got type={self.type!r}")
+        return self._request_type
+
+    @property
+    def response_type(self) -> type[Any]:
+        """Get response_type for request_info events.
+
+        Returns:
+            The response data type as a non-None type object.
+
+        Raises:
+            RuntimeError: If called on an event that is not a request_info event,
+                or if the event is malformed (request_info without response_type).
+        """
+        if self.type != "request_info" or self._response_type is None:
+            raise RuntimeError(f"response_type is only available for request_info events, got type={self.type!r}")
+        return self._response_type
+
+    # ==========================================================================
     # Serialization methods (primarily for REQUEST_INFO events)
     # ==========================================================================
 
@@ -326,10 +390,10 @@ class WorkflowEvent(Generic[DataT]):
         return {
             "type": self.type,
             "data": encode_checkpoint_value(self.data),
-            "request_id": self.request_id,
-            "source_executor_id": self.source_executor_id,
-            "request_type": serialize_type(self.request_type) if self.request_type else None,
-            "response_type": serialize_type(self.response_type) if self.response_type else None,
+            "request_id": self._request_id,
+            "source_executor_id": self._source_executor_id,
+            "request_type": serialize_type(self._request_type) if self._request_type else None,
+            "response_type": serialize_type(self._response_type) if self._response_type else None,
         }
 
     @classmethod

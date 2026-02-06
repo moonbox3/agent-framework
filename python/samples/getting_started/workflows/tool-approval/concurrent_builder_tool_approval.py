@@ -6,12 +6,12 @@ from typing import Annotated
 
 from agent_framework import (
     ChatMessage,
-    ConcurrentBuilder,
     Content,
     WorkflowEvent,
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 
 """
 Sample: Concurrent Workflow with Tool Approval Requests

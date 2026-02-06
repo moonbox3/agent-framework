@@ -107,7 +107,7 @@ async def main() -> None:
         pending_responses = None
 
         # Handle plan review request if any
-        if pending_request is not None:
+        if pending_request is not None and pending_request.request_id:
             event_data = cast(MagenticPlanReviewRequest, pending_request.data)
 
             print("\n\n[Magentic Plan Review Request]")

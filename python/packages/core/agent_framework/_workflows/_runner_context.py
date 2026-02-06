@@ -502,8 +502,6 @@ class InProcRunnerContext:
             )
 
         source_executor_id = event.source_executor_id
-        if source_executor_id is None:
-            raise RuntimeError("request_info event must have a source_executor_id for response routing")
 
         # Create ResponseMessage instance
         response_msg = Message(

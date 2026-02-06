@@ -2,8 +2,9 @@
 
 import asyncio
 
-from agent_framework import ChatAgent, GroupChatBuilder
+from agent_framework import ChatAgent
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
+from agent_framework.orchestrations import GroupChatBuilder
 
 """
 Sample: Group Chat Orchestration

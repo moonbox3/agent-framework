@@ -16,8 +16,8 @@ from agent_framework import (
     WorkflowEvent,
     tool,
 )
-from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from azure.identity import AzureCliCredential
 
 """
@@ -158,11 +158,15 @@ def _build_responses_for_requests(
     """Create response payloads for each pending request."""
     responses: dict[str, object] = {}
     for request in pending_requests:
-        if isinstance(request.data, HandoffAgentUserRequest):
+        if isinstance(request.data, HandoffAgentUserRequest) and request.request_id:
             if user_response is None:
                 raise ValueError("User response is required for HandoffAgentUserRequest")
             responses[request.request_id] = user_response
-        elif isinstance(request.data, Content) and request.data.type == "function_approval_request":
+        elif (
+            isinstance(request.data, Content)
+            and request.data.type == "function_approval_request"
+            and request.request_id
+        ):
             if approve_tools is None:
                 raise ValueError("Approval decision is required for function approval request")
             responses[request.request_id] = request.data.to_function_approval_response(approved=approve_tools)

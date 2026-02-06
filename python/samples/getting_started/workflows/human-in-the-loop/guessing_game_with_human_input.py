@@ -130,11 +130,13 @@ class TurnManager(Executor):
             return
 
         # Provide feedback to the agent to try again.
-        # We keep the agent's output strictly JSON to ensure stable parsing on the next turn.
-        user_msg = ChatMessage(
-            "user",
-            text=(f'Feedback: {reply}. Return ONLY a JSON object matching the schema {{"guess": <int 1..10>}}.'),
+        # response_format=GuessOutput on the agent ensures JSON output, so we just need to guide the logic.
+        last_guess = original_request.prompt.split(": ")[1].split(".")[0]
+        feedback_text = (
+            f"Feedback: {reply}. Your last guess was {last_guess}. "
+            f"Use this feedback to adjust and make your next guess (1-10)."
         )
+        user_msg = ChatMessage("user", text=feedback_text)
         await ctx.send_message(AgentExecutorRequest(messages=[user_msg], should_respond=True))
 
 

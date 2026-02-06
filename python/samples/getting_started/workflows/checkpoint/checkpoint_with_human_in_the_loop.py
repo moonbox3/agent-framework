@@ -1,9 +1,16 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import asyncio
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, override
+from typing import Any
+
+if sys.version_info >= (3, 12):
+    from typing import override  # type: ignore # pragma: no cover
+else:
+    from typing_extensions import override  # type: ignore[import] # pragma: no cover
+
 
 # NOTE: the Azure client imports above are real dependencies. When running this
 # sample outside of Azure-enabled environments you may wish to swap in the

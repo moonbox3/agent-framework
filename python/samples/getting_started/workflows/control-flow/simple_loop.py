@@ -11,7 +11,6 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowEvent,
     handler,
 )
 from agent_framework.azure import AzureOpenAIChatClient

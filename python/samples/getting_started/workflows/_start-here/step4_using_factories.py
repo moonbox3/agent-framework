@@ -8,7 +8,6 @@ from agent_framework import (
     Executor,
     WorkflowBuilder,
     WorkflowContext,
-    WorkflowEvent,
     executor,
     handler,
 )

@@ -15,7 +15,7 @@ In a production scenario, you would integrate with a real UI or chat interface.
 import asyncio
 from pathlib import Path
 
-from agent_framework import Workflow, WorkflowEvent
+from agent_framework import Workflow
 from agent_framework.declarative import ExternalInputRequest, WorkflowFactory
 from agent_framework_declarative._workflows._handlers import TextOutputEvent
 

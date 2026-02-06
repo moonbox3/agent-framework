@@ -9,10 +9,8 @@ from agent_framework import (
     ChatAgent,  # Tracing event for agent execution steps
     ChatMessage,  # Chat message structure
     Executor,  # Base class for custom Python executors
-    Role,  # Enum of chat roles (user, assistant, system)
     WorkflowBuilder,  # Fluent builder for wiring the workflow graph
     WorkflowContext,  # Per run context and event bus
-    WorkflowEvent,  # Unified event class for workflow events
     handler,  # Decorator to mark an Executor method as invokable
 )
 from agent_framework.azure import AzureOpenAIChatClient
@@ -43,7 +41,7 @@ class DispatchToExperts(Executor):
     @handler
     async def dispatch(self, prompt: str, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         # Wrap the incoming prompt as a user message for each expert and request a response.
-        initial_message = ChatMessage(Role.USER, text=prompt)
+        initial_message = ChatMessage("user", text=prompt)
         await ctx.send_message(AgentExecutorRequest(messages=[initial_message], should_respond=True))
 
 

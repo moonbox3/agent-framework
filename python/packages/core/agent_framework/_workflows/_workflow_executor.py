@@ -420,8 +420,6 @@ class WorkflowExecutor(Executor):
             ctx: The workflow context.
         """
         request_id = response.source_event.request_id
-        if request_id is None:
-            raise RuntimeError("SubWorkflowResponseMessage source_event must have a request_id")
         await self._handle_response(
             request_id=request_id,
             response=response.data,
@@ -553,10 +551,6 @@ class WorkflowExecutor(Executor):
         for event in request_info_events:
             request_id = event.request_id
             response_type = event.response_type
-            if request_id is None:
-                raise RuntimeError("request_info event must have a request_id")
-            if response_type is None:
-                raise RuntimeError("request_info event must have a response_type")
             # Track the pending request in execution context
             execution_context.pending_requests[request_id] = event
             # Map request to execution for response routing

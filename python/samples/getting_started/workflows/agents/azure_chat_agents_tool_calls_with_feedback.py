@@ -12,7 +12,6 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
-    Content,
     Executor,
     WorkflowBuilder,
     WorkflowContext,
@@ -48,7 +47,9 @@ Prerequisites:
 """
 
 
-# NOTE: approval_mode="never_require" is for sample brevity. Use "always_require" in production; see samples/getting_started/tools/function_tool_with_approval.py and samples/getting_started/tools/function_tool_with_approval_and_threads.py.
+# NOTE: approval_mode="never_require" is for sample brevity. Use "always_require" in production;
+# see samples/getting_started/tools/function_tool_with_approval.py and
+# samples/getting_started/tools/function_tool_with_approval_and_threads.py.
 @tool(approval_mode="never_require")
 def fetch_product_brief(
     product_name: Annotated[str, Field(description="Product name to look up.")],
@@ -298,12 +299,12 @@ async def main() -> None:
                 # Stash the request so we can prompt the human after the stream completes.
                 requests.append((event.request_id, event.data))
                 last_executor = None
-            elif event.type == "output":
+            elif event.type == "output" and not isinstance(event.data, AgentResponseUpdate):
+                # Only mark as completed for final outputs, not streaming updates
                 last_executor = None
                 response = event.data
-                print("\n===== Final output =====")
                 final_text = getattr(response, "text", str(response))
-                print(final_text.strip())
+                print(final_text, flush=True, end="")
                 completed = True
 
         if requests and not completed:

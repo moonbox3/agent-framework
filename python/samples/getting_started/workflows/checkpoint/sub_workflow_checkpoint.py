@@ -3,29 +3,32 @@
 import asyncio
 import contextlib
 import json
+import sys
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, override
+from typing import Any
 
 from agent_framework import (
-    WorkflowEvent,
     Executor,
     FileCheckpointStorage,
-    
     SubWorkflowRequestMessage,
     SubWorkflowResponseMessage,
     Workflow,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowEvent,
     WorkflowExecutor,
-    
     WorkflowRunState,
-    
     handler,
     response_handler,
 )
+
+if sys.version_info >= (3, 12):
+    from typing import override  # type: ignore # pragma: no cover
+else:
+    from typing_extensions import override  # type: ignore[import] # pragma: no cover
 
 CHECKPOINT_DIR = Path(__file__).with_suffix("").parent / "tmp" / "sub_workflow_checkpoints"
 

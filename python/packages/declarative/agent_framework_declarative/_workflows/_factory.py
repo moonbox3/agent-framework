@@ -592,6 +592,8 @@ class WorkflowFactory:
 
                 workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
         """
+        if not callable(func):
+            raise TypeError(f"Expected a callable for binding '{name}', got {type(func).__name__}")
         self._bindings[name] = func
         return self
 

@@ -123,7 +123,7 @@ class TestSetValueHandler:
         )
 
         handler = get_action_handler("SetValue")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.copy") == "literal"
 
@@ -141,7 +141,7 @@ class TestAppendValueHandler:
         })
 
         handler = get_action_handler("AppendValue")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.results") == ["item1"]
 
@@ -156,7 +156,7 @@ class TestAppendValueHandler:
         ctx.state.set("Local.results", ["item1"])
 
         handler = get_action_handler("AppendValue")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.results") == ["item1", "item2"]
 
@@ -225,7 +225,7 @@ class TestForeachHandler:
         })
 
         handler = get_action_handler("Foreach")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.results") == ["processed", "processed", "processed"]
 
@@ -242,7 +242,7 @@ class TestForeachHandler:
 
         # We'll check the last values after iteration
         handler = get_action_handler("Foreach")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # After iteration, the last item/index should be set
         assert ctx.state.get("Local.item") == "y"
@@ -267,7 +267,7 @@ class TestIfHandler:
         })
 
         handler = get_action_handler("If")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.branch") == "then"
 
@@ -286,7 +286,7 @@ class TestIfHandler:
         })
 
         handler = get_action_handler("If")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.branch") == "else"
 
@@ -314,7 +314,7 @@ class TestSwitchHandler:
         })
 
         handler = get_action_handler("Switch")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.result") == "two"
 
@@ -334,7 +334,7 @@ class TestSwitchHandler:
         })
 
         handler = get_action_handler("Switch")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.result") == "default"
 
@@ -357,7 +357,7 @@ class TestRepeatUntilHandler:
         ctx.state.set("Local.count", 0)
 
         handler = get_action_handler("RepeatUntil")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # With condition=False (literal), it will run maxIterations times
         assert ctx.state.get("Local.iteration") == 3
@@ -380,7 +380,7 @@ class TestTryCatchHandler:
         })
 
         handler = get_action_handler("TryCatch")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.result") == "success"
 
@@ -398,7 +398,7 @@ class TestTryCatchHandler:
         })
 
         handler = get_action_handler("TryCatch")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.result") == "caught"
         assert ctx.state.get("Local.error.message") == "Test error"
@@ -418,7 +418,7 @@ class TestTryCatchHandler:
         })
 
         handler = get_action_handler("TryCatch")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.try") == "ran"
         assert ctx.state.get("Local.finally") == "ran"
@@ -485,7 +485,7 @@ class TestSetVariableHandler:
         })
 
         handler = get_action_handler("SetVariable")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # Should be stored under Local namespace
         assert ctx.state.get("Local.myVar") == "test"
@@ -608,7 +608,7 @@ class TestSetTextVariableHandler:
         ctx.state.set("Local.name", "World")
 
         handler = get_action_handler("SetTextVariable")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.message") == "Hello World!"
 
@@ -636,7 +636,7 @@ class TestSetTextVariableHandler:
         })
 
         handler = get_action_handler("SetTextVariable")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.num") == 42
 
@@ -657,7 +657,7 @@ class TestSetMultipleVariablesHandler:
         })
 
         handler = get_action_handler("SetMultipleVariables")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.var1") == "one"
         assert ctx.state.get("Local.var2") == "two"
@@ -676,7 +676,7 @@ class TestSetMultipleVariablesHandler:
         })
 
         handler = get_action_handler("SetMultipleVariables")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.valid") == "ok"
         assert ctx.state.get("Local.also_valid") == "also ok"
@@ -692,7 +692,7 @@ class TestSetMultipleVariablesHandler:
         })
 
         handler = get_action_handler("SetMultipleVariables")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # Note: The handler uses 'variable' field, not 'path'
         # So this won't set anything unless the handler supports both
@@ -711,7 +711,7 @@ class TestResetVariableHandler:
         ctx.state.set("Local.toReset", "some value")
 
         handler = get_action_handler("ResetVariable")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.toReset") is None
 
@@ -742,7 +742,7 @@ class TestClearAllVariablesHandler:
         ctx.state.set("Local.var2", "value2")
 
         handler = get_action_handler("ClearAllVariables")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         assert ctx.state.get("Local.var1") is None
         assert ctx.state.get("Local.var2") is None
@@ -760,7 +760,7 @@ class TestCreateConversationHandler:
         })
 
         handler = get_action_handler("CreateConversation")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # Should have generated and stored a conversation ID
         conv_id = ctx.state.get("Local.convId")
@@ -778,7 +778,7 @@ class TestCreateConversationHandler:
         })
 
         handler = get_action_handler("CreateConversation")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         # Should still create conversation in System.conversations
         conversations = ctx.state.get("System.conversations")
@@ -802,7 +802,7 @@ class TestAddConversationMessageHandler:
         })
 
         handler = get_action_handler("AddConversationMessage")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         conversations = ctx.state.get("System.conversations")
         assert conversations is not None
@@ -857,7 +857,7 @@ class TestCopyConversationMessagesHandler:
         )
 
         handler = get_action_handler("CopyConversationMessages")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         conversations = ctx.state.get("System.conversations")
         target_messages = conversations["target-conv"]["messages"]
@@ -890,7 +890,7 @@ class TestCopyConversationMessagesHandler:
         )
 
         handler = get_action_handler("CopyConversationMessages")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         conversations = ctx.state.get("System.conversations")
         target_messages = conversations["target-conv"]["messages"]
@@ -940,7 +940,7 @@ class TestRetrieveConversationMessagesHandler:
         )
 
         handler = get_action_handler("RetrieveConversationMessages")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         retrieved = ctx.state.get("Local.retrievedMessages")
         assert len(retrieved) == 2
@@ -974,7 +974,7 @@ class TestRetrieveConversationMessagesHandler:
         )
 
         handler = get_action_handler("RetrieveConversationMessages")
-        _events = [e async for e in handler(ctx)]  # noqa: F841
+        [e async for e in handler(ctx)]
 
         retrieved = ctx.state.get("Local.msgs")
         # Should get last 2 messages

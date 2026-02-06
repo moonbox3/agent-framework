@@ -312,6 +312,20 @@ class TestWorkflowFactoryToolRegistration:
         assert factory._tools["add"](2, 3) == 5
         assert factory._tools["multiply"](2, 3) == 6
 
+    def test_register_tool_non_callable_raises(self):
+        """Test that register_tool raises TypeError for non-callable."""
+        factory = WorkflowFactory()
+
+        with pytest.raises(TypeError, match="Expected a callable for tool"):
+            factory.register_tool("bad_tool", "not_a_function")
+
+    def test_register_binding_non_callable_raises(self):
+        """Test that register_binding raises TypeError for non-callable."""
+        factory = WorkflowFactory()
+
+        with pytest.raises(TypeError, match="Expected a callable for binding"):
+            factory.register_binding("bad_binding", 42)
+
 
 class TestWorkflowFactoryEdgeCases:
     """Tests for edge cases in workflow factory."""

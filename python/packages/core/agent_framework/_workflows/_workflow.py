@@ -1,5 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
+
 import asyncio
 import functools
 import hashlib
@@ -7,7 +9,7 @@ import json
 import logging
 import types
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from typing import Any, Literal, overload
 
 from .._types import ResponseStream
@@ -20,14 +22,9 @@ from ._edge import (
     FanOutEdgeGroup,
 )
 from ._events import (
-    RequestInfoEvent,
     WorkflowErrorDetails,
     WorkflowEvent,
-    WorkflowFailedEvent,
-    WorkflowOutputEvent,
     WorkflowRunState,
-    WorkflowStartedEvent,
-    WorkflowStatusEvent,
     _framework_event_origin,  # type: ignore
 )
 from ._executor import Executor
@@ -60,9 +57,9 @@ class WorkflowRunResult(list[WorkflowEvent]):
     - status_timeline(): Access the complete status event history
     """
 
-    def __init__(self, events: list[WorkflowEvent], status_events: list[WorkflowStatusEvent] | None = None) -> None:
+    def __init__(self, events: list[WorkflowEvent[Any]], status_events: list[WorkflowEvent[Any]] | None = None) -> None:
         super().__init__(events)
-        self._status_events: list[WorkflowStatusEvent] = status_events or []
+        self._status_events: list[WorkflowEvent[Any]] = status_events or []
 
     def get_outputs(self) -> list[Any]:
         """Get all outputs from the workflow run result.
@@ -70,30 +67,30 @@ class WorkflowRunResult(list[WorkflowEvent]):
         Returns:
             A list of outputs produced by the workflow during its execution.
         """
-        return [event.data for event in self if isinstance(event, WorkflowOutputEvent)]
+        return [event.data for event in self if event.type == "output"]
 
-    def get_request_info_events(self) -> list[RequestInfoEvent]:
+    def get_request_info_events(self) -> list[WorkflowEvent[Any]]:
         """Get all request info events from the workflow run result.
 
         Returns:
-            A list of RequestInfoEvent instances found in the workflow run result.
+            A list of WorkflowEvent instances with type='request_info' found in the workflow run result.
         """
-        return [event for event in self if isinstance(event, RequestInfoEvent)]
+        return [event for event in self if event.type == "request_info"]
 
     def get_final_state(self) -> WorkflowRunState:
         """Return the final run state based on explicit status events.
 
-        Returns the last WorkflowStatusEvent.state observed. Raises if none were emitted.
+        Returns the last status event's state observed. Raises if none were emitted.
         """
         if self._status_events:
             return self._status_events[-1].state  # type: ignore[return-value]
         raise RuntimeError(
-            "Final state is unknown because no WorkflowStatusEvent was emitted. "
+            "Final state is unknown because no status event was emitted. "
             "Ensure your workflow entry points are used (which emit status events) "
             "or handle the absence of status explicitly."
         )
 
-    def status_timeline(self) -> list[WorkflowStatusEvent]:
+    def status_timeline(self) -> list[WorkflowEvent[Any]]:
         """Return the list of status events emitted during the run (control-plane)."""
         return list(self._status_events)
 
@@ -146,7 +143,7 @@ class Workflow(DictConvertible):
     Executors within a workflow can request external input using `ctx.request_info()`:
     1. Executor calls `ctx.request_info()` to request input
     2. Executor implements `response_handler()` to process the response
-    3. Requests are emitted as RequestInfoEvent instances in the event stream
+    3. Requests are emitted as request_info events (WorkflowEvent with type='request_info') in the event stream
     4. Workflow enters IDLE_WITH_PENDING_REQUESTS state
     5. Caller handles requests and provides responses via `run(responses=...)` or `run(responses=..., stream=True)`
     6. Responses are routed to the requesting executors and response handlers are invoked
@@ -206,7 +203,7 @@ class Workflow(DictConvertible):
         self.name = name
         self.description = description
 
-        # `WorkflowOutputEvent`s from these executors are treated as workflow outputs.
+        # Output events (WorkflowEvent with type='output') from these executors are treated as workflow outputs.
         # If None or empty, all executor outputs are considered workflow outputs.
         self._output_executors = list(output_executors) if output_executors else list(self.executors.keys())
 
@@ -333,10 +330,10 @@ class Workflow(DictConvertible):
                 span.add_event(OtelAttr.WORKFLOW_STARTED)
                 # Emit explicit start/status events to the stream
                 with _framework_event_origin():
-                    started = WorkflowStartedEvent()
+                    started = WorkflowEvent.started()
                 yield started
                 with _framework_event_origin():
-                    in_progress = WorkflowStatusEvent(WorkflowRunState.IN_PROGRESS)
+                    in_progress = WorkflowEvent.status(WorkflowRunState.IN_PROGRESS)
                 yield in_progress
 
                 # Reset context for a new run if supported
@@ -360,39 +357,39 @@ class Workflow(DictConvertible):
                 # All executor executions happen within workflow span
                 async for event in self._runner.run_until_convergence():
                     # Track request events for final status determination
-                    if isinstance(event, RequestInfoEvent):
+                    if event.type == "request_info":
                         saw_request = True
                     yield event
 
-                    if isinstance(event, RequestInfoEvent) and not emitted_in_progress_pending:
+                    if event.type == "request_info" and not emitted_in_progress_pending:
                         emitted_in_progress_pending = True
                         with _framework_event_origin():
-                            pending_status = WorkflowStatusEvent(WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS)
+                            pending_status = WorkflowEvent.status(WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS)
                         yield pending_status
 
                 # Workflow runs until idle - emit final status based on whether requests are pending
                 if saw_request:
                     with _framework_event_origin():
-                        terminal_status = WorkflowStatusEvent(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
+                        terminal_status = WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
                     yield terminal_status
                 else:
                     with _framework_event_origin():
-                        terminal_status = WorkflowStatusEvent(WorkflowRunState.IDLE)
+                        terminal_status = WorkflowEvent.status(WorkflowRunState.IDLE)
                     yield terminal_status
 
                 span.add_event(OtelAttr.WORKFLOW_COMPLETED)
             except Exception as exc:
-                # Drain any pending events (for example, ExecutorFailedEvent) before yielding WorkflowFailedEvent
+                # Drain any pending events (for example, executor_failed) before yielding failed event
                 for event in await self._runner.context.drain_events():
                     yield event
 
                 # Surface structured failure details before propagating exception
                 details = WorkflowErrorDetails.from_exception(exc)
                 with _framework_event_origin():
-                    failed_event = WorkflowFailedEvent(details)
+                    failed_event = WorkflowEvent.failed(details)
                 yield failed_event
                 with _framework_event_origin():
-                    failed_status = WorkflowStatusEvent(WorkflowRunState.FAILED)
+                    failed_status = WorkflowEvent.status(WorkflowRunState.FAILED)
                 yield failed_status
                 span.add_event(
                     name=OtelAttr.WORKFLOW_ERROR,
@@ -503,7 +500,7 @@ class Workflow(DictConvertible):
                 from checkpoint), with message (not allowed), or with responses
                 (restore then send responses).
             checkpoint_storage: Runtime checkpoint storage.
-            include_status_events: Whether to include WorkflowStatusEvent instances (non-streaming only).
+            include_status_events: Whether to include status events (non-streaming only).
             **kwargs: Additional keyword arguments to pass through to agent invocations.
 
         Returns:
@@ -566,7 +563,7 @@ class Workflow(DictConvertible):
             streaming=streaming,
             run_kwargs=kwargs if kwargs else None,
         ):
-            if isinstance(event, WorkflowOutputEvent) and not self._should_yield_output_event(event):
+            if event.type == "output" and not self._should_yield_output_event(event):
                 continue
             yield event
 
@@ -578,7 +575,7 @@ class Workflow(DictConvertible):
 
     @staticmethod
     def _finalize_events(
-        events: list[WorkflowEvent],
+        events: Sequence[WorkflowEvent],
         *,
         include_status_events: bool = False,
     ) -> WorkflowRunResult:
@@ -587,14 +584,14 @@ class Workflow(DictConvertible):
         Filters out internal events for non-streaming callers.
         """
         filtered: list[WorkflowEvent] = []
-        status_events: list[WorkflowStatusEvent] = []
+        status_events: list[WorkflowEvent] = []
 
         for ev in events:
-            # Omit WorkflowStartedEvent from result (telemetry-only)
-            if isinstance(ev, WorkflowStartedEvent):
+            # Omit started events from result (telemetry-only)
+            if ev.type == "started":
                 continue
             # Track status; include inline only if explicitly requested
-            if isinstance(ev, WorkflowStatusEvent):
+            if ev.type == "status":
                 status_events.append(ev)
                 if include_status_events:
                     filtered.append(ev)
@@ -651,13 +648,12 @@ class Workflow(DictConvertible):
                 # Send responses only (requires pending requests in workflow state)
                 initial_executor_fn = functools.partial(self._send_responses_internal, responses)
             return initial_executor_fn, False
-        else:
-            # Regular run or checkpoint restoration
-            initial_executor_fn = functools.partial(
-                self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
-            )
-            reset_context = message is not None and checkpoint_id is None
-            return initial_executor_fn, reset_context
+        # Regular run or checkpoint restoration
+        initial_executor_fn = functools.partial(
+            self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
+        )
+        reset_context = message is not None and checkpoint_id is None
+        return initial_executor_fn, reset_context
 
     async def _restore_and_send_responses(
         self,
@@ -718,11 +714,11 @@ class Workflow(DictConvertible):
             raise ValueError(f"Executor with ID {executor_id} not found.")
         return self.executors[executor_id]
 
-    def _should_yield_output_event(self, event: WorkflowOutputEvent) -> bool:
-        """Determine if a WorkflowOutputEvent should be yielded as a workflow output.
+    def _should_yield_output_event(self, event: WorkflowEvent[Any]) -> bool:
+        """Determine if an output event should be yielded as a workflow output.
 
         Args:
-            event: The WorkflowOutputEvent to evaluate.
+            event: The WorkflowEvent with type='output' to evaluate.
 
         Returns:
             True if the event should be yielded as a workflow output, False otherwise.

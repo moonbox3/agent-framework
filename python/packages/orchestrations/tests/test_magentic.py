@@ -30,7 +30,6 @@ from agent_framework.orchestrations import (
     MagenticContext,
     MagenticManagerBase,
     MagenticOrchestrator,
-    MagenticOrchestratorEvent,
     MagenticPlanReviewRequest,
     MagenticProgressLedger,
     MagenticProgressLedgerItem,
@@ -198,7 +197,7 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
             msg = event.data
             if isinstance(msg, list):
                 outputs.extend(cast(list[ChatMessage], msg))
-        elif isinstance(event, MagenticOrchestratorEvent):
+        elif event.type == "magentic_orchestrator":
             orchestrator_event_count += 1
 
     assert outputs, "Expected a final output message"

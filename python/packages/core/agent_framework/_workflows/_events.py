@@ -99,7 +99,8 @@ class WorkflowErrorDetails:
         )
 
 
-# Type discriminator for workflow events (like ContentType in _types.py)
+# Type discriminator for workflow events.
+# Includes both framework lifecycle types and well-known orchestration types.
 WorkflowEventType = Literal[
     # Lifecycle events (workflow-level)
     "started",  # Workflow run began
@@ -120,6 +121,10 @@ WorkflowEventType = Literal[
     "executor_invoked",  # Executor handler was called (use .executor_id, .data)
     "executor_completed",  # Executor handler completed (use .executor_id, .data)
     "executor_failed",  # Executor handler raised error (use .executor_id, .details)
+    # Orchestration event types (use .data for typed payload)
+    "group_chat",  # Group chat orchestrator events (use .data as GroupChatRequestSentEvent | GroupChatResponseReceivedEvent)  # noqa: E501
+    "handoff_sent",  # Handoff routing events (use .data as HandoffSentEvent)
+    "magentic_orchestrator",  # Magentic orchestrator events (use .data as MagenticOrchestratorEvent)
 ]
 
 

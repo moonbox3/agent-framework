@@ -38,7 +38,7 @@ from agent_framework import (
     WorkflowEvent,
     WorkflowRunState,
 )
-from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder, HandoffSentEvent
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from azure.identity.aio import AzureCliCredential
 
 # Toggle between V1 (AzureAIAgentClient) and V2 (AzureAIClient)
@@ -56,14 +56,13 @@ def _handle_events(events: list[WorkflowEvent]) -> tuple[list[WorkflowEvent[Hand
     Returns:
         Tuple of (pending_requests, file_ids_found)
     """
-    from typing import cast
 
     requests: list[WorkflowEvent[HandoffAgentUserRequest]] = []
     file_ids: list[str] = []
 
     for event in events:
-        if isinstance(event, HandoffSentEvent):
-            print(f"\n[Handoff from {event.source} to {event.target} initiated.]")
+        if event.type == "handoff_sent":
+            print(f"\n[Handoff from {event.data.source} to {event.data.target} initiated.]")
         elif event.type == "status" and event.state in {
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,

@@ -14,7 +14,7 @@ from agent_framework import (
     tool,
 )
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder, HandoffSentEvent
+from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder
 from azure.identity import AzureCliCredential
 
 logging.basicConfig(level=logging.ERROR)
@@ -122,9 +122,9 @@ def _handle_events(events: list[WorkflowEvent]) -> list[WorkflowEvent[HandoffAge
     requests: list[WorkflowEvent[HandoffAgentUserRequest]] = []
 
     for event in events:
-        if isinstance(event, HandoffSentEvent):
-            # HandoffSentEvent: Indicates a handoff has been initiated
-            print(f"\n[Handoff from {event.source} to {event.target} initiated.]")
+        if event.type == "handoff_sent":
+            # handoff_sent event: Indicates a handoff has been initiated
+            print(f"\n[Handoff from {event.data.source} to {event.data.target} initiated.]")
         elif event.type == "status" and event.state in {
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,

@@ -11,7 +11,7 @@ from agent_framework import (
     resolve_agent_id,
 )
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework.orchestrations import HandoffBuilder, HandoffSentEvent
+from agent_framework.orchestrations import HandoffBuilder
 from azure.identity import AzureCliCredential
 
 logging.basicConfig(level=logging.ERROR)
@@ -110,8 +110,8 @@ async def main() -> None:
 
     last_response_id: str | None = None
     async for event in workflow.run(request, stream=True):
-        if isinstance(event, HandoffSentEvent):
-            print(f"\nHandoff Event: from {event.source} to {event.target}\n")
+        if event.type == "handoff_sent":
+            print(f"\nHandoff Event: from {event.data.source} to {event.data.target}\n")
         elif event.type == "output":
             data = event.data
             if isinstance(data, AgentResponseUpdate):

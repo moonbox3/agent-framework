@@ -14,7 +14,7 @@ from agent_framework import (
     ChatMessage,
     WorkflowEvent,
 )
-from agent_framework.orchestrations import MagenticOrchestratorEvent, MagenticProgressLedger
+from agent_framework.orchestrations import MagenticProgressLedger
 
 
 async def run_autogen() -> None:
@@ -121,14 +121,14 @@ async def run_agent_framework() -> None:
                 last_message_id = message_id
             print(event.data, end="", flush=True)
 
-        elif isinstance(event, MagenticOrchestratorEvent):
-            print(f"\n[Magentic Orchestrator Event] Type: {event.event_type.name}")
-            if isinstance(event.data, ChatMessage):
-                print(f"Please review the plan:\n{event.data.text}")
-            elif isinstance(event.data, MagenticProgressLedger):
-                print(f"Please review progress ledger:\n{json.dumps(event.data.to_dict(), indent=2)}")
+        elif event.type == "magentic_orchestrator":
+            print(f"\n[Magentic Orchestrator Event] Type: {event.data.event_type.name}")
+            if isinstance(event.data.content, ChatMessage):
+                print(f"Please review the plan:\n{event.data.content.text}")
+            elif isinstance(event.data.content, MagenticProgressLedger):
+                print(f"Please review progress ledger:\n{json.dumps(event.data.content.to_dict(), indent=2)}")
             else:
-                print(f"Unknown data type in MagenticOrchestratorEvent: {type(event.data)}")
+                print(f"Unknown data type in MagenticOrchestratorEvent: {type(event.data.content)}")
 
             # Block to allow user to read the plan/progress before continuing
             # Note: this is for demonstration only and is not the recommended way to handle human interaction.

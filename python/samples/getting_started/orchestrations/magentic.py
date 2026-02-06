@@ -9,12 +9,11 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
-    GroupChatRequestSentEvent,
     HostedCodeInterpreterTool,
     WorkflowEvent,
 )
 from agent_framework.openai import OpenAIChatClient, OpenAIResponsesClient
-from agent_framework.orchestrations import MagenticBuilder, MagenticOrchestratorEvent, MagenticProgressLedger
+from agent_framework.orchestrations import GroupChatRequestSentEvent, MagenticBuilder, MagenticProgressLedger
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -115,22 +114,22 @@ async def main() -> None:
                 last_response_id = response_id
             print(event.data, end="", flush=True)
 
-        elif isinstance(event, MagenticOrchestratorEvent):
-            print(f"\n[Magentic Orchestrator Event] Type: {event.event_type.name}")
-            if isinstance(event.data, ChatMessage):
-                print(f"Please review the plan:\n{event.data.text}")
-            elif isinstance(event.data, MagenticProgressLedger):
-                print(f"Please review progress ledger:\n{json.dumps(event.data.to_dict(), indent=2)}")
+        elif event.type == "magentic_orchestrator":
+            print(f"\n[Magentic Orchestrator Event] Type: {event.data.event_type.name}")
+            if isinstance(event.data.content, ChatMessage):
+                print(f"Please review the plan:\n{event.data.content.text}")
+            elif isinstance(event.data.content, MagenticProgressLedger):
+                print(f"Please review progress ledger:\n{json.dumps(event.data.content.to_dict(), indent=2)}")
             else:
-                print(f"Unknown data type in MagenticOrchestratorEvent: {type(event.data)}")
+                print(f"Unknown data type in MagenticOrchestratorEvent: {type(event.data.content)}")
 
             # Block to allow user to read the plan/progress before continuing
             # Note: this is for demonstration only and is not the recommended way to handle human interaction.
             # Please refer to `with_plan_review` for proper human interaction during planning phases.
             await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter to continue...")
 
-        elif isinstance(event, GroupChatRequestSentEvent):
-            print(f"\n[REQUEST SENT ({event.round_index})] to agent: {event.participant_name}")
+        elif event.type == "group_chat" and isinstance(event.data, GroupChatRequestSentEvent):
+            print(f"\n[REQUEST SENT ({event.data.round_index})] to agent: {event.data.participant_name}")
 
         elif event.type == "output":
             output_event = event

@@ -74,8 +74,8 @@ async def main() -> None:
             participants=[researcher, writer],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4,
             intermediate_outputs=True,
+            orchestrator_agent=orchestrator_agent,
         )
-        .with_orchestrator(agent=orchestrator_agent)
         # Set a hard termination condition: stop after 4 assistant messages
         # The agent orchestrator will intelligently decide when to end before this limit but just in case
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4)

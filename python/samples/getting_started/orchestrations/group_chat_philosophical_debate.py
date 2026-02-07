@@ -215,8 +215,8 @@ Share your perspective authentically. Feel free to:
             participants=[farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10,
             intermediate_outputs=True,
+            orchestrator_agent=moderator,
         )
-        .with_orchestrator(agent=moderator)
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10)
         .build()
     )

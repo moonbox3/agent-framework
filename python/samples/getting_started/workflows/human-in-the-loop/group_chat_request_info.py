@@ -139,8 +139,11 @@ async def main() -> None:
     # Using agents= filter to only pause before pragmatist speaks (not every turn)
     # max_rounds=6: Limit to 6 rounds
     workflow = (
-        GroupChatBuilder(participants=[optimist, pragmatist, creative], max_rounds=6)
-        .with_orchestrator(agent=orchestrator)
+        GroupChatBuilder(
+            participants=[optimist, pragmatist, creative],
+            max_rounds=6,
+            orchestrator_agent=orchestrator,
+        )
         .with_request_info(agents=[pragmatist])  # Only pause before pragmatist speaks
         .build()
     )

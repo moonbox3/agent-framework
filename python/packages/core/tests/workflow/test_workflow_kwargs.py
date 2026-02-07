@@ -188,11 +188,11 @@ async def test_groupchat_kwargs_flow_to_agents() -> None:
         names = list(state.participants.keys())
         return names[(turn_count - 1) % len(names)]
 
-    workflow = (
-        GroupChatBuilder(participants=[agent1, agent2], max_rounds=2)  # Limit rounds to prevent infinite loop
-        .with_orchestrator(selection_func=simple_selector)
-        .build()
-    )
+    workflow = GroupChatBuilder(
+        participants=[agent1, agent2],
+        max_rounds=2,  # Limit rounds to prevent infinite loop
+        selection_func=simple_selector,
+    ).build()
 
     custom_data = {"session_id": "group123"}
 
@@ -410,7 +410,7 @@ async def test_magentic_kwargs_flow_to_agents() -> None:
     agent = _KwargsCapturingAgent(name="agent1")
     manager = _MockManager()
 
-    workflow = MagenticBuilder(participants=[agent]).with_manager(manager=manager).build()
+    workflow = MagenticBuilder(participants=[agent], manager=manager).build()
 
     custom_data = {"session_id": "magentic123"}
 
@@ -460,7 +460,7 @@ async def test_magentic_kwargs_stored_in_state() -> None:
     agent = _KwargsCapturingAgent(name="agent1")
     manager = _MockManager()
 
-    magentic_workflow = MagenticBuilder(participants=[agent]).with_manager(manager=manager).build()
+    magentic_workflow = MagenticBuilder(participants=[agent], manager=manager).build()
 
     # Use MagenticWorkflow.run() which goes through the kwargs attachment path
     custom_data = {"magentic_key": "magentic_value"}

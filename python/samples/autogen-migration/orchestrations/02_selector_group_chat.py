@@ -85,16 +85,14 @@ async def run_agent_framework() -> None:
         description="Expert in databases and SQL",
     )
 
-    workflow = (
-        GroupChatBuilder(participants=[python_expert, javascript_expert, database_expert], max_rounds=1)
-        .with_orchestrator(
-            agent=client.as_agent(
-                name="selector_manager",
-                instructions="Based on the conversation, select the most appropriate expert to respond next.",
-            ),
-        )
-        .build()
-    )
+    workflow = GroupChatBuilder(
+        participants=[python_expert, javascript_expert, database_expert],
+        max_rounds=1,
+        orchestrator_agent=client.as_agent(
+            name="selector_manager",
+            instructions="Based on the conversation, select the most appropriate expert to respond next.",
+        ),
+    ).build()
 
     # Run with a question that requires expert selection
     print("[Agent Framework] Group chat conversation:")

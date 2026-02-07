@@ -118,16 +118,15 @@ async def main() -> None:
     # enable_plan_review=True: Request human input for plan review
     # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
     # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
-    workflow = (
-        MagenticBuilder(participants=[researcher_agent, analyst_agent], enable_plan_review=True, intermediate_outputs=True)
-        .with_manager(
-            agent=manager_agent,
-            max_round_count=10,
-            max_stall_count=1,
-            max_reset_count=2,
-        )
-        .build()
-    )
+    workflow = MagenticBuilder(
+        participants=[researcher_agent, analyst_agent],
+        enable_plan_review=True,
+        intermediate_outputs=True,
+        manager_agent=manager_agent,
+        max_round_count=10,
+        max_stall_count=1,
+        max_reset_count=2,
+    ).build()
 
     task = "Research sustainable aviation fuel technology and summarize the findings."
 

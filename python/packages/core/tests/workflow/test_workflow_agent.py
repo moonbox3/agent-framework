@@ -675,11 +675,10 @@ class TestWorkflowAgent:
             await ctx.send_message(AgentExecutorRequest(messages=messages, should_respond=True))
 
         # Build workflow: start -> agent1 (no output) -> agent2 (output_response=True)
-        builder = WorkflowBuilder(output_executors=["start", "agent2"])
+        builder = WorkflowBuilder(start_executor="start", output_executors=["start", "agent2"])
         builder.register_executor(lambda: start_executor, "start")
         builder.register_agent(lambda: MockAgent("agent1", "Agent1 output - should NOT appear"), "agent1")
         builder.register_agent(lambda: MockAgent("agent2", "Agent2 output - SHOULD appear"), "agent2")
-        builder._start_executor = "start"
         workflow = builder.add_edge("start", "agent1").add_edge("agent1", "agent2").build()
 
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")

@@ -212,11 +212,11 @@ Share your perspective authentically. Feel free to:
     # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
         GroupChatBuilder(
+            participants=[farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10,
             intermediate_outputs=True,
         )
         .with_orchestrator(agent=moderator)
-        .participants([farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor])
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10)
         .build()
     )

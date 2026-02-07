@@ -92,8 +92,7 @@ async def run_agent_framework() -> None:
 
     # Create Magentic workflow
     workflow = (
-        MagenticBuilder()
-        .participants([researcher, coder, reviewer])
+        MagenticBuilder(participants=[researcher, coder, reviewer])
         .with_manager(
             agent=client.as_agent(
                 name="magentic_manager",

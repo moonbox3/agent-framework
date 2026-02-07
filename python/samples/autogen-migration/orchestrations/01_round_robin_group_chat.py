@@ -77,7 +77,7 @@ async def run_agent_framework() -> None:
     )
 
     # Create sequential workflow
-    workflow = SequentialBuilder().participants([researcher, writer, editor]).build()
+    workflow = SequentialBuilder(participants=[researcher, writer, editor]).build()
 
     # Run the workflow
     print("[Agent Framework] Sequential conversation:")

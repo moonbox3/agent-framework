@@ -60,8 +60,7 @@ async def main() -> None:
     print("\nBuilding Magentic Workflow with Human Plan Review...")
 
     workflow = (
-        MagenticBuilder()
-        .participants([researcher_agent, analyst_agent])
+        MagenticBuilder(participants=[researcher_agent, analyst_agent])
         .with_manager(
             agent=manager_agent,
             max_round_count=10,

@@ -148,7 +148,7 @@ async def main() -> None:
 
     # 4. Build a concurrent workflow with both agents
     # ConcurrentBuilder requires at least 2 participants for fan-out
-    workflow = ConcurrentBuilder().participants([microsoft_agent, google_agent]).build()
+    workflow = ConcurrentBuilder(participants=[microsoft_agent, google_agent]).build()
 
     # 5. Start the workflow - both agents will process the same task in parallel
     print("Starting concurrent workflow with tool approval...")

@@ -77,8 +77,7 @@ def build_workflow(checkpoint_storage: FileCheckpointStorage):
     # The builder wires in the Magentic orchestrator, sets the plan review path, and
     # stores the checkpoint backend so the runtime knows where to persist snapshots.
     return (
-        MagenticBuilder(enable_plan_review=True, checkpoint_storage=checkpoint_storage)
-        .participants([researcher, writer])
+        MagenticBuilder(participants=[researcher, writer], enable_plan_review=True, checkpoint_storage=checkpoint_storage)
         .with_manager(
             agent=manager_agent,
             max_round_count=10,

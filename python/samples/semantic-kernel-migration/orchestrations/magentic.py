@@ -144,7 +144,7 @@ async def run_agent_framework_example(prompt: str) -> str | None:
         chat_client=OpenAIChatClient(),
     )
 
-    workflow = MagenticBuilder().participants([researcher, coder]).with_manager(agent=manager_agent).build()
+    workflow = MagenticBuilder(participants=[researcher, coder]).with_manager(agent=manager_agent).build()
 
     final_text: str | None = None
     async for event in workflow.run(prompt, stream=True):

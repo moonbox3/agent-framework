@@ -79,10 +79,8 @@ class MockAggregator(Executor):
 
 def test_workflow_builder_without_start_executor_throws():
     """Test creating a workflow builder without a start executor."""
-
-    builder = WorkflowBuilder()
-    with pytest.raises(ValueError):
-        builder.build()
+    with pytest.raises(TypeError):
+        WorkflowBuilder()  # type: ignore[call-arg]
 
 
 def test_workflow_builder_fluent_api():
@@ -130,7 +128,7 @@ def test_add_agent_duplicate_id_raises_error():
     """Test that adding agents with duplicate IDs raises an error."""
     agent1 = DummyAgent(id="agent1", name="first")
     agent2 = DummyAgent(id="agent2", name="first")  # Same name as agent1
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor=agent1)
 
     with pytest.raises(ValueError, match="Duplicate executor ID"):
         builder.add_edge(agent1, agent2).build()
@@ -141,7 +139,7 @@ def test_add_agent_duplicate_id_raises_error():
 
 def test_register_executor_basic():
     """Test basic executor registration with lazy initialization."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="TestExecutor")
 
     # Register an executor factory - ID must match the registered name
     result = builder.register_executor(lambda: MockExecutor(id="TestExecutor"), name="TestExecutor")
@@ -150,7 +148,6 @@ def test_register_executor_basic():
     assert result is builder
 
     # Build workflow and verify executor is instantiated
-    builder._start_executor = "TestExecutor"
     workflow = builder.build()
     assert "TestExecutor" in workflow.executors
     assert isinstance(workflow.executors["TestExecutor"], MockExecutor)
@@ -158,7 +155,7 @@ def test_register_executor_basic():
 
 def test_register_multiple_executors():
     """Test registering multiple executors and connecting them with edges."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="ExecutorA")
 
     # Register multiple executors - IDs must match registered names
     builder.register_executor(lambda: MockExecutor(id="ExecutorA"), name="ExecutorA")
@@ -166,7 +163,6 @@ def test_register_multiple_executors():
     builder.register_executor(lambda: MockExecutor(id="ExecutorC"), name="ExecutorC")
 
     # Build workflow with edges using registered names
-    builder._start_executor = "ExecutorA"
     workflow = builder.add_edge("ExecutorA", "ExecutorB").add_edge("ExecutorB", "ExecutorC").build()
 
     # Verify all executors are present
@@ -178,7 +174,7 @@ def test_register_multiple_executors():
 
 def test_register_with_multiple_names():
     """Test registering the same factory function under multiple names."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="ExecutorA")
 
     # Register same executor factory under multiple names
     # Note: Each call creates a new instance, so IDs won't conflict
@@ -191,7 +187,6 @@ def test_register_with_multiple_names():
     builder.register_executor(make_executor, name=["ExecutorA", "ExecutorB"])
 
     # Set up workflow
-    builder._start_executor = "ExecutorA"
     workflow = builder.add_edge("ExecutorA", "ExecutorB").build()
 
     # Verify both executors are present
@@ -202,7 +197,7 @@ def test_register_with_multiple_names():
 
 def test_register_duplicate_name_raises_error():
     """Test that registering duplicate names raises an error."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="MyExecutor")
 
     # Register first executor
     builder.register_executor(lambda: MockExecutor(id="executor_1"), name="MyExecutor")
@@ -214,12 +209,11 @@ def test_register_duplicate_name_raises_error():
 
 def test_register_duplicate_id_raises_error():
     """Test that registering duplicate id raises an error."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="MyExecutor1")
 
     # Register first executor
     builder.register_executor(lambda: MockExecutor(id="executor"), name="MyExecutor1")
     builder.register_executor(lambda: MockExecutor(id="executor"), name="MyExecutor2")
-    builder._start_executor = "MyExecutor1"
 
     # Registering second executor with same ID should raise ValueError
     with pytest.raises(ValueError, match="Executor with ID 'executor' has already been registered."):
@@ -228,7 +222,7 @@ def test_register_duplicate_id_raises_error():
 
 def test_register_agent_basic():
     """Test basic agent registration with lazy initialization."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="TestAgent")
 
     # Register an agent factory
     result = builder.register_agent(lambda: DummyAgent(id="agent_test", name="test_agent"), name="TestAgent")
@@ -237,7 +231,6 @@ def test_register_agent_basic():
     assert result is builder
 
     # Build workflow and verify agent is wrapped in AgentExecutor
-    builder._start_executor = "TestAgent"
     workflow = builder.build()
     assert "test_agent" in workflow.executors
     assert isinstance(workflow.executors["test_agent"], AgentExecutor)
@@ -245,7 +238,7 @@ def test_register_agent_basic():
 
 def test_register_agent_with_thread():
     """Test registering an agent with a custom thread."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="ThreadedAgent")
     custom_thread = AgentThread()
 
     # Register agent with custom thread
@@ -256,7 +249,6 @@ def test_register_agent_with_thread():
     )
 
     # Build workflow and verify agent executor configuration
-    builder._start_executor = "ThreadedAgent"
     workflow = builder.build()
     executor = workflow.executors["threaded_agent"]
 
@@ -267,7 +259,7 @@ def test_register_agent_with_thread():
 
 def test_register_agent_duplicate_name_raises_error():
     """Test that registering agents with duplicate names raises an error."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="MyAgent")
 
     # Register first agent
     builder.register_agent(lambda: DummyAgent(id="agent1", name="first"), name="MyAgent")
@@ -279,14 +271,13 @@ def test_register_agent_duplicate_name_raises_error():
 
 def test_register_and_add_edge_with_strings():
     """Test that registered executors can be connected using string names."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Source")
 
     # Register executors
     builder.register_executor(lambda: MockExecutor(id="source"), name="Source")
     builder.register_executor(lambda: MockExecutor(id="target"), name="Target")
 
     # Add edge using string names
-    builder._start_executor = "Source"
     workflow = builder.add_edge("Source", "Target").build()
 
     # Verify edge is created correctly
@@ -297,14 +288,13 @@ def test_register_and_add_edge_with_strings():
 
 def test_register_agent_and_add_edge_with_strings():
     """Test that registered agents can be connected using string names."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Writer")
 
     # Register agents
     builder.register_agent(lambda: DummyAgent(id="writer_id", name="writer"), name="Writer")
     builder.register_agent(lambda: DummyAgent(id="reviewer_id", name="reviewer"), name="Reviewer")
 
     # Add edge using string names
-    builder._start_executor = "Writer"
     workflow = builder.add_edge("Writer", "Reviewer").build()
 
     # Verify edge is created correctly
@@ -316,7 +306,7 @@ def test_register_agent_and_add_edge_with_strings():
 
 def test_register_with_fan_out_edges():
     """Test using registered names with fan-out edge groups."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Source")
 
     # Register executors - IDs must match registered names
     builder.register_executor(lambda: MockExecutor(id="Source"), name="Source")
@@ -324,7 +314,6 @@ def test_register_with_fan_out_edges():
     builder.register_executor(lambda: MockExecutor(id="Target2"), name="Target2")
 
     # Add fan-out edges using registered names
-    builder._start_executor = "Source"
     workflow = builder.add_fan_out_edges("Source", ["Target1", "Target2"]).build()
 
     # Verify all executors are present
@@ -335,7 +324,7 @@ def test_register_with_fan_out_edges():
 
 def test_register_with_fan_in_edges():
     """Test using registered names with fan-in edge groups."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Source1")
 
     # Register executors - IDs must match registered names
     builder.register_executor(lambda: MockExecutor(id="Source1"), name="Source1")
@@ -344,7 +333,6 @@ def test_register_with_fan_in_edges():
 
     # Add fan-in edges using registered names
     # Both Source1 and Source2 need to be reachable, so connect Source1 to Source2
-    builder._start_executor = "Source1"
     workflow = builder.add_edge("Source1", "Source2").add_fan_in_edges(["Source1", "Source2"], "Aggregator").build()
 
     # Verify all executors are present
@@ -355,7 +343,7 @@ def test_register_with_fan_in_edges():
 
 def test_register_with_chain():
     """Test using registered names with add_chain."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Step1")
 
     # Register executors - IDs must match registered names
     builder.register_executor(lambda: MockExecutor(id="Step1"), name="Step1")
@@ -363,7 +351,6 @@ def test_register_with_chain():
     builder.register_executor(lambda: MockExecutor(id="Step3"), name="Step3")
 
     # Add chain using registered names
-    builder._start_executor = "Step1"
     workflow = builder.add_chain(["Step1", "Step2", "Step3"]).build()
 
     # Verify all executors are present
@@ -382,14 +369,11 @@ def test_register_factory_called_only_once():
         call_count += 1
         return MockExecutor(id="Test")
 
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Test")
     builder.register_executor(factory, name="Test")
 
     # Factory should not be called yet
     assert call_count == 0
-
-    # Add edge without building
-    builder._start_executor = "Test"
 
     # Factory should still not be called
     assert call_count == 0
@@ -404,7 +388,7 @@ def test_register_factory_called_only_once():
 
 def test_mixing_eager_and_lazy_initialization_error():
     """Test that mixing eager executor instances with lazy string names raises appropriate error."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Lazy")
 
     # Create an eager executor instance
     eager_executor = MockExecutor(id="eager")
@@ -425,7 +409,7 @@ def test_mixing_eager_and_lazy_initialization_error():
 
 def test_register_with_condition():
     """Test adding edges with conditions using registered names."""
-    builder = WorkflowBuilder()
+    builder = WorkflowBuilder(start_executor="Source")
 
     def condition_func(msg: MockMessage) -> bool:
         return msg.data > 0
@@ -435,7 +419,6 @@ def test_register_with_condition():
     builder.register_executor(lambda: MockExecutor(id="Target"), name="Target")
 
     # Add edge with condition
-    builder._start_executor = "Source"
     workflow = builder.add_edge("Source", "Target", condition=condition_func).build()
 
     # Verify workflow is built correctly
@@ -453,15 +436,13 @@ def test_register_agent_creates_unique_instances():
         return agent
 
     # Build first workflow
-    builder1 = WorkflowBuilder()
+    builder1 = WorkflowBuilder(start_executor="Agent")
     builder1.register_agent(agent_factory, name="Agent")
-    builder1._start_executor = "Agent"
     _ = builder1.build()
 
     # Build second workflow
-    builder2 = WorkflowBuilder()
+    builder2 = WorkflowBuilder(start_executor="Agent")
     builder2.register_agent(agent_factory, name="Agent")
-    builder2._start_executor = "Agent"
     _ = builder2.build()
 
     # Verify that two different agent instances were created
@@ -475,7 +456,7 @@ def test_register_agent_creates_unique_instances():
 def test_with_output_from_returns_builder():
     """Test that with_output_from returns the builder for method chaining."""
     executor_a = MockExecutor(id="executor_a")
-    builder = WorkflowBuilder(output_executors=[executor_a])
+    builder = WorkflowBuilder(output_executors=[executor_a], start_executor=executor_a)
 
     # Verify builder was created with output_executors
     assert builder._output_executors == [executor_a]
@@ -509,10 +490,9 @@ def test_with_output_from_with_agent_instances():
 
 def test_with_output_from_with_registered_names():
     """Test with_output_from with registered factory names (strings)."""
-    builder = WorkflowBuilder(output_executors=["ExecutorBFactory"])
+    builder = WorkflowBuilder(start_executor="ExecutorAFactory", output_executors=["ExecutorBFactory"])
     builder.register_executor(lambda: MockExecutor(id="ExecutorA"), name="ExecutorAFactory")
     builder.register_executor(lambda: MockExecutor(id="ExecutorB"), name="ExecutorBFactory")
-    builder._start_executor = "ExecutorAFactory"
     workflow = builder.add_edge("ExecutorAFactory", "ExecutorBFactory").build()
 
     # Verify that the workflow was built with the correct output executors
@@ -553,10 +533,9 @@ def test_with_output_from_can_be_set_to_different_value():
 
 def test_with_output_from_with_registered_agents():
     """Test with_output_from with registered agent factory names."""
-    builder = WorkflowBuilder(output_executors=["ReviewerAgent"])
+    builder = WorkflowBuilder(start_executor="WriterAgent", output_executors=["ReviewerAgent"])
     builder.register_agent(lambda: DummyAgent(id="agent1", name="writer"), name="WriterAgent")
     builder.register_agent(lambda: DummyAgent(id="agent2", name="reviewer"), name="ReviewerAgent")
-    builder._start_executor = "WriterAgent"
     workflow = builder.add_edge("WriterAgent", "ReviewerAgent").build()
 
     # Verify that the workflow was built with the agent's resolved name

@@ -31,7 +31,7 @@ def main():
     )
 
     # Build a concurrent workflow
-    workflow = ConcurrentBuilder().participants([researcher, marketer, legal]).build()
+    workflow = ConcurrentBuilder(participants=[researcher, marketer, legal]).build()
 
     # Convert the workflow to an agent
     workflow_agent = workflow.as_agent()

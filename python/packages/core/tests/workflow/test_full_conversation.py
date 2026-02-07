@@ -138,7 +138,7 @@ async def test_sequential_adapter_uses_full_conversation() -> None:
     a1 = _CaptureAgent(id="agent1", name="A1", reply_text="A1 reply")
     a2 = _CaptureAgent(id="agent2", name="A2", reply_text="A2 reply")
 
-    wf = SequentialBuilder().participants([a1, a2]).build()
+    wf = SequentialBuilder(participants=[a1, a2]).build()
 
     # Act
     async for ev in wf.run("hello seq", stream=True):

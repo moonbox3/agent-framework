@@ -78,7 +78,7 @@ class _KwargsCapturingAgent(BaseAgent):
 async def test_sequential_kwargs_flow_to_agent() -> None:
     """Test that kwargs passed to SequentialBuilder workflow flow through to agent."""
     agent = _KwargsCapturingAgent(name="seq_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
 
     custom_data = {"endpoint": "https://api.example.com", "version": "v1"}
     user_token = {"user_name": "alice", "access_level": "admin"}
@@ -105,7 +105,7 @@ async def test_sequential_kwargs_flow_to_multiple_agents() -> None:
     """Test that kwargs flow to all agents in a sequential workflow."""
     agent1 = _KwargsCapturingAgent(name="agent1")
     agent2 = _KwargsCapturingAgent(name="agent2")
-    workflow = SequentialBuilder().participants([agent1, agent2]).build()
+    workflow = SequentialBuilder(participants=[agent1, agent2]).build()
 
     custom_data = {"key": "value"}
 
@@ -123,7 +123,7 @@ async def test_sequential_kwargs_flow_to_multiple_agents() -> None:
 async def test_sequential_run_kwargs_flow() -> None:
     """Test that kwargs flow through workflow.run() (non-streaming)."""
     agent = _KwargsCapturingAgent(name="run_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
 
     _ = await workflow.run("test message", custom_data={"test": True})
 
@@ -141,7 +141,7 @@ async def test_concurrent_kwargs_flow_to_agents() -> None:
     """Test that kwargs flow to all agents in a concurrent workflow."""
     agent1 = _KwargsCapturingAgent(name="concurrent1")
     agent2 = _KwargsCapturingAgent(name="concurrent2")
-    workflow = ConcurrentBuilder().participants([agent1, agent2]).build()
+    workflow = ConcurrentBuilder(participants=[agent1, agent2]).build()
 
     custom_data = {"batch_id": "123"}
     user_token = {"user_name": "bob"}
@@ -189,8 +189,7 @@ async def test_groupchat_kwargs_flow_to_agents() -> None:
         return names[(turn_count - 1) % len(names)]
 
     workflow = (
-        GroupChatBuilder(max_rounds=2)  # Limit rounds to prevent infinite loop
-        .participants([agent1, agent2])
+        GroupChatBuilder(participants=[agent1, agent2], max_rounds=2)  # Limit rounds to prevent infinite loop
         .with_orchestrator(selection_func=simple_selector)
         .build()
     )
@@ -229,7 +228,7 @@ async def test_kwargs_stored_in_state() -> None:
             await ctx.send_message(msgs)
 
     inspector = _StateInspector(id="inspector")
-    workflow = SequentialBuilder().participants([inspector]).build()
+    workflow = SequentialBuilder(participants=[inspector]).build()
 
     async for event in workflow.run("test", my_kwarg="my_value", another=123, stream=True):
         if event.type == "status" and event.state == WorkflowRunState.IDLE:
@@ -254,7 +253,7 @@ async def test_empty_kwargs_stored_as_empty_dict() -> None:
             await ctx.send_message(msgs)
 
     checker = _StateChecker(id="checker")
-    workflow = SequentialBuilder().participants([checker]).build()
+    workflow = SequentialBuilder(participants=[checker]).build()
 
     # Run without any kwargs
     async for event in workflow.run("test", stream=True):
@@ -274,7 +273,7 @@ async def test_empty_kwargs_stored_as_empty_dict() -> None:
 async def test_kwargs_with_none_values() -> None:
     """Test that kwargs with None values are passed through correctly."""
     agent = _KwargsCapturingAgent(name="none_test")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
 
     async for event in workflow.run("test", optional_param=None, other_param="value", stream=True):
         if event.type == "status" and event.state == WorkflowRunState.IDLE:
@@ -290,7 +289,7 @@ async def test_kwargs_with_none_values() -> None:
 async def test_kwargs_with_complex_nested_data() -> None:
     """Test that complex nested data structures flow through correctly."""
     agent = _KwargsCapturingAgent(name="nested_test")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
 
     complex_data = {
         "level1": {
@@ -317,8 +316,8 @@ async def test_kwargs_preserved_across_workflow_reruns() -> None:
     agent = _KwargsCapturingAgent(name="rerun_test")
 
     # Build separate workflows for each run to avoid "already running" error
-    workflow1 = SequentialBuilder().participants([agent]).build()
-    workflow2 = SequentialBuilder().participants([agent]).build()
+    workflow1 = SequentialBuilder(participants=[agent]).build()
+    workflow2 = SequentialBuilder(participants=[agent]).build()
 
     # First run
     async for event in workflow1.run("run1", run_id="first", stream=True):
@@ -411,7 +410,7 @@ async def test_magentic_kwargs_flow_to_agents() -> None:
     agent = _KwargsCapturingAgent(name="agent1")
     manager = _MockManager()
 
-    workflow = MagenticBuilder().participants([agent]).with_manager(manager=manager).build()
+    workflow = MagenticBuilder(participants=[agent]).with_manager(manager=manager).build()
 
     custom_data = {"session_id": "magentic123"}
 
@@ -461,7 +460,7 @@ async def test_magentic_kwargs_stored_in_state() -> None:
     agent = _KwargsCapturingAgent(name="agent1")
     manager = _MockManager()
 
-    magentic_workflow = MagenticBuilder().participants([agent]).with_manager(manager=manager).build()
+    magentic_workflow = MagenticBuilder(participants=[agent]).with_manager(manager=manager).build()
 
     # Use MagenticWorkflow.run() which goes through the kwargs attachment path
     custom_data = {"magentic_key": "magentic_value"}
@@ -483,7 +482,7 @@ async def test_magentic_kwargs_stored_in_state() -> None:
 async def test_workflow_as_agent_run_propagates_kwargs_to_underlying_agent() -> None:
     """Test that kwargs passed to workflow_agent.run() flow through to the underlying agents."""
     agent = _KwargsCapturingAgent(name="inner_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
     workflow_agent = workflow.as_agent(name="TestWorkflowAgent")
 
     custom_data = {"endpoint": "https://api.example.com", "version": "v1"}
@@ -507,7 +506,7 @@ async def test_workflow_as_agent_run_propagates_kwargs_to_underlying_agent() -> 
 async def test_workflow_as_agent_run_stream_propagates_kwargs_to_underlying_agent() -> None:
     """Test that kwargs passed to workflow_agent.run() flow through to the underlying agents."""
     agent = _KwargsCapturingAgent(name="inner_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
     workflow_agent = workflow.as_agent(name="TestWorkflowAgent")
 
     custom_data = {"session_id": "xyz123"}
@@ -534,7 +533,7 @@ async def test_workflow_as_agent_propagates_kwargs_to_multiple_agents() -> None:
     """Test that kwargs flow to all agents when using workflow.as_agent()."""
     agent1 = _KwargsCapturingAgent(name="agent1")
     agent2 = _KwargsCapturingAgent(name="agent2")
-    workflow = SequentialBuilder().participants([agent1, agent2]).build()
+    workflow = SequentialBuilder(participants=[agent1, agent2]).build()
     workflow_agent = workflow.as_agent(name="MultiAgentWorkflow")
 
     custom_data = {"batch_id": "batch-001"}
@@ -551,7 +550,7 @@ async def test_workflow_as_agent_propagates_kwargs_to_multiple_agents() -> None:
 async def test_workflow_as_agent_kwargs_with_none_values() -> None:
     """Test that kwargs with None values are passed through correctly via as_agent()."""
     agent = _KwargsCapturingAgent(name="none_test_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
     workflow_agent = workflow.as_agent(name="NoneTestWorkflow")
 
     _ = await workflow_agent.run("test", optional_param=None, other_param="value")
@@ -566,7 +565,7 @@ async def test_workflow_as_agent_kwargs_with_none_values() -> None:
 async def test_workflow_as_agent_kwargs_with_complex_nested_data() -> None:
     """Test that complex nested data structures flow through correctly via as_agent()."""
     agent = _KwargsCapturingAgent(name="nested_agent")
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
     workflow_agent = workflow.as_agent(name="NestedDataWorkflow")
 
     complex_data = {
@@ -604,13 +603,13 @@ async def test_subworkflow_kwargs_propagation() -> None:
     inner_agent = _KwargsCapturingAgent(name="inner_agent")
 
     # Build the inner (sub) workflow with the agent
-    inner_workflow = SequentialBuilder().participants([inner_agent]).build()
+    inner_workflow = SequentialBuilder(participants=[inner_agent]).build()
 
     # Wrap the inner workflow in a WorkflowExecutor so it can be used as a subworkflow
     subworkflow_executor = WorkflowExecutor(workflow=inner_workflow, id="subworkflow_executor")
 
     # Build the outer (parent) workflow containing the subworkflow
-    outer_workflow = SequentialBuilder().participants([subworkflow_executor]).build()
+    outer_workflow = SequentialBuilder(participants=[subworkflow_executor]).build()
 
     # Define kwargs that should propagate to subworkflow
     custom_data = {"api_key": "secret123", "endpoint": "https://api.example.com"}
@@ -668,13 +667,13 @@ async def test_subworkflow_kwargs_accessible_via_state() -> None:
 
     # Build inner workflow with State reader
     state_reader = _StateReader(id="state_reader")
-    inner_workflow = SequentialBuilder().participants([state_reader]).build()
+    inner_workflow = SequentialBuilder(participants=[state_reader]).build()
 
     # Wrap as subworkflow
     subworkflow_executor = WorkflowExecutor(workflow=inner_workflow, id="subworkflow")
 
     # Build outer workflow
-    outer_workflow = SequentialBuilder().participants([subworkflow_executor]).build()
+    outer_workflow = SequentialBuilder(participants=[subworkflow_executor]).build()
 
     # Run with kwargs
     async for event in outer_workflow.run(
@@ -713,15 +712,15 @@ async def test_nested_subworkflow_kwargs_propagation() -> None:
     inner_agent = _KwargsCapturingAgent(name="deeply_nested_agent")
 
     # Build inner workflow
-    inner_workflow = SequentialBuilder().participants([inner_agent]).build()
+    inner_workflow = SequentialBuilder(participants=[inner_agent]).build()
     inner_executor = WorkflowExecutor(workflow=inner_workflow, id="inner_executor")
 
     # Build middle workflow containing inner
-    middle_workflow = SequentialBuilder().participants([inner_executor]).build()
+    middle_workflow = SequentialBuilder(participants=[inner_executor]).build()
     middle_executor = WorkflowExecutor(workflow=middle_workflow, id="middle_executor")
 
     # Build outer workflow containing middle
-    outer_workflow = SequentialBuilder().participants([middle_executor]).build()
+    outer_workflow = SequentialBuilder(participants=[middle_executor]).build()
 
     # Run with kwargs
     async for event in outer_workflow.run(

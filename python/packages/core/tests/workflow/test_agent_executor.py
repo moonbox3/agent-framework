@@ -70,7 +70,7 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     executor = AgentExecutor(initial_agent, agent_thread=initial_thread)
 
     # Build workflow with checkpointing enabled
-    wf = SequentialBuilder(checkpoint_storage=storage).participants([executor]).build()
+    wf = SequentialBuilder(participants=[executor], checkpoint_storage=storage).build()
 
     # Run the workflow with a user message
     first_run_output: AgentExecutorResponse | None = None
@@ -124,7 +124,7 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     assert restored_agent.call_count == 0
 
     # Build new workflow with the restored executor
-    wf_resume = SequentialBuilder(checkpoint_storage=storage).participants([restored_executor]).build()
+    wf_resume = SequentialBuilder(participants=[restored_executor], checkpoint_storage=storage).build()
 
     # Resume from checkpoint
     resumed_output: AgentExecutorResponse | None = None

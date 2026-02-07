@@ -114,8 +114,7 @@ async def main() -> None:
 
     # Build workflow with request info enabled (pauses after each agent responds)
     workflow = (
-        SequentialBuilder()
-        .participants([drafter, editor, finalizer])
+        SequentialBuilder(participants=[drafter, editor, finalizer])
         # Only enable request info for the editor agent
         .with_request_info(agents=["editor"])
         .build()

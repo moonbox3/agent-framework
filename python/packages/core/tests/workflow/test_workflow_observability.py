@@ -474,10 +474,10 @@ async def test_message_trace_context_serialization(span_exporter: InMemorySpanEx
 async def test_workflow_build_error_tracing(span_exporter: InMemorySpanExporter) -> None:
     """Test that build errors are properly recorded in build spans."""
 
-    # Test validation error by not setting start executor
-    builder = WorkflowBuilder()
+    # Test validation error by referencing a non-existent start executor
+    builder = WorkflowBuilder(start_executor="NonExistent")
 
-    with pytest.raises(ValueError, match="Starting executor must be set"):
+    with pytest.raises(ValueError):
         builder.build()
 
     spans = span_exporter.get_finished_spans()
@@ -500,5 +500,5 @@ async def test_workflow_build_error_tracing(span_exporter: InMemorySpanExporter)
 
     error_event = error_events[0]
     assert error_event.attributes is not None
-    assert "Starting executor must be set" in str(error_event.attributes.get("build.error.message"))
+    assert "starting executor" in str(error_event.attributes.get("build.error.message")).lower()
     assert error_event.attributes.get("build.error.type") == "ValueError"

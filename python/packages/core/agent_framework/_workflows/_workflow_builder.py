@@ -156,21 +156,21 @@ class WorkflowBuilder:
         name: str | None = None,
         description: str | None = None,
         *,
+        start_executor: Executor | SupportsAgentRun | str,
         checkpoint_storage: CheckpointStorage | None = None,
         output_executors: list[Executor | SupportsAgentRun | str] | None = None,
-        start_executor: Executor | SupportsAgentRun | str | None = None,
     ):
-        """Initialize the WorkflowBuilder with an empty list of edges and no starting executor.
+        """Initialize the WorkflowBuilder.
 
         Args:
             max_iterations: Maximum number of iterations for workflow convergence. Default is 100.
             name: Optional human-readable name for the workflow.
             description: Optional description of what the workflow does.
+            start_executor: The starting executor for the workflow. Can be an Executor instance,
+                SupportsAgentRun instance, or the name of a registered executor factory.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             output_executors: Optional list of executors whose outputs should be collected.
                 If not provided, outputs from all executors are collected.
-            start_executor: Optional starting executor for the workflow. Can be an Executor instance,
-                SupportsAgentRun instance, or the name of a registered executor factory.
         """
         self._edge_groups: list[EdgeGroup] = []
         self._executors: dict[str, Executor] = {}
@@ -180,7 +180,7 @@ class WorkflowBuilder:
         self._name: str | None = name
         self._description: str | None = description
         # Maps underlying SupportsAgentRun object id -> wrapped Executor so we reuse the same wrapper
-        # across set_start_executor / add_edge calls. This avoids multiple AgentExecutor instances
+        # across start_executor / add_edge calls. This avoids multiple AgentExecutor instances
         # being created for the same agent.
         self._agent_wrappers: dict[str, Executor] = {}
 
@@ -197,9 +197,8 @@ class WorkflowBuilder:
         # Output executors filter; if set, only outputs from these executors are yielded
         self._output_executors: list[Executor | SupportsAgentRun | str] = output_executors if output_executors else []
 
-        # Set start executor if provided
-        if start_executor is not None:
-            self._set_start_executor(start_executor)
+        # Set the start executor
+        self._set_start_executor(start_executor)
 
     # Agents auto-wrapped by builder now always stream incremental updates.
 
@@ -952,7 +951,7 @@ class WorkflowBuilder:
         """
         if not self._start_executor:
             raise ValueError(
-                "Starting executor must be set using the start_executor constructor parameter before building."
+                "Starting executor must be set via the start_executor constructor parameter before building."
             )
 
         start_executor: Executor | None = None

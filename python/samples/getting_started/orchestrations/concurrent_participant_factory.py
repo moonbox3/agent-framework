@@ -33,7 +33,7 @@ instances created by the same builder. This is particularly useful when you need
 requests or tasks in parallel with stateful participants.
 
 Demonstrates:
-- ConcurrentBuilder().register_participants([...]).with_aggregator(callback)
+- ConcurrentBuilder(participant_factories=[...]).with_aggregator(callback)
 - Fan-out to agents and fan-in at an aggregator
 - Aggregation implemented via an LLM call (chat_client.get_response)
 - Workflow output yielded with the synthesized summary string
@@ -125,8 +125,7 @@ async def main() -> None:
     #   SupportsAgentRun (agents) or Executor instances.
     # - register_aggregator(...) takes a factory function that returns an Executor instance.
     concurrent_builder = (
-        ConcurrentBuilder()
-        .register_participants([create_researcher, create_marketer, create_legal])
+        ConcurrentBuilder(participant_factories=[create_researcher, create_marketer, create_legal])
         .register_aggregator(SummarizationExecutor)
     )
 

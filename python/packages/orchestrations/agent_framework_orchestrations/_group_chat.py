@@ -524,6 +524,8 @@ class GroupChatBuilder:
     def __init__(
         self,
         *,
+        participants: Sequence[SupportsAgentRun | Executor] | None = None,
+        participant_factories: Sequence[Callable[[], SupportsAgentRun | Executor]] | None = None,
         termination_condition: TerminationCondition | None = None,
         max_rounds: int | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
@@ -532,6 +534,8 @@ class GroupChatBuilder:
         """Initialize the GroupChatBuilder.
 
         Args:
+            participants: Optional sequence of agent or executor instances for the group chat.
+            participant_factories: Optional sequence of callables returning agent or executor instances.
             termination_condition: Optional callable that receives the conversation history and returns
                 True to terminate the conversation, False to continue.
             max_rounds: Optional maximum number of orchestrator rounds to prevent infinite conversations.
@@ -559,6 +563,14 @@ class GroupChatBuilder:
 
         # Intermediate outputs
         self._intermediate_outputs = intermediate_outputs
+
+        if participants is None and participant_factories is None:
+            raise ValueError("Either participants or participant_factories must be provided.")
+
+        if participant_factories is not None:
+            self._set_participant_factories(participant_factories)
+        if participants is not None:
+            self._set_participants(participants)
 
     @overload
     def with_orchestrator(self, *, agent: ChatAgent | Callable[[], ChatAgent]) -> "GroupChatBuilder":
@@ -665,7 +677,7 @@ class GroupChatBuilder:
 
 
             orchestrator = CustomGroupChatOrchestrator(...)
-            workflow = GroupChatBuilder().with_orchestrator(orchestrator).participants([agent1, agent2]).build()
+            workflow = GroupChatBuilder(participants=[agent1, agent2]).with_orchestrator(orchestrator).build()
         """
         if self._agent_orchestrator is not None:
             raise ValueError(
@@ -696,70 +708,29 @@ class GroupChatBuilder:
 
         return self
 
-    def register_participants(
+    def _set_participant_factories(
         self,
         participant_factories: Sequence[Callable[[], SupportsAgentRun | Executor]],
-    ) -> "GroupChatBuilder":
-        """Register participant factories for this group chat workflow.
-
-        Args:
-            participant_factories: Sequence of callables that produce participant definitions
-                when invoked. Each callable should return either an SupportsAgentRun instance
-                (auto-wrapped as AgentExecutor) or an Executor instance.
-
-        Returns:
-            Self for fluent chaining
-
-        Raises:
-            ValueError: If participant_factories is empty, or participants
-                or participant factories are already set
-        """
+    ) -> None:
+        """Set participant factories (internal)."""
         if self._participants:
-            raise ValueError("Cannot mix .participants() and .register_participants() in the same builder instance.")
+            raise ValueError("Cannot provide both participants and participant_factories.")
 
         if self._participant_factories:
-            raise ValueError("register_participants() has already been called on this builder instance.")
+            raise ValueError("participant_factories already set.")
 
         if not participant_factories:
             raise ValueError("participant_factories cannot be empty")
 
         self._participant_factories = list(participant_factories)
-        return self
 
-    def participants(self, participants: Sequence[SupportsAgentRun | Executor]) -> "GroupChatBuilder":
-        """Define participants for this group chat workflow.
-
-        Accepts SupportsAgentRun instances (auto-wrapped as AgentExecutor) or Executor instances.
-
-        Args:
-            participants: Sequence of participant definitions
-
-        Returns:
-            Self for fluent chaining
-
-        Raises:
-            ValueError: If participants are empty, names are duplicated, or participants
-                or participant factories are already set
-            TypeError: If any participant is not SupportsAgentRun or Executor instance
-
-        Example:
-
-        .. code-block:: python
-
-            from agent_framework_orchestrations import GroupChatBuilder
-
-            workflow = (
-                GroupChatBuilder()
-                .with_orchestrator(selection_func=my_selection_function)
-                .participants([agent1, agent2, custom_executor])
-                .build()
-            )
-        """
+    def _set_participants(self, participants: Sequence[SupportsAgentRun | Executor]) -> None:
+        """Set participants (internal)."""
         if self._participant_factories:
-            raise ValueError("Cannot mix .participants() and .register_participants() in the same builder instance.")
+            raise ValueError("Cannot provide both participants and participant_factories.")
 
         if self._participants:
-            raise ValueError("participants have already been set. Call participants() at most once.")
+            raise ValueError("participants already set.")
 
         if not participants:
             raise ValueError("participants cannot be empty.")
@@ -784,8 +755,6 @@ class GroupChatBuilder:
             named[identifier] = participant
 
         self._participants = named
-
-        return self
 
     def with_termination_condition(self, termination_condition: TerminationCondition) -> "GroupChatBuilder":
         """Set a custom termination condition for the group chat workflow.
@@ -812,9 +781,8 @@ class GroupChatBuilder:
 
             specialist_agent = ...
             workflow = (
-                GroupChatBuilder()
+                GroupChatBuilder(participants=[agent1, specialist_agent])
                 .with_orchestrator(selection_func=my_selection_function)
-                .participants([agent1, specialist_agent])
                 .with_termination_condition(stop_after_two_calls)
                 .build()
             )
@@ -866,9 +834,8 @@ class GroupChatBuilder:
 
             storage = MemoryCheckpointStorage()
             workflow = (
-                GroupChatBuilder()
+                GroupChatBuilder(participants=[agent1, agent2])
                 .with_orchestrator(selection_func=my_selection_function)
-                .participants([agent1, agent2])
                 .with_checkpointing(storage)
                 .build()
             )
@@ -961,7 +928,7 @@ class GroupChatBuilder:
     def _resolve_participants(self) -> list[Executor]:
         """Resolve participant instances into Executor objects."""
         if not self._participants and not self._participant_factories:
-            raise ValueError("No participants provided. Call .participants() or .register_participants() first.")
+            raise ValueError("No participants provided. Pass participants or participant_factories to the constructor.")
         # We don't need to check if both are set since that is handled in the respective methods
 
         participants: list[Executor | SupportsAgentRun] = []

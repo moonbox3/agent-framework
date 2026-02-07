@@ -186,7 +186,7 @@ async def test_magentic_builder_returns_workflow_and_runs() -> None:
     manager = FakeManager()
     agent = StubAgent(manager.next_speaker_name, "first draft")
 
-    workflow = MagenticBuilder().participants([agent]).with_manager(manager=manager).build()
+    workflow = MagenticBuilder(participants=[agent]).with_manager(manager=manager).build()
 
     assert isinstance(workflow, Workflow)
 
@@ -212,7 +212,7 @@ async def test_magentic_as_agent_does_not_accept_conversation() -> None:
     manager = FakeManager()
     writer = StubAgent(manager.next_speaker_name, "summary response")
 
-    workflow = MagenticBuilder().participants([writer]).with_manager(manager=manager).build()
+    workflow = MagenticBuilder(participants=[writer]).with_manager(manager=manager).build()
 
     agent = workflow.as_agent(name="magentic-agent")
     conversation = [
@@ -241,8 +241,7 @@ async def test_standard_manager_plan_and_replan_combined_ledger():
 async def test_magentic_workflow_plan_review_approval_to_completion():
     manager = FakeManager()
     wf = (
-        MagenticBuilder(enable_plan_review=True)
-        .participants([DummyExec("agentA")])
+        MagenticBuilder(participants=[DummyExec("agentA")], enable_plan_review=True)
         .with_manager(manager=manager)
         .build()
     )
@@ -284,8 +283,7 @@ async def test_magentic_plan_review_with_revise():
 
     manager = CountingManager()
     wf = (
-        MagenticBuilder(enable_plan_review=True)
-        .participants([DummyExec(name=manager.next_speaker_name)])
+        MagenticBuilder(participants=[DummyExec(name=manager.next_speaker_name)], enable_plan_review=True)
         .with_manager(manager=manager)
         .build()
     )
@@ -328,12 +326,7 @@ async def test_magentic_plan_review_with_revise():
 
 async def test_magentic_orchestrator_round_limit_produces_partial_result():
     manager = FakeManager(max_round_count=1)
-    wf = (
-        MagenticBuilder()
-        .participants([DummyExec(name=manager.next_speaker_name)])
-        .with_manager(manager=manager)
-        .build()
-    )
+    wf = MagenticBuilder(participants=[DummyExec(name=manager.next_speaker_name)]).with_manager(manager=manager).build()
 
     events: list[WorkflowEvent] = []
     async for ev in wf.run("round limit test", stream=True):
@@ -359,8 +352,11 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     manager1 = FakeManager()
     wf = (
-        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
-        .participants([DummyExec(name=manager1.next_speaker_name)])
+        MagenticBuilder(
+            participants=[DummyExec(name=manager1.next_speaker_name)],
+            enable_plan_review=True,
+            checkpoint_storage=storage,
+        )
         .with_manager(manager=manager1)
         .build()
     )
@@ -380,8 +376,11 @@ async def test_magentic_checkpoint_resume_round_trip():
 
     manager2 = FakeManager()
     wf_resume = (
-        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
-        .participants([DummyExec(name=manager2.next_speaker_name)])
+        MagenticBuilder(
+            participants=[DummyExec(name=manager2.next_speaker_name)],
+            enable_plan_review=True,
+            checkpoint_storage=storage,
+        )
         .with_manager(manager=manager2)
         .build()
     )
@@ -581,8 +580,7 @@ async def _collect_agent_responses_setup(participant: SupportsAgentRun) -> list[
     captured: list[ChatMessage] = []
 
     wf = (
-        MagenticBuilder(intermediate_outputs=True)
-        .participants([participant])
+        MagenticBuilder(participants=[participant], intermediate_outputs=True)
         .with_manager(manager=InvokeOnceManager())
         .build()
     )
@@ -632,8 +630,7 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
     storage = InMemoryCheckpointStorage()
 
     workflow = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .participants([StubThreadAgent()])
+        MagenticBuilder(participants=[StubThreadAgent()], checkpoint_storage=storage)
         .with_manager(manager=InvokeOnceManager())
         .build()
     )
@@ -646,8 +643,7 @@ async def test_magentic_checkpoint_resume_inner_loop_superstep():
     inner_loop_checkpoint = next(cp for cp in checkpoints if cp.metadata.get("superstep") == 1)  # type: ignore[reportUnknownMemberType]
 
     resumed = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .participants([StubThreadAgent()])
+        MagenticBuilder(participants=[StubThreadAgent()], checkpoint_storage=storage)
         .with_manager(manager=InvokeOnceManager())
         .build()
     )
@@ -668,8 +664,7 @@ async def test_magentic_checkpoint_resume_from_saved_state():
     manager = InvokeOnceManager()
 
     workflow = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .participants([StubThreadAgent()])
+        MagenticBuilder(participants=[StubThreadAgent()], checkpoint_storage=storage)
         .with_manager(manager=manager)
         .build()
     )
@@ -684,8 +679,7 @@ async def test_magentic_checkpoint_resume_from_saved_state():
     resumed_state = checkpoints[-1]  # Use the last checkpoint
 
     resumed_workflow = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .participants([StubThreadAgent()])
+        MagenticBuilder(participants=[StubThreadAgent()], checkpoint_storage=storage)
         .with_manager(manager=InvokeOnceManager())
         .build()
     )
@@ -704,8 +698,7 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     manager = InvokeOnceManager()
 
     workflow = (
-        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
-        .participants([StubThreadAgent()])
+        MagenticBuilder(participants=[StubThreadAgent()], enable_plan_review=True, checkpoint_storage=storage)
         .with_manager(manager=manager)
         .build()
     )
@@ -722,8 +715,11 @@ async def test_magentic_checkpoint_resume_rejects_participant_renames():
     target_checkpoint = checkpoints[-1]
 
     renamed_workflow = (
-        MagenticBuilder(enable_plan_review=True, checkpoint_storage=storage)
-        .participants([StubThreadAgent(name="renamedAgent")])
+        MagenticBuilder(
+            participants=[StubThreadAgent(name="renamedAgent")],
+            enable_plan_review=True,
+            checkpoint_storage=storage,
+        )
         .with_manager(manager=InvokeOnceManager())
         .build()
     )
@@ -763,7 +759,7 @@ class NotProgressingManager(MagenticManagerBase):
 async def test_magentic_stall_and_reset_reach_limits():
     manager = NotProgressingManager(max_round_count=10, max_stall_count=0, max_reset_count=1)
 
-    wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).build()
+    wf = MagenticBuilder(participants=[DummyExec("agentA")]).with_manager(manager=manager).build()
 
     events: list[WorkflowEvent] = []
     async for ev in wf.run("test limits", stream=True):
@@ -788,7 +784,7 @@ async def test_magentic_checkpoint_runtime_only() -> None:
     storage = InMemoryCheckpointStorage()
 
     manager = FakeManager(max_round_count=10)
-    wf = MagenticBuilder().participants([DummyExec("agentA")]).with_manager(manager=manager).build()
+    wf = MagenticBuilder(participants=[DummyExec("agentA")]).with_manager(manager=manager).build()
 
     baseline_output: ChatMessage | None = None
     async for ev in wf.run("runtime checkpoint test", checkpoint_storage=storage, stream=True):
@@ -821,8 +817,7 @@ async def test_magentic_checkpoint_runtime_overrides_buildtime() -> None:
 
         manager = FakeManager(max_round_count=10)
         wf = (
-            MagenticBuilder(checkpoint_storage=buildtime_storage)
-            .participants([DummyExec("agentA")])
+            MagenticBuilder(participants=[DummyExec("agentA")], checkpoint_storage=buildtime_storage)
             .with_manager(manager=manager)
             .build()
         )
@@ -875,8 +870,7 @@ async def test_magentic_checkpoint_restore_no_duplicate_history():
     storage = InMemoryCheckpointStorage()
 
     wf = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .participants([DummyExec("agentA")])
+        MagenticBuilder(participants=[DummyExec("agentA")], checkpoint_storage=storage)
         .with_manager(manager=manager)
         .build()
     )
@@ -936,47 +930,41 @@ async def test_magentic_checkpoint_restore_no_duplicate_history():
 def test_magentic_builder_rejects_empty_participant_factories():
     """Test that MagenticBuilder rejects empty participant_factories list."""
     with pytest.raises(ValueError, match=r"participant_factories cannot be empty"):
-        MagenticBuilder().register_participants([])
+        MagenticBuilder(participant_factories=[])
 
     with pytest.raises(
         ValueError,
-        match=r"No participants provided\. Call \.participants\(\) or \.register_participants\(\) first\.",
+        match=r"Either participants or participant_factories must be provided\.",
     ):
-        MagenticBuilder().with_manager(manager=FakeManager()).build()
+        MagenticBuilder()
 
 
 def test_magentic_builder_rejects_mixing_participants_and_factories():
-    """Test that mixing .participants() and .register_participants() raises an error."""
+    """Test that passing both participants and participant_factories to the constructor raises an error."""
     agent = StubAgent("agentA", "reply from agentA")
 
-    # Case 1: participants first, then register_participants
-    with pytest.raises(ValueError, match="Cannot mix .participants"):
-        MagenticBuilder().participants([agent]).register_participants([lambda: StubAgent("agentB", "reply")])
-
-    # Case 2: register_participants first, then participants
-    with pytest.raises(ValueError, match="Cannot mix .participants"):
-        MagenticBuilder().register_participants([lambda: agent]).participants([StubAgent("agentB", "reply")])
-
-
-def test_magentic_builder_rejects_multiple_calls_to_register_participants():
-    """Test that multiple calls to .register_participants() raises an error."""
-    with pytest.raises(
-        ValueError, match=r"register_participants\(\) has already been called on this builder instance."
-    ):
-        (
-            MagenticBuilder()
-            .register_participants([lambda: StubAgent("agentA", "reply from agentA")])
-            .register_participants([lambda: StubAgent("agentB", "reply from agentB")])
+    with pytest.raises(ValueError, match="Cannot provide both participants and participant_factories"):
+        MagenticBuilder(
+            participants=[agent],
+            participant_factories=[lambda: StubAgent("agentB", "reply")],
         )
 
 
-def test_magentic_builder_rejects_multiple_calls_to_participants():
-    """Test that multiple calls to .participants() raises an error."""
-    with pytest.raises(ValueError, match="participants have already been set"):
-        (
-            MagenticBuilder()
-            .participants([StubAgent("agentA", "reply from agentA")])
-            .participants([StubAgent("agentB", "reply from agentB")])
+def test_magentic_builder_rejects_both_factories_and_participants():
+    """Test that passing both participant_factories and participants raises an error."""
+    with pytest.raises(ValueError, match="Cannot provide both participants and participant_factories"):
+        MagenticBuilder(
+            participant_factories=[lambda: StubAgent("agentA", "reply from agentA")],
+            participants=[StubAgent("agentB", "reply from agentB")],
+        )
+
+
+def test_magentic_builder_rejects_both_participants_and_factories():
+    """Test that passing both participants and participant_factories raises an error."""
+    with pytest.raises(ValueError, match="Cannot provide both participants and participant_factories"):
+        MagenticBuilder(
+            participants=[StubAgent("agentA", "reply from agentA")],
+            participant_factories=[lambda: StubAgent("agentB", "reply from agentB")],
         )
 
 
@@ -990,7 +978,7 @@ async def test_magentic_with_participant_factories():
         return StubAgent("agentA", "reply from agentA")
 
     manager = FakeManager()
-    workflow = MagenticBuilder().register_participants([create_agent]).with_manager(manager=manager).build()
+    workflow = MagenticBuilder(participant_factories=[create_agent]).with_manager(manager=manager).build()
 
     # Factory should be called during build
     assert call_count == 1
@@ -1012,7 +1000,7 @@ async def test_magentic_participant_factories_reusable_builder():
         call_count += 1
         return StubAgent("agentA", "reply from agentA")
 
-    builder = MagenticBuilder().register_participants([create_agent]).with_manager(manager=FakeManager())
+    builder = MagenticBuilder(participant_factories=[create_agent]).with_manager(manager=FakeManager())
 
     # Build first workflow
     wf1 = builder.build()
@@ -1035,8 +1023,7 @@ async def test_magentic_participant_factories_with_checkpointing():
 
     manager = FakeManager()
     workflow = (
-        MagenticBuilder(checkpoint_storage=storage)
-        .register_participants([create_agent])
+        MagenticBuilder(participant_factories=[create_agent], checkpoint_storage=storage)
         .with_manager(manager=manager)
         .build()
     )
@@ -1060,8 +1047,9 @@ async def test_magentic_participant_factories_with_checkpointing():
 def test_magentic_builder_rejects_multiple_manager_configurations():
     """Test that configuring multiple managers raises ValueError."""
     manager = FakeManager()
+    agent = StubAgent("agentA", "reply")
 
-    builder = MagenticBuilder().with_manager(manager=manager)
+    builder = MagenticBuilder(participants=[agent]).with_manager(manager=manager)
 
     with pytest.raises(ValueError, match=r"with_manager\(\) has already been called"):
         builder.with_manager(manager=manager)
@@ -1070,17 +1058,18 @@ def test_magentic_builder_rejects_multiple_manager_configurations():
 def test_magentic_builder_requires_exactly_one_manager_option():
     """Test that exactly one manager option must be provided."""
     manager = FakeManager()
+    agent = StubAgent("agentA", "reply")
 
     def manager_factory() -> MagenticManagerBase:
         return FakeManager()
 
     # No options provided
     with pytest.raises(ValueError, match="Exactly one of"):
-        MagenticBuilder().with_manager()  # type: ignore
+        MagenticBuilder(participants=[agent]).with_manager()  # type: ignore
 
     # Multiple options provided
     with pytest.raises(ValueError, match="Exactly one of"):
-        MagenticBuilder().with_manager(manager=manager, manager_factory=manager_factory)  # type: ignore
+        MagenticBuilder(participants=[agent]).with_manager(manager=manager, manager_factory=manager_factory)  # type: ignore
 
 
 async def test_magentic_with_manager_factory():
@@ -1093,7 +1082,7 @@ async def test_magentic_with_manager_factory():
         return FakeManager()
 
     agent = StubAgent("agentA", "reply from agentA")
-    workflow = MagenticBuilder().participants([agent]).with_manager(manager_factory=manager_factory).build()
+    workflow = MagenticBuilder(participants=[agent]).with_manager(manager_factory=manager_factory).build()
 
     # Factory should be called during build
     assert factory_call_count == 1
@@ -1117,10 +1106,7 @@ async def test_magentic_with_agent_factory():
 
     participant = StubAgent("agentA", "reply from agentA")
     workflow = (
-        MagenticBuilder()
-        .participants([participant])
-        .with_manager(agent_factory=agent_factory, max_round_count=1)
-        .build()
+        MagenticBuilder(participants=[participant]).with_manager(agent_factory=agent_factory, max_round_count=1).build()
     )
 
     # Factory should be called during build
@@ -1146,7 +1132,7 @@ async def test_magentic_manager_factory_reusable_builder():
         return FakeManager()
 
     agent = StubAgent("agentA", "reply from agentA")
-    builder = MagenticBuilder().participants([agent]).with_manager(manager_factory=manager_factory)
+    builder = MagenticBuilder(participants=[agent]).with_manager(manager_factory=manager_factory)
 
     # Build first workflow
     wf1 = builder.build()
@@ -1178,7 +1164,7 @@ def test_magentic_with_both_participant_and_manager_factories():
         return FakeManager()
 
     workflow = (
-        MagenticBuilder().register_participants([create_agent]).with_manager(manager_factory=manager_factory).build()
+        MagenticBuilder(participant_factories=[create_agent]).with_manager(manager_factory=manager_factory).build()
     )
 
     # All factories should be called during build
@@ -1204,7 +1190,7 @@ async def test_magentic_factories_reusable_for_multiple_workflows():
         manager_factory_call_count += 1
         return FakeManager()
 
-    builder = MagenticBuilder().register_participants([create_agent]).with_manager(manager_factory=manager_factory)
+    builder = MagenticBuilder(participant_factories=[create_agent]).with_manager(manager_factory=manager_factory)
 
     # Build first workflow
     wf1 = builder.build()
@@ -1255,8 +1241,7 @@ def test_magentic_agent_factory_with_standard_manager_options():
 
     participant = StubAgent("agentA", "reply from agentA")
     workflow = (
-        MagenticBuilder()
-        .participants([participant])
+        MagenticBuilder(participants=[participant])
         .with_manager(
             agent_factory=agent_factory,
             task_ledger=custom_task_ledger,

@@ -240,7 +240,7 @@ async def main() -> None:
 
     # Build the workflow.
     workflow = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="writer_agent")
         .register_agent(create_writer_agent, name="writer_agent")
         .register_agent(create_final_editor_agent, name="final_editor_agent")
         .register_executor(
@@ -251,7 +251,6 @@ async def main() -> None:
             ),
             name="coordinator",
         )
-        .set_start_executor("writer_agent")
         .add_edge("writer_agent", "coordinator")
         .add_edge("coordinator", "writer_agent")
         .add_edge("final_editor_agent", "coordinator")

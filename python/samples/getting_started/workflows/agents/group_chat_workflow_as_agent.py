@@ -36,14 +36,13 @@ async def main() -> None:
     # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
     # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
-        GroupChatBuilder(intermediate_outputs=True)
+        GroupChatBuilder(participants=[researcher, writer], intermediate_outputs=True)
         .with_orchestrator(
             agent=OpenAIChatClient().as_agent(
                 name="Orchestrator",
                 instructions="You coordinate a team conversation to solve the user's task.",
             )
         )
-        .participants([researcher, writer])
         .build()
     )
 

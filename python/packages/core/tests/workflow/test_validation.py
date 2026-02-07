@@ -186,13 +186,8 @@ def test_disconnected_start_executor_not_in_graph():
 
 
 def test_missing_start_executor():
-    executor1 = StringExecutor(id="executor1")
-    executor2 = StringExecutor(id="executor2")
-
-    with pytest.raises(ValueError) as exc_info:
-        WorkflowBuilder().add_edge(executor1, executor2).build()
-
-    assert "Starting executor must be set" in str(exc_info.value)
+    with pytest.raises(TypeError):
+        WorkflowBuilder()  # type: ignore[call-arg]
 
 
 def test_workflow_validation_error_base_class():

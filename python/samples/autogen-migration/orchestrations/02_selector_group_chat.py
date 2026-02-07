@@ -86,8 +86,7 @@ async def run_agent_framework() -> None:
     )
 
     workflow = (
-        GroupChatBuilder(max_rounds=1)
-        .participants([python_expert, javascript_expert, database_expert])
+        GroupChatBuilder(participants=[python_expert, javascript_expert, database_expert], max_rounds=1)
         .with_orchestrator(
             agent=client.as_agent(
                 name="selector_manager",

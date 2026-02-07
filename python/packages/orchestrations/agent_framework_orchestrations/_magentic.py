@@ -1378,6 +1378,8 @@ class MagenticBuilder:
     def __init__(
         self,
         *,
+        participants: Sequence[SupportsAgentRun | Executor] | None = None,
+        participant_factories: Sequence[Callable[[], SupportsAgentRun | Executor]] | None = None,
         enable_plan_review: bool = False,
         checkpoint_storage: CheckpointStorage | None = None,
         intermediate_outputs: bool = False,
@@ -1385,6 +1387,8 @@ class MagenticBuilder:
         """Initialize the Magentic workflow builder.
 
         Args:
+            participants: Optional sequence of agent or executor instances for the workflow.
+            participant_factories: Optional sequence of callables returning agent or executor instances.
             enable_plan_review: If True, requires human approval of the initial plan before proceeding.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             intermediate_outputs: If True, enables intermediate outputs from agent participants.
@@ -1404,71 +1408,37 @@ class MagenticBuilder:
         # Intermediate outputs
         self._intermediate_outputs = intermediate_outputs
 
-    def register_participants(
+        if participants is None and participant_factories is None:
+            raise ValueError("Either participants or participant_factories must be provided.")
+
+        if participant_factories is not None:
+            self._set_participant_factories(participant_factories)
+        if participants is not None:
+            self._set_participants(participants)
+
+    def _set_participant_factories(
         self,
         participant_factories: Sequence[Callable[[], SupportsAgentRun | Executor]],
-    ) -> "MagenticBuilder":
-        """Register participant factories for this Magentic workflow.
-
-        Args:
-            participant_factories: Sequence of callables that return SupportsAgentRun or Executor instances.
-
-        Returns:
-            Self for method chaining
-
-        Raises:
-            ValueError: If participant_factories is empty, or participants
-                or participant factories are already set
-        """
+    ) -> None:
+        """Set participant factories (internal)."""
         if self._participants:
-            raise ValueError("Cannot mix .participants() and .register_participants() in the same builder instance.")
+            raise ValueError("Cannot provide both participants and participant_factories.")
 
         if self._participant_factories:
-            raise ValueError("register_participants() has already been called on this builder instance.")
+            raise ValueError("participant_factories already set.")
 
         if not participant_factories:
             raise ValueError("participant_factories cannot be empty")
 
         self._participant_factories = list(participant_factories)
-        return self
 
-    def participants(self, participants: Sequence[SupportsAgentRun | Executor]) -> Self:
-        """Define participants for this Magentic workflow.
-
-        Accepts SupportsAgentRun instances (auto-wrapped as AgentExecutor) or Executor instances.
-
-        Args:
-            participants: Sequence of participant definitions
-
-        Returns:
-            Self for method chaining
-
-        Raises:
-            ValueError: If participants are empty, names are duplicated, or participants
-                or participant factories are already set
-            TypeError: If any participant is not SupportsAgentRun or Executor instance
-
-        Example:
-
-        .. code-block:: python
-
-            workflow = (
-                MagenticBuilder()
-                .participants([research_agent, writing_agent, coding_agent, review_agent])
-                .with_manager(agent=manager_agent)
-                .build()
-            )
-
-        Notes:
-            - Participant names become part of the manager's context for selection
-            - Agent descriptions (if available) are extracted and provided to the manager
-            - Can be called multiple times to add participants incrementally
-        """
+    def _set_participants(self, participants: Sequence[SupportsAgentRun | Executor]) -> None:
+        """Set participants (internal)."""
         if self._participant_factories:
-            raise ValueError("Cannot mix .participants() and .register_participants() in the same builder instance.")
+            raise ValueError("Cannot provide both participants and participant_factories.")
 
         if self._participants:
-            raise ValueError("participants have already been set. Call participants(...) at most once.")
+            raise ValueError("participants already set.")
 
         if not participants:
             raise ValueError("participants cannot be empty.")
@@ -1493,8 +1463,6 @@ class MagenticBuilder:
             named[identifier] = participant
 
         self._participants = named
-
-        return self
 
     def with_plan_review(self, enable: bool = True) -> "MagenticBuilder":
         """Enable or disable human-in-the-loop plan review before task execution.
@@ -1521,8 +1489,7 @@ class MagenticBuilder:
         .. code-block:: python
 
             workflow = (
-                MagenticBuilder()
-                .participants(agent1=agent1)
+                MagenticBuilder(participants=[agent1])
                 .with_manager(agent=manager_agent)
                 .with_plan_review(enable=True)
                 .build()
@@ -1568,8 +1535,7 @@ class MagenticBuilder:
 
             storage = InMemoryCheckpointStorage()
             workflow = (
-                MagenticBuilder()
-                .participants([agent1])
+                MagenticBuilder(participants=[agent1])
                 .with_manager(agent=manager_agent)
                 .with_checkpointing(storage)
                 .build()
@@ -1809,8 +1775,7 @@ class MagenticBuilder:
             )
 
             workflow = (
-                MagenticBuilder()
-                .participants(agent1=agent1, agent2=agent2)
+                MagenticBuilder(participants=[agent1, agent2])
                 .with_manager(
                     agent=manager_agent,
                     max_round_count=20,
@@ -1830,15 +1795,14 @@ class MagenticBuilder:
 
 
             manager = MyManager()
-            workflow = MagenticBuilder().participants(agent1=agent1).with_manager(manager).build()
+            workflow = MagenticBuilder(participants=[agent1]).with_manager(manager).build()
 
         Usage with prompt customization:
 
         .. code-block:: python
 
             workflow = (
-                MagenticBuilder()
-                .participants(coder=coder_agent, reviewer=reviewer_agent)
+                MagenticBuilder(participants=[coder_agent, reviewer_agent])
                 .with_manager(
                     agent=manager_agent,
                     task_ledger_plan_prompt="Create a detailed step-by-step plan...",
@@ -1952,7 +1916,7 @@ class MagenticBuilder:
     def _resolve_participants(self) -> list[Executor]:
         """Resolve participant instances into Executor objects."""
         if not self._participants and not self._participant_factories:
-            raise ValueError("No participants provided. Call .participants() or .register_participants() first.")
+            raise ValueError("No participants provided. Pass participants or participant_factories to the constructor.")
         # We don't need to check if both are set since that is handled in the respective methods
 
         participants: list[Executor | SupportsAgentRun] = []

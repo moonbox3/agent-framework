@@ -152,9 +152,8 @@ async def main() -> None:
     # Third round: DevOpsEngineer speaks with an approval request (deploy to production)
     # Fourth round: DevOpsEngineer speaks again after approval
     workflow = (
-        GroupChatBuilder(max_rounds=4)
+        GroupChatBuilder(participants=[qa_engineer, devops_engineer], max_rounds=4)
         .with_orchestrator(selection_func=select_next_speaker)
-        .participants([qa_engineer, devops_engineer])
         .build()
     )
 

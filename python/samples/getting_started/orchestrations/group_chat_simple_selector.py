@@ -89,10 +89,10 @@ async def main() -> None:
     # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
         GroupChatBuilder(
+            participants=[expert, verifier, clarifier, skeptic],
             termination_condition=lambda conversation: len(conversation) >= 6,
             intermediate_outputs=True,
         )
-        .participants([expert, verifier, clarifier, skeptic])
         .with_orchestrator(selection_func=round_robin_selector)
         # Set a hard termination condition: stop after 6 messages (user task + one full rounds + 1)
         # One round is expert -> verifier -> clarifier -> skeptic, after which the expert gets to respond again.

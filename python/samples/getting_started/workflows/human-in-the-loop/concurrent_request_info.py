@@ -174,8 +174,7 @@ async def main() -> None:
 
     # Build workflow with request info enabled and custom aggregator
     workflow = (
-        ConcurrentBuilder()
-        .participants([technical_analyst, business_analyst, user_experience_analyst])
+        ConcurrentBuilder(participants=[technical_analyst, business_analyst, user_experience_analyst])
         .with_aggregator(aggregate_with_synthesis)
         # Only enable request info for the technical analyst agent
         .with_request_info(agents=["technical_analyst"])

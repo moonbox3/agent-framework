@@ -71,11 +71,11 @@ async def main() -> None:
     # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
     workflow = (
         GroupChatBuilder(
+            participants=[researcher, writer],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4,
             intermediate_outputs=True,
         )
         .with_orchestrator(agent=orchestrator_agent)
-        .participants([researcher, writer])
         # Set a hard termination condition: stop after 4 assistant messages
         # The agent orchestrator will intelligently decide when to end before this limit but just in case
         .with_termination_condition(lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4)

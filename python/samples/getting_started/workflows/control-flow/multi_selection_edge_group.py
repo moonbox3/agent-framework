@@ -225,7 +225,7 @@ async def main() -> None:
         return [handle_uncertain_id]
 
     workflow_builder = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="store_email")
         .register_agent(create_email_analysis_agent, name="email_analysis_agent")
         .register_agent(create_email_assistant_agent, name="email_assistant_agent")
         .register_agent(create_email_summary_agent, name="email_summary_agent")
@@ -240,7 +240,6 @@ async def main() -> None:
         .register_executor(lambda: database_access, name="database_access")
     )
 
-    workflow_builder._start_executor = "store_email"  # Set start executor
     workflow = (
         workflow_builder
         .add_edge("store_email", "email_analysis_agent")

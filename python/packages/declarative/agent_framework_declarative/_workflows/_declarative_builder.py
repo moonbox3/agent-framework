@@ -137,8 +137,6 @@ class DeclarativeWorkflowBuilder:
         Raises:
             ValueError: If no actions are defined (empty workflow), or validation fails
         """
-        builder = WorkflowBuilder(name=self._workflow_id, checkpoint_storage=self._checkpoint_storage)
-
         actions = self._yaml_def.get("actions", [])
         if not actions:
             # Empty workflow - raise an error since we need at least one executor
@@ -147,6 +145,13 @@ class DeclarativeWorkflowBuilder:
         # Validate workflow definition before building
         if self._validate:
             self._validate_workflow(actions)
+
+        # Use a placeholder for start_executor; it will be overwritten below via _set_start_executor
+        builder = WorkflowBuilder(
+            start_executor="_declarative_placeholder",
+            name=self._workflow_id,
+            checkpoint_storage=self._checkpoint_storage,
+        )
 
         # First pass: create all executors
         entry_executor = self._create_executors_for_actions(actions, builder)

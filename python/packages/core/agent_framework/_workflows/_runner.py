@@ -104,6 +104,9 @@ class Runner:
                 logger.info(f"Starting superstep {self._iteration + 1}")
                 yield WorkflowEvent.superstep_started(iteration=self._iteration + 1)
 
+                # Reset per-superstep tracking for HITL detection
+                self._ctx.reset_superstep_request_info_tracking()
+
                 # Run iteration concurrently with live event streaming: we poll
                 # for new events while the iteration coroutine progresses.
                 iteration_task = asyncio.create_task(self._run_iteration())
@@ -148,6 +151,18 @@ class Runner:
                 await self._create_checkpoint_if_enabled(f"superstep_{self._iteration}")
 
                 yield WorkflowEvent.superstep_completed(iteration=self._iteration)
+
+                # Check for HITL pause: if any request_info events were emitted
+                # during this superstep, pause the workflow even if there are pending
+                # messages. This prevents parallel nodes from continuing to run while
+                # HITL input is needed. Pending messages are preserved in memory and
+                # will be delivered alongside HITL responses in the next run.
+                if self._ctx.had_request_info_in_superstep():
+                    logger.info(
+                        f"Pausing workflow after superstep {self._iteration}: "
+                        "request_info event(s) emitted during fan-out execution"
+                    )
+                    break
 
                 # Check for convergence: no more messages to process
                 if not await self._ctx.has_messages():

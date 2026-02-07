@@ -281,6 +281,18 @@ class RunnerContext(Protocol):
         """
         ...
 
+    def reset_superstep_request_info_tracking(self) -> None:
+        """Reset tracking of new request_info events for the current superstep."""
+        ...
+
+    def had_request_info_in_superstep(self) -> bool:
+        """Check if any request_info events were emitted during the current superstep.
+
+        Returns:
+            True if at least one request_info event was emitted since the last reset.
+        """
+        ...
+
 
 class InProcRunnerContext:
     """In-process execution context for local execution and optional checkpointing."""
@@ -305,6 +317,9 @@ class InProcRunnerContext:
 
         # Streaming flag - set by workflow's run(..., stream=True) vs run(..., stream=False)
         self._streaming: bool = False
+
+        # Track whether new request_info events were emitted during the current superstep
+        self._new_request_info_in_superstep: bool = False
 
     # region Messaging and Events
     async def send_message(self, message: Message) -> None:
@@ -415,6 +430,7 @@ class InProcRunnerContext:
         # Clear any pending events (best-effort) by recreating the queue
         self._event_queue = asyncio.Queue()
         self._streaming = False  # Reset streaming flag
+        self._new_request_info_in_superstep = False
 
     async def apply_checkpoint(self, checkpoint: WorkflowCheckpoint) -> None:
         """Apply a checkpoint to the current context, mutating its state."""
@@ -481,6 +497,7 @@ class InProcRunnerContext:
         if event.request_id is None:
             raise ValueError("request_info event must have a request_id")
         self._pending_request_info_events[event.request_id] = event
+        self._new_request_info_in_superstep = True
         await self.add_event(event)
 
     async def send_request_info_response(self, request_id: str, response: Any) -> None:
@@ -521,3 +538,15 @@ class InProcRunnerContext:
             A dictionary mapping request IDs to their corresponding WorkflowEvent (type='request_info').
         """
         return dict(self._pending_request_info_events)
+
+    def reset_superstep_request_info_tracking(self) -> None:
+        """Reset tracking of new request_info events for the current superstep."""
+        self._new_request_info_in_superstep = False
+
+    def had_request_info_in_superstep(self) -> bool:
+        """Check if any request_info events were emitted during the current superstep.
+
+        Returns:
+            True if at least one request_info event was emitted since the last reset.
+        """
+        return self._new_request_info_in_superstep

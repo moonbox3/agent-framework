@@ -111,7 +111,7 @@ async def main() -> None:
     )
 
     # 3. Build a sequential workflow with the agent
-    workflow = SequentialBuilder().participants([database_agent]).build()
+    workflow = SequentialBuilder(participants=[database_agent]).build()
 
     # 4. Start the workflow with a user task
     print("Starting sequential workflow with tool approval...")

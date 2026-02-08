@@ -441,7 +441,7 @@ class AgentFrameworkExecutor:
                 if not checkpoint_id:
                     error_msg = (
                         "Cannot process HIL responses without a checkpoint. "
-                        "Workflows using HIL must be configured with .with_checkpointing() "
+                        "Workflows using HIL must be configured with checkpoint_storage in constructor"
                         "and a checkpoint must exist before sending responses."
                     )
                     logger.error(error_msg)

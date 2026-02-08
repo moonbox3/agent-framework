@@ -152,7 +152,7 @@ class Workflow(DictConvertible):
     Checkpointing can be configured at build time or runtime:
 
     Build-time (via WorkflowBuilder):
-        workflow = WorkflowBuilder().with_checkpointing(storage).build()
+        workflow = WorkflowBuilder(checkpoint_storage=storage).build()
 
     Runtime (via run parameters):
         result = await workflow.run(message, checkpoint_storage=runtime_storage)
@@ -428,7 +428,7 @@ class Workflow(DictConvertible):
             if not has_checkpointing and checkpoint_storage is None:
                 raise ValueError(
                     "Cannot restore from checkpoint: either provide checkpoint_storage parameter "
-                    "or build workflow with WorkflowBuilder.with_checkpointing(checkpoint_storage)."
+                    "or build workflow with WorkflowBuilder(checkpoint_storage=checkpoint_storage)."
                 )
 
             await self._runner.restore_from_checkpoint(checkpoint_id, checkpoint_storage)

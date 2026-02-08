@@ -97,17 +97,16 @@ def create_workflow(checkpoint_storage: FileCheckpointStorage) -> tuple[Workflow
     client = AzureOpenAIChatClient(credential=AzureCliCredential())
     triage, refund, order = create_agents(client)
 
+    # checkpoint_storage: Enable checkpointing for resume
+    # termination_condition: Terminate after 5 user messages for this demo
     workflow = (
         HandoffBuilder(
             name="checkpoint_handoff_demo",
             participants=[triage, refund, order],
+            checkpoint_storage=checkpoint_storage,
+            termination_condition=lambda conv: sum(1 for msg in conv if msg.role == "user") >= 5,
         )
         .with_start_agent(triage)
-        .with_checkpointing(checkpoint_storage)
-        .with_termination_condition(
-            # Terminate after 5 user messages for this demo
-            lambda conv: sum(1 for msg in conv if msg.role == "user") >= 5
-        )
         .build()
     )
 

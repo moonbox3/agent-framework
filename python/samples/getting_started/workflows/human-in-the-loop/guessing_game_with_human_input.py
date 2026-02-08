@@ -198,8 +198,7 @@ async def main() -> None:
 
     # Build a simple loop: TurnManager <-> AgentExecutor.
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(turn_manager)
+        WorkflowBuilder(start_executor=turn_manager)
         .add_edge(turn_manager, guessing_agent)  # Ask agent to make/adjust a guess
         .add_edge(guessing_agent, turn_manager)  # Agent's response comes back to coordinator
     ).build()

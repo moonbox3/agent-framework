@@ -28,7 +28,7 @@ Pipeline layout:
 writer_agent -> Coordinator -> writer_agent -> Coordinator -> final_editor_agent -> Coordinator -> output
 
 The writer agent drafts marketing copy. A custom executor emits a request_info event (type='request_info') so a
-human can comment, then relays the human guidance back into the conversation before the final editor agent 
+human can comment, then relays the human guidance back into the conversation before the final editor agent
 produces the polished output.
 
 Demonstrates:
@@ -184,8 +184,7 @@ async def main() -> None:
 
     # Build the workflow.
     workflow = (
-        WorkflowBuilder()
-        .set_start_executor(writer_agent)
+        WorkflowBuilder(start_executor=writer_agent)
         .add_edge(writer_agent, coordinator)
         .add_edge(coordinator, writer_agent)
         .add_edge(final_editor_agent, coordinator)

@@ -178,7 +178,7 @@ class TestRequestInfoAndResponse:
     async def test_approval_workflow(self):
         """Test end-to-end workflow with approval request."""
         executor = ApprovalRequiredExecutor(id="approval_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # First run the workflow until it emits a request
         request_info_event: WorkflowEvent | None = None
@@ -203,7 +203,7 @@ class TestRequestInfoAndResponse:
     async def test_calculation_workflow(self):
         """Test end-to-end workflow with calculation request."""
         executor = CalculationExecutor(id="calc_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # First run the workflow until it emits a calculation request
         request_info_event: WorkflowEvent | None = None
@@ -230,7 +230,7 @@ class TestRequestInfoAndResponse:
     async def test_multiple_requests_workflow(self):
         """Test workflow with multiple concurrent requests."""
         executor = MultiRequestExecutor(id="multi_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # Collect all request events by running the full stream
         request_events: list[WorkflowEvent] = []
@@ -264,7 +264,7 @@ class TestRequestInfoAndResponse:
     async def test_denied_approval_workflow(self):
         """Test workflow when approval is denied."""
         executor = ApprovalRequiredExecutor(id="approval_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # First run the workflow until it emits a request
         request_info_event: WorkflowEvent | None = None
@@ -287,7 +287,7 @@ class TestRequestInfoAndResponse:
     async def test_workflow_state_with_pending_requests(self):
         """Test workflow state when waiting for responses."""
         executor = ApprovalRequiredExecutor(id="approval_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # Run workflow until idle with pending requests
         request_info_event: WorkflowEvent | None = None
@@ -312,7 +312,7 @@ class TestRequestInfoAndResponse:
     async def test_invalid_calculation_input(self):
         """Test workflow handling of invalid calculation input."""
         executor = CalculationExecutor(id="calc_executor")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # Send invalid input (no numbers)
         completed = False
@@ -334,7 +334,7 @@ class TestRequestInfoAndResponse:
 
             # Create workflow with checkpointing enabled
             executor = ApprovalRequiredExecutor(id="approval_executor")
-            workflow = WorkflowBuilder().set_start_executor(executor).with_checkpointing(storage).build()
+            workflow = WorkflowBuilder(start_executor=executor, checkpoint_storage=storage).build()
 
             # Step 1: Run workflow to completion to ensure checkpoints are created
             request_info_event: WorkflowEvent | None = None
@@ -372,7 +372,7 @@ class TestRequestInfoAndResponse:
 
             # Step 4: Create a fresh workflow and restore from checkpoint
             new_executor = ApprovalRequiredExecutor(id="approval_executor")
-            restored_workflow = WorkflowBuilder().set_start_executor(new_executor).with_checkpointing(storage).build()
+            restored_workflow = WorkflowBuilder(start_executor=new_executor, checkpoint_storage=storage).build()
 
             # Step 5: Resume from checkpoint and verify the request can be continued
             completed = False

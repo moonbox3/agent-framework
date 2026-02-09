@@ -44,7 +44,7 @@ def test_build_fails_when_parent_has_checkpoint_but_sub_does_not() -> None:
     with pytest.raises(WorkflowValidationError, match="sub-workflow in executor 'sub'") as exc_info:
         WorkflowBuilder(start_executor="start", checkpoint_storage=storage).register_executor(
             lambda: StartExecutor(id="start"), name="start"
-        ).register_executor(lambda: build_sub_workflow(), name="sub").add_edge("start", "sub").build()
+        ).register_executor(build_sub_workflow, name="sub").add_edge("start", "sub").build()
 
     assert exc_info.value.type == "checkpoint_configuration"
 
@@ -68,7 +68,7 @@ def test_build_succeeds_when_neither_has_checkpoint() -> None:
     workflow = (
         WorkflowBuilder(start_executor="start")
         .register_executor(lambda: StartExecutor(id="start"), name="start")
-        .register_executor(lambda: build_sub_workflow(), name="sub")
+        .register_executor(build_sub_workflow, name="sub")
         .add_edge("start", "sub")
         .build()
     )
@@ -83,7 +83,7 @@ async def test_runtime_checkpoint_validates_sub_workflows() -> None:
     workflow = (
         WorkflowBuilder(start_executor="start")
         .register_executor(lambda: StartExecutor(id="start"), name="start")
-        .register_executor(lambda: build_sub_workflow(), name="sub")
+        .register_executor(build_sub_workflow, name="sub")
         .add_edge("start", "sub")
         .build()
     )

@@ -28,7 +28,7 @@ from ._edge import (
 )
 from ._executor import Executor
 from ._runner_context import InProcRunnerContext
-from ._validation import validate_workflow_graph
+from ._validation import CheckpointConfigurationError, validate_workflow_graph
 from ._workflow import Workflow
 
 if sys.version_info >= (3, 11):
@@ -1099,6 +1099,14 @@ class WorkflowBuilder:
                     start_executor,
                     output_executors,
                 )
+
+                # Validate checkpoint configuration for sub-workflows
+                if self._checkpoint_storage is not None:
+                    from ._workflow_executor import WorkflowExecutor
+
+                    for executor in executors.values():
+                        if isinstance(executor, WorkflowExecutor) and not executor.workflow.has_checkpointing:
+                            raise CheckpointConfigurationError(executor.id)
 
                 # Add validation completed event
                 span.add_event(OtelAttr.BUILD_VALIDATION_COMPLETED)

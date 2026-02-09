@@ -24,6 +24,7 @@ class ValidationTypeEnum(Enum):
     GRAPH_CONNECTIVITY = "GRAPH_CONNECTIVITY"
     HANDLER_OUTPUT_ANNOTATION = "HANDLER_OUTPUT_ANNOTATION"
     OUTPUT_VALIDATION = "OUTPUT_VALIDATION"
+    CHECKPOINT_CONFIGURATION = "CHECKPOINT_CONFIGURATION"
 
 
 class WorkflowValidationError(Exception):
@@ -77,6 +78,21 @@ class GraphConnectivityError(WorkflowValidationError):
 
     def __init__(self, message: str):
         super().__init__(message, validation_type=ValidationTypeEnum.GRAPH_CONNECTIVITY)
+
+
+class CheckpointConfigurationError(WorkflowValidationError):
+    """Exception raised when checkpoint configuration is inconsistent between parent and sub-workflows."""
+
+    def __init__(self, executor_id: str):
+        super().__init__(
+            message=(
+                f"Parent workflow has checkpointing enabled, but sub-workflow in executor "
+                f"'{executor_id}' does not. When checkpointing is enabled on a parent workflow, "
+                f"all sub-workflows must also have checkpoint_storage configured in their WorkflowBuilder."
+            ),
+            validation_type=ValidationTypeEnum.CHECKPOINT_CONFIGURATION,
+        )
+        self.executor_id = executor_id
 
 
 # endregion

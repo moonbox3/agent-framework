@@ -228,6 +228,11 @@ class Workflow(DictConvertible):
         self._graph_signature_hash = self._hash_graph_signature(self._graph_signature)
         self._runner.graph_signature_hash = self._graph_signature_hash
 
+    @property
+    def has_checkpointing(self) -> bool:
+        """Whether this workflow has checkpoint storage configured (build-time or runtime)."""
+        return self._runner_context.has_checkpointing()
+
     def _ensure_not_running(self) -> None:
         """Ensure the workflow is not already running."""
         if self._is_running:
@@ -237,6 +242,19 @@ class Workflow(DictConvertible):
     def _reset_running_flag(self) -> None:
         """Reset the running flag."""
         self._is_running = False
+
+    def _validate_sub_workflow_checkpointing(self) -> None:
+        """Validate that all sub-workflows have checkpointing configured.
+
+        Raises:
+            CheckpointConfigurationError: If a sub-workflow is missing checkpoint configuration.
+        """
+        from ._validation import CheckpointConfigurationError
+        from ._workflow_executor import WorkflowExecutor
+
+        for executor in self.executors.values():
+            if isinstance(executor, WorkflowExecutor) and not executor.workflow.has_checkpointing:
+                raise CheckpointConfigurationError(executor.id)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the workflow definition into a JSON-ready dictionary."""
@@ -552,6 +570,7 @@ class Workflow(DictConvertible):
         # Enable runtime checkpointing if storage provided
         if checkpoint_storage is not None:
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
+            self._validate_sub_workflow_checkpointing()
 
         initial_executor_fn, reset_context = self._resolve_execution_mode(
             message, responses, checkpoint_id, checkpoint_storage

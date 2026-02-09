@@ -295,10 +295,10 @@ class LaunchCoordinator(Executor):
 # ---------------------------------------------------------------------------
 
 
-def build_sub_workflow() -> WorkflowExecutor:
+def build_sub_workflow(storage: FileCheckpointStorage) -> WorkflowExecutor:
     """Assemble the sub-workflow used by the parent workflow executor."""
     sub_workflow = (
-        WorkflowBuilder(start_executor="writer")
+        WorkflowBuilder(start_executor="writer", checkpoint_storage=storage)
         .register_executor(DraftWriter, name="writer")
         .register_executor(DraftReviewRouter, name="router")
         .register_executor(DraftFinaliser, name="finaliser")
@@ -316,7 +316,7 @@ def build_parent_workflow(storage: FileCheckpointStorage) -> Workflow:
     return (
         WorkflowBuilder(start_executor="coordinator", checkpoint_storage=storage)
         .register_executor(LaunchCoordinator, name="coordinator")
-        .register_executor(build_sub_workflow, name="sub_executor")
+        .register_executor(lambda: build_sub_workflow(storage), name="sub_executor")
         .add_edge("coordinator", "sub_executor")
         .add_edge("sub_executor", "coordinator")
         .build()

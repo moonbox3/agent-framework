@@ -559,7 +559,7 @@ class CheckpointTestCoordinator(Executor):
 def _build_checkpoint_test_workflow(storage: InMemoryCheckpointStorage) -> Workflow:
     """Build the main workflow with checkpointing for testing."""
     two_step_executor = TwoStepSubWorkflowExecutor()
-    sub_workflow = WorkflowBuilder(start_executor=two_step_executor).build()
+    sub_workflow = WorkflowBuilder(start_executor=two_step_executor, checkpoint_storage=storage).build()
     sub_workflow_executor = WorkflowExecutor(sub_workflow, id="sub_workflow_executor")
 
     coordinator = CheckpointTestCoordinator()

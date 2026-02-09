@@ -56,6 +56,7 @@ from ._runner_context import (
     RunnerContext,
 )
 from ._validation import (
+    CheckpointConfigurationError,
     EdgeDuplicationError,
     GraphConnectivityError,
     TypeCompatibilityError,
@@ -79,6 +80,7 @@ __all__ = [
     "AgentExecutorRequest",
     "AgentExecutorResponse",
     "Case",
+    "CheckpointConfigurationError",
     "CheckpointStorage",
     "Default",
     "Edge",

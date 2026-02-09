@@ -10,7 +10,6 @@ from agent_framework import (
     Executor,
     GraphConnectivityError,
     TypeCompatibilityError,
-    ValidationTypeEnum,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowValidationError,
@@ -95,7 +94,7 @@ def test_edge_duplication_validation_fails():
         WorkflowBuilder(start_executor=executor1).add_edge(executor1, executor2).add_edge(executor1, executor2).build()
 
     assert "executor1->executor2" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.EDGE_DUPLICATION
+    assert exc_info.value.type == "edge_duplication"
 
 
 def test_type_compatibility_validation_fails():
@@ -108,7 +107,7 @@ def test_type_compatibility_validation_fails():
     error = exc_info.value
     assert error.source_executor_id == "string_executor"
     assert error.target_executor_id == "int_executor"
-    assert error.validation_type == ValidationTypeEnum.TYPE_COMPATIBILITY
+    assert error.type == "type_compatibility"
 
 
 def test_type_compatibility_with_any_type_passes():
@@ -151,7 +150,7 @@ def test_graph_connectivity_unreachable_executors():
 
     assert "unreachable" in str(exc_info.value).lower()
     assert "executor3" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.GRAPH_CONNECTIVITY
+    assert exc_info.value.type == "graph_connectivity"
 
 
 def test_graph_connectivity_isolated_executors():
@@ -191,10 +190,10 @@ def test_missing_start_executor():
 
 
 def test_workflow_validation_error_base_class():
-    error = WorkflowValidationError("Test message", ValidationTypeEnum.EDGE_DUPLICATION)
-    assert str(error) == "[EDGE_DUPLICATION] Test message"
+    error = WorkflowValidationError("Test message", "edge_duplication")
+    assert str(error) == "[edge_duplication] Test message"
     assert error.message == "Test message"
-    assert error.validation_type == ValidationTypeEnum.EDGE_DUPLICATION
+    assert error.type == "edge_duplication"
 
 
 def test_complex_workflow_validation():
@@ -464,20 +463,19 @@ def test_generic_type_compatibility() -> None:
     assert workflow is not None
 
 
-def test_validation_enum_usage() -> None:
-    # Test that all validation types use the enum correctly
+def test_validation_type_usage() -> None:
+    # Test that all validation types are stored as string literals
     edge_error = EdgeDuplicationError("test->test")
-    assert edge_error.validation_type == ValidationTypeEnum.EDGE_DUPLICATION
+    assert edge_error.type == "edge_duplication"
 
     type_error = TypeCompatibilityError("source", "target", [str], [int])
-    assert type_error.validation_type == ValidationTypeEnum.TYPE_COMPATIBILITY
+    assert type_error.type == "type_compatibility"
 
     graph_error = GraphConnectivityError("test message")
-    assert graph_error.validation_type == ValidationTypeEnum.GRAPH_CONNECTIVITY
+    assert graph_error.type == "graph_connectivity"
 
-    # Test enum string representation
-    assert str(ValidationTypeEnum.EDGE_DUPLICATION) == "ValidationTypeEnum.EDGE_DUPLICATION"
-    assert ValidationTypeEnum.EDGE_DUPLICATION.value == "EDGE_DUPLICATION"
+    error = WorkflowValidationError("test", "output_validation")
+    assert error.type == "output_validation"
 
 
 def test_handler_ctx_missing_annotation_raises() -> None:
@@ -588,7 +586,7 @@ def test_output_validation_fails_for_nonexistent_executor():
 
     assert "not present in the workflow graph" in str(exc_info.value)
     assert "nonexistent_executor" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+    assert exc_info.value.type == "output_validation"
 
 
 def test_output_validation_fails_for_executor_without_output_types():
@@ -605,7 +603,7 @@ def test_output_validation_fails_for_executor_without_output_types():
 
     assert "must have output type annotations defined" in str(exc_info.value)
     assert "no_output" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+    assert exc_info.value.type == "output_validation"
 
 
 def test_output_validation_empty_list_passes():
@@ -635,7 +633,7 @@ def test_output_validation_with_direct_validate_workflow_graph():
         validate_workflow_graph(edge_groups, executors, executor1, ["nonexistent"])
 
     assert "not present in the workflow graph" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+    assert exc_info.value.type == "output_validation"
 
 
 def test_output_validation_with_no_output_types_via_direct_validation():
@@ -650,7 +648,7 @@ def test_output_validation_with_no_output_types_via_direct_validation():
         validate_workflow_graph(edge_groups, executors, executor1, ["no_output"])
 
     assert "must have output type annotations defined" in str(exc_info.value)
-    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+    assert exc_info.value.type == "output_validation"
 
 
 def test_output_validation_partial_invalid_list():
@@ -666,12 +664,6 @@ def test_output_validation_partial_invalid_list():
 
     assert "not present in the workflow graph" in str(exc_info.value)
     assert "nonexistent" in str(exc_info.value)
-
-
-def test_output_validation_type_enum_value():
-    """Test that OUTPUT_VALIDATION is properly defined in ValidationTypeEnum."""
-    assert hasattr(ValidationTypeEnum, "OUTPUT_VALIDATION")
-    assert ValidationTypeEnum.OUTPUT_VALIDATION.value == "OUTPUT_VALIDATION"
 
 
 # endregion

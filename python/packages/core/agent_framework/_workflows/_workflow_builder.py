@@ -28,7 +28,7 @@ from ._edge import (
 )
 from ._executor import Executor
 from ._runner_context import InProcRunnerContext
-from ._validation import CheckpointConfigurationError, validate_workflow_graph
+from ._validation import WorkflowValidationError, validate_workflow_graph
 from ._workflow import Workflow
 
 if sys.version_info >= (3, 11):
@@ -1106,7 +1106,13 @@ class WorkflowBuilder:
 
                     for executor in executors.values():
                         if isinstance(executor, WorkflowExecutor) and not executor.workflow.has_checkpointing:
-                            raise CheckpointConfigurationError(executor.id)
+                            raise WorkflowValidationError(
+                                f"Parent workflow has checkpointing enabled, but sub-workflow in executor "
+                                f"'{executor.id}' does not. When checkpointing is enabled on a parent workflow, "
+                                f"all sub-workflows must also have checkpoint_storage configured in their "
+                                f"WorkflowBuilder.",
+                                "checkpoint_configuration",
+                            )
 
                 # Add validation completed event
                 span.add_event(OtelAttr.BUILD_VALIDATION_COMPLETED)

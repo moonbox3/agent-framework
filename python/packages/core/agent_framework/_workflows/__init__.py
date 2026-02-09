@@ -56,11 +56,10 @@ from ._runner_context import (
     RunnerContext,
 )
 from ._validation import (
-    CheckpointConfigurationError,
     EdgeDuplicationError,
     GraphConnectivityError,
     TypeCompatibilityError,
-    ValidationTypeEnum,
+    ValidationType,
     WorkflowValidationError,
     validate_workflow_graph,
 )
@@ -80,7 +79,6 @@ __all__ = [
     "AgentExecutorRequest",
     "AgentExecutorResponse",
     "Case",
-    "CheckpointConfigurationError",
     "CheckpointStorage",
     "Default",
     "Edge",
@@ -104,7 +102,7 @@ __all__ = [
     "SwitchCaseEdgeGroupCase",
     "SwitchCaseEdgeGroupDefault",
     "TypeCompatibilityError",
-    "ValidationTypeEnum",
+    "ValidationType",
     "Workflow",
     "WorkflowAgent",
     "WorkflowBuilder",

@@ -247,14 +247,20 @@ class Workflow(DictConvertible):
         """Validate that all sub-workflows have checkpointing configured.
 
         Raises:
-            CheckpointConfigurationError: If a sub-workflow is missing checkpoint configuration.
+            WorkflowValidationError: If a sub-workflow is missing checkpoint configuration.
         """
-        from ._validation import CheckpointConfigurationError
+        from ._validation import WorkflowValidationError
         from ._workflow_executor import WorkflowExecutor
 
         for executor in self.executors.values():
             if isinstance(executor, WorkflowExecutor) and not executor.workflow.has_checkpointing:
-                raise CheckpointConfigurationError(executor.id)
+                raise WorkflowValidationError(
+                    f"Parent workflow has checkpointing enabled, but sub-workflow in executor "
+                    f"'{executor.id}' does not. When checkpointing is enabled on a parent workflow, "
+                    f"all sub-workflows must also have checkpoint_storage configured in their "
+                    f"WorkflowBuilder.",
+                    "checkpoint_configuration",
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the workflow definition into a JSON-ready dictionary."""

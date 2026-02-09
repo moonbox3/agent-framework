@@ -4,8 +4,7 @@ import logging
 import types
 from collections import defaultdict
 from collections.abc import Sequence
-from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from ._edge import Edge, EdgeGroup, FanInEdgeGroup, InternalEdgeGroup
 from ._executor import Executor
@@ -15,28 +14,28 @@ logger = logging.getLogger(__name__)
 
 
 # region Enums and Base Classes
-class ValidationTypeEnum(Enum):
-    """Enumeration of workflow validation types."""
 
-    EDGE_DUPLICATION = "EDGE_DUPLICATION"
-    EXECUTOR_DUPLICATION = "EXECUTOR_DUPLICATION"
-    TYPE_COMPATIBILITY = "TYPE_COMPATIBILITY"
-    GRAPH_CONNECTIVITY = "GRAPH_CONNECTIVITY"
-    HANDLER_OUTPUT_ANNOTATION = "HANDLER_OUTPUT_ANNOTATION"
-    OUTPUT_VALIDATION = "OUTPUT_VALIDATION"
-    CHECKPOINT_CONFIGURATION = "CHECKPOINT_CONFIGURATION"
+ValidationType = Literal[
+    "edge_duplication",
+    "executor_duplication",
+    "type_compatibility",
+    "graph_connectivity",
+    "handler_output_annotation",
+    "output_validation",
+    "checkpoint_configuration",
+]
 
 
 class WorkflowValidationError(Exception):
     """Base exception for workflow validation errors."""
 
-    def __init__(self, message: str, validation_type: ValidationTypeEnum):
+    def __init__(self, message: str, type: ValidationType):
         super().__init__(message)
         self.message = message
-        self.validation_type = validation_type
+        self.type: ValidationType = type
 
     def __str__(self) -> str:
-        return f"[{self.validation_type.value}] {self.message}"
+        return f"[{self.type}] {self.message}"
 
 
 class EdgeDuplicationError(WorkflowValidationError):
@@ -45,7 +44,7 @@ class EdgeDuplicationError(WorkflowValidationError):
     def __init__(self, edge_id: str):
         super().__init__(
             message=f"Duplicate edge detected: {edge_id}. Each edge in the workflow must be unique.",
-            validation_type=ValidationTypeEnum.EDGE_DUPLICATION,
+            type="edge_duplication",
         )
         self.edge_id = edge_id
 
@@ -65,7 +64,7 @@ class TypeCompatibilityError(WorkflowValidationError):
             message=f"Type incompatibility between executors '{source_executor_id}' -> '{target_executor_id}'. "
             f"Source executor outputs types {[str(t) for t in source_types]} but target executor "
             f"can only handle types {[str(t) for t in target_types]}.",
-            validation_type=ValidationTypeEnum.TYPE_COMPATIBILITY,
+            type="type_compatibility",
         )
         self.source_executor_id = source_executor_id
         self.target_executor_id = target_executor_id
@@ -77,22 +76,7 @@ class GraphConnectivityError(WorkflowValidationError):
     """Exception raised when graph connectivity issues are detected."""
 
     def __init__(self, message: str):
-        super().__init__(message, validation_type=ValidationTypeEnum.GRAPH_CONNECTIVITY)
-
-
-class CheckpointConfigurationError(WorkflowValidationError):
-    """Exception raised when checkpoint configuration is inconsistent between parent and sub-workflows."""
-
-    def __init__(self, executor_id: str):
-        super().__init__(
-            message=(
-                f"Parent workflow has checkpointing enabled, but sub-workflow in executor "
-                f"'{executor_id}' does not. When checkpointing is enabled on a parent workflow, "
-                f"all sub-workflows must also have checkpoint_storage configured in their WorkflowBuilder."
-            ),
-            validation_type=ValidationTypeEnum.CHECKPOINT_CONFIGURATION,
-        )
-        self.executor_id = executor_id
+        super().__init__(message, type="graph_connectivity")
 
 
 # endregion
@@ -377,14 +361,14 @@ class WorkflowGraphValidator:
             if output_id not in self._executors:
                 raise WorkflowValidationError(
                     f"Output executor '{output_id}' is not present in the workflow graph",
-                    validation_type=ValidationTypeEnum.OUTPUT_VALIDATION,
+                    type="output_validation",
                 )
 
             output_executor = self._executors[output_id]
             if not output_executor.workflow_output_types:
                 raise WorkflowValidationError(
                     f"Output executor '{output_id}' must have output type annotations defined.",
-                    validation_type=ValidationTypeEnum.OUTPUT_VALIDATION,
+                    type="output_validation",
                 )
 
     # endregion

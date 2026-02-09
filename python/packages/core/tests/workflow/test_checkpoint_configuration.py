@@ -4,11 +4,11 @@ import pytest
 from typing_extensions import Never
 
 from agent_framework import (
-    CheckpointConfigurationError,
     Executor,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowExecutor,
+    WorkflowValidationError,
     handler,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
@@ -41,10 +41,12 @@ def test_build_fails_when_parent_has_checkpoint_but_sub_does_not() -> None:
     """Parent has checkpoint_storage, sub-workflow does not -> error at build time."""
     storage = InMemoryCheckpointStorage()
 
-    with pytest.raises(CheckpointConfigurationError, match="sub-workflow in executor 'sub'"):
+    with pytest.raises(WorkflowValidationError, match="sub-workflow in executor 'sub'") as exc_info:
         WorkflowBuilder(start_executor="start", checkpoint_storage=storage).register_executor(
             lambda: StartExecutor(id="start"), name="start"
         ).register_executor(lambda: build_sub_workflow(), name="sub").add_edge("start", "sub").build()
+
+    assert exc_info.value.type == "checkpoint_configuration"
 
 
 def test_build_succeeds_when_both_have_checkpoint() -> None:
@@ -87,8 +89,10 @@ async def test_runtime_checkpoint_validates_sub_workflows() -> None:
     )
 
     # Run with runtime checkpoint_storage - should fail because sub has none
-    with pytest.raises(CheckpointConfigurationError, match="sub-workflow in executor 'sub'"):
+    with pytest.raises(WorkflowValidationError, match="sub-workflow in executor 'sub'") as exc_info:
         await workflow.run("hello", checkpoint_storage=storage)
+
+    assert exc_info.value.type == "checkpoint_configuration"
 
 
 def test_nested_sub_workflows_all_require_checkpoint() -> None:
@@ -100,10 +104,12 @@ def test_nested_sub_workflows_all_require_checkpoint() -> None:
 
     # Middle workflow wrapping the inner sub - this should fail because
     # middle has checkpoint but inner doesn't
-    with pytest.raises(CheckpointConfigurationError, match="sub-workflow in executor 'sub'"):
+    with pytest.raises(WorkflowValidationError, match="sub-workflow in executor 'sub'") as exc_info:
         WorkflowBuilder(start_executor="start", checkpoint_storage=storage).register_executor(
             lambda: StartExecutor(id="start"), name="start"
         ).register_executor(lambda: inner_sub, name="sub").add_edge("start", "sub").build()
+
+    assert exc_info.value.type == "checkpoint_configuration"
 
 
 def test_error_message_identifies_executor() -> None:
@@ -118,7 +124,7 @@ def test_error_message_identifies_executor() -> None:
         id="my_custom_executor_name",
     )
 
-    with pytest.raises(CheckpointConfigurationError, match="my_custom_executor_name"):
+    with pytest.raises(WorkflowValidationError, match="my_custom_executor_name"):
         WorkflowBuilder(start_executor="start", checkpoint_storage=storage).register_executor(
             lambda: StartExecutor(id="start"), name="start"
         ).register_executor(lambda: custom_id_sub, name="my_custom_executor_name").add_edge(

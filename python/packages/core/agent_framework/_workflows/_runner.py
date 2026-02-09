@@ -160,7 +160,7 @@ class Runner:
                 if self._ctx.had_request_info_in_superstep():
                     logger.info(
                         f"Pausing workflow after superstep {self._iteration}: "
-                        "request_info event(s) emitted during fan-out execution"
+                        "request_info event(s) emitted during this superstep"
                     )
                     break
 

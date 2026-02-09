@@ -11,8 +11,6 @@ See: https://github.com/microsoft/agent-framework/issues/3539
 
 from dataclasses import dataclass
 
-import pytest
-
 from agent_framework import (
     Executor,
     WorkflowBuilder,
@@ -23,7 +21,6 @@ from agent_framework import (
     response_handler,
 )
 from agent_framework._workflows._request_info_mixin import RequestInfoMixin
-
 
 # region Test Executors
 
@@ -91,9 +88,7 @@ class TypedHITLExecutor(Executor, RequestInfoMixin):
         await ctx.request_info(TypedRequest(question=data), TypedResponse)
 
     @response_handler
-    async def on_response(
-        self, original: TypedRequest, response: TypedResponse, ctx: WorkflowContext
-    ) -> None:
+    async def on_response(self, original: TypedRequest, response: TypedResponse, ctx: WorkflowContext) -> None:
         await ctx.send_message(f"hitl:{response.answer}")
 
 
@@ -115,8 +110,7 @@ class TestFanOutHITLPause:
         collector = CollectorExecutor(id="collector")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [worker, hitl])
             .add_edge(worker, collector)
             .add_edge(hitl, collector)
@@ -152,9 +146,7 @@ class TestFanOutHITLPause:
         outputs2: list[str] = []
         final_state2: WorkflowRunState | None = None
 
-        async for event in workflow.run(
-            stream=True, responses={request_events[0].request_id: "human_answer"}
-        ):
+        async for event in workflow.run(stream=True, responses={request_events[0].request_id: "human_answer"}):
             if event.type == "output":
                 outputs2.append(event.data)
             elif event.type == "status":
@@ -179,8 +171,7 @@ class TestFanOutHITLPause:
         collector = CollectorExecutor(id="collector")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [worker1, worker2])
             .add_edge(worker1, collector)
             .add_edge(worker2, collector)
@@ -207,8 +198,7 @@ class TestFanOutHITLPause:
         collector = CollectorExecutor(id="collector")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [hitl1, hitl2])
             .add_edge(hitl1, collector)
             .add_edge(hitl2, collector)
@@ -262,8 +252,7 @@ class TestFanOutHITLPause:
         collector = CollectorExecutor(id="collector")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [worker, hitl])
             .add_edge(worker, collector)
             .add_edge(hitl, collector)
@@ -310,8 +299,7 @@ class TestFanOutHITLPause:
         collector = CollectorExecutor(id="collector")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [worker, hitl])
             .add_edge(worker, collector)
             .add_edge(hitl, collector)
@@ -345,12 +333,7 @@ class TestFanOutHITLPause:
         hitl = HITLExecutor(id="hitl")
         collector = CollectorExecutor(id="collector")
 
-        workflow = (
-            WorkflowBuilder()
-            .set_start_executor(hitl)
-            .add_edge(hitl, collector)
-            .build()
-        )
+        workflow = WorkflowBuilder(start_executor=hitl).add_edge(hitl, collector).build()
 
         # First run
         request_events: list[WorkflowEvent] = []
@@ -362,9 +345,7 @@ class TestFanOutHITLPause:
 
         # Resume
         outputs: list[str] = []
-        async for event in workflow.run(
-            stream=True, responses={request_events[0].request_id: "world"}
-        ):
+        async for event in workflow.run(stream=True, responses={request_events[0].request_id: "world"}):
             if event.type == "output":
                 outputs.append(event.data)
 
@@ -395,8 +376,7 @@ class TestFanOutHITLPause:
         aggregator = AggregatorExecutor(id="aggregator")
 
         workflow = (
-            WorkflowBuilder()
-            .set_start_executor(dispatch)
+            WorkflowBuilder(start_executor=dispatch)
             .add_fan_out_edges(dispatch, [worker, hitl])
             .add_fan_in_edges([worker, hitl], aggregator)
             .build()
@@ -417,9 +397,7 @@ class TestFanOutHITLPause:
 
         # Resume: both messages reach the fan-in, aggregator processes them
         outputs2: list = []
-        async for event in workflow.run(
-            stream=True, responses={request_events[0].request_id: "human_input"}
-        ):
+        async for event in workflow.run(stream=True, responses={request_events[0].request_id: "human_input"}):
             if event.type == "output":
                 outputs2.append(event.data)
 

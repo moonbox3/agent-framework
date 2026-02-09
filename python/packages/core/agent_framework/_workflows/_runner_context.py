@@ -451,6 +451,9 @@ class InProcRunnerContext:
         # Restore workflow ID
         self._workflow_id = checkpoint.workflow_id
 
+        # Reset superstep tracking - restored events are pre-existing, not new
+        self._new_request_info_in_superstep = False
+
     # endregion Checkpointing
 
     def set_workflow_id(self, workflow_id: str) -> None:

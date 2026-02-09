@@ -87,6 +87,7 @@ Once comfortable with these, explore the rest of the samples below.
 | SequentialBuilder Request Info             | [human-in-the-loop/sequential_request_info.py](./human-in-the-loop/sequential_request_info.py)               | Request info for agent responses mid-workflow using `.with_request_info()` on SequentialBuilder       |
 | ConcurrentBuilder Request Info             | [human-in-the-loop/concurrent_request_info.py](./human-in-the-loop/concurrent_request_info.py)               | Review concurrent agent outputs before aggregation using `.with_request_info()` on ConcurrentBuilder  |
 | GroupChatBuilder Request Info              | [human-in-the-loop/group_chat_request_info.py](./human-in-the-loop/group_chat_request_info.py)               | Steer group discussions with periodic guidance using `.with_request_info()` on GroupChatBuilder       |
+| Fan-out HITL Pause                        | [human-in-the-loop/fan_out_with_hitl_and_loop.py](./human-in-the-loop/fan_out_with_hitl_and_loop.py)         | Pause workflow at superstep boundary when a fan-out node requests HITL, preventing runaway parallel loops |
 
 ### tool-approval
 

@@ -13,8 +13,8 @@ using the standard request_info pattern for consistency.
 
 Demonstrate:
 - Configuring request info with `.with_request_info()`
-- Handling RequestInfoEvent with AgentInputRequest data
-- Injecting responses back into the workflow via send_responses_streaming
+- Handling request_info events with AgentInputRequest data
+- Injecting responses back into the workflow via run(responses=..., stream=True)
 
 Prerequisites:
 - Azure OpenAI configured for AzureOpenAIChatClient with required environment variables
@@ -27,14 +27,11 @@ from typing import cast
 
 from agent_framework import (
     AgentExecutorResponse,
-    AgentRequestInfoResponse,
     ChatMessage,
-    RequestInfoEvent,
-    SequentialBuilder,
     WorkflowEvent,
-    WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import AgentRequestInfoResponse, SequentialBuilder
 from azure.identity import AzureCliCredential
 
 
@@ -43,10 +40,10 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, AgentExecutorResponse] = {}
     async for event in stream:
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExecutorResponse):
+        if event.type == "request_info" and isinstance(event.data, AgentExecutorResponse):
             requests[event.request_id] = event.data
 
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             # The output of the sequential workflow is a list of ChatMessages
             print("\n" + "=" * 60)
             print("WORKFLOW COMPLETE")
@@ -117,22 +114,21 @@ async def main() -> None:
 
     # Build workflow with request info enabled (pauses after each agent responds)
     workflow = (
-        SequentialBuilder()
-        .participants([drafter, editor, finalizer])
+        SequentialBuilder(participants=[drafter, editor, finalizer])
         # Only enable request info for the editor agent
         .with_request_info(agents=["editor"])
         .build()
     )
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
+    # Runs are not isolated; state is preserved across multiple calls to run.
     stream = workflow.run("Write a brief introduction to artificial intelligence.", stream=True)
 
     pending_responses = await process_event_stream(stream)
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
 

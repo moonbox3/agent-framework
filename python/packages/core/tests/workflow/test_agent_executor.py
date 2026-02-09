@@ -13,9 +13,7 @@ from agent_framework import (
     ChatMessageStore,
     Content,
     ResponseStream,
-    WorkflowOutputEvent,
     WorkflowRunState,
-    WorkflowStatusEvent,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorResponse
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
@@ -72,14 +70,14 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     executor = AgentExecutor(initial_agent, agent_thread=initial_thread)
 
     # Build workflow with checkpointing enabled
-    wf = SequentialBuilder().participants([executor]).with_checkpointing(storage).build()
+    wf = SequentialBuilder(participants=[executor], checkpoint_storage=storage).build()
 
     # Run the workflow with a user message
     first_run_output: AgentExecutorResponse | None = None
     async for ev in wf.run("First workflow run", stream=True):
-        if isinstance(ev, WorkflowOutputEvent):
+        if ev.type == "output":
             first_run_output = ev.data  # type: ignore[assignment]
-        if isinstance(ev, WorkflowStatusEvent) and ev.state == WorkflowRunState.IDLE:
+        if ev.type == "status" and ev.state == WorkflowRunState.IDLE:
             break
 
     assert first_run_output is not None
@@ -126,14 +124,14 @@ async def test_agent_executor_checkpoint_stores_and_restores_state() -> None:
     assert restored_agent.call_count == 0
 
     # Build new workflow with the restored executor
-    wf_resume = SequentialBuilder().participants([restored_executor]).with_checkpointing(storage).build()
+    wf_resume = SequentialBuilder(participants=[restored_executor], checkpoint_storage=storage).build()
 
     # Resume from checkpoint
     resumed_output: AgentExecutorResponse | None = None
     async for ev in wf_resume.run(checkpoint_id=restore_checkpoint.checkpoint_id, stream=True):
-        if isinstance(ev, WorkflowOutputEvent):
+        if ev.type == "output":
             resumed_output = ev.data  # type: ignore[assignment]
-        if isinstance(ev, WorkflowStatusEvent) and ev.state in (
+        if ev.type == "status" and ev.state in (
             WorkflowRunState.IDLE,
             WorkflowRunState.IDLE_WITH_PENDING_REQUESTS,
         ):

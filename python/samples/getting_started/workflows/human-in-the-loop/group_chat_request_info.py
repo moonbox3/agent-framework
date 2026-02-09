@@ -28,14 +28,11 @@ from typing import cast
 
 from agent_framework import (
     AgentExecutorResponse,
-    AgentRequestInfoResponse,
     ChatMessage,
-    GroupChatBuilder,
-    RequestInfoEvent,
     WorkflowEvent,
-    WorkflowOutputEvent,
 )
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import AgentRequestInfoResponse, GroupChatBuilder
 from azure.identity import AzureCliCredential
 
 
@@ -44,10 +41,10 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, AgentExecutorResponse] = {}
     async for event in stream:
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, AgentExecutorResponse):
+        if event.type == "request_info" and isinstance(event.data, AgentExecutorResponse):
             requests[event.request_id] = event.data
 
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             # The output of the workflow comes from the orchestrator and it's a list of messages
             print("\n" + "=" * 60)
             print("DISCUSSION COMPLETE")
@@ -140,17 +137,19 @@ async def main() -> None:
 
     # Build workflow with request info enabled
     # Using agents= filter to only pause before pragmatist speaks (not every turn)
+    # max_rounds=6: Limit to 6 rounds
     workflow = (
-        GroupChatBuilder()
-        .with_orchestrator(agent=orchestrator)
-        .participants([optimist, pragmatist, creative])
-        .with_max_rounds(6)
+        GroupChatBuilder(
+            participants=[optimist, pragmatist, creative],
+            max_rounds=6,
+            orchestrator_agent=orchestrator,
+        )
         .with_request_info(agents=[pragmatist])  # Only pause before pragmatist speaks
         .build()
     )
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
+    # Runs are not isolated; state is preserved across multiple calls to run.
     stream = workflow.run(
         "Discuss how our team should approach adopting AI tools for productivity. "
         "Consider benefits, risks, and implementation strategies.",
@@ -161,7 +160,7 @@ async def main() -> None:
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
 

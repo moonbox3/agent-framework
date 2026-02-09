@@ -36,22 +36,23 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
-from agent_framework import AgentProtocol, ChatAgent
+from agent_framework import ChatAgent, SupportsAgentRun
 from agent_framework._middleware import FunctionInvocationContext, FunctionMiddleware
 from agent_framework._threads import AgentThread
 from agent_framework._tools import FunctionTool, tool
 from agent_framework._types import AgentResponse, AgentResponseUpdate, ChatMessage
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._agent_utils import resolve_agent_id
-from agent_framework._workflows._base_group_chat_orchestrator import TerminationCondition
 from agent_framework._workflows._checkpoint import CheckpointStorage
 from agent_framework._workflows._events import WorkflowEvent
-from agent_framework._workflows._orchestrator_helpers import clean_conversation_for_handoff
 from agent_framework._workflows._request_info_mixin import response_handler
 from agent_framework._workflows._workflow import Workflow
 from agent_framework._workflows._workflow_builder import WorkflowBuilder
 from agent_framework._workflows._workflow_context import WorkflowContext
 from typing_extensions import Never
+
+from ._base_group_chat_orchestrator import TerminationCondition
+from ._orchestrator_helpers import clean_conversation_for_handoff
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -63,20 +64,14 @@ logger = logging.getLogger(__name__)
 
 
 # region Handoff events
-class HandoffSentEvent(WorkflowEvent):
-    """Base class for handoff workflow events."""
 
-    def __init__(self, source: str, target: str, data: Any | None = None) -> None:
-        """Initialize handoff sent event.
 
-        Args:
-            source: Identifier of the source agent initiating the handoff
-            target: Identifier of the target agent receiving the handoff
-            data: Optional event-specific data
-        """
-        super().__init__(data)
-        self.source = source
-        self.target = target
+@dataclass
+class HandoffSentEvent:
+    """Data payload for handoff_sent events."""
+
+    source: str
+    target: str
 
 
 # endregion
@@ -94,14 +89,14 @@ class HandoffConfiguration:
     target_id: str
     description: str | None = None
 
-    def __init__(self, *, target: str | AgentProtocol, description: str | None = None) -> None:
+    def __init__(self, *, target: str | SupportsAgentRun, description: str | None = None) -> None:
         """Initialize HandoffConfiguration.
 
         Args:
-            target: Target agent identifier or AgentProtocol instance
+            target: Target agent identifier or SupportsAgentRun instance
             description: Optional human-readable description of the handoff
         """
-        self.target_id = resolve_agent_id(target) if isinstance(target, AgentProtocol) else target
+        self.target_id = resolve_agent_id(target) if isinstance(target, SupportsAgentRun) else target
         self.description = description
 
     def __eq__(self, other: Any) -> bool:
@@ -198,7 +193,7 @@ class HandoffAgentExecutor(AgentExecutor):
 
     def __init__(
         self,
-        agent: AgentProtocol,
+        agent: SupportsAgentRun,
         handoffs: Sequence[HandoffConfiguration],
         *,
         agent_thread: AgentThread | None = None,
@@ -241,9 +236,9 @@ class HandoffAgentExecutor(AgentExecutor):
 
     def _prepare_agent_with_handoffs(
         self,
-        agent: AgentProtocol,
+        agent: SupportsAgentRun,
         handoffs: Sequence[HandoffConfiguration],
-    ) -> AgentProtocol:
+    ) -> SupportsAgentRun:
         """Prepare an agent by adding handoff tools for the specified target agents.
 
         Args:
@@ -314,7 +309,7 @@ class HandoffAgentExecutor(AgentExecutor):
             name=agent.name,
             description=agent.description,
             chat_message_store_factory=agent.chat_message_store_factory,
-            context_providers=agent.context_provider,
+            context_provider=agent.context_provider,
             middleware=middleware,
             default_options=cloned_options,  # type: ignore[arg-type]
         )
@@ -420,7 +415,9 @@ class HandoffAgentExecutor(AgentExecutor):
             await cast(WorkflowContext[AgentExecutorRequest], ctx).send_message(
                 AgentExecutorRequest(messages=[], should_respond=True), target_id=handoff_target
             )
-            await ctx.add_event(HandoffSentEvent(source=self.id, target=handoff_target))
+            await ctx.add_event(
+                WorkflowEvent("handoff_sent", data=HandoffSentEvent(source=self.id, target=handoff_target))
+            )
             self._autonomous_mode_turns = 0  # Reset autonomous mode turn counter on handoff
             return
 
@@ -577,9 +574,11 @@ class HandoffBuilder:
         self,
         *,
         name: str | None = None,
-        participants: Sequence[AgentProtocol] | None = None,
-        participant_factories: Mapping[str, Callable[[], AgentProtocol]] | None = None,
+        participants: Sequence[SupportsAgentRun] | None = None,
+        participant_factories: Mapping[str, Callable[[], SupportsAgentRun]] | None = None,
         description: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
+        termination_condition: TerminationCondition | None = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -602,13 +601,16 @@ class HandoffBuilder:
                                    created by this builder.
             description: Optional human-readable description explaining the workflow's
                          purpose. Useful for documentation and observability.
+            checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
+            termination_condition: Optional callable that receives the full conversation and returns True
+                (or awaitable True) if the workflow should terminate.
         """
         self._name = name
         self._description = description
 
         # Participant related members
-        self._participants: dict[str, AgentProtocol] = {}
-        self._participant_factories: dict[str, Callable[[], AgentProtocol]] = {}
+        self._participants: dict[str, SupportsAgentRun] = {}
+        self._participant_factories: dict[str, Callable[[], SupportsAgentRun]] = {}
         self._start_id: str | None = None
         if participant_factories:
             self.register_participants(participant_factories)
@@ -620,7 +622,7 @@ class HandoffBuilder:
         self._handoff_config: dict[str, set[HandoffConfiguration]] = {}
 
         # Checkpoint related members
-        self._checkpoint_storage: CheckpointStorage | None = None
+        self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
         # Autonomous mode related
         self._autonomous_mode: bool = False
@@ -629,19 +631,21 @@ class HandoffBuilder:
         self._autonomous_mode_enabled_agents: list[str] = []
 
         # Termination related members
-        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = None
+        self._termination_condition: Callable[[list[ChatMessage]], bool | Awaitable[bool]] | None = (
+            termination_condition
+        )
 
     def register_participants(
-        self, participant_factories: Mapping[str, Callable[[], AgentProtocol]]
+        self, participant_factories: Mapping[str, Callable[[], SupportsAgentRun]]
     ) -> "HandoffBuilder":
         """Register factories that produce agents for the handoff workflow.
 
-        Each factory is a callable that returns an AgentProtocol instance.
+        Each factory is a callable that returns an SupportsAgentRun instance.
         Factories are invoked when building the workflow, allowing for lazy instantiation
         and state isolation per workflow instance.
 
         Args:
-            participant_factories: Mapping of factory names to callables that return AgentProtocol
+            participant_factories: Mapping of factory names to callables that return SupportsAgentRun
                                    instances. Each produced participant must have a unique identifier
                                    (`.name` is preferred if set, otherwise `.id` is used).
 
@@ -693,11 +697,11 @@ class HandoffBuilder:
         self._participant_factories = dict(participant_factories)
         return self
 
-    def participants(self, participants: Sequence[AgentProtocol]) -> "HandoffBuilder":
+    def participants(self, participants: Sequence[SupportsAgentRun]) -> "HandoffBuilder":
         """Register the agents that will participate in the handoff workflow.
 
         Args:
-            participants: Sequence of AgentProtocol instances. Each must have a unique identifier.
+            participants: Sequence of SupportsAgentRun instances. Each must have a unique identifier.
                 (`.name` is preferred if set, otherwise `.id` is used).
 
         Returns:
@@ -706,7 +710,7 @@ class HandoffBuilder:
         Raises:
             ValueError: If participants is empty, contains duplicates, or `.participants()` or
                         `.register_participants()` has already been called.
-            TypeError: If participants are not AgentProtocol instances.
+            TypeError: If participants are not SupportsAgentRun instances.
 
         Example:
 
@@ -732,13 +736,13 @@ class HandoffBuilder:
         if not participants:
             raise ValueError("participants cannot be empty")
 
-        named: dict[str, AgentProtocol] = {}
+        named: dict[str, SupportsAgentRun] = {}
         for participant in participants:
-            if isinstance(participant, AgentProtocol):
+            if isinstance(participant, SupportsAgentRun):
                 resolved_id = self._resolve_to_id(participant)
             else:
                 raise TypeError(
-                    f"Participants must be AgentProtocol or Executor instances. Got {type(participant).__name__}."
+                    f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."
                 )
 
             if resolved_id in named:
@@ -751,8 +755,8 @@ class HandoffBuilder:
 
     def add_handoff(
         self,
-        source: str | AgentProtocol,
-        targets: Sequence[str] | Sequence[AgentProtocol],
+        source: str | SupportsAgentRun,
+        targets: Sequence[str] | Sequence[SupportsAgentRun],
         *,
         description: str | None = None,
     ) -> "HandoffBuilder":
@@ -766,11 +770,11 @@ class HandoffBuilder:
         Args:
             source: The agent that can initiate the handoff. Can be:
                    - Factory name (str): If using participant factories
-                   - AgentProtocol instance: The actual agent object
+                   - SupportsAgentRun instance: The actual agent object
                    - Cannot mix factory names and instances across source and targets
             targets: One or more target agents that the source can hand off to. Can be:
                     - Factory name (str): If using participant factories
-                    - AgentProtocol instance: The actual agent object
+                    - SupportsAgentRun instance: The actual agent object
                     - Single target: ["billing_agent"] or [agent_instance]
                     - Multiple targets: ["billing_agent", "support_agent"] or [agent1, agent2]
                     - Cannot mix factory names and instances across source and targets
@@ -789,7 +793,7 @@ class HandoffBuilder:
                            participants(...) hasn't been called yet.
                         2) If source or targets are factory names (str) but participant_factories(...)
                            hasn't been called yet, or if they are not in the participant_factories list.
-            TypeError: If mixing factory names (str) and AgentProtocol/Executor instances
+            TypeError: If mixing factory names (str) and SupportsAgentRun/Executor instances
 
         Examples:
             Single target (using factory name):
@@ -851,7 +855,7 @@ class HandoffBuilder:
                     self._handoff_config[source].add(HandoffConfiguration(target=t, description=description))
             return self
 
-        if isinstance(source, (AgentProtocol)) and all(isinstance(t, AgentProtocol) for t in targets):
+        if isinstance(source, (SupportsAgentRun)) and all(isinstance(t, SupportsAgentRun) for t in targets):
             # Both source and targets are instances
             if not self._participants:
                 raise ValueError("Call participants(...) before add_handoff(...)")
@@ -884,10 +888,10 @@ class HandoffBuilder:
             return self
 
         raise TypeError(
-            "Cannot mix factory names (str) and AgentProtocol instances across source and targets in add_handoff()"
+            "Cannot mix factory names (str) and SupportsAgentRun instances across source and targets in add_handoff()"
         )
 
-    def with_start_agent(self, agent: str | AgentProtocol) -> "HandoffBuilder":
+    def with_start_agent(self, agent: str | SupportsAgentRun) -> "HandoffBuilder":
         """Set the agent that will initiate the handoff workflow.
 
         If not specified, the first registered participant will be used as the starting agent.
@@ -895,7 +899,7 @@ class HandoffBuilder:
         Args:
             agent: The agent that will start the workflow. Can be:
                    - Factory name (str): If using participant factories
-                   - AgentProtocol instance: The actual agent object
+                   - SupportsAgentRun instance: The actual agent object
         Returns:
             Self for method chaining.
         """
@@ -906,7 +910,7 @@ class HandoffBuilder:
             else:
                 raise ValueError("Call register_participants(...) before with_start_agent(...)")
             self._start_id = agent
-        elif isinstance(agent, AgentProtocol):
+        elif isinstance(agent, SupportsAgentRun):
             resolved_id = self._resolve_to_id(agent)
             if self._participants:
                 if resolved_id not in self._participants:
@@ -915,14 +919,14 @@ class HandoffBuilder:
                 raise ValueError("Call participants(...) before with_start_agent(...)")
             self._start_id = resolved_id
         else:
-            raise TypeError("Start agent must be a factory name (str) or an AgentProtocol instance")
+            raise TypeError("Start agent must be a factory name (str) or an SupportsAgentRun instance")
 
         return self
 
     def with_autonomous_mode(
         self,
         *,
-        agents: Sequence[AgentProtocol] | Sequence[str] | None = None,
+        agents: Sequence[SupportsAgentRun] | Sequence[str] | None = None,
         prompts: dict[str, str] | None = None,
         turn_limits: dict[str, int] | None = None,
     ) -> "HandoffBuilder":
@@ -936,7 +940,7 @@ class HandoffBuilder:
         Args:
             agents: Optional list of agents to enable autonomous mode for. Can be:
                     - Factory names (str): If using participant factories
-                    - AgentProtocol instances: The actual agent objects
+                    - SupportsAgentRun instances: The actual agent objects
                     - If not provided, all agents will operate in autonomous mode.
             prompts: Optional mapping of agent identifiers/factory names to custom prompts to use when continuing
                      in autonomous mode. If not provided, a default prompt will be used.
@@ -1063,7 +1067,9 @@ class HandoffBuilder:
         builder = WorkflowBuilder(
             name=self._name,
             description=self._description,
-        ).set_start_executor(start_executor)
+            start_executor=start_executor,
+            checkpoint_storage=self._checkpoint_storage,
+        )
 
         # Add the appropriate edges
         # In handoff workflows, all executors are connected, making a fully connected graph.
@@ -1079,15 +1085,11 @@ class HandoffBuilder:
             elif len(targets) == 1:
                 builder = builder.add_edge(executor, targets[0])
 
-        # Configure checkpointing if enabled
-        if self._checkpoint_storage:
-            builder.with_checkpointing(self._checkpoint_storage)
-
         return builder.build()
 
     # region Internal Helper Methods
 
-    def _resolve_agents(self) -> dict[str, AgentProtocol]:
+    def _resolve_agents(self) -> dict[str, SupportsAgentRun]:
         """Resolve participant factories into agent instances.
 
         If agent instances were provided directly via participants(...), those are
@@ -1095,7 +1097,7 @@ class HandoffBuilder:
         those are invoked to create the agent instances.
 
         Returns:
-            Map of executor IDs or factory names to `AgentProtocol` instances
+            Map of executor IDs or factory names to `SupportsAgentRun` instances
         """
         if not self._participants and not self._participant_factories:
             raise ValueError("No participants provided. Call .participants() or .register_participants() first.")
@@ -1106,13 +1108,13 @@ class HandoffBuilder:
 
         if self._participant_factories:
             # Invoke each factory to create participant instances
-            factory_names_to_agents: dict[str, AgentProtocol] = {}
+            factory_names_to_agents: dict[str, SupportsAgentRun] = {}
             for factory_name, factory in self._participant_factories.items():
                 instance = factory()
-                if isinstance(instance, AgentProtocol):
+                if isinstance(instance, SupportsAgentRun):
                     resolved_id = self._resolve_to_id(instance)
                 else:
-                    raise TypeError(f"Participants must be AgentProtocol instances. Got {type(instance).__name__}.")
+                    raise TypeError(f"Participants must be SupportsAgentRun instances. Got {type(instance).__name__}.")
 
                 if resolved_id in factory_names_to_agents:
                     raise ValueError(f"Duplicate participant name '{resolved_id}' detected")
@@ -1125,11 +1127,11 @@ class HandoffBuilder:
 
         raise ValueError("No executors or participant_factories have been configured")
 
-    def _resolve_handoffs(self, agents: Mapping[str, AgentProtocol]) -> dict[str, list[HandoffConfiguration]]:
+    def _resolve_handoffs(self, agents: Mapping[str, SupportsAgentRun]) -> dict[str, list[HandoffConfiguration]]:
         """Handoffs may be specified using factory names or instances; resolve to executor IDs.
 
         Args:
-            agents: Map of agent IDs or factory names to `AgentProtocol` instances
+            agents: Map of agent IDs or factory names to `SupportsAgentRun` instances
 
         Returns:
             Map of executor IDs to list of HandoffConfiguration instances
@@ -1176,13 +1178,13 @@ class HandoffBuilder:
 
     def _resolve_executors(
         self,
-        agents: dict[str, AgentProtocol],
+        agents: dict[str, SupportsAgentRun],
         handoffs: dict[str, list[HandoffConfiguration]],
     ) -> dict[str, HandoffAgentExecutor]:
         """Resolve agents into HandoffAgentExecutors.
 
         Args:
-            agents: Map of agent IDs or factory names to `AgentProtocol` instances
+            agents: Map of agent IDs or factory names to `SupportsAgentRun` instances
             handoffs: Map of executor IDs to list of HandoffConfiguration instances
 
         Returns:
@@ -1216,9 +1218,9 @@ class HandoffBuilder:
 
         return executors
 
-    def _resolve_to_id(self, candidate: str | AgentProtocol) -> str:
+    def _resolve_to_id(self, candidate: str | SupportsAgentRun) -> str:
         """Resolve a participant reference into a concrete executor identifier."""
-        if isinstance(candidate, AgentProtocol):
+        if isinstance(candidate, SupportsAgentRun):
             return resolve_agent_id(candidate)
         if isinstance(candidate, str):
             return candidate

@@ -9,7 +9,6 @@ from typing_extensions import Never
 
 from agent_framework import (
     AgentExecutorRequest,
-    AgentProtocol,
     AgentResponse,
     AgentResponseUpdate,
     AgentThread,
@@ -18,6 +17,7 @@ from agent_framework import (
     Content,
     Executor,
     ResponseStream,
+    SupportsAgentRun,
     UsageDetails,
     WorkflowAgent,
     WorkflowBuilder,
@@ -150,7 +150,7 @@ class TestWorkflowAgent:
         executor1 = SimpleExecutor(id="executor1", response_text="Step1", streaming=False)
         executor2 = SimpleExecutor(id="executor2", response_text="Step2", streaming=False)
 
-        workflow = WorkflowBuilder().set_start_executor(executor1).add_edge(executor1, executor2).build()
+        workflow = WorkflowBuilder(start_executor=executor1).add_edge(executor1, executor2).build()
 
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")
 
@@ -194,7 +194,7 @@ class TestWorkflowAgent:
         executor2 = SimpleExecutor(id="stream2", response_text="Streaming2")
 
         # Create workflow with just one executor
-        workflow = WorkflowBuilder().set_start_executor(executor1).add_edge(executor1, executor2).build()
+        workflow = WorkflowBuilder(start_executor=executor1).add_edge(executor1, executor2).build()
 
         agent = WorkflowAgent(workflow=workflow, name="Streaming Test Agent")
 
@@ -218,13 +218,13 @@ class TestWorkflowAgent:
         assert "Streaming2: Streaming1: Test input" in second_content.text
 
     async def test_end_to_end_request_info_handling(self):
-        """Test end-to-end workflow with RequestInfoEvent handling."""
+        """Test end-to-end workflow with request_info event (type='request_info') handling."""
         # Create workflow with requesting executor -> request info executor (no cycle)
         simple_executor = SimpleExecutor(id="simple", response_text="SimpleResponse", streaming=False)
         requesting_executor = RequestingExecutor(id="requester", streaming=False)
 
         workflow = (
-            WorkflowBuilder().set_start_executor(simple_executor).add_edge(simple_executor, requesting_executor).build()
+            WorkflowBuilder(start_executor=simple_executor).add_edge(simple_executor, requesting_executor).build()
         )
 
         agent = WorkflowAgent(workflow=workflow, name="Request Test Agent")
@@ -296,7 +296,7 @@ class TestWorkflowAgent:
         """Test that Workflow.as_agent() creates a properly configured WorkflowAgent."""
         # Create a simple workflow
         executor = SimpleExecutor(id="executor1", response_text="Response")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # Test as_agent with a name
         agent = workflow.as_agent(name="TestAgent")
@@ -322,7 +322,7 @@ class TestWorkflowAgent:
 
         # Create a simple workflow
         executor = _Executor(id="test")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
 
         # Try to create an agent with unsupported input types
         with pytest.raises(ValueError, match="Workflow's start executor cannot handle list\\[ChatMessage\\]"):
@@ -331,7 +331,7 @@ class TestWorkflowAgent:
     async def test_workflow_as_agent_yield_output_surfaces_as_agent_response(self) -> None:
         """Test that ctx.yield_output() in a workflow executor surfaces as agent output when using .as_agent().
 
-        This validates the fix for issue #2813: WorkflowOutputEvent should be converted to
+        This validates the fix for issue #2813: output event (type='output') should be converted to
         AgentResponseUpdate when the workflow is wrapped via .as_agent().
         """
 
@@ -341,9 +341,9 @@ class TestWorkflowAgent:
             input_text = messages[0].text if messages else "no input"
             await ctx.yield_output(f"processed: {input_text}")
 
-        workflow = WorkflowBuilder().set_start_executor(yielding_executor).build()
+        workflow = WorkflowBuilder(start_executor=yielding_executor).build()
 
-        # Run directly - should return WorkflowOutputEvent in result
+        # Run directly - should return output event (type='output') in result
         direct_result = await workflow.run([ChatMessage(role="user", text="hello")])
         direct_outputs = direct_result.get_outputs()
         assert len(direct_outputs) == 1
@@ -365,7 +365,7 @@ class TestWorkflowAgent:
             await ctx.yield_output("first output")
             await ctx.yield_output("second output")
 
-        workflow = WorkflowBuilder().set_start_executor(yielding_executor).build()
+        workflow = WorkflowBuilder(start_executor=yielding_executor).build()
         agent = workflow.as_agent("test-agent")
 
         updates: list[AgentResponseUpdate] = []
@@ -387,7 +387,7 @@ class TestWorkflowAgent:
             await ctx.yield_output(Content.from_data(data=b"binary data", media_type="application/octet-stream"))
             await ctx.yield_output(Content.from_uri(uri="https://example.com/image.png", media_type="image/png"))
 
-        workflow = WorkflowBuilder().set_start_executor(content_yielding_executor).build()
+        workflow = WorkflowBuilder(start_executor=content_yielding_executor).build()
         agent = workflow.as_agent("content-test-agent")
 
         result = await agent.run("test")
@@ -417,7 +417,7 @@ class TestWorkflowAgent:
             )
             await ctx.yield_output(msg)
 
-        workflow = WorkflowBuilder().set_start_executor(chat_message_executor).build()
+        workflow = WorkflowBuilder(start_executor=chat_message_executor).build()
         agent = workflow.as_agent("chat-msg-agent")
 
         result = await agent.run("test")
@@ -448,7 +448,7 @@ class TestWorkflowAgent:
             custom = CustomData(42)
             await ctx.yield_output(custom)
 
-        workflow = WorkflowBuilder().set_start_executor(raw_yielding_executor).build()
+        workflow = WorkflowBuilder(start_executor=raw_yielding_executor).build()
         agent = workflow.as_agent("raw-test-agent")
 
         updates: list[AgentResponseUpdate] = []
@@ -490,7 +490,7 @@ class TestWorkflowAgent:
             ]
             await ctx.yield_output(msg_list)
 
-        workflow = WorkflowBuilder().set_start_executor(list_yielding_executor).build()
+        workflow = WorkflowBuilder(start_executor=list_yielding_executor).build()
         agent = workflow.as_agent("list-msg-agent")
 
         # Verify streaming returns the update with all 4 contents before coalescing
@@ -521,7 +521,7 @@ class TestWorkflowAgent:
         """
         # Create an executor that captures all received messages
         capturing_executor = ConversationHistoryCapturingExecutor(id="capturing", streaming=False)
-        workflow = WorkflowBuilder().set_start_executor(capturing_executor).build()
+        workflow = WorkflowBuilder(start_executor=capturing_executor).build()
         agent = WorkflowAgent(workflow=workflow, name="Thread History Test Agent")
 
         # Create a thread with existing conversation history
@@ -551,7 +551,7 @@ class TestWorkflowAgent:
         """
         # Create an executor that captures all received messages
         capturing_executor = ConversationHistoryCapturingExecutor(id="capturing_stream")
-        workflow = WorkflowBuilder().set_start_executor(capturing_executor).build()
+        workflow = WorkflowBuilder(start_executor=capturing_executor).build()
         agent = WorkflowAgent(workflow=workflow, name="Thread Stream Test Agent")
 
         # Create a thread with existing conversation history
@@ -579,7 +579,7 @@ class TestWorkflowAgent:
     async def test_empty_thread_works_correctly(self) -> None:
         """Test that an empty thread (no message store) works correctly."""
         capturing_executor = ConversationHistoryCapturingExecutor(id="empty_thread_test")
-        workflow = WorkflowBuilder().set_start_executor(capturing_executor).build()
+        workflow = WorkflowBuilder(start_executor=capturing_executor).build()
         agent = WorkflowAgent(workflow=workflow, name="Empty Thread Test Agent")
 
         # Create an empty thread
@@ -597,7 +597,7 @@ class TestWorkflowAgent:
         from agent_framework import InMemoryCheckpointStorage
 
         capturing_executor = ConversationHistoryCapturingExecutor(id="checkpoint_test")
-        workflow = WorkflowBuilder().set_start_executor(capturing_executor).build()
+        workflow = WorkflowBuilder(start_executor=capturing_executor).build()
         agent = WorkflowAgent(workflow=workflow, name="Checkpoint Test Agent")
 
         # Create checkpoint storage
@@ -615,7 +615,7 @@ class TestWorkflowAgent:
     async def test_agent_executor_output_response_false_filters_streaming_events(self):
         """Test that AgentExecutor with output_response=False does not surface streaming events."""
 
-        class MockAgent(AgentProtocol):
+        class MockAgent(SupportsAgentRun):
             """Mock agent for testing."""
 
             def __init__(self, name: str, response_text: str) -> None:
@@ -675,17 +675,11 @@ class TestWorkflowAgent:
             await ctx.send_message(AgentExecutorRequest(messages=messages, should_respond=True))
 
         # Build workflow: start -> agent1 (no output) -> agent2 (output_response=True)
-        workflow = (
-            WorkflowBuilder()
-            .register_executor(lambda: start_executor, "start")
-            .register_agent(lambda: MockAgent("agent1", "Agent1 output - should NOT appear"), "agent1")
-            .register_agent(lambda: MockAgent("agent2", "Agent2 output - SHOULD appear"), "agent2")
-            .set_start_executor("start")
-            .add_edge("start", "agent1")
-            .add_edge("agent1", "agent2")
-            .with_output_from(["start", "agent2"])
-            .build()
-        )
+        builder = WorkflowBuilder(start_executor="start", output_executors=["start", "agent2"])
+        builder.register_executor(lambda: start_executor, "start")
+        builder.register_agent(lambda: MockAgent("agent1", "Agent1 output - should NOT appear"), "agent1")
+        builder.register_agent(lambda: MockAgent("agent2", "Agent2 output - SHOULD appear"), "agent2")
+        workflow = builder.add_edge("start", "agent1").add_edge("agent1", "agent2").build()
 
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")
         result = await agent.run("Test input")
@@ -705,7 +699,7 @@ class TestWorkflowAgent:
     async def test_agent_executor_output_response_no_duplicate_from_workflow_output_event(self):
         """Test that AgentExecutor with output_response=True does not duplicate content."""
 
-        class MockAgent(AgentProtocol):
+        class MockAgent(SupportsAgentRun):
             """Mock agent for testing."""
 
             def __init__(self, name: str, response_text: str) -> None:
@@ -765,10 +759,9 @@ class TestWorkflowAgent:
 
         # Build workflow with single agent
         workflow = (
-            WorkflowBuilder()
+            WorkflowBuilder(start_executor="start")
             .register_executor(lambda: start_executor, "start")
             .register_agent(lambda: MockAgent("agent", "Unique response text"), "agent")
-            .set_start_executor("start")
             .add_edge("start", "agent")
             .build()
         )
@@ -779,7 +772,7 @@ class TestWorkflowAgent:
         # Count occurrences of the unique response text
         unique_text_count = sum(1 for msg in result.messages if msg.text and "Unique response text" in msg.text)
 
-        # Should appear exactly once (not duplicated from both streaming and WorkflowOutputEvent)
+        # Should appear exactly once (not duplicated from both streaming and output event)
         assert unique_text_count == 1, f"Response should appear exactly once, but appeared {unique_text_count} times"
 
 
@@ -793,8 +786,8 @@ class TestWorkflowAgentAuthorName:
         identification of which agent produced them in multi-agent workflows.
         """
         # Create workflow with executor that emits AgentResponseUpdate without author_name
-        executor1 = SimpleExecutor(id="my_executor_id", response_text="Response")
-        workflow = WorkflowBuilder().set_start_executor(executor1).build()
+        executor1 = SimpleExecutor(id="my_executor_id", response_text="Response", streaming=True)
+        workflow = WorkflowBuilder(start_executor=executor1).build()
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")
 
         # Collect streaming updates
@@ -830,7 +823,7 @@ class TestWorkflowAgentAuthorName:
                 await ctx.yield_output(update)
 
         executor = AuthorNameExecutor(id="executor_id")
-        workflow = WorkflowBuilder().set_start_executor(executor).build()
+        workflow = WorkflowBuilder(start_executor=executor).build()
         agent = WorkflowAgent(workflow=workflow, name="Test Agent")
 
         # Collect streaming updates
@@ -848,7 +841,7 @@ class TestWorkflowAgentAuthorName:
         executor1 = SimpleExecutor(id="first_executor", response_text="First")
         executor2 = SimpleExecutor(id="second_executor", response_text="Second")
 
-        workflow = WorkflowBuilder().set_start_executor(executor1).add_edge(executor1, executor2).build()
+        workflow = WorkflowBuilder(start_executor=executor1).add_edge(executor1, executor2).build()
         agent = WorkflowAgent(workflow=workflow, name="Multi-Executor Agent")
 
         # Collect streaming updates

@@ -3,7 +3,7 @@
 import asyncio
 from typing import cast
 
-from agent_framework import ChatMessage, WorkflowOutputEvent
+from agent_framework import ChatMessage
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.orchestrations import SequentialBuilder
 from azure.identity import AzureCliCredential
@@ -43,12 +43,12 @@ async def main() -> None:
     )
 
     # 2) Build sequential workflow: writer -> reviewer
-    workflow = SequentialBuilder().participants([writer, reviewer]).build()
+    workflow = SequentialBuilder(participants=[writer, reviewer]).build()
 
     # 3) Run and collect outputs
     outputs: list[list[ChatMessage]] = []
     async for event in workflow.run("Write a tagline for a budget-friendly eBike.", stream=True):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             outputs.append(cast(list[ChatMessage], event.data))
 
     if outputs:

@@ -17,13 +17,13 @@ The default aggregator fans in their results and yields output containing
 a list[ChatMessage] representing the concatenated conversations from all agents.
 
 Demonstrates:
-- Minimal wiring with ConcurrentBuilder().participants([...]).build()
+- Minimal wiring with ConcurrentBuilder(participants=[...]).build()
 - Fan-out to multiple agents, fan-in aggregation of final ChatMessages
 - Workflow completion when idle with no pending work
 
 Prerequisites:
 - Azure OpenAI access configured for AzureOpenAIChatClient (use az login + env vars)
-- Familiarity with Workflow events (WorkflowOutputEvent)
+- Familiarity with Workflow events (WorkflowEvent)
 """
 
 
@@ -56,8 +56,8 @@ async def main() -> None:
     )
 
     # 2) Build a concurrent workflow
-    # Participants are either Agents (type of AgentProtocol) or Executors
-    workflow = ConcurrentBuilder().participants([researcher, marketer, legal]).build()
+    # Participants are either Agents (type of SupportsAgentRun) or Executors
+    workflow = ConcurrentBuilder(participants=[researcher, marketer, legal]).build()
 
     # 3) Run with a single prompt and pretty-print the final combined messages
     events = await workflow.run("We are launching a new budget-friendly electric bike for urban commuters.")

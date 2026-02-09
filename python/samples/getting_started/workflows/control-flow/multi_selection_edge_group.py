@@ -16,7 +16,6 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowContext,
     WorkflowEvent,
-    WorkflowOutputEvent,
     executor,
 )
 from agent_framework.azure import AzureOpenAIChatClient
@@ -226,7 +225,7 @@ async def main() -> None:
         return [handle_uncertain_id]
 
     workflow_builder = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="store_email")
         .register_agent(create_email_analysis_agent, name="email_analysis_agent")
         .register_agent(create_email_assistant_agent, name="email_assistant_agent")
         .register_agent(create_email_summary_agent, name="email_summary_agent")
@@ -243,7 +242,6 @@ async def main() -> None:
 
     workflow = (
         workflow_builder
-        .set_start_executor("store_email")
         .add_edge("store_email", "email_analysis_agent")
         .add_edge("email_analysis_agent", "to_analysis_result")
         .add_multi_selection_edge_group(
@@ -279,7 +277,7 @@ async def main() -> None:
     async for event in workflow.run(email, stream=True):
         if isinstance(event, DatabaseEvent):
             print(f"{event}")
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             print(f"Workflow output: {event.data}")
 
     """

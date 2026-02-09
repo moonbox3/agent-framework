@@ -6,14 +6,12 @@ from typing import Annotated
 
 from agent_framework import (
     ChatMessage,
-    ConcurrentBuilder,
     Content,
-    RequestInfoEvent,
     WorkflowEvent,
-    WorkflowOutputEvent,
     tool,
 )
 from agent_framework.openai import OpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 
 """
 Sample: Concurrent Workflow with Tool Approval Requests
@@ -36,7 +34,7 @@ agents may independently trigger approval requests.
 
 Demonstrate:
 - Handling multiple approval requests from different agents in concurrent workflows.
-- Handling RequestInfoEvent during concurrent agent execution.
+- Handling  during concurrent agent execution.
 - Understanding that approval pauses only the agent that triggered it, not all agents.
 
 Prerequisites:
@@ -89,12 +87,12 @@ def get_portfolio_balance() -> str:
     return "Portfolio: $50,000 invested, $10,000 cash available. Holdings: AAPL, GOOGL, MSFT."
 
 
-def _print_output(event: WorkflowOutputEvent) -> None:
+def _print_output(event: WorkflowEvent) -> None:
     if not event.data:
-        raise ValueError("WorkflowOutputEvent has no data")
+        raise ValueError("WorkflowEvent has no data")
 
     if not isinstance(event.data, list) and not all(isinstance(msg, ChatMessage) for msg in event.data):
-        raise ValueError("WorkflowOutputEvent data is not a list of ChatMessage")
+        raise ValueError("WorkflowEvent data is not a list of ChatMessage")
 
     messages: list[ChatMessage] = event.data  # type: ignore
 
@@ -109,10 +107,10 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
     """Process events from the workflow stream to capture human feedback requests."""
     requests: dict[str, Content] = {}
     async for event in stream:
-        if isinstance(event, RequestInfoEvent) and isinstance(event.data, Content):
+        if event.type == "request_info" and isinstance(event.data, Content):
             # We are only expecting tool approval requests in this sample
             requests[event.request_id] = event.data
-        elif isinstance(event, WorkflowOutputEvent):
+        elif event.type == "output":
             _print_output(event)
 
     responses: dict[str, Content] = {}
@@ -150,14 +148,14 @@ async def main() -> None:
 
     # 4. Build a concurrent workflow with both agents
     # ConcurrentBuilder requires at least 2 participants for fan-out
-    workflow = ConcurrentBuilder().participants([microsoft_agent, google_agent]).build()
+    workflow = ConcurrentBuilder(participants=[microsoft_agent, google_agent]).build()
 
     # 5. Start the workflow - both agents will process the same task in parallel
     print("Starting concurrent workflow with tool approval...")
     print("-" * 60)
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
+    # Runs are not isolated; state is preserved across multiple calls to run.
     stream = workflow.run(
         "Manage my portfolio. Use a max of 5000 dollars to adjust my position using "
         "your best judgment based on market sentiment. No need to confirm trades with me.",
@@ -168,7 +166,7 @@ async def main() -> None:
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
     """

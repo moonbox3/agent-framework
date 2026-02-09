@@ -2,8 +2,8 @@
 
 import asyncio
 
-from agent_framework import SequentialBuilder
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from azure.identity import AzureCliCredential
 
 """
@@ -40,7 +40,7 @@ async def main() -> None:
     )
 
     # 2) Build sequential workflow: writer -> reviewer
-    workflow = SequentialBuilder().participants([writer, reviewer]).build()
+    workflow = SequentialBuilder(participants=[writer, reviewer]).build()
 
     # 3) Treat the workflow itself as an agent for follow-up invocations
     agent = workflow.as_agent(name="SequentialWorkflowAgent")

@@ -3,7 +3,7 @@
 import asyncio
 import random
 
-from agent_framework import Executor, WorkflowBuilder, WorkflowContext, WorkflowOutputEvent, handler
+from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
 from typing_extensions import Never
 
 """
@@ -73,12 +73,11 @@ class Aggregator(Executor):
 async def main() -> None:
     # 1) Build a simple fan out and fan in workflow
     workflow = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="dispatcher")
         .register_executor(lambda: Dispatcher(id="dispatcher"), name="dispatcher")
         .register_executor(lambda: Average(id="average"), name="average")
         .register_executor(lambda: Sum(id="summation"), name="summation")
         .register_executor(lambda: Aggregator(id="aggregator"), name="aggregator")
-        .set_start_executor("dispatcher")
         .add_fan_out_edges("dispatcher", ["average", "summation"])
         .add_fan_in_edges(["average", "summation"], "aggregator")
         .build()
@@ -87,7 +86,7 @@ async def main() -> None:
     # 2) Run the workflow
     output: list[int | float] | None = None
     async for event in workflow.run([random.randint(1, 100) for _ in range(10)], stream=True):
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             output = event.data
 
     if output is not None:

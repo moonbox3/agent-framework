@@ -7,22 +7,22 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from agent_framework import (
-    AgentProtocol,
     AgentResponse,
     AgentResponseUpdate,
     AgentThread,
     ChatMessage,
+    SupportsAgentRun,
 )
 from agent_framework._workflows._agent_executor import AgentExecutorRequest, AgentExecutorResponse
-from agent_framework._workflows._orchestration_request_info import (
+from agent_framework._workflows._workflow_context import WorkflowContext
+
+from agent_framework_orchestrations._orchestration_request_info import (
     AgentApprovalExecutor,
     AgentRequestInfoExecutor,
     AgentRequestInfoResponse,
     resolve_request_info_filter,
 )
-from agent_framework._workflows._workflow_context import WorkflowContext
 
 
 class TestResolveRequestInfoFilter:
@@ -44,10 +44,10 @@ class TestResolveRequestInfoFilter:
         assert result == {"agent1", "agent2"}
 
     def test_resolves_agent_display_names(self):
-        """Test resolving AgentProtocol instances by name attribute."""
-        agent1 = MagicMock(spec=AgentProtocol)
+        """Test resolving SupportsAgentRun instances by name attribute."""
+        agent1 = MagicMock(spec=SupportsAgentRun)
         agent1.name = "writer"
-        agent2 = MagicMock(spec=AgentProtocol)
+        agent2 = MagicMock(spec=SupportsAgentRun)
         agent2.name = "reviewer"
 
         result = resolve_request_info_filter([agent1, agent2])
@@ -55,7 +55,7 @@ class TestResolveRequestInfoFilter:
 
     def test_mixed_types(self):
         """Test resolving a mix of strings and agents."""
-        agent = MagicMock(spec=AgentProtocol)
+        agent = MagicMock(spec=SupportsAgentRun)
         agent.name = "writer"
 
         result = resolve_request_info_filter(["manual_name", agent])

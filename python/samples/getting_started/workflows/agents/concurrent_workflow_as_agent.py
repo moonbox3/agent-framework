@@ -2,8 +2,8 @@
 
 import asyncio
 
-from agent_framework import ConcurrentBuilder
 from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
 
 """
@@ -20,7 +20,7 @@ Demonstrates:
 
 Prerequisites:
 - Azure OpenAI access configured for AzureOpenAIChatClient (use az login + env vars)
-- Familiarity with Workflow events (WorkflowOutputEvent)
+- Familiarity with Workflow events (WorkflowEvent with type "output")
 """
 
 
@@ -65,7 +65,7 @@ async def main() -> None:
     )
 
     # 2) Build a concurrent workflow
-    workflow = ConcurrentBuilder().participants([researcher, marketer, legal]).build()
+    workflow = ConcurrentBuilder(participants=[researcher, marketer, legal]).build()
 
     # 3) Expose the concurrent workflow as an agent for easy reuse
     agent = workflow.as_agent(name="ConcurrentWorkflowAgent")

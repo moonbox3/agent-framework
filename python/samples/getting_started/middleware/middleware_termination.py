@@ -6,10 +6,11 @@ from random import randint
 from typing import Annotated
 
 from agent_framework import (
+    AgentContext,
     AgentMiddleware,
     AgentResponse,
-    AgentRunContext,
     ChatMessage,
+    MiddlewareTermination,
     tool,
 )
 from agent_framework.azure import AzureAIAgentClient
@@ -47,8 +48,8 @@ class PreTerminationMiddleware(AgentMiddleware):
 
     async def process(
         self,
-        context: AgentRunContext,
-        next: Callable[[AgentRunContext], Awaitable[None]],
+        context: AgentContext,
+        next: Callable[[AgentContext], Awaitable[None]],
     ) -> None:
         # Check if the user message contains any blocked words
         last_message = context.messages[-1] if context.messages else None
@@ -72,8 +73,7 @@ class PreTerminationMiddleware(AgentMiddleware):
                     )
 
                     # Set terminate flag to prevent further processing
-                    context.terminate = True
-                    break
+                    raise MiddlewareTermination
 
         await next(context)
 
@@ -87,8 +87,8 @@ class PostTerminationMiddleware(AgentMiddleware):
 
     async def process(
         self,
-        context: AgentRunContext,
-        next: Callable[[AgentRunContext], Awaitable[None]],
+        context: AgentContext,
+        next: Callable[[AgentContext], Awaitable[None]],
     ) -> None:
         print(f"[PostTerminationMiddleware] Processing request (response count: {self.response_count})")
 
@@ -98,7 +98,7 @@ class PostTerminationMiddleware(AgentMiddleware):
                 f"[PostTerminationMiddleware] Maximum responses ({self.max_responses}) reached. "
                 "Terminating further processing."
             )
-            context.terminate = True
+            raise MiddlewareTermination
 
         # Allow the agent to process normally
         await next(context)

@@ -33,7 +33,9 @@ Prerequisites:
 
 
 # Define tools that accept custom context via **kwargs
-# NOTE: approval_mode="never_require" is for sample brevity. Use "always_require" in production; see samples/getting_started/tools/function_tool_with_approval.py and samples/getting_started/tools/function_tool_with_approval_and_threads.py.
+# NOTE: approval_mode="never_require" is for sample brevity.
+# Use "always_require" in production; see samples/getting_started/tools/function_tool_with_approval.py and
+# samples/getting_started/tools/function_tool_with_approval_and_threads.py.
 @tool(approval_mode="never_require")
 def get_user_data(
     query: Annotated[str, Field(description="What user data to retrieve")],
@@ -92,7 +94,7 @@ async def main() -> None:
     )
 
     # Build a sequential workflow
-    workflow = SequentialBuilder().participants([agent]).build()
+    workflow = SequentialBuilder(participants=[agent]).build()
 
     # Expose the workflow as an agent using .as_agent()
     workflow_agent = workflow.as_agent(name="WorkflowAgent")

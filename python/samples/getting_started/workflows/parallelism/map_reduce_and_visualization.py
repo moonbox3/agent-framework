@@ -10,8 +10,7 @@ import aiofiles
 from agent_framework import (
     Executor,  # Base class for custom workflow steps
     WorkflowBuilder,  # Fluent builder for executors and edges
-    WorkflowContext,  # Per run context with workflow state and messaging
-    WorkflowOutputEvent,  # Event emitted when workflow yields output
+    WorkflowContext,  # Per run context with shared state and messaging
     WorkflowViz,  # Utility to visualize a workflow graph
     handler,  # Decorator to expose an Executor method as a step
 )
@@ -262,7 +261,7 @@ async def main():
 
     # Step 1: Create the workflow builder and register executors.
     workflow_builder = (
-        WorkflowBuilder()
+        WorkflowBuilder(start_executor="split_data_executor")
         .register_executor(lambda: Map(id="map_executor_0"), name="map_executor_0")
         .register_executor(lambda: Map(id="map_executor_1"), name="map_executor_1")
         .register_executor(lambda: Map(id="map_executor_2"), name="map_executor_2")
@@ -287,7 +286,6 @@ async def main():
     # Step 2: Build the workflow graph using fan out and fan in edges.
     workflow = (
         workflow_builder
-        .set_start_executor("split_data_executor")
         .add_fan_out_edges(
             "split_data_executor",
             ["map_executor_0", "map_executor_1", "map_executor_2"],
@@ -332,7 +330,7 @@ async def main():
     # Step 4: Run the workflow with the raw text as input.
     async for event in workflow.run(raw_text, stream=True):
         print(f"Event: {event}")
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             print(f"Final Output: {event.data}")
 
 

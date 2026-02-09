@@ -9,9 +9,7 @@ from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
     ChatMessage,
-    RequestInfoEvent,
     WorkflowEvent,
-    WorkflowOutputEvent,
 )
 from agent_framework.openai import OpenAIChatClient
 from agent_framework.orchestrations import MagenticBuilder, MagenticPlanReviewRequest, MagenticPlanReviewResponse
@@ -46,10 +44,10 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
 
     requests: dict[str, MagenticPlanReviewRequest] = {}
     async for event in stream:
-        if isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+        if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
             requests[event.request_id] = cast(MagenticPlanReviewRequest, event.data)
 
-        if isinstance(event, WorkflowOutputEvent):
+        if event.type == "output":
             data = event.data
             if isinstance(data, AgentResponseUpdate):
                 rid = data.response_id
@@ -68,7 +66,7 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
                 # To make the type checker happy, we cast event.data to the expected type
                 outputs = cast(list[ChatMessage], event.data)
                 for msg in outputs:
-                    speaker = msg.author_name or msg.role.value
+                    speaker = msg.author_name or msg.role
                     print(f"[{speaker}]: {msg.text}")
 
     responses: dict[str, MagenticPlanReviewResponse] = {}
@@ -117,22 +115,18 @@ async def main() -> None:
 
     print("\nBuilding Magentic Workflow with Human Plan Review...")
 
-    workflow = (
-        MagenticBuilder()
-        .participants([researcher_agent, analyst_agent])
-        .with_manager(
-            agent=manager_agent,
-            max_round_count=10,
-            max_stall_count=1,
-            max_reset_count=2,
-        )
-        # Request human input for plan review
-        .with_plan_review()
-        # Enable intermediate outputs to observe the conversation as it unfolds
-        # Intermediate outputs will be emitted as WorkflowOutputEvent events
-        .with_intermediate_outputs()
-        .build()
-    )
+    # enable_plan_review=True: Request human input for plan review
+    # intermediate_outputs=True: Enable intermediate outputs to observe the conversation as it unfolds
+    # (Intermediate outputs will be emitted as WorkflowOutputEvent events)
+    workflow = MagenticBuilder(
+        participants=[researcher_agent, analyst_agent],
+        enable_plan_review=True,
+        intermediate_outputs=True,
+        manager_agent=manager_agent,
+        max_round_count=10,
+        max_stall_count=1,
+        max_reset_count=2,
+    ).build()
 
     task = "Research sustainable aviation fuel technology and summarize the findings."
 
@@ -141,14 +135,14 @@ async def main() -> None:
     print("=" * 60)
 
     # Initiate the first run of the workflow.
-    # Runs are not isolated; state is preserved across multiple calls to run or send_responses_streaming.
+    # Runs are not isolated; state is preserved across multiple calls to run.
     stream = workflow.run(task, stream=True)
 
     pending_responses = await process_event_stream(stream)
     while pending_responses is not None:
         # Run the workflow until there is no more human feedback to provide,
         # in which case this workflow completes.
-        stream = workflow.send_responses_streaming(pending_responses)
+        stream = workflow.run(stream=True, responses=pending_responses)
         pending_responses = await process_event_stream(stream)
 
 

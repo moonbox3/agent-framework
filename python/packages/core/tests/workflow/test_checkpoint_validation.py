@@ -8,7 +8,6 @@ from agent_framework import (
     WorkflowCheckpointException,
     WorkflowContext,
     WorkflowRunState,
-    WorkflowStatusEvent,
     handler,
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
@@ -31,8 +30,9 @@ def build_workflow(storage: InMemoryCheckpointStorage, finish_id: str = "finish"
     start = StartExecutor(id="start")
     finish = FinishExecutor(id=finish_id)
 
-    builder = WorkflowBuilder(max_iterations=3).set_start_executor(start).add_edge(start, finish)
-    builder = builder.with_checkpointing(checkpoint_storage=storage)
+    builder = WorkflowBuilder(max_iterations=3, start_executor=start, checkpoint_storage=storage).add_edge(
+        start, finish
+    )
     return builder.build()
 
 
@@ -80,4 +80,4 @@ async def test_resume_succeeds_when_graph_matches() -> None:
         )
     ]
 
-    assert any(isinstance(event, WorkflowStatusEvent) and event.state == WorkflowRunState.IDLE for event in events)
+    assert any(event.type == "status" and event.state == WorkflowRunState.IDLE for event in events)

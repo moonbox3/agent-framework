@@ -34,7 +34,7 @@ sequenceDiagram
     Note over Agent,AML: Agent Middleware Layer
     Agent->>AML: run() with middleware param
     AML->>AML: categorize_middleware() → split by type
-    AML->>AMP: execute(AgentRunContext)
+    AML->>AMP: execute(AgentContext)
 
     loop Agent Middleware Chain
         AMP->>AMP: middleware[i].process(context, next)
@@ -127,11 +127,11 @@ sequenceDiagram
 
 **Entry Point:** `Agent.run(messages, thread, options, middleware)`
 
-**Context Object:** `AgentRunContext`
+**Context Object:** `AgentContext`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `agent` | `AgentProtocol` | The agent being invoked |
+| `agent` | `SupportsAgentRun` | The agent being invoked |
 | `messages` | `list[ChatMessage]` | Input messages (mutable) |
 | `thread` | `AgentThread \| None` | Conversation thread |
 | `options` | `Mapping[str, Any]` | Chat options dict |

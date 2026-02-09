@@ -21,7 +21,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from agent_framework import WorkflowOutputEvent
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.declarative import WorkflowFactory
 from azure.identity import AzureCliCredential
@@ -249,8 +248,8 @@ async def main():
 
         # Run the workflow with streaming to capture output
         try:
-            async for event in workflow.run_stream(query):
-                if isinstance(event, WorkflowOutputEvent) and isinstance(event.data, str):
+            async for event in workflow.run(query, stream=True):
+                if event.type == "output" and isinstance(event.data, str):
                     print(event.data, end="", flush=True)
         except Exception as e:
             print(f"\nWorkflow error: {type(e).__name__}: {e}")

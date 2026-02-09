@@ -35,7 +35,6 @@ from ._executors_agents import (
     AgentResult,
     ExternalLoopState,
     InvokeAzureAgentExecutor,
-    InvokeToolExecutor,
 )
 from ._executors_basic import (
     BASIC_ACTION_EXECUTORS,
@@ -132,7 +131,6 @@ __all__ = [
     "ForeachNextExecutor",
     "InvokeAzureAgentExecutor",
     "InvokeFunctionToolExecutor",
-    "InvokeToolExecutor",
     "JoinExecutor",
     "LoopControl",
     "LoopIterationResult",

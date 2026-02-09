@@ -18,8 +18,6 @@ Flow:
 Prerequisites:
   - Azure OpenAI endpoint configured via environment variables.
   - `az login` for AzureCliCredential.
-
-Run: uv run python samples/getting_started/workflows/human-in-the-loop/agents_with_declaration_only_tools.py
 """
 
 import asyncio

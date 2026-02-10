@@ -753,7 +753,7 @@ class Workflow(DictConvertible):
             if isinstance(executor, WorkflowExecutor):
                 executor_sig = {
                     "type": executor_sig,
-                    "sub_workflow": executor.workflow._compute_graph_signature(),
+                    "sub_workflow": executor.workflow._graph_signature,
                 }
 
             executors_signature[executor_id] = executor_sig

@@ -216,9 +216,11 @@ class DeclarativeWorkflowBuilder:
         for action_def in actions:
             kind = action_def.get("kind", "")
 
-            # Check for duplicate explicit IDs
+            # Check for duplicate or reserved explicit IDs
             explicit_id = action_def.get("id")
             if explicit_id:
+                if explicit_id == "_workflow_entry":
+                    raise ValueError(f"Action ID '{explicit_id}' is reserved for internal use. Choose a different ID.")
                 if explicit_id in seen_ids:
                     raise ValueError(f"Duplicate action ID '{explicit_id}'. Action IDs must be unique.")
                 seen_ids.add(explicit_id)

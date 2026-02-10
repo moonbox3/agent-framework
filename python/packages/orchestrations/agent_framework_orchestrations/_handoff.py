@@ -751,16 +751,16 @@ class HandoffBuilder:
             target_ids.append(target_id)
 
         # Merge with existing handoff configuration for this source
-        if source_id in self._handoff_config:
-            # Add new targets to existing list, avoiding duplicates
-            for t in target_ids:
-                if t in self._handoff_config[source_id]:
-                    logger.warning(f"Handoff from '{source_id}' to '{t}' is already configured; overwriting.")
-                self._handoff_config[source_id].add(HandoffConfiguration(target=t, description=description))
-        else:
+        if source_id not in self._handoff_config:
             self._handoff_config[source_id] = set()
-            for t in target_ids:
-                self._handoff_config[source_id].add(HandoffConfiguration(target=t, description=description))
+
+        for t in target_ids:
+            config = HandoffConfiguration(target=t, description=description)
+            if config in self._handoff_config[source_id]:
+                logger.warning(f"Handoff from '{source_id}' to '{t}' is already configured; overwriting.")
+                # Remove old config so the new one (with updated description) takes effect
+                self._handoff_config[source_id].discard(config)
+            self._handoff_config[source_id].add(config)
 
         return self
 

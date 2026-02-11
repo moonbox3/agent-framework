@@ -284,6 +284,35 @@ class TestResponseHandlers:
         assert "handler boom" in caplog.text
         assert "ReviewRequest" in caplog.text
 
+    async def test_handler_type_mismatch_leaves_request_pending(self, caplog):
+        """A handler returning wrong type should not drop the pending request."""
+        reviewer = ReviewerExecutor()
+        workflow = WorkflowBuilder(start_executor=reviewer).build()
+
+        async def wrong_type_handler(request: ReviewRequest) -> int:
+            return 123
+
+        with caplog.at_level(logging.ERROR):
+            result1 = await workflow.run(
+                "bad_type_test",
+                request_handlers={ReviewRequest: wrong_type_handler},
+            )
+
+        assert reviewer.feedback_received is False
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        assert "Response type mismatch" in caplog.text
+
+        # Pending request should still be recoverable via manual response submission.
+        request_events = result1.get_request_info_events()
+        assert len(request_events) == 1
+
+        result2 = await workflow.run(
+            responses={request_events[0].request_id: "manual_retry"},
+        )
+        assert reviewer.feedback_received is True
+        assert reviewer.feedback_value == "manual_retry"
+        assert result2.get_final_state() == WorkflowRunState.IDLE
+
     async def test_unmatched_type_logs_warning(self, caplog):
         """A request type with no matching handler logs a warning and stays pending."""
         unknown_exec = UnknownRequestExecutor()

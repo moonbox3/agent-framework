@@ -6,7 +6,6 @@ import asyncio
 import functools
 import hashlib
 import json
-import logging
 import types
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
@@ -33,8 +32,6 @@ from ._runner import Runner
 from ._runner_context import RunnerContext
 from ._state import State
 from ._typing_utils import is_instance_of, try_coerce_to_type
-
-logger = logging.getLogger(__name__)
 
 
 class WorkflowRunResult(list[WorkflowEvent]):
@@ -303,7 +300,7 @@ class Workflow(DictConvertible):
         reset_context: bool = True,
         streaming: bool = False,
         run_kwargs: dict[str, Any] | None = None,
-        outstanding_handler_tasks: set[asyncio.Task[None]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
     ) -> AsyncIterable[WorkflowEvent]:
         """Private method to run workflow with proper tracing.
 
@@ -315,7 +312,7 @@ class Workflow(DictConvertible):
             reset_context: Whether to reset the context for a new run
             streaming: Whether to enable streaming mode for agents
             run_kwargs: Optional kwargs to store in State for agent invocations
-            outstanding_handler_tasks: Optional set to track outstanding response handler tasks
+            request_handlers: Optional request handlers for automatic request_info responses.
 
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
@@ -363,7 +360,7 @@ class Workflow(DictConvertible):
 
                 # All executor executions happen within workflow span
                 async for event in self._runner.run_until_convergence(
-                    outstanding_handler_tasks=outstanding_handler_tasks,
+                    request_handlers=request_handlers,
                 ):
                     yield event
 
@@ -561,34 +558,6 @@ class Workflow(DictConvertible):
             return response_stream
         return response_stream.get_final_response()
 
-    async def _invoke_request_handler(
-        self,
-        handler_fn: Callable[[Any], Awaitable[Any]],
-        request_id: str,
-        request_data: Any,
-    ) -> None:
-        """Invoke a response handler and submit the result back to the workflow.
-
-        On success, the response is submitted via send_request_info_response which
-        pops the pending request and injects a response message for the next superstep.
-        On failure, the request stays pending and the workflow converges as
-        IDLE_WITH_PENDING_REQUESTS.
-        """
-        try:
-            response = await handler_fn(request_data)
-        except Exception:
-            logger.exception(f"Response handler failed for request {request_id} (type={type(request_data).__name__})")
-            return
-
-        try:
-            await self._runner_context.send_request_info_response(request_id, response)
-        except Exception:
-            logger.exception(
-                f"Failed to submit response for request {request_id} "
-                f"(type={type(request_data).__name__}). "
-                f"Handler succeeded but response could not be delivered."
-            )
-
     async def _run_core(
         self,
         message: Any | None = None,
@@ -602,10 +571,11 @@ class Workflow(DictConvertible):
     ) -> AsyncIterable[WorkflowEvent]:
         """Single core execution path for both streaming and non-streaming modes.
 
-        When request_handlers are provided, handlers are dispatched inline as
-        asyncio tasks when request_info events are emitted. The runner's convergence
-        check waits for outstanding handler tasks before deciding the workflow is idle,
-        allowing handler responses to be processed in subsequent supersteps.
+        When request_handlers are provided, the runner dispatches handlers inline
+        as asyncio tasks when request_info events are emitted. The runner's
+        convergence check waits for outstanding handler tasks before deciding the
+        workflow is idle, allowing handler responses to be processed in subsequent
+        supersteps.
 
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
@@ -618,45 +588,16 @@ class Workflow(DictConvertible):
             message, responses, checkpoint_id, checkpoint_storage
         )
 
-        outstanding_tasks: set[asyncio.Task[None]] | None = set() if request_handlers else None
-
-        try:
-            async for event in self._run_workflow_with_tracing(
-                initial_executor_fn=initial_executor_fn,
-                reset_context=reset_context,
-                streaming=streaming,
-                run_kwargs=kwargs if kwargs else None,
-                outstanding_handler_tasks=outstanding_tasks,
-            ):
-                if event.type == "output" and not self._should_yield_output_event(event):
-                    continue
-
-                # Dispatch response handlers inline as tasks
-                if event.type == "request_info" and request_handlers is not None and outstanding_tasks is not None:
-                    request_data_type = type(event.data)
-                    matched_handler = request_handlers.get(request_data_type)
-                    if matched_handler:
-                        task = asyncio.create_task(
-                            self._invoke_request_handler(matched_handler, event.request_id, event.data)
-                        )
-                        outstanding_tasks.add(task)
-                        task.add_done_callback(outstanding_tasks.discard)
-                    else:
-                        registered_types = [t.__name__ for t in request_handlers]
-                        logger.warning(
-                            f"No response handler registered for request type "
-                            f"{request_data_type.__name__} (request_id={event.request_id}). "
-                            f"Registered types: {registered_types}"
-                        )
-
-                yield event
-        finally:
-            # Cancel any outstanding handler tasks on error/cancellation
-            if outstanding_tasks:
-                for t in outstanding_tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*outstanding_tasks, return_exceptions=True)
+        async for event in self._run_workflow_with_tracing(
+            initial_executor_fn=initial_executor_fn,
+            reset_context=reset_context,
+            streaming=streaming,
+            run_kwargs=kwargs if kwargs else None,
+            request_handlers=request_handlers,
+        ):
+            if event.type == "output" and not self._should_yield_output_event(event):
+                continue
+            yield event
 
     async def _run_cleanup(self, checkpoint_storage: CheckpointStorage | None) -> None:
         """Cleanup hook called after stream consumption."""

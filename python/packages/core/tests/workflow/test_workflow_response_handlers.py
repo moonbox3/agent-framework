@@ -642,3 +642,37 @@ class TestBuilderLevelResponseHandlers:
                     UnknownRequest: handle_unknown,
                 },
             ).build()
+
+    async def test_responses_bypass_builder_handlers(self):
+        """run(responses=...) works even when builder has default request_handlers.
+
+        Regression: without the fix, builder-level handlers would be treated as
+        effective_handlers, causing _validate_run_params to raise ValueError
+        ('Cannot provide both request_handlers and responses').
+        """
+        reviewer = ReviewerExecutor()
+        collector = CollectorExecutor()
+
+        async def failing_handler(request: ReviewRequest) -> str:
+            raise RuntimeError("intentional failure")
+
+        # Build with handlers that always fail — first run ends with pending request
+        workflow = (
+            WorkflowBuilder(
+                start_executor=reviewer,
+                request_handlers={ReviewRequest: failing_handler},
+            )
+            .add_edge(reviewer, collector)
+            .build()
+        )
+
+        result1 = await workflow.run("first")
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        request_events = result1.get_request_info_events()
+        assert len(request_events) == 1
+
+        # Manual response submission should NOT conflict with builder-level handlers
+        result2 = await workflow.run(responses={request_events[0].request_id: "manual_response"})
+        assert reviewer.feedback_received is True
+        assert reviewer.feedback_value == "manual_response"
+        assert result2.get_final_state() == WorkflowRunState.IDLE

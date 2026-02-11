@@ -586,29 +586,43 @@ class WorkflowBuilder:
         if existing is not wrapped:
             self._add_executor(wrapped)
 
+    @staticmethod
+    def _type_name(t: type) -> str:
+        """Return a human-readable name for a type, handling UnionType safely."""
+        return getattr(t, "__name__", str(t))
+
     def _validate_request_handlers(self, executors: dict[str, Executor]) -> None:
         """Validate that request_handlers keys match executor @response_handler request types.
 
         Collects all request types declared via @response_handler decorators across all
         executors, then checks that each key in self._request_handlers maps to a known
-        request type. Raises ValueError if an unrecognized type is found.
+        request type. Union types in executor annotations are expanded into their
+        constituent types. Raises ValueError if an unrecognized type is found.
         """
         if self._request_handlers is None:
             return
 
-        # Collect all request types from executor @response_handler annotations
+        # Collect all request types from executor @response_handler annotations.
+        # Expand union types (e.g. str | int) into their constituent types so that
+        # request_handlers keys can match individual members.
         known_request_types: set[type] = set()
         for executor in executors.values():
             if hasattr(executor, "_response_handlers"):
                 for request_type, _ in executor._response_handlers:  # type: ignore
-                    known_request_types.add(request_type)
+                    if hasattr(request_type, "__args__"):
+                        # UnionType — expand into constituent types
+                        known_request_types.update(request_type.__args__)
+                    else:
+                        known_request_types.add(request_type)
 
         # Check each handler key against known request types
         for handler_type in self._request_handlers:
             if handler_type not in known_request_types:
-                known_names = sorted(t.__name__ for t in known_request_types) if known_request_types else ["(none)"]
+                known_names = (
+                    sorted(self._type_name(t) for t in known_request_types) if known_request_types else ["(none)"]
+                )
                 raise ValueError(
-                    f"request_handlers key {handler_type.__name__} does not match any "
+                    f"request_handlers key {self._type_name(handler_type)} does not match any "
                     f"@response_handler request type declared in workflow executors. "
                     f"Known request types: {known_names}"
                 )

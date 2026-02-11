@@ -528,8 +528,14 @@ class Workflow(DictConvertible):
         Raises:
             ValueError: If parameter combination is invalid.
         """
-        # Fall back to builder-level request_handlers if none provided at runtime
-        effective_handlers = request_handlers if request_handlers is not None else self._request_handlers
+        # Fall back to builder-level request_handlers if none provided at runtime.
+        # Skip fallback when responses are provided — manual submission bypasses automatic handling.
+        if request_handlers is not None:
+            effective_handlers = request_handlers
+        elif responses is not None:
+            effective_handlers = None
+        else:
+            effective_handlers = self._request_handlers
 
         # Validate parameters eagerly (before any async work or setting running flag)
         self._validate_run_params(message, responses, checkpoint_id, effective_handlers)

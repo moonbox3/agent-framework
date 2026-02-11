@@ -4,12 +4,10 @@
 Sample: Fan-out Async + HITL with response_handlers parameter
 
 Demonstrates automatic HITL request handling in fan-out workflows using the
-response_handlers parameter. Execution is sequential in two phases:
-
-1. Phase 1: The workflow runs to idle, collecting any request_info events.
-2. Matching handlers are called concurrently via asyncio.gather.
-3. Phase 2: Collected responses are submitted back and the workflow runs
-   again to process them.
+response_handlers parameter. Handlers are dispatched inline as asyncio tasks
+when request_info events are emitted during execution. The runner waits for
+outstanding handler tasks before declaring convergence, so handler responses
+are processed in subsequent supersteps within the same workflow run.
 
 Usage:
     response_handlers = {
@@ -24,6 +22,7 @@ Usage:
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 
 from agent_framework import (
@@ -33,6 +32,13 @@ from agent_framework import (
     handler,
     response_handler,
 )
+
+_start_time: float = 0.0
+
+
+def _ts() -> str:
+    """Return elapsed seconds since workflow start."""
+    return f"{time.monotonic() - _start_time:.1f}s"
 
 
 @dataclass
@@ -95,8 +101,9 @@ class AsyncProcessor(Executor):
         self.iteration_count += 1
         await asyncio.sleep(0.5)
         analysis = f"Iteration {self.iteration_count}: {packet.content[:50]}... processed"
+        print(f"  [{_ts()}] Processor: iteration {self.iteration_count}/10 complete")
 
-        if self.iteration_count < 3:
+        if self.iteration_count < 10:
             updated_packet = DataPacket(
                 iteration=self.iteration_count,
                 content=packet.content,
@@ -104,12 +111,10 @@ class AsyncProcessor(Executor):
             )
             await ctx.send_message(updated_packet)
         else:
-            await ctx.send_message(
-                DataPacket(
-                    iteration=self.iteration_count,
-                    content=packet.content,
-                    analysis=analysis,
-                )
+            # Stop sending to break the self-loop. Use yield_output for final result.
+            print(f"  [{_ts()}] Processor: DONE after {self.iteration_count} iterations")
+            await ctx.yield_output(
+                DataPacket(iteration=self.iteration_count, content=packet.content, analysis=analysis)
             )
 
 
@@ -143,6 +148,7 @@ class Reviewer(Executor):
         feedback: str,
         ctx: WorkflowContext[str],
     ) -> None:
+        print(f"  [{_ts()}] Reviewer: response_handler invoked with feedback")
         result = f"Review feedback processed: {feedback}"
         await ctx.send_message(result)
 
@@ -171,23 +177,23 @@ class FinalAggregator(Executor):
 # Response Handlers (External)
 # ============================================================================
 # These are registered via response_handlers dict, not as executor methods.
-# They run after Phase 1 completes and their responses are submitted in Phase 2.
+# They are dispatched inline as asyncio tasks when request_info events are emitted.
 
 
 async def handle_review(request: ReviewRequest) -> str:
     """Handle external review request.
 
-    Called after Phase 1 when the Reviewer emits a request_info with
-    ReviewRequest type. The response is submitted back to the workflow
-    for Phase 2 processing.
+    Dispatched as an asyncio task when the Reviewer emits a request_info
+    with ReviewRequest type. The response is submitted back to the workflow
+    and processed in a subsequent superstep.
     """
-    print(f"\n[Handler] Processing review request for iteration {request.packet.iteration}")
+    print(f"  [{_ts()}] Handler: STARTED - reviewing iteration {request.packet.iteration}")
 
-    # Simulate external API call
-    await asyncio.sleep(2.0)
+    # Simulate slow external API call (e.g., LLM inference, human approval system)
+    await asyncio.sleep(3.0)
 
     feedback = "Analysis looks good. Continue processing."
-    print(f"[Handler] Review feedback: {feedback}\n")
+    print(f"  [{_ts()}] Handler: DONE - returning feedback")
 
     return feedback
 
@@ -208,11 +214,12 @@ async def main() -> None:
     reviewer = Reviewer()
     aggregator = FinalAggregator()
 
-    # Build workflow
+    # Build workflow: processor self-loops, both branches feed into aggregator
     workflow = (
         WorkflowBuilder(start_executor=analyzer)
         .add_edge(analyzer, processor)
         .add_edge(analyzer, reviewer)
+        .add_edge(processor, processor)  # self-loop for async processing
         .add_edge(processor, aggregator)
         .add_edge(reviewer, aggregator)
         .build()
@@ -232,24 +239,57 @@ async def main() -> None:
         # Can add more: ApprovalRequest: handle_approval, etc.
     }
 
-    print(f"\n[Start] Task: {initial_data.task}\n")
+    global _start_time
+    _start_time = time.monotonic()
 
-    # Run workflow with automatic response handling (two-phase execution)
-    # Phase 1: workflow runs to idle, collecting request_info events
-    # Handlers run concurrently, then responses are submitted for Phase 2
+    print(f"\n[{_ts()}] Start: {initial_data.task}")
+
+    # Run workflow with automatic response handling (inline dispatch)
+    # Handlers are dispatched as asyncio tasks when request_info events are emitted
+    # Responses are injected back and processed in subsequent supersteps
     result = await workflow.run(
         initial_data,
         response_handlers=response_handlers,
     )
 
+    elapsed = time.monotonic() - _start_time
+
     # Display results
-    print(f"\nFinal state: {result.get_final_state()}")
-    print(f"Total events: {len(result)}")
+    print(f"\n[{_ts()}] Final state: {result.get_final_state()}")
+    print(f"  Total time: {elapsed:.1f}s")
+    print(f"  Total events: {len(result)}")
     outputs = result.get_outputs()
     if outputs:
         print(f"Outputs ({len(outputs)}):")
         for output in outputs:
             print(f"  - {output}")
+
+    """
+    Sample Output:
+
+    [0.0s] Start: document analysis
+
+    [0.0s] Handler: STARTED - reviewing iteration 0
+    [0.5s] Processor: iteration 1/10 complete
+    [1.1s] Processor: iteration 2/10 complete
+    [1.6s] Processor: iteration 3/10 complete
+    [2.2s] Processor: iteration 4/10 complete
+    [2.7s] Processor: iteration 5/10 complete
+    [3.0s] Handler: DONE - returning feedback
+    [3.3s] Processor: iteration 6/10 complete
+    [3.3s] Reviewer: response_handler invoked with feedback
+    [3.8s] Processor: iteration 7/10 complete
+    [4.4s] Processor: iteration 8/10 complete
+    [4.9s] Processor: iteration 9/10 complete
+    [5.5s] Processor: iteration 10/10 complete
+    [5.5s] Processor: DONE after 10 iterations
+
+    [5.6s] Final state: WorkflowRunState.IDLE
+    Total time: 5.6s
+    Total events: 70
+    Outputs (1):
+    - DataPacket(iteration=10, content='Sample document to process', analysis='Iteration 10: Sample document to process... processed')
+    """  # noqa: E501
 
 
 if __name__ == "__main__":

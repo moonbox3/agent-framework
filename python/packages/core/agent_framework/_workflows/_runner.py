@@ -79,7 +79,10 @@ class Runner:
         """Reset the iteration count to zero."""
         self._iteration = 0
 
-    async def run_until_convergence(self) -> AsyncGenerator[WorkflowEvent, None]:
+    async def run_until_convergence(
+        self,
+        outstanding_handler_tasks: set[asyncio.Task[None]] | None = None,
+    ) -> AsyncGenerator[WorkflowEvent, None]:
         """Run the workflow until no more messages are sent."""
         if self._running:
             raise WorkflowRunnerException("Runner is already running.")
@@ -121,6 +124,12 @@ class Runner:
                     iteration_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await iteration_task
+                    if outstanding_handler_tasks:
+                        for t in outstanding_handler_tasks:
+                            if not t.done():
+                                t.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await asyncio.gather(*outstanding_handler_tasks, return_exceptions=True)
                     raise
 
                 # Propagate errors from iteration, but first surface any pending events
@@ -151,6 +160,14 @@ class Runner:
 
                 # Check for convergence: no more messages to process
                 if not await self._ctx.has_messages():
+                    if outstanding_handler_tasks:
+                        still_running = {t for t in outstanding_handler_tasks if not t.done()}
+                        while still_running:
+                            _, still_running = await asyncio.wait(still_running, return_when=asyncio.FIRST_COMPLETED)
+                            if await self._ctx.has_messages():
+                                break
+                        if await self._ctx.has_messages():
+                            continue
                     break
 
             if self._iteration >= self._max_iterations and await self._ctx.has_messages():

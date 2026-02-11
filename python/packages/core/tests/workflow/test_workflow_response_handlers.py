@@ -4,7 +4,7 @@
 Tests for workflow response_handlers parameter.
 
 Verifies automatic HITL request handling: type-based dispatch, concurrent execution,
-error handling, parameter validation, and two-phase event merging.
+error handling, parameter validation, and inline handler dispatch.
 """
 
 import asyncio
@@ -182,7 +182,7 @@ class CollectorExecutor(Executor):
 
 
 class TestResponseHandlers:
-    async def test_single_handler_submits_and_triggers_phase2(self):
+    async def test_single_handler_submits_response(self):
         """Handler response is submitted back and the executor's response_handler runs."""
         reviewer = ReviewerExecutor()
         collector = CollectorExecutor()
@@ -199,7 +199,7 @@ class TestResponseHandlers:
         assert reviewer.feedback_received is True
         assert reviewer.feedback_value == "lgtm"
         assert result.get_final_state() == WorkflowRunState.IDLE
-        # Collector should have received the message from Phase 2
+        # Collector should have received the message from the response handler
         assert any("review_done:lgtm" in msg for msg in collector.collected)
 
     async def test_multiple_handlers_dispatched_by_type(self):
@@ -303,20 +303,29 @@ class TestResponseHandlers:
         assert "UnknownRequest" in caplog.text
         assert "ReviewRequest" in caplog.text
 
-    async def test_stream_true_with_handlers_raises(self):
-        """stream=True + response_handlers raises ValueError immediately."""
+    async def test_stream_true_with_handlers_works(self):
+        """stream=True + response_handlers works with inline dispatch."""
         reviewer = ReviewerExecutor()
-        workflow = WorkflowBuilder(start_executor=reviewer).build()
+        collector = CollectorExecutor()
+        workflow = WorkflowBuilder(start_executor=reviewer).add_edge(reviewer, collector).build()
 
         async def handle_review(request: ReviewRequest) -> str:
-            return "x"
+            return "stream_lgtm"
 
-        with pytest.raises(ValueError, match="stream=True"):
-            workflow.run(
-                "test",
-                stream=True,
-                response_handlers={ReviewRequest: handle_review},
-            )
+        events = []
+        stream = workflow.run(
+            "stream_test",
+            stream=True,
+            response_handlers={ReviewRequest: handle_review},
+        )
+        async for event in stream:
+            events.append(event)
+        result = await stream.get_final_response()
+
+        assert reviewer.feedback_received is True
+        assert reviewer.feedback_value == "stream_lgtm"
+        assert result.get_final_state() == WorkflowRunState.IDLE
+        assert any("review_done:stream_lgtm" in msg for msg in collector.collected)
 
     async def test_responses_with_handlers_raises(self):
         """response_handlers + responses raises ValueError immediately."""
@@ -402,8 +411,8 @@ class TestResponseHandlers:
         # (generous margin for CI/test overhead; sequential would be ~400ms+)
         assert elapsed < 0.5, f"Expected < 500ms, got {elapsed * 1000:.0f}ms"
 
-    async def test_events_merged_from_both_phases(self):
-        """Result contains request_info events from Phase 1 AND executor events from Phase 2."""
+    async def test_events_include_request_and_response_handling(self):
+        """Result contains request_info events and executor events from response processing."""
         reviewer = ReviewerExecutor()
         collector = CollectorExecutor()
         workflow = WorkflowBuilder(start_executor=reviewer).add_edge(reviewer, collector).build()
@@ -416,14 +425,97 @@ class TestResponseHandlers:
             response_handlers={ReviewRequest: handle_review},
         )
 
-        # Phase 1 should have produced request_info events
+        # Should have produced request_info events
         request_events = result.get_request_info_events()
         assert len(request_events) >= 1
         assert isinstance(request_events[0].data, ReviewRequest)
 
-        # Phase 2 should have produced executor events (reviewer response handler ran)
+        # Response handler should have triggered executor events (reviewer response handler ran)
         executor_invoked_events = [e for e in result if e.type == "executor_invoked"]
-        assert len(executor_invoked_events) >= 2  # Phase 1 + Phase 2
+        assert len(executor_invoked_events) >= 2  # Initial + response handling
 
-        # Final state should be IDLE (Phase 2 completed)
+        # Final state should be IDLE (response was processed)
+        assert result.get_final_state() == WorkflowRunState.IDLE
+
+    async def test_handler_with_looping_branch(self):
+        """Fan-out with self-looping branch + HITL handler: handler dispatches while loop runs."""
+
+        @dataclass
+        class LoopMessage:
+            iteration: int
+            content: str
+
+        class LoopingProcessor(Executor):
+            """Loops a fixed number of times via self-send. Stops by not sending."""
+
+            def __init__(self):
+                super().__init__("looper")
+                self.iteration_count = 0
+
+            @handler
+            async def process(self, message: LoopMessage, ctx: WorkflowContext[LoopMessage]) -> None:
+                self.iteration_count += 1
+                if self.iteration_count < 3:
+                    await ctx.send_message(LoopMessage(iteration=self.iteration_count, content="processing"))
+
+        class HITLExecutor(Executor):
+            """Requests info from external handler."""
+
+            def __init__(self):
+                super().__init__("hitl")
+                self.response_received = False
+                self.response_value: str | None = None
+
+            @handler
+            async def start(self, message: LoopMessage, ctx: WorkflowContext) -> None:
+                request = ReviewRequest(id="hitl_req", data=f"Review: {message.content}")
+                await ctx.request_info(request_data=request, response_type=str)
+
+            @response_handler
+            async def on_response(
+                self,
+                original_request: ReviewRequest,
+                response: str,
+                ctx: WorkflowContext[str],
+            ) -> None:
+                self.response_received = True
+                self.response_value = response
+
+        class FanOutDispatcher(Executor):
+            def __init__(self):
+                super().__init__("fanout")
+
+            @handler
+            async def start(self, message: str, ctx: WorkflowContext[LoopMessage]) -> None:
+                await ctx.send_message(LoopMessage(iteration=0, content=message))
+
+        fanout = FanOutDispatcher()
+        looper = LoopingProcessor()
+        hitl = HITLExecutor()
+
+        workflow = (
+            WorkflowBuilder(start_executor=fanout)
+            .add_edge(fanout, looper)
+            .add_edge(fanout, hitl)
+            .add_edge(looper, looper)  # self-loop (stops when no message sent)
+            .build()
+        )
+
+        async def handle_review(request: ReviewRequest) -> str:
+            await asyncio.sleep(0.1)  # Simulate async work
+            return "approved_by_handler"
+
+        result = await workflow.run(
+            "fan_out_test",
+            response_handlers={ReviewRequest: handle_review},
+        )
+
+        # Looping branch completed its iterations
+        assert looper.iteration_count == 3
+
+        # HITL handler was dispatched and response processed
+        assert hitl.response_received is True
+        assert hitl.response_value == "approved_by_handler"
+
+        # Final state should be IDLE (all branches complete, all requests handled)
         assert result.get_final_state() == WorkflowRunState.IDLE

@@ -37,15 +37,6 @@ from ._typing_utils import is_instance_of, try_coerce_to_type
 logger = logging.getLogger(__name__)
 
 
-class _NoResponseType:
-    """Sentinel type to distinguish 'handler failed/unmatched' from 'handler returned None'."""
-
-    pass
-
-
-_NO_RESPONSE = _NoResponseType()
-
-
 class WorkflowRunResult(list[WorkflowEvent]):
     """Container for events generated during non-streaming workflow execution.
 
@@ -231,9 +222,6 @@ class Workflow(DictConvertible):
         # Flag to prevent concurrent workflow executions
         self._is_running = False
 
-        # Store responses collected from response_handlers for submission after stream completes
-        self._pending_handler_responses: dict[str, Any] | None = None
-
         # Capture a canonical fingerprint of the workflow graph so checkpoints
         # can assert they are resumed with an equivalent topology.
         self._graph_signature = self._compute_graph_signature()
@@ -309,6 +297,7 @@ class Workflow(DictConvertible):
         reset_context: bool = True,
         streaming: bool = False,
         run_kwargs: dict[str, Any] | None = None,
+        outstanding_handler_tasks: set[asyncio.Task[None]] | None = None,
     ) -> AsyncIterable[WorkflowEvent]:
         """Private method to run workflow with proper tracing.
 
@@ -320,6 +309,7 @@ class Workflow(DictConvertible):
             reset_context: Whether to reset the context for a new run
             streaming: Whether to enable streaming mode for agents
             run_kwargs: Optional kwargs to store in State for agent invocations
+            outstanding_handler_tasks: Optional set to track outstanding response handler tasks
 
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
@@ -335,7 +325,6 @@ class Workflow(DictConvertible):
             OtelAttr.WORKFLOW_RUN_SPAN,
             attributes,
         ) as span:
-            saw_request = False
             emitted_in_progress_pending = False
             try:
                 # Add workflow started event (telemetry + surface state to consumers)
@@ -367,10 +356,9 @@ class Workflow(DictConvertible):
                     await initial_executor_fn()
 
                 # All executor executions happen within workflow span
-                async for event in self._runner.run_until_convergence():
-                    # Track request events for final status determination
-                    if event.type == "request_info":
-                        saw_request = True
+                async for event in self._runner.run_until_convergence(
+                    outstanding_handler_tasks=outstanding_handler_tasks,
+                ):
                     yield event
 
                     if event.type == "request_info" and not emitted_in_progress_pending:
@@ -380,7 +368,8 @@ class Workflow(DictConvertible):
                         yield pending_status
 
                 # Workflow runs until idle - emit final status based on whether requests are pending
-                if saw_request:
+                pending = await self._runner_context.get_pending_request_info_events()
+                if pending:
                     with _framework_event_origin():
                         terminal_status = WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
                     yield terminal_status
@@ -512,13 +501,11 @@ class Workflow(DictConvertible):
                 exclusive with message. Can be combined with checkpoint_id to restore
                 a checkpoint and send responses in a single call.
             response_handlers: Dict mapping request data types to async handler functions.
-                Requires stream=False (default). Mutually exclusive with ``responses``.
-                Execution is sequential in two phases:
-                1. Phase 1: Workflow runs to idle, collecting request_info events.
-                2. All matching handlers are called concurrently via asyncio.gather.
-                3. Phase 2: Collected responses are submitted back and the workflow
-                   runs again to process them.
-                The combined WorkflowRunResult contains events from both phases.
+                Mutually exclusive with ``responses``. Handlers are dispatched inline
+                as asyncio tasks when request_info events are emitted during execution.
+                The runner waits for outstanding handler tasks before declaring convergence,
+                so handler responses are processed in subsequent supersteps within the
+                same workflow run.
             checkpoint_id: ID of checkpoint to restore from. Can be used alone (resume
                 from checkpoint), with message (not allowed), or with responses
                 (restore then send responses).
@@ -536,12 +523,6 @@ class Workflow(DictConvertible):
         """
         # Validate parameters eagerly (before any async work or setting running flag)
         self._validate_run_params(message, responses, checkpoint_id, response_handlers)
-        if stream and response_handlers is not None:
-            raise ValueError(
-                "Cannot use response_handlers with stream=True. "
-                "Response handlers require non-streaming mode (stream=False) "
-                "to automatically submit responses after execution completes."
-            )
         self._ensure_not_running()
 
         response_stream = ResponseStream[WorkflowEvent, WorkflowRunResult](
@@ -562,68 +543,35 @@ class Workflow(DictConvertible):
 
         if stream:
             return response_stream
-        if response_handlers is not None:
-            # Wrap to handle automatic response submission after stream completes
-            return self._run_with_response_submission(
-                response_stream,
-                checkpoint_storage=checkpoint_storage,
-                include_status_events=include_status_events,
-                **kwargs,
-            )
         return response_stream.get_final_response()
 
-    async def _run_with_response_submission(
+    async def _invoke_response_handler(
         self,
-        response_stream: ResponseStream[WorkflowEvent, WorkflowRunResult],
-        checkpoint_storage: CheckpointStorage | None = None,
-        include_status_events: bool = False,
-        **kwargs: Any,
-    ) -> WorkflowRunResult:
-        """Execute response_stream and submit collected handler responses as Phase 2.
+        handler_fn: Callable[[Any], Awaitable[Any]],
+        request_id: str,
+        request_data: Any,
+    ) -> None:
+        """Invoke a response handler and submit the result back to the workflow.
 
-        After the main stream completes, if response_handlers collected any responses,
-        this method submits them back to the workflow via ``run(responses=...)``.
-
-        Args:
-            response_stream: The ResponseStream from Phase 1 to execute.
-            checkpoint_storage: Checkpoint storage (forwarded to Phase 2).
-            include_status_events: Whether to include status events.
-            **kwargs: Additional kwargs forwarded to Phase 2.
-
-        Returns:
-            WorkflowRunResult with merged events from Phase 1 and Phase 2.
+        On success, the response is submitted via send_request_info_response which
+        pops the pending request and injects a response message for the next superstep.
+        On failure, the request stays pending and the workflow converges as
+        IDLE_WITH_PENDING_REQUESTS.
         """
-        # Clear stale state from any prior run
-        self._pending_handler_responses = None
+        try:
+            response = await handler_fn(request_data)
+        except Exception:
+            logger.exception(f"Response handler failed for request {request_id} (type={type(request_data).__name__})")
+            return
 
-        # Phase 1: execute the main stream (handlers populate _pending_handler_responses)
-        result = await response_stream.get_final_response()
-
-        # Phase 2: submit collected responses into the current workflow state
-        if self._pending_handler_responses:
-            logger.debug(
-                f"Response handlers collected {len(self._pending_handler_responses)} "
-                f"responses. Submitting back to workflow for continued processing."
+        try:
+            await self._runner_context.send_request_info_response(request_id, response)
+        except Exception:
+            logger.exception(
+                f"Failed to submit response for request {request_id} "
+                f"(type={type(request_data).__name__}). "
+                f"Handler succeeded but response could not be delivered."
             )
-            collected_responses = self._pending_handler_responses
-            self._pending_handler_responses = None
-
-            continuation_result = await self.run(
-                responses=collected_responses,
-                checkpoint_storage=checkpoint_storage,
-                stream=False,
-                include_status_events=include_status_events,
-                **kwargs,
-            )
-
-            merged_events = list(result) + list(continuation_result)
-            merged_status_events = result._status_events + continuation_result._status_events
-            return WorkflowRunResult(
-                events=merged_events,
-                status_events=merged_status_events,
-            )
-
-        return result
 
     async def _run_core(
         self,
@@ -638,12 +586,14 @@ class Workflow(DictConvertible):
     ) -> AsyncIterable[WorkflowEvent]:
         """Single core execution path for both streaming and non-streaming modes.
 
+        When response_handlers are provided, handlers are dispatched inline as
+        asyncio tasks when request_info events are emitted. The runner's convergence
+        check waits for outstanding handler tasks before deciding the workflow is idle,
+        allowing handler responses to be processed in subsequent supersteps.
+
         Yields:
             WorkflowEvent: The events generated during the workflow execution.
         """
-        # Clear stale handler responses from any prior run
-        self._pending_handler_responses = None
-
         # Enable runtime checkpointing if storage provided
         if checkpoint_storage is not None:
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
@@ -652,65 +602,45 @@ class Workflow(DictConvertible):
             message, responses, checkpoint_id, checkpoint_storage
         )
 
-        # Collect pending requests if handlers provided
-        pending_requests: dict[str, Any] = {}
+        outstanding_tasks: set[asyncio.Task[None]] | None = set() if response_handlers else None
 
-        async for event in self._run_workflow_with_tracing(
-            initial_executor_fn=initial_executor_fn,
-            reset_context=reset_context,
-            streaming=streaming,
-            run_kwargs=kwargs if kwargs else None,
-        ):
-            if event.type == "output" and not self._should_yield_output_event(event):
-                continue
-
-            # Collect request_info events for external handling
-            if event.type == "request_info" and response_handlers:
-                pending_requests[event.request_id] = event.data
-
-            yield event
-
-        # After main execution, dispatch response handlers for pending requests
-        if response_handlers and pending_requests:
-
-            async def get_response(request_id: str, request_data: Any) -> tuple[str, Any]:
-                request_data_type = type(request_data)
-                matched_handler = response_handlers.get(request_data_type)
-                if matched_handler:
-                    try:
-                        response = await matched_handler(request_data)
-                        return (request_id, response)
-                    except Exception:
-                        logger.exception(
-                            f"Error in response handler for request {request_id} (type={request_data_type.__name__})"
-                        )
-                        return (request_id, _NO_RESPONSE)
-                else:
-                    registered_types = [t.__name__ for t in response_handlers]
-                    logger.warning(
-                        f"No response handler registered for request type "
-                        f"{request_data_type.__name__} (request_id={request_id}). "
-                        f"Registered types: {registered_types}"
-                    )
-                    return (request_id, _NO_RESPONSE)
-
-            # Run all handlers concurrently, capturing exceptions as return values
-            response_tasks = [get_response(req_id, req_data) for req_id, req_data in pending_requests.items()]
-            responses_list = await asyncio.gather(*response_tasks, return_exceptions=True)
-
-            # Filter out failed/unmatched results
-            collected_responses: dict[str, Any] = {}
-            for item in responses_list:
-                if isinstance(item, BaseException):
-                    logger.error(f"Unexpected exception in response handler gather: {item}")
+        try:
+            async for event in self._run_workflow_with_tracing(
+                initial_executor_fn=initial_executor_fn,
+                reset_context=reset_context,
+                streaming=streaming,
+                run_kwargs=kwargs if kwargs else None,
+                outstanding_handler_tasks=outstanding_tasks,
+            ):
+                if event.type == "output" and not self._should_yield_output_event(event):
                     continue
-                req_id, resp = item
-                if not isinstance(resp, _NoResponseType):
-                    collected_responses[req_id] = resp
 
-            # Store for use in _run_with_response_submission
-            if collected_responses:
-                self._pending_handler_responses = collected_responses
+                # Dispatch response handlers inline as tasks
+                if event.type == "request_info" and response_handlers is not None and outstanding_tasks is not None:
+                    request_data_type = type(event.data)
+                    matched_handler = response_handlers.get(request_data_type)
+                    if matched_handler:
+                        task = asyncio.create_task(
+                            self._invoke_response_handler(matched_handler, event.request_id, event.data)
+                        )
+                        outstanding_tasks.add(task)
+                        task.add_done_callback(outstanding_tasks.discard)
+                    else:
+                        registered_types = [t.__name__ for t in response_handlers]
+                        logger.warning(
+                            f"No response handler registered for request type "
+                            f"{request_data_type.__name__} (request_id={event.request_id}). "
+                            f"Registered types: {registered_types}"
+                        )
+
+                yield event
+        finally:
+            # Cancel any outstanding handler tasks on error/cancellation
+            if outstanding_tasks:
+                for t in outstanding_tasks:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*outstanding_tasks, return_exceptions=True)
 
     async def _run_cleanup(self, checkpoint_storage: CheckpointStorage | None) -> None:
         """Cleanup hook called after stream consumption."""

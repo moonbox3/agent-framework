@@ -498,3 +498,56 @@ class TestActionContextKwargs:
             call_kw = mock_agent.run.call_args_list[0].kwargs
             assert call_kw.get("user_token") == "secret"
             assert call_kw.get("api_key") == "key123"
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_handler_merges_caller_options(self):
+        """Caller-provided options in run_kwargs should be merged, not cause TypeError."""
+        import agent_framework_declarative._workflows._actions_agents  # noqa: F401
+
+        mock_response = MagicMock()
+        mock_response.text = "response"
+        mock_response.messages = []
+        mock_response.tool_calls = []
+
+        async def non_streaming_run(*args, **kwargs):
+            if kwargs.get("stream"):
+                raise TypeError("no streaming")
+            return mock_response
+
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=non_streaming_run)
+
+        # Include 'options' in run_kwargs to test merge behavior
+        test_kwargs = {"user_token": "secret", "options": {"temperature": 0.7}}
+
+        state = WorkflowState()
+        state.add_conversation_message(MagicMock(role="user", text="hello"))
+
+        ctx = create_action_context(
+            action={
+                "kind": "InvokeAzureAgent",
+                "agent": "my_agent",
+            },
+            agents={"my_agent": mock_agent},
+            run_kwargs=test_kwargs,
+        )
+
+        handler = get_action_handler("InvokeAzureAgent")
+        _ = [e async for e in handler(ctx)]
+
+        assert mock_agent.run.call_count >= 1
+
+        # Find the non-streaming fallback call
+        for call in mock_agent.run.call_args_list:
+            call_kw = call.kwargs
+            if not call_kw.get("stream"):
+                # Caller options should be merged with additional_function_arguments
+                assert call_kw["options"]["temperature"] == 0.7
+                assert "additional_function_arguments" in call_kw["options"]
+                # Direct kwargs should not include 'options' (no duplicate keyword)
+                assert call_kw.get("user_token") == "secret"
+                break
+        else:
+            call_kw = mock_agent.run.call_args_list[0].kwargs
+            assert call_kw["options"]["temperature"] == 0.7
+            assert "additional_function_arguments" in call_kw["options"]

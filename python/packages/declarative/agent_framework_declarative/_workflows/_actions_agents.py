@@ -331,7 +331,11 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
     run_kwargs = ctx.run_kwargs
     options: dict[str, Any] | None = None
     if run_kwargs:
-        options = {"additional_function_arguments": run_kwargs}
+        # Merge caller-provided options to avoid duplicate keyword argument
+        options = dict(run_kwargs.get("options") or {})
+        options["additional_function_arguments"] = run_kwargs
+        # Exclude 'options' from splat to avoid TypeError on duplicate keyword
+        run_kwargs = {k: v for k, v in run_kwargs.items() if k != "options"}
 
     while True:
         # Invoke the agent
@@ -580,7 +584,11 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
     prompt_run_kwargs = ctx.run_kwargs
     prompt_options: dict[str, Any] | None = None
     if prompt_run_kwargs:
-        prompt_options = {"additional_function_arguments": prompt_run_kwargs}
+        # Merge caller-provided options to avoid duplicate keyword argument
+        prompt_options = dict(prompt_run_kwargs.get("options") or {})
+        prompt_options["additional_function_arguments"] = prompt_run_kwargs
+        # Exclude 'options' from splat to avoid TypeError on duplicate keyword
+        prompt_run_kwargs = {k: v for k, v in prompt_run_kwargs.items() if k != "options"}
 
     # Invoke the agent
     try:

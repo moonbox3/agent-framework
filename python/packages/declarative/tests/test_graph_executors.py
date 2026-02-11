@@ -1427,3 +1427,72 @@ class TestExecutorKwargsForwarding:
         # Check direct kwargs were passed
         assert call_kwargs.kwargs.get("user_token") == "abc123"
         assert call_kwargs.kwargs.get("service_config") == {"endpoint": "http://test"}
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_merges_caller_options(self):
+        """Caller-provided options in run_kwargs should be merged, not cause TypeError."""
+        from agent_framework._workflows._const import WORKFLOW_RUN_KWARGS_KEY
+        from agent_framework._workflows._state import State
+
+        from agent_framework_declarative._workflows._executors_agents import (
+            InvokeAzureAgentExecutor,
+        )
+
+        mock_state = MagicMock(spec=State)
+        state_data: dict[str, Any] = {}
+
+        def mock_get(key, default=None):
+            return state_data.get(key, default)
+
+        def mock_set(key, value):
+            state_data[key] = value
+
+        mock_state.get = MagicMock(side_effect=mock_get)
+        mock_state.set = MagicMock(side_effect=mock_set)
+
+        # Include 'options' in run_kwargs to test merge behavior
+        test_kwargs = {
+            "user_token": "abc123",
+            "options": {"temperature": 0.5},
+        }
+        state_data[WORKFLOW_RUN_KWARGS_KEY] = test_kwargs
+
+        dws = DeclarativeWorkflowState(mock_state)
+        dws.initialize({"input": "hello"})
+
+        mock_response = MagicMock()
+        mock_response.text = "response text"
+        mock_response.messages = []
+        mock_response.tool_calls = []
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value=mock_response)
+
+        mock_ctx = MagicMock()
+        mock_ctx.get_state = MagicMock(side_effect=mock_get)
+        mock_ctx.yield_output = AsyncMock()
+
+        executor = InvokeAzureAgentExecutor.__new__(InvokeAzureAgentExecutor)
+        executor._agents = {"test_agent": mock_agent}
+
+        await executor._invoke_agent_and_store_results(
+            agent=mock_agent,
+            agent_name="test_agent",
+            input_text="hello",
+            state=dws,
+            ctx=mock_ctx,
+            messages_var=None,
+            response_obj_var=None,
+            result_property=None,
+            auto_send=True,
+        )
+
+        mock_agent.run.assert_called_once()
+        call_kwargs = mock_agent.run.call_args
+
+        # Caller options should be merged with additional_function_arguments
+        merged_options = call_kwargs.kwargs["options"]
+        assert merged_options["temperature"] == 0.5
+        assert "additional_function_arguments" in merged_options
+
+        # Direct kwargs should be passed without 'options' (no duplicate keyword)
+        assert call_kwargs.kwargs.get("user_token") == "abc123"

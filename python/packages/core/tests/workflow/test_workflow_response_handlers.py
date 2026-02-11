@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 """
-Tests for workflow response_handlers parameter.
+Tests for workflow request_handlers parameter.
 
 Verifies automatic HITL request handling: type-based dispatch, concurrent execution,
 error handling, parameter validation, and inline handler dispatch.
@@ -193,7 +193,7 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "test_msg",
-            response_handlers={ReviewRequest: handle_review},
+            request_handlers={ReviewRequest: handle_review},
         )
 
         assert reviewer.feedback_received is True
@@ -235,7 +235,7 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "multi_test",
-            response_handlers={
+            request_handlers={
                 ReviewRequest: handle_review,
                 ApprovalRequest: handle_approval,
             },
@@ -257,7 +257,7 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "test_none",
-            response_handlers={ReviewRequest: handle_returning_none},
+            request_handlers={ReviewRequest: handle_returning_none},
         )
 
         # The handler matched and returned None — that None should be submitted
@@ -276,7 +276,7 @@ class TestResponseHandlers:
         with caplog.at_level(logging.ERROR):
             result = await workflow.run(
                 "fail_test",
-                response_handlers={ReviewRequest: failing_handler},
+                request_handlers={ReviewRequest: failing_handler},
             )
 
         assert reviewer.feedback_received is False
@@ -296,7 +296,7 @@ class TestResponseHandlers:
         with caplog.at_level(logging.WARNING):
             result = await workflow.run(
                 "unknown_test",
-                response_handlers={ReviewRequest: handle_review},
+                request_handlers={ReviewRequest: handle_review},
             )
 
         assert result.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
@@ -304,7 +304,7 @@ class TestResponseHandlers:
         assert "ReviewRequest" in caplog.text
 
     async def test_stream_true_with_handlers_works(self):
-        """stream=True + response_handlers works with inline dispatch."""
+        """stream=True + request_handlers works with inline dispatch."""
         reviewer = ReviewerExecutor()
         collector = CollectorExecutor()
         workflow = WorkflowBuilder(start_executor=reviewer).add_edge(reviewer, collector).build()
@@ -316,7 +316,7 @@ class TestResponseHandlers:
         stream = workflow.run(
             "stream_test",
             stream=True,
-            response_handlers={ReviewRequest: handle_review},
+            request_handlers={ReviewRequest: handle_review},
         )
         async for event in stream:
             events.append(event)
@@ -328,17 +328,17 @@ class TestResponseHandlers:
         assert any("review_done:stream_lgtm" in msg for msg in collector.collected)
 
     async def test_responses_with_handlers_raises(self):
-        """response_handlers + responses raises ValueError immediately."""
+        """request_handlers + responses raises ValueError immediately."""
         reviewer = ReviewerExecutor()
         workflow = WorkflowBuilder(start_executor=reviewer).build()
 
         async def handle_review(request: ReviewRequest) -> str:
             return "x"
 
-        with pytest.raises(ValueError, match="response_handlers.*responses"):
+        with pytest.raises(ValueError, match="request_handlers.*responses"):
             await workflow.run(
                 responses={"some_id": "value"},
-                response_handlers={ReviewRequest: handle_review},
+                request_handlers={ReviewRequest: handle_review},
             )
 
     async def test_no_request_info_handlers_unused(self):
@@ -352,18 +352,18 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "hello",
-            response_handlers={ReviewRequest: handle_review},
+            request_handlers={ReviewRequest: handle_review},
         )
 
         assert result.get_final_state() == WorkflowRunState.IDLE
         assert len(result.get_request_info_events()) == 0
 
     async def test_none_handlers_preserves_behavior(self):
-        """response_handlers=None preserves original IDLE_WITH_PENDING_REQUESTS state."""
+        """request_handlers=None preserves original IDLE_WITH_PENDING_REQUESTS state."""
         reviewer = ReviewerExecutor()
         workflow = WorkflowBuilder(start_executor=reviewer).build()
 
-        result = await workflow.run("test_default", response_handlers=None)
+        result = await workflow.run("test_default", request_handlers=None)
 
         assert reviewer.feedback_received is False
         assert result.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
@@ -400,7 +400,7 @@ class TestResponseHandlers:
         start = time.monotonic()
         await workflow.run(
             "concurrent_test",
-            response_handlers={
+            request_handlers={
                 ReviewRequest: slow_review,
                 ApprovalRequest: slow_approval,
             },
@@ -422,7 +422,7 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "merge_test",
-            response_handlers={ReviewRequest: handle_review},
+            request_handlers={ReviewRequest: handle_review},
         )
 
         # Should have produced request_info events
@@ -507,7 +507,7 @@ class TestResponseHandlers:
 
         result = await workflow.run(
             "fan_out_test",
-            response_handlers={ReviewRequest: handle_review},
+            request_handlers={ReviewRequest: handle_review},
         )
 
         # Looping branch completed its iterations
@@ -519,3 +519,126 @@ class TestResponseHandlers:
 
         # Final state should be IDLE (all branches complete, all requests handled)
         assert result.get_final_state() == WorkflowRunState.IDLE
+
+
+class TestBuilderLevelResponseHandlers:
+    """Tests for request_handlers passed via WorkflowBuilder constructor."""
+
+    async def test_builder_handlers_used_as_default(self):
+        """Builder-level request_handlers are used when run() has none."""
+        reviewer = ReviewerExecutor()
+        collector = CollectorExecutor()
+
+        async def handle_review(request: ReviewRequest) -> str:
+            return "builder_lgtm"
+
+        workflow = (
+            WorkflowBuilder(
+                start_executor=reviewer,
+                request_handlers={ReviewRequest: handle_review},
+            )
+            .add_edge(reviewer, collector)
+            .build()
+        )
+
+        result = await workflow.run("test_builder")
+
+        assert reviewer.feedback_received is True
+        assert reviewer.feedback_value == "builder_lgtm"
+        assert result.get_final_state() == WorkflowRunState.IDLE
+        assert any("review_done:builder_lgtm" in msg for msg in collector.collected)
+
+    async def test_run_level_overrides_builder(self):
+        """run(request_handlers=...) overrides builder-level handlers."""
+        reviewer = ReviewerExecutor()
+        collector = CollectorExecutor()
+
+        async def builder_handler(request: ReviewRequest) -> str:
+            return "from_builder"
+
+        async def run_handler(request: ReviewRequest) -> str:
+            return "from_run"
+
+        workflow = (
+            WorkflowBuilder(
+                start_executor=reviewer,
+                request_handlers={ReviewRequest: builder_handler},
+            )
+            .add_edge(reviewer, collector)
+            .build()
+        )
+
+        result = await workflow.run(
+            "test_override",
+            request_handlers={ReviewRequest: run_handler},
+        )
+
+        assert reviewer.feedback_value == "from_run"
+        assert result.get_final_state() == WorkflowRunState.IDLE
+
+    async def test_validation_rejects_unknown_type(self):
+        """Builder rejects request_handlers with types not in any @response_handler."""
+        reviewer = ReviewerExecutor()
+
+        async def handle_unknown(request: UnknownRequest) -> str:
+            return "x"
+
+        with pytest.raises(ValueError, match="UnknownRequest.*does not match"):
+            WorkflowBuilder(
+                start_executor=reviewer,
+                request_handlers={UnknownRequest: handle_unknown},
+            ).build()
+
+    async def test_validation_passes_for_known_types(self):
+        """Builder accepts request_handlers matching executor @response_handler types."""
+        reviewer = ReviewerExecutor()
+        approver = ApproverExecutor()
+
+        async def handle_review(request: ReviewRequest) -> str:
+            return "ok"
+
+        async def handle_approval(request: ApprovalRequest) -> str:
+            return "approved"
+
+        # Should not raise — both types are declared via @response_handler on executors
+        class Dispatcher(Executor):
+            def __init__(self):
+                super().__init__("dispatcher")
+
+            @handler
+            async def start(self, message: str, ctx: WorkflowContext) -> None:
+                await ctx.send_message(message)
+
+        dispatcher = Dispatcher()
+        workflow = (
+            WorkflowBuilder(
+                start_executor=dispatcher,
+                request_handlers={
+                    ReviewRequest: handle_review,
+                    ApprovalRequest: handle_approval,
+                },
+            )
+            .add_edge(dispatcher, reviewer)
+            .add_edge(dispatcher, approver)
+            .build()
+        )
+        assert workflow is not None
+
+    async def test_validation_partial_mismatch_rejected(self):
+        """Builder rejects if any key is unknown, even if others are valid."""
+        reviewer = ReviewerExecutor()
+
+        async def handle_review(request: ReviewRequest) -> str:
+            return "ok"
+
+        async def handle_unknown(request: UnknownRequest) -> str:
+            return "x"
+
+        with pytest.raises(ValueError, match="UnknownRequest.*does not match"):
+            WorkflowBuilder(
+                start_executor=reviewer,
+                request_handlers={
+                    ReviewRequest: handle_review,
+                    UnknownRequest: handle_unknown,
+                },
+            ).build()

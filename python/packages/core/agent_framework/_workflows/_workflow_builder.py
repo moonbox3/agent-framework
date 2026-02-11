@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -159,6 +159,7 @@ class WorkflowBuilder:
         start_executor: Executor | SupportsAgentRun | str,
         checkpoint_storage: CheckpointStorage | None = None,
         output_executors: list[Executor | SupportsAgentRun | str] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
     ):
         """Initialize the WorkflowBuilder.
 
@@ -171,6 +172,9 @@ class WorkflowBuilder:
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             output_executors: Optional list of executors whose outputs should be collected.
                 If not provided, outputs from all executors are collected.
+            request_handlers: Optional dict mapping request data types to async handler functions.
+                Keys must match request types declared in executor @response_handler decorators.
+                Validated at build time. Can be overridden per-run via workflow.run(request_handlers=...).
         """
         self._edge_groups: list[EdgeGroup] = []
         self._executors: dict[str, Executor] = {}
@@ -196,6 +200,9 @@ class WorkflowBuilder:
 
         # Output executors filter; if set, only outputs from these executors are yielded
         self._output_executors: list[Executor | SupportsAgentRun | str] = output_executors if output_executors else []
+
+        # Response handlers for automatic HITL request handling
+        self._request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = request_handlers
 
         # Set the start executor
         self._set_start_executor(start_executor)
@@ -1023,6 +1030,33 @@ class WorkflowBuilder:
 
         return (start_executor, factory_name_to_instance, deferred_edge_groups)
 
+    def _validate_request_handlers(self, executors: dict[str, Executor]) -> None:
+        """Validate that request_handlers keys match executor @response_handler request types.
+
+        Collects all request types declared via @response_handler decorators across all
+        executors, then checks that each key in self._request_handlers maps to a known
+        request type. Raises ValueError if an unrecognized type is found.
+        """
+        if self._request_handlers is None:
+            return
+
+        # Collect all request types from executor @response_handler annotations
+        known_request_types: set[type] = set()
+        for executor in executors.values():
+            if hasattr(executor, "_response_handlers"):
+                for request_type, _ in executor._response_handlers:  # type: ignore
+                    known_request_types.add(request_type)
+
+        # Check each handler key against known request types
+        for handler_type in self._request_handlers:
+            if handler_type not in known_request_types:
+                known_names = sorted(t.__name__ for t in known_request_types) if known_request_types else ["(none)"]
+                raise ValueError(
+                    f"request_handlers key {handler_type.__name__} does not match any "
+                    f"@response_handler request type declared in workflow executors. "
+                    f"Known request types: {known_names}"
+                )
+
     def build(self) -> Workflow:
         """Build and return the constructed workflow.
 
@@ -1100,6 +1134,10 @@ class WorkflowBuilder:
                     output_executors,
                 )
 
+                # Validate request_handlers against executor @response_handler annotations
+                if self._request_handlers is not None:
+                    self._validate_request_handlers(executors)
+
                 # Add validation completed event
                 span.add_event(OtelAttr.BUILD_VALIDATION_COMPLETED)
 
@@ -1115,6 +1153,7 @@ class WorkflowBuilder:
                     name=self._name,
                     description=self._description,
                     output_executors=output_executors,
+                    request_handlers=self._request_handlers,
                 )
                 build_attributes: dict[str, Any] = {
                     OtelAttr.WORKFLOW_ID: workflow.id,

@@ -1,23 +1,23 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 """
-Sample: Fan-out Async + HITL with response_handlers parameter
+Sample: Fan-out Async + HITL with request_handlers parameter
 
 Demonstrates automatic HITL request handling in fan-out workflows using the
-response_handlers parameter. Handlers are dispatched inline as asyncio tasks
+request_handlers parameter. Handlers are dispatched inline as asyncio tasks
 when request_info events are emitted during execution. The runner waits for
 outstanding handler tasks before declaring convergence, so handler responses
 are processed in subsequent supersteps within the same workflow run.
 
 Usage:
-    response_handlers = {
+    request_handlers = {
         ReviewRequest: handle_review,
         ApprovalRequest: handle_approval,
     }
 
     result = await workflow.run(
         initial_data,
-        response_handlers=response_handlers,
+        request_handlers=request_handlers,
     )
 """
 
@@ -176,7 +176,7 @@ class FinalAggregator(Executor):
 # ============================================================================
 # Response Handlers (External)
 # ============================================================================
-# These are registered via response_handlers dict, not as executor methods.
+# These are registered via request_handlers dict, not as executor methods.
 # They are dispatched inline as asyncio tasks when request_info events are emitted.
 
 
@@ -205,7 +205,7 @@ async def handle_review(request: ReviewRequest) -> str:
 
 async def main() -> None:
     print("=" * 80)
-    print("HITL: response_handlers parameter in workflow.run()")
+    print("HITL: request_handlers parameter in workflow.run()")
     print("=" * 80)
 
     # Create executors
@@ -234,7 +234,7 @@ async def main() -> None:
     # THE CLEAN API
     # ========================================================================
     # Define external response handlers (type-based dispatch)
-    response_handlers = {
+    request_handlers = {
         ReviewRequest: handle_review,
         # Can add more: ApprovalRequest: handle_approval, etc.
     }
@@ -249,7 +249,7 @@ async def main() -> None:
     # Responses are injected back and processed in subsequent supersteps
     result = await workflow.run(
         initial_data,
-        response_handlers=response_handlers,
+        request_handlers=request_handlers,
     )
 
     elapsed = time.monotonic() - _start_time

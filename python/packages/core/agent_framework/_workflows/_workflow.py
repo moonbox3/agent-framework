@@ -179,6 +179,7 @@ class Workflow(DictConvertible):
         name: str | None = None,
         description: str | None = None,
         output_executors: list[str] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
         **kwargs: Any,
     ):
         """Initialize the workflow with a list of edges.
@@ -193,6 +194,8 @@ class Workflow(DictConvertible):
             description: Optional description of what the workflow does.
             output_executors: Optional list of executor IDs whose outputs will be considered workflow outputs.
                               If None or empty, all executor outputs are treated as workflow outputs.
+            request_handlers: Optional default response handlers for automatic HITL request handling.
+                Can be overridden per-run via workflow.run(request_handlers=...).
             kwargs: Additional keyword arguments. Unused in this implementation.
         """
         self.edge_groups = list(edge_groups)
@@ -221,6 +224,9 @@ class Workflow(DictConvertible):
 
         # Flag to prevent concurrent workflow executions
         self._is_running = False
+
+        # Default response handlers (can be overridden per-run)
+        self._request_handlers = request_handlers
 
         # Capture a canonical fingerprint of the workflow graph so checkpoints
         # can assert they are resumed with an equivalent topology.
@@ -453,7 +459,7 @@ class Workflow(DictConvertible):
         *,
         stream: Literal[True],
         responses: dict[str, Any] | None = None,
-        response_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         **kwargs: Any,
@@ -466,7 +472,7 @@ class Workflow(DictConvertible):
         *,
         stream: Literal[False] = ...,
         responses: dict[str, Any] | None = None,
-        response_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         include_status_events: bool = False,
@@ -479,7 +485,7 @@ class Workflow(DictConvertible):
         *,
         stream: bool = False,
         responses: dict[str, Any] | None = None,
-        response_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         include_status_events: bool = False,
@@ -500,12 +506,13 @@ class Workflow(DictConvertible):
                 request IDs and values are the corresponding response data. Mutually
                 exclusive with message. Can be combined with checkpoint_id to restore
                 a checkpoint and send responses in a single call.
-            response_handlers: Dict mapping request data types to async handler functions.
+            request_handlers: Dict mapping request data types to async handler functions.
                 Mutually exclusive with ``responses``. Handlers are dispatched inline
                 as asyncio tasks when request_info events are emitted during execution.
                 The runner waits for outstanding handler tasks before declaring convergence,
                 so handler responses are processed in subsequent supersteps within the
-                same workflow run.
+                same workflow run. If None, falls back to handlers set at build time via
+                WorkflowBuilder. Pass an empty dict to explicitly disable handlers for a run.
             checkpoint_id: ID of checkpoint to restore from. Can be used alone (resume
                 from checkpoint), with message (not allowed), or with responses
                 (restore then send responses).
@@ -521,15 +528,18 @@ class Workflow(DictConvertible):
         Raises:
             ValueError: If parameter combination is invalid.
         """
+        # Fall back to builder-level request_handlers if none provided at runtime
+        effective_handlers = request_handlers if request_handlers is not None else self._request_handlers
+
         # Validate parameters eagerly (before any async work or setting running flag)
-        self._validate_run_params(message, responses, checkpoint_id, response_handlers)
+        self._validate_run_params(message, responses, checkpoint_id, effective_handlers)
         self._ensure_not_running()
 
         response_stream = ResponseStream[WorkflowEvent, WorkflowRunResult](
             self._run_core(
                 message=message,
                 responses=responses,
-                response_handlers=response_handlers,
+                request_handlers=effective_handlers,
                 checkpoint_id=checkpoint_id,
                 checkpoint_storage=checkpoint_storage,
                 streaming=stream,
@@ -545,7 +555,7 @@ class Workflow(DictConvertible):
             return response_stream
         return response_stream.get_final_response()
 
-    async def _invoke_response_handler(
+    async def _invoke_request_handler(
         self,
         handler_fn: Callable[[Any], Awaitable[Any]],
         request_id: str,
@@ -578,7 +588,7 @@ class Workflow(DictConvertible):
         message: Any | None = None,
         *,
         responses: dict[str, Any] | None = None,
-        response_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         streaming: bool = False,
@@ -586,7 +596,7 @@ class Workflow(DictConvertible):
     ) -> AsyncIterable[WorkflowEvent]:
         """Single core execution path for both streaming and non-streaming modes.
 
-        When response_handlers are provided, handlers are dispatched inline as
+        When request_handlers are provided, handlers are dispatched inline as
         asyncio tasks when request_info events are emitted. The runner's convergence
         check waits for outstanding handler tasks before deciding the workflow is idle,
         allowing handler responses to be processed in subsequent supersteps.
@@ -602,7 +612,7 @@ class Workflow(DictConvertible):
             message, responses, checkpoint_id, checkpoint_storage
         )
 
-        outstanding_tasks: set[asyncio.Task[None]] | None = set() if response_handlers else None
+        outstanding_tasks: set[asyncio.Task[None]] | None = set() if request_handlers else None
 
         try:
             async for event in self._run_workflow_with_tracing(
@@ -616,17 +626,17 @@ class Workflow(DictConvertible):
                     continue
 
                 # Dispatch response handlers inline as tasks
-                if event.type == "request_info" and response_handlers is not None and outstanding_tasks is not None:
+                if event.type == "request_info" and request_handlers is not None and outstanding_tasks is not None:
                     request_data_type = type(event.data)
-                    matched_handler = response_handlers.get(request_data_type)
+                    matched_handler = request_handlers.get(request_data_type)
                     if matched_handler:
                         task = asyncio.create_task(
-                            self._invoke_response_handler(matched_handler, event.request_id, event.data)
+                            self._invoke_request_handler(matched_handler, event.request_id, event.data)
                         )
                         outstanding_tasks.add(task)
                         task.add_done_callback(outstanding_tasks.discard)
                     else:
-                        registered_types = [t.__name__ for t in response_handlers]
+                        registered_types = [t.__name__ for t in request_handlers]
                         logger.warning(
                             f"No response handler registered for request type "
                             f"{request_data_type.__name__} (request_id={event.request_id}). "
@@ -680,7 +690,7 @@ class Workflow(DictConvertible):
         message: Any | None,
         responses: dict[str, Any] | None,
         checkpoint_id: str | None,
-        response_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
+        request_handlers: Mapping[type, Callable[[Any], Awaitable[Any]]] | None = None,
     ) -> None:
         """Validate parameter combinations for run().
 
@@ -689,7 +699,7 @@ class Workflow(DictConvertible):
         - message and checkpoint_id are mutually exclusive
         - At least one of message, responses, or checkpoint_id must be provided
         - responses + checkpoint_id is allowed (restore then send)
-        - response_handlers and responses are mutually exclusive
+        - request_handlers and responses are mutually exclusive
         """
         if message is not None and responses is not None:
             raise ValueError("Cannot provide both 'message' and 'responses'. Use one or the other.")
@@ -703,10 +713,10 @@ class Workflow(DictConvertible):
                 "or 'checkpoint_id' (resume from checkpoint)."
             )
 
-        if response_handlers is not None and responses is not None:
+        if request_handlers is not None and responses is not None:
             raise ValueError(
-                "Cannot provide both 'response_handlers' and 'responses'. "
-                "Use 'response_handlers' for automatic handling or 'responses' for manual submission."
+                "Cannot provide both 'request_handlers' and 'responses'. "
+                "Use 'request_handlers' for automatic handling or 'responses' for manual submission."
             )
 
     def _resolve_execution_mode(

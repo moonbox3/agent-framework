@@ -37,7 +37,13 @@ from agent_framework._workflows import (
     WorkflowContext,
 )
 from agent_framework._workflows._state import State
-from powerfx import Engine
+
+try:
+    from powerfx import Engine
+except (ImportError, RuntimeError):
+    # ImportError: powerfx package not installed
+    # RuntimeError: .NET runtime not available or misconfigured
+    Engine = None  # type: ignore[assignment, misc]
 
 if sys.version_info >= (3, 11):
     from typing import TypedDict  # type: ignore # pragma: no cover
@@ -362,6 +368,15 @@ class DeclarativeWorkflowState:
         # Pre-process nested custom functions (e.g., Upper(MessageText(...)))
         # Replace them with their evaluated results before sending to PowerFx
         formula = self._preprocess_custom_functions(formula)
+
+        if Engine is None:
+            logger.warning(
+                "PowerFx is not available (dotnet runtime not installed). "
+                "Expression '%s' cannot be fully evaluated. "
+                "Install dotnet and the powerfx package for full PowerFx support.",
+                formula[:80],
+            )
+            return formula
 
         engine = Engine()
         symbols = self._to_powerfx_symbols()

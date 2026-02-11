@@ -345,7 +345,8 @@ class DeclarativeWorkflowState:
             undefined variables (matching legacy fallback parser behavior).
 
         Raises:
-            ImportError: If the powerfx package is not installed.
+            RuntimeError: If the powerfx package is not installed and the
+                expression requires PowerFx evaluation.
         """
         if not expression:
             return expression
@@ -370,13 +371,11 @@ class DeclarativeWorkflowState:
         formula = self._preprocess_custom_functions(formula)
 
         if Engine is None:
-            logger.warning(
-                "PowerFx is not available (dotnet runtime not installed). "
-                "Expression '%s' cannot be fully evaluated. "
-                "Install dotnet and the powerfx package for full PowerFx support.",
-                formula[:80],
+            raise RuntimeError(
+                f"PowerFx is not available (dotnet runtime not installed). "
+                f"Expression '={formula[:80]}' cannot be evaluated. "
+                f"Install dotnet and the powerfx package for full PowerFx support."
             )
-            return formula
 
         engine = Engine()
         symbols = self._to_powerfx_symbols()

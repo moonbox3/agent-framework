@@ -327,6 +327,12 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
     max_iterations = 100  # Safety limit
 
     # Start external loop if configured
+    # Build options for kwargs propagation to agent tools
+    run_kwargs = ctx.run_kwargs
+    options: dict[str, Any] | None = None
+    if run_kwargs:
+        options = {"additional_function_arguments": run_kwargs}
+
     while True:
         # Invoke the agent
         try:
@@ -337,7 +343,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
                     updates: list[Any] = []
                     tool_calls: list[Any] = []
 
-                    async for chunk in agent.run(messages, stream=True):
+                    async for chunk in agent.run(messages, stream=True, options=options, **run_kwargs):
                         updates.append(chunk)
 
                         # Yield streaming events for text chunks
@@ -403,7 +409,7 @@ async def handle_invoke_azure_agent(ctx: ActionContext) -> AsyncGenerator[Workfl
 
                 except TypeError:
                     # Agent doesn't support streaming, fall back to non-streaming
-                    response = await agent.run(messages)
+                    response = await agent.run(messages, options=options, **run_kwargs)
 
                     text = response.text
                     response_messages = response.messages
@@ -570,6 +576,12 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
 
     logger.debug(f"InvokePromptAgent: calling '{agent_name}' with {len(messages)} messages")
 
+    # Build options for kwargs propagation to agent tools
+    prompt_run_kwargs = ctx.run_kwargs
+    prompt_options: dict[str, Any] | None = None
+    if prompt_run_kwargs:
+        prompt_options = {"additional_function_arguments": prompt_run_kwargs}
+
     # Invoke the agent
     try:
         if hasattr(agent, "run"):
@@ -577,7 +589,7 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
             try:
                 updates: list[Any] = []
 
-                async for chunk in agent.run(messages, stream=True):
+                async for chunk in agent.run(messages, stream=True, options=prompt_options, **prompt_run_kwargs):
                     updates.append(chunk)
 
                     if hasattr(chunk, "text") and chunk.text:
@@ -607,7 +619,7 @@ async def handle_invoke_prompt_agent(ctx: ActionContext) -> AsyncGenerator[Workf
 
             except TypeError:
                 # Agent doesn't support streaming, fall back to non-streaming
-                response = await agent.run(messages)
+                response = await agent.run(messages, options=prompt_options, **prompt_run_kwargs)
                 text = response.text
                 response_messages = response.messages
 

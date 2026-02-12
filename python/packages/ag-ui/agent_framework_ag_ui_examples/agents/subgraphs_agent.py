@@ -1,26 +1,33 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Subgraphs travel planner agent for Dojo compatibility."""
-
-from __future__ import annotations
+"""Subgraphs travel planner built with MAF workflow primitives."""
 
 import json
 import uuid
 from collections.abc import AsyncGenerator
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from ag_ui.core import (
     BaseEvent,
-    RunFinishedEvent,
-    RunStartedEvent,
     StateSnapshotEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
+from agent_framework import (
+    Executor,
+    Message,
+    Workflow,
+    WorkflowBuilder,
+    WorkflowContext,
+    handler,
+    response_handler,
+)
 
 from agent_framework_ag_ui import AgentFrameworkWorkflow
+from agent_framework_ag_ui._workflow_run import run_workflow_stream
 
 STATIC_FLIGHTS: list[dict[str, str]] = [
     {
@@ -87,9 +94,30 @@ STATIC_EXPERIENCES: list[dict[str, str]] = [
     },
 ]
 
+_STATE_KEY = "subgraphs_state"
+
+
+@dataclass
+class _PresentFlights:
+    pass
+
+
+@dataclass
+class _PresentHotels:
+    pass
+
+
+@dataclass
+class _PlanExperiences:
+    pass
+
+
+@dataclass
+class _FinalizeTrip:
+    pass
+
 
 def _initial_state() -> dict[str, Any]:
-    """Create default travel planner state."""
     return {
         "itinerary": {},
         "experiences": [],
@@ -100,8 +128,7 @@ def _initial_state() -> dict[str, Any]:
     }
 
 
-def _emit_text(text: str) -> list[BaseEvent]:
-    """Emit a complete assistant text message event sequence."""
+def _emit_text_events(text: str) -> list[BaseEvent]:
     message_id = str(uuid.uuid4())
     return [
         TextMessageStartEvent(message_id=message_id, role="assistant"),
@@ -110,98 +137,39 @@ def _emit_text(text: str) -> list[BaseEvent]:
     ]
 
 
-def _extract_resume_value(resume_payload: Any) -> Any | None:
-    """Extract the first resume value from AG-UI interrupt payloads."""
-    if resume_payload is None:
-        return None
-
-    interrupts: list[Any] = []
-    if isinstance(resume_payload, list):
-        interrupts = resume_payload
-    elif isinstance(resume_payload, dict):
-        if isinstance(resume_payload.get("interrupts"), list):
-            interrupts = resume_payload["interrupts"]
-        elif isinstance(resume_payload.get("interrupt"), list):
-            interrupts = resume_payload["interrupt"]
-        else:
-            interrupts = [resume_payload]
-
-    for interrupt in interrupts:
-        if not isinstance(interrupt, dict):
-            continue
-        if "value" not in interrupt:
-            continue
-        value = interrupt["value"]
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                return value
-        return value
-    return None
+async def _emit_text(ctx: WorkflowContext[Any, BaseEvent], text: str) -> None:
+    for event in _emit_text_events(text):
+        await ctx.yield_output(event)
 
 
-def _content_to_text(content: Any) -> str:
-    """Convert AG-UI message content to plain text for lightweight intent parsing."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                if isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-        return " ".join(parts)
-    if isinstance(content, dict):
-        text = content.get("text")
-        return text if isinstance(text, str) else ""
-    return ""
+async def _emit_state_snapshot(ctx: WorkflowContext[Any, BaseEvent], state: dict[str, Any]) -> None:
+    await ctx.yield_output(StateSnapshotEvent(snapshot=deepcopy(state)))
 
 
-def _latest_user_text(messages: Any) -> str | None:
-    """Get the latest user text from AG-UI messages."""
-    if not isinstance(messages, list):
-        return None
-    for item in reversed(messages):
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role", "")).lower()
-        if role != "user":
-            continue
-        text = _content_to_text(item.get("content", "")).strip()
-        if text:
-            return text.lower()
-    return None
+def _flight_interrupt_value() -> dict[str, Any]:
+    return {
+        "message": "Choose the flight you want. I recommend KLM because it is cheaper and usually on time.",
+        "options": deepcopy(STATIC_FLIGHTS),
+        "recommendation": deepcopy(STATIC_FLIGHTS[0]),
+        "agent": "flights",
+    }
 
 
-def _flight_from_user_text(user_text: str | None) -> dict[str, str] | None:
-    """Infer a flight choice from plain user text."""
-    if not user_text:
-        return None
-    if "united" in user_text:
-        return deepcopy(STATIC_FLIGHTS[1])
-    if "klm" in user_text:
-        return deepcopy(STATIC_FLIGHTS[0])
-    return None
+def _hotel_interrupt_value() -> dict[str, Any]:
+    return {
+        "message": "Choose your hotel. I recommend Hotel Zoe for the best value in a central location.",
+        "options": deepcopy(STATIC_HOTELS),
+        "recommendation": deepcopy(STATIC_HOTELS[2]),
+        "agent": "hotels",
+    }
 
 
-def _hotel_from_user_text(user_text: str | None) -> dict[str, str] | None:
-    """Infer a hotel choice from plain user text."""
-    if not user_text:
-        return None
-    if "ritz" in user_text or "carlton" in user_text:
-        return deepcopy(STATIC_HOTELS[1])
-    if "zephyr" in user_text:
-        return deepcopy(STATIC_HOTELS[0])
-    if "zoe" in user_text:
-        return deepcopy(STATIC_HOTELS[2])
-    return None
-
-
-def _as_flight(value: Any) -> dict[str, str]:
-    """Normalize flight selection from resume payload."""
+def _normalize_flight(value: Any) -> dict[str, str] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
     if isinstance(value, dict) and value.get("airline"):
         return {
             "airline": str(value.get("airline", "")),
@@ -210,11 +178,15 @@ def _as_flight(value: Any) -> dict[str, str]:
             "price": str(value.get("price", "")),
             "duration": str(value.get("duration", "")),
         }
-    return deepcopy(STATIC_FLIGHTS[0])
+    return None
 
 
-def _as_hotel(value: Any) -> dict[str, str]:
-    """Normalize hotel selection from resume payload."""
+def _normalize_hotel(value: Any) -> dict[str, str] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
     if isinstance(value, dict) and value.get("name"):
         return {
             "name": str(value.get("name", "")),
@@ -222,153 +194,222 @@ def _as_hotel(value: Any) -> dict[str, str]:
             "price_per_night": str(value.get("price_per_night", "")),
             "rating": str(value.get("rating", "")),
         }
-    return deepcopy(STATIC_HOTELS[2])
+    return None
 
 
-class SubgraphsTravelAgent(AgentFrameworkWorkflow):
-    """Deterministic travel-planning agent with interrupt-driven subgraph flow."""
+def _load_state(ctx: WorkflowContext[Any, BaseEvent]) -> dict[str, Any]:
+    state = ctx.get_state(_STATE_KEY)
+    if isinstance(state, dict):
+        return state
+    new_state = _initial_state()
+    ctx.set_state(_STATE_KEY, new_state)
+    return new_state
 
+
+class _SupervisorExecutor(Executor):
     def __init__(self) -> None:
-        super().__init__(
-            name="subgraphs",
-            description="Travel planning supervisor with flights/hotels/experiences subgraphs.",
+        super().__init__(id="supervisor_agent")
+
+    @handler
+    async def start(self, message: list[Message], ctx: WorkflowContext[_PresentFlights, BaseEvent]) -> None:
+        del message
+        state = _initial_state()
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
+
+        await _emit_text(
+            ctx,
+            "Supervisor: I will coordinate our specialist agents to plan your San Francisco trip end to end.",
         )
-        self._state_by_thread: dict[str, dict[str, Any]] = {}
 
-    async def run_agent(self, input_data: dict[str, Any]) -> AsyncGenerator[BaseEvent, None]:
-        """Run one turn of the subgraphs planner."""
-        thread_id = str(input_data.get("thread_id") or input_data.get("threadId") or uuid.uuid4())
-        run_id = str(input_data.get("run_id") or input_data.get("runId") or uuid.uuid4())
+        state["active_agent"] = "flights"
+        state["planning_step"] = "collecting_flights"
+        state["flights"] = deepcopy(STATIC_FLIGHTS)
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
 
-        yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+        await ctx.send_message(_PresentFlights(), target_id="flights_agent")
 
-        state = self._state_by_thread.get(thread_id)
+    @handler
+    async def finalize(self, message: _FinalizeTrip, ctx: WorkflowContext[Any, BaseEvent]) -> None:
+        del message
+        state = _load_state(ctx)
+        state["active_agent"] = "supervisor"
+        state["planning_step"] = "complete"
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
+        await _emit_text(ctx, "Supervisor: Your travel planning is complete and your itinerary is ready.")
 
-        if state is None:
-            state = _initial_state()
-            self._state_by_thread[thread_id] = state
-            yield StateSnapshotEvent(snapshot=deepcopy(state))
 
-            for event in _emit_text(
-                "Supervisor: I will coordinate our specialist agents to plan your San Francisco trip end to end."
-            ):
-                yield event
+class _FlightsExecutor(Executor):
+    def __init__(self) -> None:
+        super().__init__(id="flights_agent")
 
+    @handler
+    async def present_options(self, message: _PresentFlights, ctx: WorkflowContext[_PresentHotels, BaseEvent]) -> None:
+        del message
+        await _emit_text(
+            ctx,
+            "Flights Agent: I found two flight options from Amsterdam to San Francisco. "
+            "KLM is recommended for the best value and schedule.",
+        )
+        await ctx.request_info(_flight_interrupt_value(), dict, request_id="flights-choice")
+
+    @response_handler
+    async def handle_selection(
+        self,
+        original_request: dict,
+        response: dict,
+        ctx: WorkflowContext[_PresentHotels, BaseEvent],
+    ) -> None:
+        del original_request
+        state = _load_state(ctx)
+        selected_flight = _normalize_flight(response)
+
+        if selected_flight is None:
             state["active_agent"] = "flights"
             state["planning_step"] = "collecting_flights"
             state["flights"] = deepcopy(STATIC_FLIGHTS)
-            yield StateSnapshotEvent(snapshot=deepcopy(state))
-
-            for event in _emit_text(
-                "Flights Agent: I found two flight options from Amsterdam to San Francisco. "
-                "KLM is recommended for the best value and schedule."
-            ):
-                yield event
-
-            yield RunFinishedEvent(
-                run_id=run_id,
-                thread_id=thread_id,
-                interrupt=[
-                    {
-                        "id": "flights-choice",
-                        "value": {
-                            "message": (
-                                "Choose the flight you want. I recommend KLM because it is cheaper and usually on time."
-                            ),
-                            "options": deepcopy(STATIC_FLIGHTS),
-                            "recommendation": deepcopy(STATIC_FLIGHTS[0]),
-                            "agent": "flights",
-                        },
-                    }
-                ],
-            )
+            ctx.set_state(_STATE_KEY, state)
+            await _emit_state_snapshot(ctx, state)
+            await _emit_text(ctx, "Flights Agent: Please choose a flight option from the selection card to continue.")
+            await ctx.request_info(_flight_interrupt_value(), dict, request_id="flights-choice")
             return
 
-        state = self._state_by_thread.setdefault(thread_id, _initial_state())
         itinerary = state.setdefault("itinerary", {})
-        resume_value = _extract_resume_value(input_data.get("resume"))
-        user_text = _latest_user_text(input_data.get("messages"))
+        itinerary["flight"] = selected_flight
 
-        if "flight" not in itinerary:
-            if resume_value is None:
-                resume_value = _flight_from_user_text(user_text)
-            selected_flight = _as_flight(resume_value)
-            itinerary["flight"] = selected_flight
+        state["active_agent"] = "flights"
+        state["planning_step"] = "booking_flight"
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
+
+        await _emit_text(
+            ctx,
+            f"Flights Agent: Great choice. I will book the {selected_flight['airline']} flight. "
+            "Now I am routing you to Hotels Agent for accommodation.",
+        )
+
+        state["active_agent"] = "hotels"
+        state["planning_step"] = "collecting_hotels"
+        state["hotels"] = deepcopy(STATIC_HOTELS)
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
+
+        await ctx.send_message(_PresentHotels(), target_id="hotels_agent")
+
+
+class _HotelsExecutor(Executor):
+    def __init__(self) -> None:
+        super().__init__(id="hotels_agent")
+
+    @handler
+    async def present_options(self, message: _PresentHotels, ctx: WorkflowContext[_PlanExperiences, BaseEvent]) -> None:
+        del message
+        await _emit_text(
+            ctx,
+            "Hotels Agent: I found three accommodation options in San Francisco. "
+            "Hotel Zoe is recommended for the best balance of location, quality, and price.",
+        )
+        await ctx.request_info(_hotel_interrupt_value(), dict, request_id="hotels-choice")
+
+    @response_handler
+    async def handle_selection(
+        self,
+        original_request: dict,
+        response: dict,
+        ctx: WorkflowContext[_PlanExperiences, BaseEvent],
+    ) -> None:
+        del original_request
+        state = _load_state(ctx)
+        selected_hotel = _normalize_hotel(response)
+
+        if selected_hotel is None:
             state["active_agent"] = "hotels"
             state["planning_step"] = "collecting_hotels"
             state["hotels"] = deepcopy(STATIC_HOTELS)
-            yield StateSnapshotEvent(snapshot=deepcopy(state))
-
-            for event in _emit_text(
-                f"Flights Agent: Great choice. I will book the {selected_flight['airline']} flight. "
-                "Now I am routing you to Hotels Agent for accommodation."
-            ):
-                yield event
-
-            for event in _emit_text(
-                "Hotels Agent: I found three accommodation options in San Francisco. "
-                "Hotel Zoe is recommended for the best balance of location, quality, and price."
-            ):
-                yield event
-
-            yield RunFinishedEvent(
-                run_id=run_id,
-                thread_id=thread_id,
-                interrupt=[
-                    {
-                        "id": "hotels-choice",
-                        "value": {
-                            "message": (
-                                "Choose your hotel. I recommend Hotel Zoe for the best value in a central location."
-                            ),
-                            "options": deepcopy(STATIC_HOTELS),
-                            "recommendation": deepcopy(STATIC_HOTELS[2]),
-                            "agent": "hotels",
-                        },
-                    }
-                ],
-            )
+            ctx.set_state(_STATE_KEY, state)
+            await _emit_state_snapshot(ctx, state)
+            await _emit_text(ctx, "Hotels Agent: Please choose a hotel option from the selection card to continue.")
+            await ctx.request_info(_hotel_interrupt_value(), dict, request_id="hotels-choice")
             return
 
-        if "hotel" not in itinerary:
-            if resume_value is None:
-                resume_value = _hotel_from_user_text(user_text)
-            selected_hotel = _as_hotel(resume_value)
-            itinerary["hotel"] = selected_hotel
+        itinerary = state.setdefault("itinerary", {})
+        itinerary["hotel"] = selected_hotel
 
-            state["active_agent"] = "experiences"
-            state["planning_step"] = "curating_experiences"
-            state["experiences"] = deepcopy(STATIC_EXPERIENCES)
-            yield StateSnapshotEvent(snapshot=deepcopy(state))
+        state["active_agent"] = "hotels"
+        state["planning_step"] = "booking_hotel"
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
 
-            for event in _emit_text(
-                f"Hotels Agent: Excellent, {selected_hotel['name']} is booked. "
-                "I am routing you to Experiences Agent for activities and restaurants."
-            ):
-                yield event
+        await _emit_text(
+            ctx,
+            f"Hotels Agent: Excellent, {selected_hotel['name']} is booked. "
+            "I am routing you to Experiences Agent for activities and restaurants.",
+        )
 
-            for event in _emit_text(
-                "Experiences Agent: I planned activities and restaurants including "
-                "Pier 39, Golden Gate Bridge, Swan Oyster Depot, and Tartine Bakery."
-            ):
-                yield event
+        state["active_agent"] = "experiences"
+        state["planning_step"] = "curating_experiences"
+        state["experiences"] = deepcopy(STATIC_EXPERIENCES)
+        ctx.set_state(_STATE_KEY, state)
+        await _emit_state_snapshot(ctx, state)
 
-            state["active_agent"] = "supervisor"
-            state["planning_step"] = "complete"
-            yield StateSnapshotEvent(snapshot=deepcopy(state))
+        await ctx.send_message(_PlanExperiences(), target_id="experiences_agent")
 
-            for event in _emit_text("Supervisor: Your travel planning is complete and your itinerary is ready."):
-                yield event
 
-            yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
-            return
+class _ExperiencesExecutor(Executor):
+    def __init__(self) -> None:
+        super().__init__(id="experiences_agent")
 
-        yield StateSnapshotEvent(snapshot=deepcopy(state))
-        for event in _emit_text("Supervisor: Your itinerary is already complete. Ask me to start a new trip anytime."):
+    @handler
+    async def plan(self, message: _PlanExperiences, ctx: WorkflowContext[_FinalizeTrip, BaseEvent]) -> None:
+        del message
+        await _emit_text(
+            ctx,
+            "Experiences Agent: I planned activities and restaurants including "
+            "Pier 39, Golden Gate Bridge, Swan Oyster Depot, and Tartine Bakery.",
+        )
+        await ctx.send_message(_FinalizeTrip(), target_id="supervisor_agent")
+
+
+def _build_subgraphs_workflow() -> Workflow:
+    supervisor = _SupervisorExecutor()
+    flights = _FlightsExecutor()
+    hotels = _HotelsExecutor()
+    experiences = _ExperiencesExecutor()
+
+    return (
+        WorkflowBuilder(
+            name="subgraphs",
+            description="Travel planning supervisor with flights/hotels/experiences subgraphs.",
+            start_executor=supervisor,
+        )
+        .add_edge(supervisor, flights)
+        .add_edge(flights, hotels)
+        .add_edge(hotels, experiences)
+        .add_edge(experiences, supervisor)
+        .build()
+    )
+
+
+class SubgraphsTravelAgent(AgentFrameworkWorkflow):
+    """Thread-aware workflow wrapper for the subgraphs travel planner."""
+
+    def __init__(self) -> None:
+        super().__init__(name="subgraphs", description="Travel planning workflow with interrupt-driven selections.")
+        self._workflow_by_thread: dict[str, Workflow] = {}
+
+    async def run_agent(self, input_data: dict[str, Any]) -> AsyncGenerator[BaseEvent, None]:
+        thread_id = str(input_data.get("thread_id") or input_data.get("threadId") or uuid.uuid4())
+        workflow = self._workflow_by_thread.get(thread_id)
+        if workflow is None:
+            workflow = _build_subgraphs_workflow()
+            self._workflow_by_thread[thread_id] = workflow
+
+        async for event in run_workflow_stream(input_data, workflow):
             yield event
-        yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
 
 
 def subgraphs_agent() -> SubgraphsTravelAgent:
-    """Create the deterministic subgraphs travel planner agent."""
+    """Create the subgraphs travel planner agent."""
     return SubgraphsTravelAgent()

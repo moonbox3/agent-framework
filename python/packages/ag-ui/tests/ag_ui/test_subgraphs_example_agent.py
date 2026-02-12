@@ -30,8 +30,17 @@ async def test_subgraphs_example_initial_run_emits_flight_interrupt() -> None:
     event_types = [event.type for event in events]
     assert event_types[0] == "RUN_STARTED"
     assert "STATE_SNAPSHOT" in event_types
+    assert "STEP_STARTED" in event_types
+    assert "STEP_FINISHED" in event_types
     assert "TEXT_MESSAGE_CONTENT" in event_types
     assert "RUN_FINISHED" in event_types
+
+    started_steps = [event.step_name for event in events if event.type == "STEP_STARTED"]
+    finished_steps = [event.step_name for event in events if event.type == "STEP_FINISHED"]
+    assert "supervisor_agent" in started_steps
+    assert "flights_agent" in started_steps
+    assert "supervisor_agent" in finished_steps
+    assert "flights_agent" in finished_steps
 
     finished = [event for event in events if event.type == "RUN_FINISHED"][0]
     interrupt_payload = finished.model_dump().get("interrupt")
@@ -121,8 +130,8 @@ async def test_subgraphs_example_resume_flow_reaches_completion() -> None:
     assert len(final_snapshot["experiences"]) == 4
 
 
-async def test_subgraphs_example_progresses_with_plain_user_text() -> None:
-    """Agent should continue on same thread even when selection arrives as plain user text."""
+async def test_subgraphs_example_requires_structured_resume_for_selection() -> None:
+    """Agent should re-issue interrupts when user sends plain text instead of resume payload."""
     agent = subgraphs_agent()
     thread_id = "thread-subgraphs-text"
 
@@ -148,22 +157,35 @@ async def test_subgraphs_example_progresses_with_plain_user_text() -> None:
     )
     second_finished = [event for event in second_events if event.type == "RUN_FINISHED"][0].model_dump()
     assert isinstance(second_finished.get("interrupt"), list)
-    assert second_finished["interrupt"][0]["value"]["agent"] == "hotels"
-
-    second_snapshots = [event.snapshot for event in second_events if event.type == "STATE_SNAPSHOT"]
-    assert second_snapshots[-1]["itinerary"]["flight"]["airline"] == "United"
+    assert second_finished["interrupt"][0]["value"]["agent"] == "flights"
+    assert "TEXT_MESSAGE_CONTENT" not in [event.type for event in second_events]
 
     third_events = await _run(
         agent,
         {
             "thread_id": thread_id,
             "run_id": "run-c",
-            "messages": [{"role": "user", "content": "Book the Ritz-Carlton please"}],
+            "resume": {
+                "interrupts": [
+                    {
+                        "id": second_finished["interrupt"][0]["id"],
+                        "value": json.dumps(
+                            {
+                                "airline": "United",
+                                "departure": "Amsterdam (AMS)",
+                                "arrival": "San Francisco (SFO)",
+                                "price": "$720",
+                                "duration": "12h 15m",
+                            }
+                        ),
+                    }
+                ]
+            },
         },
     )
     third_finished = [event for event in third_events if event.type == "RUN_FINISHED"][0].model_dump()
-    assert "interrupt" not in third_finished
+    assert isinstance(third_finished.get("interrupt"), list)
+    assert third_finished["interrupt"][0]["value"]["agent"] == "hotels"
 
     third_snapshots = [event.snapshot for event in third_events if event.type == "STATE_SNAPSHOT"]
-    assert third_snapshots[-1]["itinerary"]["hotel"]["name"] == "The Ritz-Carlton"
-    assert third_snapshots[-1]["planning_step"] == "complete"
+    assert third_snapshots[-1]["itinerary"]["flight"]["airline"] == "United"

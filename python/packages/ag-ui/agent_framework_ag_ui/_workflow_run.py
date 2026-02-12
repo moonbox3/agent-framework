@@ -60,6 +60,50 @@ _WORKFLOW_EVENT_BASE_FIELDS: set[str] = {
 }
 
 
+async def _pending_request_events(workflow: Workflow) -> dict[str, Any]:
+    """Best-effort retrieval of pending request_info events from workflow context."""
+    runner_context = getattr(workflow, "_runner_context", None)
+    if runner_context is None:
+        return {}
+
+    get_pending = getattr(runner_context, "get_pending_request_info_events", None)
+    if get_pending is None:
+        return {}
+
+    try:
+        pending = await get_pending()
+    except Exception:  # pragma: no cover - defensive for internal API drift
+        logger.debug("Could not read pending workflow requests", exc_info=True)
+        return {}
+
+    if isinstance(pending, dict):
+        return cast(dict[str, Any], pending)
+    return {}
+
+
+def _interrupt_entry_for_request_event(request_event: Any) -> dict[str, Any] | None:
+    """Build AG-UI interrupt payload from a workflow request_info event."""
+    request_id = getattr(request_event, "request_id", None)
+    if request_id is None:
+        return None
+    request_data = make_json_safe(getattr(request_event, "data", None))
+    if isinstance(request_data, dict):
+        value: Any = request_data
+    else:
+        value = {"data": request_data}
+    return {"id": str(request_id), "value": value}
+
+
+def _interrupts_from_pending_requests(pending_events: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert pending workflow request events into AG-UI interrupt descriptors."""
+    interrupts: list[dict[str, Any]] = []
+    for request_event in pending_events.values():
+        entry = _interrupt_entry_for_request_event(request_event)
+        if entry is not None:
+            interrupts.append(entry)
+    return interrupts
+
+
 def _extract_responses_from_messages(messages: list[Message]) -> dict[str, Any]:
     """Extract request-info responses from incoming tool/function-result messages."""
     responses: dict[str, Any] = {}
@@ -81,7 +125,13 @@ def _resume_to_workflow_responses(resume_payload: Any) -> dict[str, Any]:
     """Convert AG-UI resume payloads into workflow responses."""
     responses: dict[str, Any] = {}
     for interrupt in _normalize_resume_interrupts(resume_payload):
-        responses[str(interrupt["id"])] = interrupt.get("value")
+        value = interrupt.get("value")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        responses[str(interrupt["id"])] = value
     return responses
 
 
@@ -165,7 +215,7 @@ async def run_workflow_stream(
         logger.debug("Received available interrupts metadata: %s", available_interrupts)
 
     raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
-    messages, _ = normalize_agui_input_messages(raw_messages)
+    messages, _ = normalize_agui_input_messages(raw_messages, sanitize_tool_history=False)
 
     flow = FlowState()
     interrupts: list[dict[str, Any]] = []
@@ -175,15 +225,21 @@ async def run_workflow_stream(
 
     responses = _resume_to_workflow_responses(input_data.get("resume"))
     responses.update(_extract_responses_from_messages(messages))
+    pending_before_run = await _pending_request_events(workflow)
 
     if not responses and not messages:
+        pending_interrupts = _interrupts_from_pending_requests(pending_before_run)
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
-        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
+        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id, interrupts=pending_interrupts)
         return
 
     try:
         if responses:
             event_stream = workflow.run(responses=responses, stream=True)
+        elif pending_before_run:
+            # If pending requests exist and the client did not provide structured responses,
+            # keep workflow state paused instead of replaying a fresh message turn.
+            event_stream = workflow.run(responses={}, stream=True)
         else:
             event_stream = workflow.run(message=messages, stream=True)
 
@@ -211,6 +267,8 @@ async def run_workflow_stream(
                 state = getattr(event, "state", None)
                 state_value = state.value if hasattr(state, "value") else str(state)
                 if state_value in _TERMINAL_STATES and not terminal_emitted:
+                    if not interrupts:
+                        interrupts.extend(_interrupts_from_pending_requests(await _pending_request_events(workflow)))
                     yield _build_run_finished_event(run_id=run_id, thread_id=thread_id, interrupts=interrupts)
                     terminal_emitted = True
                 elif state_value not in _TERMINAL_STATES:
@@ -234,6 +292,11 @@ async def run_workflow_stream(
                     "executor_completed": "completed",
                     "executor_failed": "failed",
                 }[event_type]
+                if isinstance(executor_id, str) and executor_id:
+                    if event_type == "executor_invoked":
+                        yield StepStartedEvent(step_name=executor_id)
+                    else:
+                        yield StepFinishedEvent(step_name=executor_id)
                 payload: dict[str, Any] = {
                     "executor_id": executor_id,
                     "status": status,
@@ -257,14 +320,19 @@ async def run_workflow_stream(
 
                 request_type = getattr(event, "request_type", None)
                 response_type = getattr(event, "response_type", None)
+                request_data = make_json_safe(getattr(event, "data", None))
                 request_payload = {
                     "request_id": request_id,
                     "source_executor_id": getattr(event, "source_executor_id", None),
                     "request_type": getattr(request_type, "__name__", str(request_type) if request_type else None),
                     "response_type": getattr(response_type, "__name__", str(response_type) if response_type else None),
-                    "data": make_json_safe(getattr(event, "data", None)),
+                    "data": request_data,
                 }
-                interrupts.append({"id": str(request_id), "value": request_payload})
+                if isinstance(request_data, dict):
+                    interrupt_value: Any = request_data
+                else:
+                    interrupt_value = {"data": request_data}
+                interrupts.append({"id": str(request_id), "value": interrupt_value})
                 args_delta = json.dumps(request_payload)
 
                 yield ToolCallStartEvent(tool_call_id=str(request_id), tool_call_name="request_info")
@@ -275,6 +343,13 @@ async def run_workflow_stream(
 
             if event_type in {"output", "data"}:
                 payload = getattr(event, "data", None)
+                if isinstance(payload, BaseEvent):
+                    yield payload
+                    continue
+                if isinstance(payload, list) and payload and all(isinstance(item, BaseEvent) for item in payload):
+                    for item in payload:
+                        yield item
+                    continue
                 contents = _workflow_payload_to_contents(payload)
                 if contents:
                     if not flow.message_id and _has_only_tool_calls(contents):
@@ -306,4 +381,6 @@ async def run_workflow_stream(
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
 
     if not terminal_emitted and not run_error_emitted:
+        if not interrupts:
+            interrupts.extend(_interrupts_from_pending_requests(await _pending_request_events(workflow)))
         yield _build_run_finished_event(run_id=run_id, thread_id=thread_id, interrupts=interrupts)

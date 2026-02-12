@@ -422,10 +422,20 @@ def _normalize_snapshot_content(content: Any) -> Any:
 
 def normalize_agui_input_messages(
     messages: list[dict[str, Any]],
+    *,
+    sanitize_tool_history: bool = True,
 ) -> tuple[list[Message], list[dict[str, Any]]]:
-    """Normalize raw AG-UI messages into provider and snapshot formats."""
+    """Normalize raw AG-UI messages into provider and snapshot formats.
+
+    Args:
+        messages: Raw AG-UI messages.
+        sanitize_tool_history: Apply agent-run specific tool history repair logic.
+            Keep enabled for standard agent runs; disable for native workflow runs
+            where pending-request responses must come explicitly from interrupt resume.
+    """
     provider_messages = agui_messages_to_agent_framework(messages)
-    provider_messages = _sanitize_tool_history(provider_messages)
+    if sanitize_tool_history:
+        provider_messages = _sanitize_tool_history(provider_messages)
     provider_messages = _deduplicate_messages(provider_messages)
     snapshot_messages = agui_messages_to_snapshot_format(messages)
     return provider_messages, snapshot_messages

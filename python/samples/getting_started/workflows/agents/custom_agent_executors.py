@@ -25,7 +25,7 @@ Show how to wrap chat agents created by AzureOpenAIResponsesClient inside workfl
 pattern with typed inputs and typed WorkflowContext[T] outputs, connect executors with the fluent WorkflowBuilder,
 and finish by yielding outputs from the terminal node.
 
-Note: When an agent is passed to a workflow, the workflow essenatially wrap the agent in a more sophisticated executor.
+Note: When an agent is passed to a workflow, the workflow wraps the agent in a more sophisticated executor.
 
 Prerequisites:
 - AZURE_AI_PROJECT_ENDPOINT must be your Azure AI Foundry Agent Service (V2) project endpoint.

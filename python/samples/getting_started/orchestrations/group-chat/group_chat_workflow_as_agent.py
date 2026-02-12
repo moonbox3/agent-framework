@@ -17,7 +17,7 @@ What it does:
 
 Prerequisites:
 - AZURE_AI_PROJECT_ENDPOINT must be your Azure AI Foundry Agent Service (V2) project endpoint.
-- OpenAI environment variables configured for `AzureOpenAIResponsesClient` and `AzureOpenAIResponsesClient`.
+- Environment variables configured for `AzureOpenAIResponsesClient`.
 """
 
 

@@ -70,8 +70,8 @@ def _handle_events(events: list[WorkflowEvent]) -> tuple[list[WorkflowEvent[Hand
                             file_id = annotation["file_id"]  # type: ignore
                             file_ids.append(file_id)
                             print(f"[Found file annotation: file_id={file_id}]")
-            elif event.type == "output":
-                conversation = cast(list[Message], event.data)
+            elif isinstance(data, list):
+                conversation = cast(list[Message], data)
                 if isinstance(conversation, list):
                     print("\n=== Final Conversation Snapshot ===")
                     for message in conversation:

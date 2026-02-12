@@ -94,8 +94,9 @@ These may appear in event streams (executor_invoked/executor_completed). They're
 
 ## Environment Variables
 
-- **AzureOpenAIChatClient**: Set Azure OpenAI environment variables as documented [here](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/chat_client/README.md#environment-variables).
+Orchestration samples that use `AzureOpenAIResponsesClient` expect:
 
-- **OpenAI** (used in some orchestration samples):
-  - [OpenAIChatClient env vars](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/agents/openai_chat_client/README.md)
-  - [OpenAIResponsesClient env vars](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/agents/openai_responses_client/README.md)
+- `AZURE_AI_PROJECT_ENDPOINT` (Azure AI Foundry Agent Service (V2) project endpoint)
+- `AZURE_AI_MODEL_DEPLOYMENT_NAME` (model deployment name)
+
+These values are passed directly into the client constructor via `os.getenv()` in sample code.

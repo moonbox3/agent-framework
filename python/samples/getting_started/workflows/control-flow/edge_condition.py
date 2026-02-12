@@ -36,7 +36,7 @@ Prerequisites:
 - You understand the basics of WorkflowBuilder, executors, and events in this framework.
 - You know the concept of edge conditions and how they gate routes using a predicate function.
 - Azure OpenAI access is configured for AzureOpenAIResponsesClient. You should be logged in with Azure CLI (AzureCliCredential)
-and have the Azure OpenAI environment variables set as documented in the getting started chat client README.
+and have the Foundry V2 Project environment variables set as documented in the getting started chat client README.
 - The sample email resource file exists at workflow/resources/email.txt.
 
 High level flow:

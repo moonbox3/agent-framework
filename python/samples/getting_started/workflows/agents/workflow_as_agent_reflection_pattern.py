@@ -191,7 +191,7 @@ async def main() -> None:
     print("Building workflow with Worker ↔ Reviewer cycle...")
     worker = Worker(
         id="worker",
-        chat_client=AzureOpenAIResponsesClient(
+        client=AzureOpenAIResponsesClient(
             project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
             deployment_name=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
             credential=AzureCliCredential(),
@@ -199,7 +199,7 @@ async def main() -> None:
     )
     reviewer = Reviewer(
         id="reviewer",
-        chat_client=AzureOpenAIResponsesClient(
+        client=AzureOpenAIResponsesClient(
             project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
             deployment_name=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
             credential=AzureCliCredential(),

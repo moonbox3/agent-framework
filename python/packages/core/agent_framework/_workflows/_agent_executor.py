@@ -397,7 +397,7 @@ class AgentExecutor(Executor):
         options: dict[str, Any] = {}
         if options_from_workflow is not None:
             if isinstance(options_from_workflow, Mapping):
-                for key, value in cast(Mapping[Any, Any], options_from_workflow).items():
+                for key, value in options_from_workflow.items():
                     if isinstance(key, str):
                         options[key] = value
             else:
@@ -409,20 +409,14 @@ class AgentExecutor(Executor):
 
         existing_additional_args = options.get("additional_function_arguments")
         if isinstance(existing_additional_args, Mapping):
-            additional_args = {
-                key: value
-                for key, value in cast(Mapping[Any, Any], existing_additional_args).items()
-                if isinstance(key, str)
-            }
+            additional_args = {key: value for key, value in existing_additional_args.items() if isinstance(key, str)}
         else:
             additional_args = {}
 
         if workflow_additional_args is not None:
             if isinstance(workflow_additional_args, Mapping):
                 additional_args.update({
-                    key: value
-                    for key, value in cast(Mapping[Any, Any], workflow_additional_args).items()
-                    if isinstance(key, str)
+                    key: value for key, value in workflow_additional_args.items() if isinstance(key, str)
                 })
             else:
                 logger.warning(

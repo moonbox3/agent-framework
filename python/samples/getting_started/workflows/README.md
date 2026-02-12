@@ -160,9 +160,9 @@ Sequential orchestration uses a few small adapter nodes for plumbing:
 
 ### Environment Variables
 
-- **AzureOpenAIChatClient**: Set Azure OpenAI environment variables as documented [here](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/chat_client/README.md#environment-variables).
-  These variables are required for samples that construct `AzureOpenAIChatClient`
+Workflow samples that use `AzureOpenAIResponsesClient` expect:
 
-- **OpenAI** (used in orchestration samples):
-  - [OpenAIChatClient env vars](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/agents/openai_chat_client/README.md)
-  - [OpenAIResponsesClient env vars](https://github.com/microsoft/agent-framework/blob/main/python/samples/getting_started/agents/openai_responses_client/README.md)
+- `AZURE_AI_PROJECT_ENDPOINT` (Azure AI Foundry Agent Service (V2) project endpoint)
+- `AZURE_AI_MODEL_DEPLOYMENT_NAME` (model deployment name)
+
+These values are passed directly into the client constructor via `os.getenv()` in sample code.

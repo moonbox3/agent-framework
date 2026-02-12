@@ -25,7 +25,7 @@ Key Concepts:
 
 Prerequisites:
 - AZURE_AI_PROJECT_ENDPOINT must be your Azure AI Foundry Agent Service (V2) project endpoint.
-- OpenAI environment variables configured
+- Environment variables configured
 """
 
 

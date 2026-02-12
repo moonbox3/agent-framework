@@ -21,6 +21,7 @@ existing observability and streaming semantics continue to apply.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import sys
 from collections import OrderedDict
@@ -393,6 +394,61 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
         )
         self._increment_round()
 
+    @staticmethod
+    def _parse_last_json_object(text: str) -> AgentOrchestrationOutput | None:
+        """Parse one or more concatenated JSON values and return the last object."""
+        decoder = json.JSONDecoder()
+        index = 0
+        parsed: Any | None = None
+
+        while index < len(text):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text):
+                break
+            parsed, index = decoder.raw_decode(text, index)
+
+        if parsed is None:
+            return None
+        return AgentOrchestrationOutput.model_validate(parsed)
+
+    @classmethod
+    def _parse_agent_output(cls, agent_response: Any) -> AgentOrchestrationOutput:
+        """Parse manager output, handling both structured values and concatenated JSON text."""
+        try:
+            structured_value = agent_response.value
+        except Exception:
+            structured_value = None
+
+        if structured_value is not None:
+            return AgentOrchestrationOutput.model_validate(structured_value)
+
+        text_candidates: list[str] = []
+        for message in reversed(agent_response.messages):
+            if message.role == "assistant" and message.text.strip():
+                text_candidates.append(message.text.strip())
+                break
+
+        response_text = agent_response.text.strip()
+        if response_text and response_text not in text_candidates:
+            text_candidates.append(response_text)
+
+        last_error: Exception | None = None
+        for candidate in text_candidates:
+            try:
+                return AgentOrchestrationOutput.model_validate_json(candidate)
+            except Exception as ex:
+                last_error = ex
+
+            try:
+                parsed = cls._parse_last_json_object(candidate)
+                if parsed is not None:
+                    return parsed
+            except Exception as ex:
+                last_error = ex
+
+        raise ValueError("Failed to parse agent orchestration output.") from last_error
+
     async def _invoke_agent(self) -> AgentOrchestrationOutput:
         """Invoke the orchestrator agent to determine the next speaker and termination."""
 
@@ -404,7 +460,7 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
                 options={"response_format": AgentOrchestrationOutput},
             )
             # Parse and validate the structured output
-            agent_orchestration_output = AgentOrchestrationOutput.model_validate_json(agent_response.text)
+            agent_orchestration_output = self._parse_agent_output(agent_response)
 
             if not agent_orchestration_output.terminate and not agent_orchestration_output.next_speaker:
                 raise ValueError("next_speaker must be provided if not terminating the conversation.")

@@ -17,14 +17,14 @@ from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
 from ._types import AGUIRequest
-from ._workflow_agent import AgentFrameworkWorkflowAgent
+from ._workflow_agent import AgentFrameworkWorkflow
 
 logger = logging.getLogger(__name__)
 
 
 def add_agent_framework_fastapi_endpoint(
     app: FastAPI,
-    agent: SupportsAgentRun | AgentFrameworkAgent | Workflow | AgentFrameworkWorkflowAgent,
+    agent: SupportsAgentRun | AgentFrameworkAgent | Workflow | AgentFrameworkWorkflow,
     path: str = "/",
     state_schema: Any | None = None,
     predict_state_config: dict[str, dict[str, str]] | None = None,
@@ -51,15 +51,17 @@ def add_agent_framework_fastapi_endpoint(
             Example: `dependencies=[Depends(verify_api_key)]`
     """
     if isinstance(agent, Workflow):
-        wrapped_agent = AgentFrameworkWorkflowAgent(workflow=agent)
+        wrapped_agent = AgentFrameworkWorkflow(workflow=agent)
     elif isinstance(agent, SupportsAgentRun):
         wrapped_agent = AgentFrameworkAgent(
             agent=agent,
             state_schema=state_schema,
             predict_state_config=predict_state_config,
         )
-    else:
+    elif isinstance(agent, (AgentFrameworkAgent, AgentFrameworkWorkflow)):
         wrapped_agent = agent
+    else:
+        raise TypeError("agent must be SupportsAgentRun, Workflow, AgentFrameworkAgent, or AgentFrameworkWorkflow.")
 
     @app.post(path, tags=tags or ["AG-UI"], dependencies=dependencies, response_model=None)  # type: ignore[arg-type]
     async def agent_endpoint(request_body: AGUIRequest) -> StreamingResponse | dict[str, str]:

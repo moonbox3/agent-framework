@@ -24,6 +24,8 @@ from agent_framework import Agent, Content, Message, SupportsChatGetResponse, to
 from agent_framework.ag_ui import AgentFrameworkAgent
 from pydantic import BaseModel, Field
 
+from agent_framework_ag_ui import AgentFrameworkWorkflow
+
 
 class StepStatus(str, Enum):
     """Status of a task step."""
@@ -105,7 +107,7 @@ def _create_task_steps_agent(client: SupportsChatGetResponse[Any]) -> AgentFrame
 
 
 # Wrap the agent's run method to add step execution simulation
-class TaskStepsAgentWithExecution:
+class TaskStepsAgentWithExecution(AgentFrameworkWorkflow):
     """Wrapper that adds step execution simulation after plan generation.
 
     This wrapper delegates to AgentFrameworkAgent but is recognized as compatible
@@ -114,17 +116,8 @@ class TaskStepsAgentWithExecution:
 
     def __init__(self, base_agent: AgentFrameworkAgent):
         """Initialize wrapper with base agent."""
+        super().__init__(name=base_agent.name, description=base_agent.description)
         self._base_agent = base_agent
-
-    @property
-    def name(self) -> str:
-        """Delegate to base agent."""
-        return self._base_agent.name
-
-    @property
-    def description(self) -> str:
-        """Delegate to base agent."""
-        return self._base_agent.description
 
     def __getattr__(self, name: str) -> Any:
         """Delegate all other attribute access to base agent."""

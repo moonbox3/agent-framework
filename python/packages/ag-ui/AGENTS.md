@@ -5,7 +5,7 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
 ## Main Classes
 
 - **`AgentFrameworkAgent`** - Wraps agents for AG-UI compatibility
-- **`AgentFrameworkWorkflowAgent`** - Wraps native `Workflow` objects for AG-UI streaming endpoints
+- **`AgentFrameworkWorkflow`** - Wraps native `Workflow` objects (or custom workflow-style runners) for AG-UI streaming endpoints
 - **`AGUIChatClient`** - Chat client that speaks AG-UI protocol
 - **`AGUIHttpService`** - HTTP service for AG-UI endpoints
 - **`AGUIEventConverter`** - Converts between Agent Framework and AG-UI events

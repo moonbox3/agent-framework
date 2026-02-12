@@ -183,6 +183,21 @@ class TestAGUIRequest:
         assert request.forwarded_props == {"custom_key": "custom_value"}
         assert request.parent_run_id == "parent-run-789"
 
+    def test_agui_request_camel_case_aliases(self) -> None:
+        """Test AGUIRequest accepts camelCase aliases from AG-UI HTTP clients."""
+        request = AGUIRequest(
+            messages=[{"role": "user", "content": "Hello"}],
+            runId="run-camel-1",
+            threadId="thread-camel-1",
+            forwardedProps={"k": "v"},
+            parentRunId="parent-camel-1",
+        )
+
+        assert request.run_id == "run-camel-1"
+        assert request.thread_id == "thread-camel-1"
+        assert request.forwarded_props == {"k": "v"}
+        assert request.parent_run_id == "parent-camel-1"
+
     def test_agui_request_model_dump_excludes_none(self) -> None:
         """Test that model_dump(exclude_none=True) excludes None fields."""
         request = AGUIRequest(

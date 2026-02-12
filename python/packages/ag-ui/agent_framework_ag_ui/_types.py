@@ -53,10 +53,12 @@ class AGUIRequest(BaseModel):
     )
     run_id: str | None = Field(
         None,
+        validation_alias=AliasChoices("run_id", "runId"),
         description="Optional run identifier for tracking",
     )
     thread_id: str | None = Field(
         None,
+        validation_alias=AliasChoices("thread_id", "threadId"),
         description="Optional thread identifier for conversation context",
     )
     state: dict[str, Any] | None = Field(
@@ -73,10 +75,12 @@ class AGUIRequest(BaseModel):
     )
     forwarded_props: dict[str, Any] | None = Field(
         None,
+        validation_alias=AliasChoices("forwarded_props", "forwardedProps"),
         description="Additional properties forwarded to the agent",
     )
     parent_run_id: str | None = Field(
         None,
+        validation_alias=AliasChoices("parent_run_id", "parentRunId"),
         description="ID of the run that spawned this run",
     )
     available_interrupts: list[dict[str, Any]] | None = Field(

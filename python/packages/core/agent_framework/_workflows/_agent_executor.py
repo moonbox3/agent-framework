@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -368,8 +368,10 @@ class AgentExecutor(Executor):
         # TODO(evmattso): Integrate workflow agent run handling around ResponseStream so
         # AgentExecutor does not need this conditional stream-finalization branch.
         maybe_get_final_response = getattr(stream, "get_final_response", None)
-        if callable(maybe_get_final_response):
-            response = await cast(Any, maybe_get_final_response)()
+        get_final_response = maybe_get_final_response if callable(maybe_get_final_response) else None
+        response: AgentResponse[Any]
+        if get_final_response is not None:
+            response = await cast(Callable[[], Awaitable[AgentResponse[Any]]], get_final_response)()
         elif is_chat_agent(self._agent):
             response_format = self._agent.default_options.get("response_format")
             response = AgentResponse.from_updates(

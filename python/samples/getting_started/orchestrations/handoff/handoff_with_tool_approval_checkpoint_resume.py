@@ -4,14 +4,13 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, TypeGuard, cast
+from typing import Any
 
 from agent_framework import (
     Agent,
     AgentResponseUpdate,
     Content,
     FileCheckpointStorage,
-    Message,
     Workflow,
     WorkflowEvent,
     tool,
@@ -146,26 +145,6 @@ def print_function_approval_request(request: Content, request_id: str) -> None:
     print(f"Function: {request.function_call.name}")  # type: ignore
     print(f"Arguments:\n{json.dumps(args, indent=2)}")
     print(f"{'=' * 60}\n")
-
-
-def print_final_conversation(conversation: list[Message]) -> None:
-    """Pretty-print the final conversation output."""
-    print("\n" + "=" * 60)
-    print("Final conversation")
-    print("=" * 60)
-    for message in conversation:
-        if not message.text:
-            continue
-        speaker = message.author_name or message.role
-        print(f"{speaker}: {message.text}")
-    print("=" * 60)
-
-
-def is_message_list(value: object) -> TypeGuard[list[Message]]:
-    """Type guard for workflow outputs that are full conversation messages."""
-    if not isinstance(value, list):
-        return False
-    return all(isinstance(item, Message) for item in cast(list[object], value))
 
 
 async def main() -> None:

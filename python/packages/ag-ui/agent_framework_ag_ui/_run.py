@@ -212,8 +212,16 @@ async def _normalize_response_stream(response_stream: Any) -> AsyncIterable[Any]
             return cast(AsyncIterable[Any], resolved_stream)
         if isinstance(resolved_stream, AsyncIterable):
             return cast(AsyncIterable[Any], resolved_stream)
+        resolved_type = f"{type(resolved_stream).__module__}.{type(resolved_stream).__name__}"
+        raise AgentExecutionException(
+            "Agent did not return a streaming AsyncIterable response. "
+            f"Awaitable resolved to unsupported type: {resolved_type}."
+        )
 
-    raise AgentExecutionException("Agent did not return a streaming AsyncIterable response.")
+    stream_type = f"{type(response_stream).__module__}.{type(response_stream).__name__}"
+    raise AgentExecutionException(
+        f"Agent did not return a streaming AsyncIterable response. Received unsupported type: {stream_type}."
+    )
 
 
 def _create_state_context_message(

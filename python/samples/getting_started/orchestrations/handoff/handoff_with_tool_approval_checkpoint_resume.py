@@ -4,13 +4,16 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard, cast
 
 from agent_framework import (
     Agent,
+    AgentResponseUpdate,
     Content,
     FileCheckpointStorage,
+    Message,
     Workflow,
+    WorkflowEvent,
     tool,
 )
 from agent_framework.azure import AzureOpenAIResponsesClient
@@ -145,6 +148,26 @@ def print_function_approval_request(request: Content, request_id: str) -> None:
     print(f"{'=' * 60}\n")
 
 
+def print_final_conversation(conversation: list[Message]) -> None:
+    """Pretty-print the final conversation output."""
+    print("\n" + "=" * 60)
+    print("Final conversation")
+    print("=" * 60)
+    for message in conversation:
+        if not message.text:
+            continue
+        speaker = message.author_name or message.role
+        print(f"{speaker}: {message.text}")
+    print("=" * 60)
+
+
+def is_message_list(value: object) -> TypeGuard[list[Message]]:
+    """Type guard for workflow outputs that are full conversation messages."""
+    if not isinstance(value, list):
+        return False
+    return all(isinstance(item, Message) for item in cast(list[object], value))
+
+
 async def main() -> None:
     """
     Demonstrate the checkpoint-based pause/resume pattern for handoff workflows.
@@ -183,8 +206,16 @@ async def main() -> None:
     initial_request = "Hi, my order 12345 arrived damaged. I need a refund."
 
     # Phase 1: Initial run - workflow will pause when it needs user input
-    results = await workflow.run(message=initial_request)
-    request_events = results.get_request_info_events()
+    print("Running initial workflow...")
+    results = await workflow.run(message=initial_request, stream=True)
+
+    # Iterate through streamed events and collect request_info events
+    request_events: list[WorkflowEvent] = []
+    async for event in results:
+        event: WorkflowEvent
+        if event.type == "request_info":
+            request_events.append(event)
+
     if not request_events:
         print("Workflow completed without needing user input")
         return
@@ -224,8 +255,17 @@ async def main() -> None:
             raise RuntimeError("No checkpoints found.")
         checkpoint_id = checkpoint.checkpoint_id
 
-        results = await workflow.run(responses=responses, checkpoint_id=checkpoint_id)
-        request_events = results.get_request_info_events()
+        print("Resuming workflow from checkpoint...")
+        results = await workflow.run(responses=responses, checkpoint_id=checkpoint_id, stream=True)
+
+        # Iterate through streamed events and collect request_info events
+        request_events: list[WorkflowEvent] = []
+        async for event in results:
+            event: WorkflowEvent
+            if event.type == "request_info":
+                request_events.append(event)
+            elif event.type == "output" and isinstance(event.data, AgentResponseUpdate):
+                print(event.data.text, end="", flush=True)
 
     print("\n" + "=" * 60)
     print("DEMO COMPLETE")

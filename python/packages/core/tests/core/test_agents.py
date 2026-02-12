@@ -17,6 +17,7 @@ from agent_framework import (
     ChatMessageStore,
     ChatOptions,
     ChatResponse,
+    ChatResponseUpdate,
     Content,
     Context,
     ContextProvider,
@@ -151,6 +152,63 @@ async def test_chat_client_agent_update_thread_id(chat_client_base: SupportsChat
     assert result.text == "test response"
 
     assert thread.service_thread_id == "123"
+
+
+async def test_chat_client_agent_update_thread_id_streaming_uses_conversation_id(
+    chat_client_base: SupportsChatGetResponse,
+) -> None:
+    chat_client_base.streaming_responses = [
+        [
+            ChatResponseUpdate(
+                contents=[Content.from_text("stream part 1")],
+                role="assistant",
+                response_id="resp_stream_123",
+                conversation_id="conv_stream_456",
+            ),
+            ChatResponseUpdate(
+                contents=[Content.from_text(" stream part 2")],
+                role="assistant",
+                response_id="resp_stream_123",
+                conversation_id="conv_stream_456",
+                finish_reason="stop",
+            ),
+        ]
+    ]
+
+    agent = Agent(client=chat_client_base)
+    thread = agent.get_new_thread()
+
+    stream = agent.run("Hello", thread=thread, stream=True)
+    async for _ in stream:
+        pass
+    result = await stream.get_final_response()
+    assert result.text == "stream part 1 stream part 2"
+    assert thread.service_thread_id == "conv_stream_456"
+
+
+async def test_chat_client_agent_update_thread_id_streaming_does_not_use_response_id(
+    chat_client_base: SupportsChatGetResponse,
+) -> None:
+    chat_client_base.streaming_responses = [
+        [
+            ChatResponseUpdate(
+                contents=[Content.from_text("stream response without conversation id")],
+                role="assistant",
+                response_id="resp_only_123",
+                finish_reason="stop",
+            ),
+        ]
+    ]
+
+    agent = Agent(client=chat_client_base)
+    thread = agent.get_new_thread()
+
+    stream = agent.run("Hello", thread=thread, stream=True)
+    async for _ in stream:
+        pass
+    result = await stream.get_final_response()
+    assert result.text == "stream response without conversation id"
+    assert thread.service_thread_id is None
 
 
 async def test_chat_client_agent_update_thread_messages(client: SupportsChatGetResponse) -> None:

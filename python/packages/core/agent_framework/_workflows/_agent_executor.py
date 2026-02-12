@@ -347,32 +347,33 @@ class AgentExecutor(Executor):
         """
         run_kwargs, options = self._prepare_agent_run_args(ctx.get_state(WORKFLOW_RUN_KWARGS_KEY) or {})
 
-        updates: list[AgentResponseUpdate] = []
-        user_input_requests: list[Content] = []
-        async for update in self._agent.run(
+        streamed_user_input_requests: list[Content] = []
+        stream = self._agent.run(
             self._cache,
             stream=True,
             thread=self._agent_thread,
             options=options,
             **run_kwargs,
-        ):
-            updates.append(update)
+        )
+        async for update in stream:
             await ctx.yield_output(update)
-
             if update.user_input_requests:
-                user_input_requests.extend(update.user_input_requests)
+                streamed_user_input_requests.extend(update.user_input_requests)
 
-        # Build the final AgentResponse from the collected updates
-        if is_chat_agent(self._agent):
-            response_format = self._agent.default_options.get("response_format")
-            response = AgentResponse.from_updates(
-                updates,
-                output_format_type=response_format,
-            )
-        else:
-            response = AgentResponse.from_updates(updates)
+        # Finalize through ResponseStream so result hooks run (e.g., thread conversation updates).
+        response = await stream.get_final_response()
 
         # Handle any user input requests after the streaming completes
+        user_input_requests: list[Content] = []
+        seen_request_ids: set[str] = set()
+        for user_input_request in [*streamed_user_input_requests, *response.user_input_requests]:
+            request_id = getattr(user_input_request, "id", None)
+            if isinstance(request_id, str) and request_id:
+                if request_id in seen_request_ids:
+                    continue
+                seen_request_ids.add(request_id)
+            user_input_requests.append(user_input_request)
+
         if user_input_requests:
             for user_input_request in user_input_requests:
                 self._pending_agent_requests[user_input_request.id] = user_input_request  # type: ignore[index]

@@ -923,8 +923,11 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
             if ctx is None:
                 return  # No context available (shouldn't happen in normal flow)
 
-            # Update thread with conversation_id
-            await self._update_thread_with_type_and_conversation_id(ctx["thread"], response.response_id)
+            # Update thread with conversation_id derived from streaming raw updates.
+            # Using response_id here can break function-call continuation for APIs
+            # where response IDs are not valid conversation handles.
+            conversation_id = self._extract_conversation_id_from_streaming_response(response)
+            await self._update_thread_with_type_and_conversation_id(ctx["thread"], conversation_id)
 
             # Ensure author names are set for all messages
             for message in response.messages:
@@ -979,6 +982,27 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
         """Finalize response updates into a single AgentResponse."""
         output_format_type = response_format if isinstance(response_format, type) else None
         return AgentResponse.from_updates(updates, output_format_type=output_format_type)
+
+    @staticmethod
+    def _extract_conversation_id_from_streaming_response(response: AgentResponse[Any]) -> str | None:
+        """Extract conversation_id from streaming raw updates, if present."""
+        raw = response.raw_representation
+        if raw is None:
+            return None
+
+        raw_items: list[Any] = raw if isinstance(raw, list) else [raw]
+        for item in reversed(raw_items):
+            if isinstance(item, Mapping):
+                value = item.get("conversation_id")
+                if isinstance(value, str) and value:
+                    return value
+                continue
+
+            value = getattr(item, "conversation_id", None)
+            if isinstance(value, str) and value:
+                return value
+
+        return None
 
     async def _prepare_run_context(
         self,

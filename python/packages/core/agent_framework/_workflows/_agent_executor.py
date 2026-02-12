@@ -347,6 +347,7 @@ class AgentExecutor(Executor):
         """
         run_kwargs, options = self._prepare_agent_run_args(ctx.get_state(WORKFLOW_RUN_KWARGS_KEY) or {})
 
+        updates: list[AgentResponseUpdate] = []
         streamed_user_input_requests: list[Content] = []
         stream = self._agent.run(
             self._cache,
@@ -356,12 +357,27 @@ class AgentExecutor(Executor):
             **run_kwargs,
         )
         async for update in stream:
+            updates.append(update)
             await ctx.yield_output(update)
             if update.user_input_requests:
                 streamed_user_input_requests.extend(update.user_input_requests)
 
-        # Finalize through ResponseStream so result hooks run (e.g., thread conversation updates).
-        response = await stream.get_final_response()
+        # Prefer stream finalization when available so result hooks run
+        # (e.g., thread conversation updates). Fall back to reconstructing from updates
+        # for legacy/custom agents that return a plain async iterable.
+        # TODO(evmattso): Integrate workflow agent run handling around ResponseStream so
+        # AgentExecutor does not need this conditional stream-finalization branch.
+        maybe_get_final_response = getattr(stream, "get_final_response", None)
+        if callable(maybe_get_final_response):
+            response = await cast(Any, maybe_get_final_response)()
+        elif is_chat_agent(self._agent):
+            response_format = self._agent.default_options.get("response_format")
+            response = AgentResponse.from_updates(
+                updates,
+                output_format_type=response_format,
+            )
+        else:
+            response = AgentResponse.from_updates(updates)
 
         # Handle any user input requests after the streaming completes
         user_input_requests: list[Content] = []

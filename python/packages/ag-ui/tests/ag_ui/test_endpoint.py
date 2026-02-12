@@ -7,7 +7,18 @@ from collections.abc import AsyncIterator, Awaitable, Sequence
 from typing import Any
 
 import pytest
-from agent_framework import Agent, AgentResponse, AgentResponseUpdate, AgentThread, ChatResponseUpdate, Content, Message
+from agent_framework import (
+    Agent,
+    AgentResponse,
+    AgentResponseUpdate,
+    AgentThread,
+    ChatResponseUpdate,
+    Content,
+    Message,
+    WorkflowBuilder,
+    WorkflowContext,
+    executor,
+)
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.params import Depends
 from fastapi.testclient import TestClient
@@ -90,6 +101,32 @@ async def test_add_endpoint_with_wrapped_agent(build_chat_client):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+
+async def test_add_endpoint_with_workflow_protocol():
+    """Test adding endpoint with native Workflow support."""
+
+    @executor(id="start")
+    async def start(message: Any, ctx: WorkflowContext) -> None:
+        await ctx.yield_output("Workflow response")
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=start).build()
+
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow")
+
+    client = TestClient(app)
+    response = client.post("/workflow", json={"messages": [{"role": "user", "content": "Hello"}]})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+    content = response.content.decode("utf-8")
+    lines = [line for line in content.split("\n") if line.startswith("data: ")]
+    event_types = [json.loads(line[6:]).get("type") for line in lines]
+    assert "RUN_STARTED" in event_types
+    assert "TEXT_MESSAGE_CONTENT" in event_types
+    assert "RUN_FINISHED" in event_types
 
 
 async def test_endpoint_with_state_schema(build_chat_client):

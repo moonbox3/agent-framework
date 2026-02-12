@@ -165,6 +165,72 @@ def _extract_approved_state_updates(
     return updates
 
 
+def _normalize_resume_interrupts(resume_payload: Any) -> list[dict[str, Any]]:
+    """Normalize resume payload to a list of interrupt responses."""
+    if resume_payload is None:
+        return []
+
+    if isinstance(resume_payload, list):
+        candidates = resume_payload
+    elif isinstance(resume_payload, dict):
+        resume_dict = cast(dict[str, Any], resume_payload)
+        if isinstance(resume_dict.get("interrupts"), list):
+            candidates = cast(list[Any], resume_dict["interrupts"])
+        elif isinstance(resume_dict.get("interrupt"), list):
+            candidates = cast(list[Any], resume_dict["interrupt"])
+        else:
+            candidates = [resume_dict]
+    else:
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        item_dict = cast(dict[str, Any], item)
+        interrupt_id = item_dict.get("id") or item_dict.get("interruptId") or item_dict.get("toolCallId")
+        if not interrupt_id:
+            continue
+
+        if "value" in item_dict:
+            value = item_dict.get("value")
+        elif "response" in item_dict:
+            value = item_dict.get("response")
+        else:
+            value = {k: v for k, v in item_dict.items() if k not in {"id", "interruptId", "toolCallId", "type"}}
+
+        normalized.append({"id": str(interrupt_id), "value": value})
+
+    return normalized
+
+
+def _resume_to_tool_messages(resume_payload: Any) -> list[dict[str, Any]]:
+    """Convert a resume payload into AG-UI tool messages for approval continuation."""
+    result: list[dict[str, Any]] = []
+    for interrupt in _normalize_resume_interrupts(resume_payload):
+        value = interrupt.get("value")
+        content: str
+        if isinstance(value, str):
+            content = value
+        else:
+            content = json.dumps(make_json_safe(value))
+        result.append(
+            {
+                "role": "tool",
+                "toolCallId": interrupt["id"],
+                "content": content,
+            }
+        )
+    return result
+
+
+def _build_run_finished_event(run_id: str, thread_id: str, interrupts: list[dict[str, Any]] | None = None) -> RunFinishedEvent:
+    """Create a RUN_FINISHED event, optionally carrying interrupt metadata."""
+    if interrupts:
+        return RunFinishedEvent(run_id=run_id, thread_id=thread_id, interrupt=interrupts)  # type: ignore[call-arg]
+    return RunFinishedEvent(run_id=run_id, thread_id=thread_id)
+
+
 @dataclass
 class FlowState:
     """Minimal explicit state for a single AG-UI run."""
@@ -179,6 +245,7 @@ class FlowState:
     tool_calls_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     tool_results: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     tool_calls_ended: set[str] = field(default_factory=set)  # pyright: ignore[reportUnknownVariableType]
+    interrupts: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
     def get_tool_name(self, call_id: str | None) -> str | None:
         """Get tool name by call ID."""
@@ -481,6 +548,21 @@ def _emit_approval_request(
             },
         )
     )
+    interrupt_id = func_call_id or content.id
+    if interrupt_id:
+        flow.interrupts = [
+            {
+                "id": str(interrupt_id),
+                "value": {
+                    "type": "function_approval_request",
+                    "function_call": {
+                        "call_id": func_call_id,
+                        "name": func_name,
+                        "arguments": make_json_safe(func_call.parse_arguments()),
+                    },
+                },
+            }
+        ]
 
     # Emit confirm_changes tool call for UI compatibility
     # The complete sequence (Start -> Args -> End) signals the UI to show the confirmation dialog
@@ -830,7 +912,14 @@ async def run_agent_stream(
         )
 
     # Normalize messages
-    raw_messages = input_data.get("messages", [])
+    available_interrupts = input_data.get("available_interrupts") or input_data.get("availableInterrupts")
+    raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
+    resume_messages = _resume_to_tool_messages(input_data.get("resume"))
+    if available_interrupts:
+        logger.debug("Received available interrupts metadata: %s", available_interrupts)
+    if resume_messages:
+        logger.info(f"Appending {len(resume_messages)} synthesized resume message(s) to AG-UI input.")
+        raw_messages.extend(resume_messages)
     messages, snapshot_messages = normalize_agui_input_messages(raw_messages)
 
     # Check for structured output mode (skip text content)
@@ -846,7 +935,7 @@ async def run_agent_stream(
     if not messages:
         logger.warning("No messages provided in AG-UI input")
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
-        yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
+        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
         return
 
     # Prepare tools
@@ -905,7 +994,7 @@ async def run_agent_stream(
             yield StateSnapshotEvent(snapshot=flow.current_state)
         for event in _handle_step_based_approval(messages):
             yield event
-        yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
+        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
         return
 
     # Inject state context message so the model knows current application state
@@ -1098,6 +1187,19 @@ async def run_agent_stream(
                         flow.tool_calls_by_id[confirm_id] = confirm_entry
                         flow.tool_calls_ended.add(confirm_id)  # Mark as ended since we emit End event
                         flow.waiting_for_approval = True
+                        flow.interrupts = [
+                            {
+                                "id": str(confirm_id),
+                                "value": {
+                                    "type": "function_approval_request",
+                                    "function_call": {
+                                        "call_id": tool_call_id,
+                                        "name": tool_name,
+                                        "arguments": function_arguments,
+                                    },
+                                },
+                            }
+                        ]
 
     # Close any open message
     if flow.message_id:
@@ -1121,4 +1223,4 @@ async def run_agent_stream(
 
     # Always emit RunFinished - confirm_changes tool call is complete (Start -> Args -> End)
     # The UI will show confirmation dialog and send a new request when user responds
-    yield RunFinishedEvent(run_id=run_id, thread_id=thread_id)
+    yield _build_run_finished_event(run_id=run_id, thread_id=thread_id, interrupts=flow.interrupts)

@@ -10,20 +10,21 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 from ag_ui.encoder import EventEncoder
-from agent_framework import SupportsAgentRun
+from agent_framework import SupportsAgentRun, Workflow
 from fastapi import FastAPI
 from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
 from ._types import AGUIRequest
+from ._workflow_agent import AgentFrameworkWorkflowAgent
 
 logger = logging.getLogger(__name__)
 
 
 def add_agent_framework_fastapi_endpoint(
     app: FastAPI,
-    agent: SupportsAgentRun | AgentFrameworkAgent,
+    agent: SupportsAgentRun | AgentFrameworkAgent | Workflow | AgentFrameworkWorkflowAgent,
     path: str = "/",
     state_schema: Any | None = None,
     predict_state_config: dict[str, dict[str, str]] | None = None,
@@ -49,7 +50,9 @@ def add_agent_framework_fastapi_endpoint(
             authentication checks, rate limiting, or other middleware-like behavior.
             Example: `dependencies=[Depends(verify_api_key)]`
     """
-    if isinstance(agent, SupportsAgentRun):
+    if isinstance(agent, Workflow):
+        wrapped_agent = AgentFrameworkWorkflowAgent(workflow=agent)
+    elif isinstance(agent, SupportsAgentRun):
         wrapped_agent = AgentFrameworkAgent(
             agent=agent,
             state_schema=state_schema,

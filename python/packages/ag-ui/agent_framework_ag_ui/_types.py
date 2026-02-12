@@ -6,7 +6,7 @@ import sys
 from typing import Any, Generic
 
 from agent_framework import ChatOptions
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
@@ -79,6 +79,16 @@ class AGUIRequest(BaseModel):
         None,
         description="ID of the run that spawned this run",
     )
+    available_interrupts: list[dict[str, Any]] | None = Field(
+        None,
+        alias="availableInterrupts",
+        validation_alias=AliasChoices("availableInterrupts", "available_interrupts"),
+        description="List of interrupts that can be resumed by the server",
+    )
+    resume: dict[str, Any] | None = Field(
+        None,
+        description="Resume payload containing interrupt responses",
+    )
 
 
 # region AG-UI Chat Options TypedDict
@@ -139,6 +149,12 @@ class AGUIChatOptions(ChatOptions[ResponseModelT], Generic[ResponseModelT], tota
 
     context: dict[str, Any]
     """Shared context/state to send to the server."""
+
+    available_interrupts: list[dict[str, Any]]
+    """Interrupt descriptors available for resumption."""
+
+    resume: dict[str, Any]
+    """Interrupt resume payload to continue a paused run."""
 
     # ChatOptions fields not applicable for AG-UI
     store: None  # type: ignore[misc]

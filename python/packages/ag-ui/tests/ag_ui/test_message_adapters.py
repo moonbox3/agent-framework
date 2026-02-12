@@ -2,6 +2,7 @@
 
 """Tests for message adapters."""
 
+import base64
 import json
 
 import pytest
@@ -406,12 +407,107 @@ def test_agui_non_string_content():
     assert "nested" in messages[0].contents[0].text
 
 
+def test_agui_multimodal_legacy_binary_to_agent_framework():
+    """Legacy text/binary multimodal content converts to text + media Content."""
+    messages = agui_messages_to_agent_framework(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "See this image"},
+                    {"type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png"},
+                ],
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert len(messages[0].contents) == 2
+    assert messages[0].contents[0].type == "text"
+    assert messages[0].contents[0].text == "See this image"
+    assert messages[0].contents[1].type == "uri"
+    assert messages[0].contents[1].uri == "https://example.com/image.png"
+    assert messages[0].contents[1].media_type == "image/png"
+
+
+def test_agui_multimodal_draft_source_base64_to_agent_framework():
+    """Draft-style media source payload converts into data Content."""
+    payload = base64.b64encode(b"abc").decode("utf-8")
+    messages = agui_messages_to_agent_framework(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "audio",
+                        "source": {"type": "base64", "data": payload, "mimeType": "audio/wav"},
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert len(messages[0].contents) == 1
+    assert messages[0].contents[0].type == "data"
+    assert messages[0].contents[0].media_type == "audio/wav"
+    assert isinstance(messages[0].contents[0].uri, str)
+    assert messages[0].contents[0].uri.startswith("data:audio/wav;base64,")
+
+
+def test_agui_multimodal_mixed_order_preserved():
+    """Mixed text/media multimodal input keeps content ordering."""
+    messages = agui_messages_to_agent_framework(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "First"},
+                    {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                    {"type": "text", "text": "Last"},
+                ],
+            }
+        ]
+    )
+
+    assert len(messages[0].contents) == 3
+    assert messages[0].contents[0].type == "text"
+    assert messages[0].contents[0].text == "First"
+    assert messages[0].contents[1].type == "uri"
+    assert messages[0].contents[2].type == "text"
+    assert messages[0].contents[2].text == "Last"
+
+
 def test_agui_message_without_id():
     """Test message without ID field."""
     messages = agui_messages_to_agent_framework([{"role": "user", "content": "No ID"}])
 
     assert len(messages) == 1
     assert messages[0].message_id is None
+
+
+def test_agui_snapshot_format_preserves_multimodal_content():
+    """Snapshot normalization keeps structured content when media parts are present."""
+    normalized = agui_messages_to_snapshot_format(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Caption"},
+                    {
+                        "type": "image",
+                        "source": {"type": "url", "url": "https://example.com/image.png", "mime_type": "image/png"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert isinstance(normalized[0]["content"], list)
+    content_parts = normalized[0]["content"]
+    assert content_parts[0]["type"] == "text"
+    assert content_parts[1]["type"] == "image"
+    assert content_parts[1]["source"]["mimeType"] == "image/png"
 
 
 def test_agui_with_tool_calls_to_agent_framework():

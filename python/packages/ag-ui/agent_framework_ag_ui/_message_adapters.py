@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from typing import Any, cast
@@ -252,6 +253,171 @@ def _deduplicate_messages(messages: list[Message]) -> list[Message]:
             unique_messages.append(msg)
 
     return unique_messages
+
+
+def _parse_multimodal_media_part(part: dict[str, Any]) -> Content | None:
+    """Convert a multimodal media part into Agent Framework content."""
+    part_type = str(part.get("type", "")).lower()
+    source = part.get("source")
+
+    mime_type = cast(
+        str | None,
+        part.get("mimeType")
+        or part.get("mime_type")
+        or {
+            "image": "image/*",
+            "audio": "audio/*",
+            "video": "video/*",
+            "document": "application/octet-stream",
+            "binary": "application/octet-stream",
+        }.get(part_type, "application/octet-stream"),
+    )
+    url = cast(str | None, part.get("url") or part.get("uri"))
+    data = cast(str | None, part.get("data"))
+    binary_id = cast(str | None, part.get("id"))
+
+    if isinstance(source, dict):
+        source_dict = cast(dict[str, Any], source)
+        source_type = str(source_dict.get("type", "")).lower()
+        source_mime = source_dict.get("mimeType") or source_dict.get("mime_type")
+        if isinstance(source_mime, str) and source_mime:
+            mime_type = source_mime
+
+        if source_type in {"url", "uri"}:
+            url = cast(str | None, source_dict.get("url") or source_dict.get("uri"))
+        elif source_type in {"base64", "data", "binary"}:
+            data = cast(str | None, source_dict.get("data"))
+        elif source_type in {"id", "file"}:
+            binary_id = cast(str | None, source_dict.get("id"))
+        else:
+            url = cast(str | None, source_dict.get("url") or source_dict.get("uri") or url)
+            data = cast(str | None, source_dict.get("data") or data)
+            binary_id = cast(str | None, source_dict.get("id") or binary_id)
+
+    if isinstance(url, str) and url:
+        return Content.from_uri(uri=url, media_type=mime_type)
+
+    if isinstance(data, str) and data:
+        if data.startswith("data:"):
+            return Content.from_uri(uri=data, media_type=mime_type)
+        try:
+            decoded = base64.b64decode(data, validate=True)
+            return Content.from_data(data=decoded, media_type=mime_type or "application/octet-stream")
+        except Exception:
+            try:
+                decoded = base64.b64decode(data)
+                return Content.from_data(data=decoded, media_type=mime_type or "application/octet-stream")
+            except Exception:
+                # Best effort fallback for malformed payloads.
+                return Content.from_uri(
+                    uri=f"data:{mime_type or 'application/octet-stream'};base64,{data}",
+                    media_type=mime_type,
+                )
+
+    if isinstance(binary_id, str) and binary_id:
+        return Content.from_uri(uri=f"ag-ui://binary/{binary_id}", media_type=mime_type)
+
+    return None
+
+
+def _convert_agui_content_to_framework(content: Any) -> list[Content]:
+    """Convert AG-UI content payloads to Agent Framework Content entries."""
+    if isinstance(content, str):
+        return [Content.from_text(text=content)]
+
+    if isinstance(content, list):
+        converted: list[Content] = []
+        for item in content:
+            if isinstance(item, str):
+                converted.append(Content.from_text(text=item))
+                continue
+            if not isinstance(item, dict):
+                converted.append(Content.from_text(text=str(item)))
+                continue
+
+            part = cast(dict[str, Any], item)
+            part_type = str(part.get("type", "")).lower()
+
+            if part_type in {"text", "input_text"}:
+                converted.append(Content.from_text(text=str(part.get("text", ""))))
+                continue
+
+            if part_type in {"binary", "image", "audio", "video", "document"}:
+                media_content = _parse_multimodal_media_part(part)
+                if media_content is not None:
+                    converted.append(media_content)
+                continue
+
+            text_value = part.get("text")
+            if isinstance(text_value, str):
+                converted.append(Content.from_text(text=text_value))
+            else:
+                converted.append(Content.from_text(text=str(part)))
+
+        return converted
+
+    if content is None:
+        return []
+
+    return [Content.from_text(text=str(content))]
+
+
+def _normalize_snapshot_content(content: Any) -> Any:
+    """Normalize AG-UI message content for snapshot payloads.
+
+    Preserve multimodal fidelity whenever non-text parts are present.
+    """
+    if isinstance(content, list):
+        has_non_text_parts = False
+        normalized_parts: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+
+        for item in content:
+            if isinstance(item, str):
+                text_parts.append(item)
+                normalized_parts.append({"type": "text", "text": item})
+                continue
+            if not isinstance(item, dict):
+                item_text = str(item)
+                text_parts.append(item_text)
+                normalized_parts.append({"type": "text", "text": item_text})
+                continue
+
+            part = cast(dict[str, Any], item).copy()
+            part_type = str(part.get("type", "")).lower()
+
+            if part_type == "input_text":
+                part["type"] = "text"
+                part_type = "text"
+            elif part_type == "input_image":
+                part["type"] = "image"
+                part_type = "image"
+
+            if part_type == "text":
+                text_parts.append(str(part.get("text", "")))
+            else:
+                has_non_text_parts = True
+
+            if "mime_type" in part and "mimeType" not in part:
+                part["mimeType"] = part.get("mime_type")
+
+            source = part.get("source")
+            if isinstance(source, dict):
+                source_part = cast(dict[str, Any], source)
+                if "mime_type" in source_part and "mimeType" not in source_part:
+                    source_part["mimeType"] = source_part.get("mime_type")
+
+            normalized_parts.append(part)
+
+        if has_non_text_parts:
+            return normalized_parts
+
+        return "".join(text_parts)
+
+    if content is None:
+        return ""
+
+    return content
 
 
 def normalize_agui_input_messages(
@@ -566,10 +732,10 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Mes
         tool_calls = msg.get("tool_calls") or msg.get("toolCalls")
         if tool_calls:
             contents: list[Any] = []
-            # Include any assistant text content if present
-            content_text = msg.get("content")
-            if isinstance(content_text, str) and content_text:
-                contents.append(Content.from_text(text=content_text))
+            # Include any assistant content if present
+            content_value = msg.get("content")
+            if content_value not in (None, ""):
+                contents.extend(_convert_agui_content_to_framework(content_value))
             # Convert each tool call entry
             for tc in tool_calls:
                 if not isinstance(tc, dict):
@@ -624,12 +790,12 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Mes
 
             chat_msg = Message(role=role, contents=approval_contents)  # type: ignore[call-overload]
         else:
-            # Regular text message
+            # Regular message content (text or multimodal)
             content = msg.get("content", "")
-            if isinstance(content, str):
-                chat_msg = Message(role=role, contents=[Content.from_text(text=content)])  # type: ignore[call-overload]
-            else:
-                chat_msg = Message(role=role, contents=[Content.from_text(text=str(content))])  # type: ignore[call-overload]
+            converted_contents = _convert_agui_content_to_framework(content)
+            if not converted_contents:
+                converted_contents = [Content.from_text(text="")]
+            chat_msg = Message(role=role, contents=converted_contents)  # type: ignore[call-overload]
 
         if "id" in msg:
             chat_msg.message_id = msg["id"]
@@ -765,23 +931,7 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
             normalized_msg["id"] = generate_event_id()
 
         # Normalize content field
-        content = normalized_msg.get("content")
-        if isinstance(content, list):
-            # Convert content array format to simple string
-            text_parts: list[str] = []
-            for item in content:
-                if isinstance(item, dict):
-                    # Convert 'input_text' to 'text' type
-                    if item.get("type") == "input_text":
-                        text_parts.append(str(item.get("text", "")))
-                    elif item.get("type") == "text":
-                        text_parts.append(str(item.get("text", "")))
-                    else:
-                        # Other types - just extract text field if present
-                        text_parts.append(str(item.get("text", "")))
-            normalized_msg["content"] = "".join(text_parts)
-        elif content is None:
-            normalized_msg["content"] = ""
+        normalized_msg["content"] = _normalize_snapshot_content(normalized_msg.get("content"))
 
         tool_calls = normalized_msg.get("tool_calls") or normalized_msg.get("toolCalls")
         if isinstance(tool_calls, list):

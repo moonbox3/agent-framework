@@ -12,13 +12,16 @@ from agent_framework.exceptions import AgentExecutionException
 
 from agent_framework_ag_ui._run import (
     FlowState,
+    _build_run_finished_event,
     _build_safe_metadata,
     _create_state_context_message,
+    _emit_approval_request,
     _emit_content,
     _emit_tool_result,
     _has_only_tool_calls,
     _inject_state_context,
     _normalize_response_stream,
+    _resume_to_tool_messages,
     _should_suppress_intermediate_snapshot,
 )
 
@@ -150,6 +153,7 @@ class TestFlowState:
         assert flow.tool_calls_by_id == {}
         assert flow.tool_results == []
         assert flow.tool_calls_ended == set()
+        assert flow.interrupts == []
 
     def test_get_tool_name(self):
         """Tests get_tool_name method."""
@@ -423,6 +427,47 @@ def test_emit_tool_result_no_open_message():
     # Should have: ToolCallEndEvent, ToolCallResultEvent (no TextMessageEndEvent)
     text_end_events = [e for e in events if isinstance(e, TextMessageEndEvent)]
     assert len(text_end_events) == 0
+
+
+def test_emit_approval_request_populates_interrupt_metadata():
+    """Approval requests should populate FlowState interrupts for RUN_FINISHED metadata."""
+    flow = FlowState(message_id="msg-1")
+    function_call = Content.from_function_call(call_id="call_123", name="write_doc", arguments={"content": "x"})
+    approval_content = Content.from_function_approval_request(id="approval_1", function_call=function_call)
+
+    _events = _emit_approval_request(approval_content, flow)  # noqa: F841
+
+    assert flow.waiting_for_approval is True
+    assert len(flow.interrupts) == 1
+    assert flow.interrupts[0]["id"] == "call_123"
+    assert flow.interrupts[0]["value"]["type"] == "function_approval_request"
+
+
+def test_resume_to_tool_messages_from_interrupts_payload():
+    """Resume payload interrupt responses map to tool messages."""
+    resume = {
+        "interrupts": [
+            {"id": "req_1", "value": {"accepted": True, "steps": []}},
+            {"id": "req_2", "value": "plain value"},
+        ]
+    }
+
+    messages = _resume_to_tool_messages(resume)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "tool"
+    assert messages[0]["toolCallId"] == "req_1"
+    assert '"accepted": true' in messages[0]["content"]
+    assert messages[1]["content"] == "plain value"
+
+
+def test_build_run_finished_event_with_interrupt():
+    """RUN_FINISHED helper should preserve interrupt payloads."""
+    event = _build_run_finished_event("run-1", "thread-1", interrupts=[{"id": "req_1", "value": {"x": 1}}])
+    dumped = event.model_dump()
+
+    assert dumped["run_id"] == "run-1"
+    assert dumped["thread_id"] == "thread-1"
+    assert dumped["interrupt"] == [{"id": "req_1", "value": {"x": 1}}]
 
 
 def test_extract_approved_state_updates_no_handler():

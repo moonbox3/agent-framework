@@ -27,11 +27,10 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from agent_framework import (
-    AgentThread,
+    AgentSession,
     Content,
     Message,
     SupportsAgentRun,
-    prepare_function_call_results,
 )
 from agent_framework._middleware import FunctionMiddlewarePipeline
 from agent_framework._tools import (
@@ -459,7 +458,7 @@ def _emit_tool_result(
     events.append(ToolCallEndEvent(tool_call_id=content.call_id))
     flow.tool_calls_ended.add(content.call_id)  # Track ended tool calls
 
-    result_content = prepare_function_call_results(content.result)
+    result_content = content.result if content.result is not None else ""
     message_id = generate_event_id()
     events.append(
         ToolCallResultEvent(
@@ -944,12 +943,12 @@ async def run_agent_stream(
     register_additional_client_tools(agent, client_tools)
     tools = merge_tools(server_tools, client_tools)
 
-    # Create thread (with service thread support)
-    if config.use_service_thread:
+    # Create session (with service session support)
+    if config.use_service_session:
         supplied_thread_id = input_data.get("thread_id") or input_data.get("threadId")
-        thread = AgentThread(service_thread_id=supplied_thread_id)
+        session = AgentSession(service_session_id=supplied_thread_id)
     else:
-        thread = AgentThread()
+        session = AgentSession()
 
     # Inject metadata for AG-UI orchestration (Feature #2: Azure-safe truncation)
     base_metadata: dict[str, Any] = {
@@ -958,17 +957,17 @@ async def run_agent_stream(
     }
     if flow.current_state:
         base_metadata["current_state"] = flow.current_state
-    thread.metadata = _build_safe_metadata(base_metadata)  # type: ignore[attr-defined]
+    session.metadata = _build_safe_metadata(base_metadata)  # type: ignore[attr-defined]
 
     # Build run kwargs (Feature #6: Azure store flag when metadata present)
-    run_kwargs: dict[str, Any] = {"thread": thread}
+    run_kwargs: dict[str, Any] = {"session": session}
     if tools:
         run_kwargs["tools"] = tools
     # Filter out AG-UI internal metadata keys before passing to chat client
     # These are used internally for orchestration and should not be sent to the LLM provider
-    thread_metadata = cast(dict[str, Any], getattr(thread, "metadata", {}) or {})
+    session_metadata = cast(dict[str, Any], getattr(session, "metadata", None) or {})
     client_metadata: dict[str, Any] = {
-        k: v for k, v in thread_metadata.items() if k not in AG_UI_INTERNAL_METADATA_KEYS
+        k: v for k, v in session_metadata.items() if k not in AG_UI_INTERNAL_METADATA_KEYS
     }
     safe_metadata = _build_safe_metadata(client_metadata) if client_metadata else {}
     if safe_metadata:

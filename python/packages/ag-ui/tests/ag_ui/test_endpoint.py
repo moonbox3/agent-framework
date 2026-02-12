@@ -3,53 +3,16 @@
 """Tests for FastAPI endpoint creation (_endpoint.py)."""
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Sequence
-from typing import Any
 
 import pytest
-from agent_framework import Agent, AgentResponse, AgentResponseUpdate, AgentThread, ChatResponseUpdate, Content, Message
+from agent_framework import Agent, ChatResponseUpdate, Content
+from agent_framework.orchestrations import SequentialBuilder
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.params import Depends
 from fastapi.testclient import TestClient
 
 from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
-
-
-class AsyncGeneratorStreamAgent:
-    """Minimal SupportsAgentRun-compatible agent using async-generator streaming."""
-
-    id = "async-generator-stream-agent"
-    name = "async-generator-stream-agent"
-    description = "Returns async generators when stream=True"
-
-    def run(
-        self,
-        messages: str | Message | Sequence[str | Message] | None = None,
-        *,
-        stream: bool = False,
-        thread: AgentThread | None = None,
-        **kwargs: Any,
-    ) -> Awaitable[AgentResponse[Any]] | AsyncIterator[AgentResponseUpdate]:
-        if stream:
-
-            async def _stream() -> AsyncIterator[AgentResponseUpdate]:
-                yield AgentResponseUpdate(
-                    contents=[Content.from_text(text="Async generator response")], role="assistant"
-                )
-
-            return _stream()
-
-        async def _get_response() -> AgentResponse[Any]:
-            return AgentResponse(
-                messages=[Message(role="assistant", contents=[Content.from_text(text="Async generator response")])],
-                response_id="async-generator-response",
-            )
-
-        return _get_response()
-
-    def get_new_thread(self, **kwargs: Any) -> AgentThread:
-        return AgentThread()
 
 
 @pytest.fixture
@@ -203,10 +166,12 @@ async def test_endpoint_event_streaming(build_chat_client):
     assert found_run_finished
 
 
-async def test_endpoint_with_async_generator_streaming_agent():
-    """Test endpoint handles async-generator stream outputs from wrapped agents."""
+async def test_endpoint_with_workflow_as_agent_stream_output(build_chat_client):
+    """Test endpoint handles workflow-as-agent stream outputs."""
     app = FastAPI()
-    agent = AsyncGeneratorStreamAgent()
+    brainstorm_agent = Agent(name="brainstorm", instructions="Brainstorm ideas", client=build_chat_client("Idea"))
+    reviewer_agent = Agent(name="reviewer", instructions="Review ideas", client=build_chat_client("Review"))
+    agent = SequentialBuilder(participants=[brainstorm_agent, reviewer_agent]).build().as_agent()
 
     add_agent_framework_fastapi_endpoint(app, agent, path="/workflow-like")
 

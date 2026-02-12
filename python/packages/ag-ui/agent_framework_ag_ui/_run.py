@@ -200,15 +200,10 @@ async def _normalize_response_stream(response_stream: Any) -> AsyncIterable[Any]
       - AsyncIterable[AgentResponseUpdate] (workflow-style stream)
       - Awaitable that resolves to either of the above
     """
-    if isinstance(response_stream, ResponseStream):
-        return cast(AsyncIterable[Any], response_stream)
-
-    if isinstance(response_stream, AsyncIterable):
-        return cast(AsyncIterable[Any], response_stream)
-
     if isinstance(response_stream, Awaitable):
         resolved_stream = await cast(Awaitable[Any], response_stream)
         if isinstance(resolved_stream, ResponseStream):
+            # AG-UI consumes update iteration only; ResponseStream finalizers are not used here.
             return cast(AsyncIterable[Any], resolved_stream)
         if isinstance(resolved_stream, AsyncIterable):
             return cast(AsyncIterable[Any], resolved_stream)
@@ -217,6 +212,13 @@ async def _normalize_response_stream(response_stream: Any) -> AsyncIterable[Any]
             "Agent did not return a streaming AsyncIterable response. "
             f"Awaitable resolved to unsupported type: {resolved_type}."
         )
+
+    if isinstance(response_stream, ResponseStream):
+        # AG-UI consumes update iteration only; ResponseStream finalizers are not used here.
+        return cast(AsyncIterable[Any], response_stream)
+
+    if isinstance(response_stream, AsyncIterable):
+        return cast(AsyncIterable[Any], response_stream)
 
     stream_type = f"{type(response_stream).__module__}.{type(response_stream).__name__}"
     raise AgentExecutionException(

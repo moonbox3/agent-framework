@@ -7,7 +7,7 @@ from ag_ui.core import (
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
-from agent_framework import AgentResponseUpdate, Content, Message
+from agent_framework import AgentResponseUpdate, Content, Message, ResponseStream
 from agent_framework.exceptions import AgentExecutionException
 
 from agent_framework_ag_ui._run import (
@@ -185,6 +185,18 @@ class TestFlowState:
 class TestNormalizeResponseStream:
     """Tests for _normalize_response_stream helper."""
 
+    async def test_accepts_response_stream(self):
+        """Accept standard ResponseStream values."""
+
+        async def _stream():
+            yield AgentResponseUpdate(contents=[Content.from_text("hello")], role="assistant")
+
+        stream = await _normalize_response_stream(ResponseStream(_stream()))
+        updates = [update async for update in stream]
+
+        assert len(updates) == 1
+        assert updates[0].contents[0].text == "hello"
+
     async def test_accepts_async_iterable(self):
         """Accept workflow-style async generator streams."""
 
@@ -192,6 +204,21 @@ class TestNormalizeResponseStream:
             yield AgentResponseUpdate(contents=[Content.from_text("hello")], role="assistant")
 
         stream = await _normalize_response_stream(_stream())
+        updates = [update async for update in stream]
+
+        assert len(updates) == 1
+        assert updates[0].contents[0].text == "hello"
+
+    async def test_accepts_awaitable_resolving_to_async_iterable(self):
+        """Accept awaitables that resolve to async iterable streams."""
+
+        async def _stream():
+            yield AgentResponseUpdate(contents=[Content.from_text("hello")], role="assistant")
+
+        async def _resolve():
+            return _stream()
+
+        stream = await _normalize_response_stream(_resolve())
         updates = [update async for update in stream]
 
         assert len(updates) == 1

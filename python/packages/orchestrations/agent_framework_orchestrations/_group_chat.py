@@ -396,7 +396,15 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
 
     @staticmethod
     def _parse_last_json_object(text: str) -> AgentOrchestrationOutput | None:
-        """Parse one or more concatenated JSON values and return the last object."""
+        """Best-effort parser for concatenated JSON and return the last object.
+
+        Stop-gap workaround:
+        In some runs, the orchestrator manager text can contain multiple JSON objects
+        concatenated back-to-back (for example: `{...}{...}`), which causes
+        `model_validate_json` to fail with trailing characters. Until the root cause
+        is fully understood and fixed, decode sequential top-level JSON values and
+        validate the last one.
+        """
         decoder = json.JSONDecoder()
         index = 0
         parsed: Any | None = None
@@ -414,7 +422,12 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
 
     @classmethod
     def _parse_agent_output(cls, agent_response: Any) -> AgentOrchestrationOutput:
-        """Parse manager output, handling both structured values and concatenated JSON text."""
+        """Parse manager output with defensive fallbacks.
+
+        Preferred path is structured output (`agent_response.value`) when available.
+        If only text is available, first attempt strict JSON parsing and then apply a
+        temporary concatenated-JSON fallback as a stop-gap.
+        """
         try:
             structured_value = agent_response.value
         except Exception:
@@ -441,6 +454,8 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
                 last_error = ex
 
             try:
+                # Stop-gap fallback for rare cases where multiple JSON objects are
+                # returned in one text payload (concatenated with no separator).
                 parsed = cls._parse_last_json_object(candidate)
                 if parsed is not None:
                     return parsed

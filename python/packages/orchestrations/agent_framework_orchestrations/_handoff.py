@@ -482,7 +482,10 @@ class HandoffAgentExecutor(AgentExecutor):
         # Handoff workflows are orchestrator-stateful and provider-stateless by design.
         # If an existing session still has a service conversation id, clear it to avoid
         # replaying stale unresolved tool calls across resumed turns.
-        if self._agent.default_options.get("store") is False and self._session.service_session_id is not None:
+        if (
+            cast(Agent, self._agent).default_options.get("store") is False
+            and self._session.service_session_id is not None
+        ):
             self._session.service_session_id = None
 
         # Check termination condition before running the agent
@@ -502,7 +505,7 @@ class HandoffAgentExecutor(AgentExecutor):
 
         # A function approval request is issued by the base AgentExecutor
         if response is None:
-            if self._agent.default_options.get("store") is False:
+            if cast(Agent, self._agent).default_options.get("store") is False:
                 self._persist_pending_approval_function_calls()
             # Agent did not complete (e.g., waiting for user input); do not emit response
             logger.debug("AgentExecutor %s: Agent did not complete, awaiting user input", self.id)

@@ -130,12 +130,7 @@ def _extract_responses_from_messages(messages: list[Message]) -> dict[str, Any]:
         for content in message.contents:
             if content.type != "function_result" or not content.call_id:
                 continue
-            value: Any = content.result
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except json.JSONDecodeError:
-                    pass
+            value = _coerce_json_value(content.result)
             responses[str(content.call_id)] = value
     return responses
 
@@ -144,12 +139,7 @@ def _resume_to_workflow_responses(resume_payload: Any) -> dict[str, Any]:
     """Convert AG-UI resume payloads into workflow responses."""
     responses: dict[str, Any] = {}
     for interrupt in _normalize_resume_interrupts(resume_payload):
-        value = interrupt.get("value")
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                pass
+        value = _coerce_json_value(interrupt.get("value"))
         responses[str(interrupt["id"])] = value
     return responses
 

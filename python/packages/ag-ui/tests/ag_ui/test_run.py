@@ -492,7 +492,7 @@ def test_emit_approval_request_populates_interrupt_metadata():
     function_call = Content.from_function_call(call_id="call_123", name="write_doc", arguments={"content": "x"})
     approval_content = Content.from_function_approval_request(id="approval_1", function_call=function_call)
 
-    _events = _emit_approval_request(approval_content, flow)  # noqa: F841
+    _emit_approval_request(approval_content, flow)
 
     assert flow.waiting_for_approval is True
     assert len(flow.interrupts) == 1

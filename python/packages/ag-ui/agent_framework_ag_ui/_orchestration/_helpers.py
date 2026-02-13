@@ -2,7 +2,6 @@
 
 """Helper functions for orchestration logic.
 
-Most orchestration helpers have been moved inline to _agent_run.py.
 This module retains utilities that may be useful for testing or extensions.
 """
 

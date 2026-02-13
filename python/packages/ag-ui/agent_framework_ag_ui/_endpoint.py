@@ -50,7 +50,12 @@ def add_agent_framework_fastapi_endpoint(
             authentication checks, rate limiting, or other middleware-like behavior.
             Example: `dependencies=[Depends(verify_api_key)]`
     """
-    if isinstance(agent, Workflow):
+    wrapped_agent: AgentFrameworkAgent | AgentFrameworkWorkflow
+    if isinstance(agent, AgentFrameworkWorkflow):
+        wrapped_agent = agent
+    elif isinstance(agent, AgentFrameworkAgent):
+        wrapped_agent = agent
+    elif isinstance(agent, Workflow):
         wrapped_agent = AgentFrameworkWorkflow(workflow=agent)
     elif isinstance(agent, SupportsAgentRun):
         wrapped_agent = AgentFrameworkAgent(
@@ -58,8 +63,6 @@ def add_agent_framework_fastapi_endpoint(
             state_schema=state_schema,
             predict_state_config=predict_state_config,
         )
-    elif isinstance(agent, (AgentFrameworkAgent, AgentFrameworkWorkflow)):
-        wrapped_agent = agent
     else:
         raise TypeError("agent must be SupportsAgentRun, Workflow, AgentFrameworkAgent, or AgentFrameworkWorkflow.")
 

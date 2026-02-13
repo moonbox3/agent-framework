@@ -182,12 +182,18 @@ body {
   border-radius: 12px;
   background: #f5f9fb;
   padding: 10px;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .approval-details pre {
   margin: 0;
-  overflow-x: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
   font-size: 0.82rem;
+  max-width: 100%;
 }
 
 .approval-inline {
@@ -210,6 +216,7 @@ body {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .approval-actions button,
@@ -261,7 +268,7 @@ body {
 }
 
 .approval-modal {
-  width: min(760px, 100%);
+  width: min(860px, calc(100vw - 40px));
   border-radius: 18px;
   border: 1px solid #89a7ba;
   background: #fdfefe;

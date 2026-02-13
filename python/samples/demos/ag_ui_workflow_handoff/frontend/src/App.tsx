@@ -198,6 +198,23 @@ function normalizeRole(role: unknown): "assistant" | "user" | "system" {
   return "assistant";
 }
 
+function normalizeShippingPreference(text: string): string | null {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  if (/\bstandard\b/.test(normalized)) {
+    return "standard";
+  }
+
+  if (/\b(expedited|express|overnight|priority|next[-\s]?day)\b/.test(normalized)) {
+    return "expedited";
+  }
+
+  return null;
+}
+
 export default function App(): JSX.Element {
   const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8891";
   const endpoint = `${backendUrl.replace(/\/$/, "")}/handoff_demo`;
@@ -243,6 +260,16 @@ export default function App(): JSX.Element {
     setMessages((prev) => [...prev, message]);
   };
 
+  const rebuildAssistantMessageIndex = (items: DisplayMessage[]): void => {
+    const next: Record<string, number> = {};
+    items.forEach((item, index) => {
+      if (item.role === "assistant") {
+        next[item.id] = index;
+      }
+    });
+    assistantMessageIndexRef.current = next;
+  };
+
   const upsertAssistantStart = (messageId: string, role: unknown): void => {
     const normalizedRole = normalizeRole(role);
     if (normalizedRole === "user") {
@@ -250,8 +277,12 @@ export default function App(): JSX.Element {
     }
 
     setMessages((prev) => {
+      const existingIndex = prev.findIndex((item) => item.id === messageId);
+      if (existingIndex >= 0) {
+        return prev;
+      }
       const next: DisplayMessage[] = [...prev, { id: messageId, role: normalizedRole, text: "" }];
-      assistantMessageIndexRef.current[messageId] = next.length - 1;
+      rebuildAssistantMessageIndex(next);
       return next;
     });
   };
@@ -261,13 +292,29 @@ export default function App(): JSX.Element {
       const index = assistantMessageIndexRef.current[messageId];
       if (index === undefined) {
         const next: DisplayMessage[] = [...prev, { id: messageId, role: "assistant", text: delta }];
-        assistantMessageIndexRef.current[messageId] = next.length - 1;
+        rebuildAssistantMessageIndex(next);
         return next;
       }
 
       const next = [...prev];
       const existing = next[index];
       next[index] = { ...existing, text: `${existing.text}${delta}` };
+      return next;
+    });
+  };
+
+  const finalizeAssistantMessage = (messageId: string): void => {
+    setMessages((prev) => {
+      const index = assistantMessageIndexRef.current[messageId];
+      if (index === undefined) {
+        return prev;
+      }
+      const candidate = prev[index];
+      if (candidate.role === "user" || candidate.text.trim().length > 0) {
+        return prev;
+      }
+      const next = prev.filter((item) => item.id !== messageId);
+      rebuildAssistantMessageIndex(next);
       return next;
     });
   };
@@ -331,6 +378,14 @@ export default function App(): JSX.Element {
           }
         }
         break;
+      case "TEXT_MESSAGE_END":
+        if (isObject(event)) {
+          const messageId = getString(event, "message_id", "messageId");
+          if (messageId) {
+            finalizeAssistantMessage(messageId);
+          }
+        }
+        break;
       case "MESSAGES_SNAPSHOT":
         // Intentionally ignored for chat rendering in this demo.
         // AG-UI snapshots can contain full conversation history and cause replay duplication.
@@ -388,10 +443,12 @@ export default function App(): JSX.Element {
         }
         break;
       case "RUN_ERROR":
-        pushMessage({
-          id: randomId(),
-          role: "system",
-          text: `Run error: ${isObject(event) ? (getString(event, "message") ?? "Unknown error") : "Unknown error"}`,
+        setMessages((prev) => {
+          const text = `Run error: ${isObject(event) ? (getString(event, "message") ?? "Unknown error") : "Unknown error"}`;
+          if (prev.length > 0 && prev[prev.length - 1]?.role === "system" && prev[prev.length - 1]?.text === text) {
+            return prev;
+          }
+          return [...prev, { id: randomId(), role: "system", text }];
         });
         setStatusText("Run failed");
         setIsRunning(false);
@@ -569,10 +626,14 @@ export default function App(): JSX.Element {
       return;
     }
 
-    setCaseSnapshot((prev) => ({
-      ...prev,
-      shippingPreference: text,
-    }));
+    const fromOrderAgent = currentRequestInfo?.source_executor_id === "order_agent";
+    const shippingPreference = fromOrderAgent ? normalizeShippingPreference(text) : null;
+    if (shippingPreference) {
+      setCaseSnapshot((prev) => ({
+        ...prev,
+        shippingPreference,
+      }));
+    }
 
     pushMessage({ id: randomId(), role: "user", text });
 

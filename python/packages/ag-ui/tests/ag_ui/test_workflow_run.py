@@ -159,9 +159,7 @@ async def test_workflow_run_resume_from_forwarded_command_payload() -> None:
             {
                 "messages": [],
                 "forwarded_props": {
-                    "command": {
-                        "resume": json.dumps({"airline": "KLM", "departure": "AMS", "arrival": "SFO"})
-                    }
+                    "command": {"resume": json.dumps({"airline": "KLM", "departure": "AMS", "arrival": "SFO"})}
                 },
             },
             workflow,
@@ -226,7 +224,9 @@ async def test_workflow_run_resume_content_response_from_json_payload() -> None:
             await ctx.yield_output(f"Refund tool call {status}.")
 
     workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
-    first_events = [event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)]
+    first_events = [
+        event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)
+    ]
     first_finished = [event for event in first_events if event.type == "RUN_FINISHED"][0].model_dump()
     interrupt_payload = cast(list[dict[str, Any]], first_finished.get("interrupt"))
     interrupt_value = cast(dict[str, Any], interrupt_payload[0]["value"])
@@ -276,7 +276,9 @@ async def test_workflow_run_resume_message_list_from_json_payload() -> None:
             await ctx.request_info({"prompt": "Need user follow-up"}, list[Message], request_id="handoff-user-input")
 
         @response_handler
-        async def handle_user_input(self, original_request: dict, response: list[Message], ctx: WorkflowContext) -> None:
+        async def handle_user_input(
+            self, original_request: dict, response: list[Message], ctx: WorkflowContext
+        ) -> None:
             del original_request
             user_text = response[0].text if response else ""
             await ctx.yield_output(f"Captured response: {user_text}")

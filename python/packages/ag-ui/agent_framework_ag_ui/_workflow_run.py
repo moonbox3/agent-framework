@@ -19,7 +19,6 @@ from ag_ui.core import (
     StepFinishedEvent,
     StepStartedEvent,
     TextMessageEndEvent,
-    TextMessageStartEvent,
     ToolCallArgsEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
@@ -32,7 +31,6 @@ from ._run_common import (
     _build_run_finished_event,
     _emit_content,
     _extract_resume_payload,
-    _has_only_tool_calls,
     _normalize_resume_interrupts,
 )
 from ._utils import generate_event_id, make_json_safe
@@ -375,7 +373,11 @@ def _coerce_responses_for_pending_requests(
 def _latest_user_text(messages: list[Message]) -> str | None:
     """Get the most recent user text message, if present."""
     for message in reversed(messages):
-        role = message.role.value if hasattr(message.role, "value") else str(message.role)
+        role_field = message.role
+        if isinstance(role_field, str):
+            role = role_field
+        else:
+            role = str(getattr(role_field, "value", role_field))
         if role != "user":
             continue
         for content in reversed(message.contents):
@@ -400,7 +402,9 @@ def _workflow_interrupt_event_value(request_payload: dict[str, Any]) -> str | No
 def _message_role_value(message: Message) -> str:
     """Normalize Message.role to its string value."""
     role = message.role
-    return role.value if hasattr(role, "value") else str(role)
+    if isinstance(role, str):
+        return role
+    return str(getattr(role, "value", role))
 
 
 def _latest_assistant_contents(messages: list[Message]) -> list[Content] | None:
@@ -444,7 +448,13 @@ def _workflow_payload_to_contents(payload: Any) -> list[Content] | None:
             return None
         return list(payload.contents or [])
     if isinstance(payload, AgentResponseUpdate):
-        role = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
+        role_field = payload.role
+        if role_field is None:
+            return None
+        if isinstance(role_field, str):
+            role = role_field
+        else:
+            role = str(getattr(role_field, "value", role_field))
         if role != "assistant":
             return None
         return list(payload.contents or [])
@@ -467,7 +477,7 @@ def _event_name(event: Any) -> str:
     event_type = getattr(event, "type", None)
     if isinstance(event_type, str) and event_type:
         return event_type
-    return event.__class__.__name__
+    return type(event).__name__
 
 
 def _custom_event_value(event: Any) -> Any:
@@ -593,7 +603,10 @@ async def run_workflow_stream(
 
             if event_type == "status":
                 state = getattr(event, "state", None)
-                state_value = state.value if hasattr(state, "value") else str(state)
+                if isinstance(state, str):
+                    state_value = state
+                else:
+                    state_value = str(getattr(state, "value", state))
                 if state_value in _TERMINAL_STATES and not terminal_emitted:
                     if not interrupts:
                         interrupts.extend(_interrupts_from_pending_requests(await _pending_request_events(workflow)))
@@ -629,19 +642,19 @@ async def run_workflow_stream(
                         yield StepStartedEvent(step_name=executor_id)
                     else:
                         yield StepFinishedEvent(step_name=executor_id)
-                payload: dict[str, Any] = {
+                executor_payload: dict[str, Any] = {
                     "executor_id": executor_id,
                     "status": status,
                 }
                 if event_type == "executor_failed":
-                    payload["details"] = make_json_safe(getattr(event, "details", None))
+                    executor_payload["details"] = make_json_safe(getattr(event, "details", None))
                 else:
-                    payload["data"] = make_json_safe(getattr(event, "data", None))
+                    executor_payload["data"] = make_json_safe(getattr(event, "data", None))
 
                 yield ActivitySnapshotEvent(
                     message_id=f"executor:{executor_id}" if executor_id else generate_event_id(),
                     activity_type="executor",
-                    content=payload,
+                    content=executor_payload,
                 )
                 continue
 
@@ -670,32 +683,35 @@ async def run_workflow_stream(
                 continue
 
             if event_type in {"output", "data"}:
-                payload = getattr(event, "data", None)
-                if isinstance(payload, BaseEvent):
-                    yield payload
+                output_payload = getattr(event, "data", None)
+                if isinstance(output_payload, BaseEvent):
+                    yield output_payload
                     continue
-                if isinstance(payload, list) and payload and all(isinstance(item, BaseEvent) for item in payload):
-                    for item in payload:
+                if (
+                    isinstance(output_payload, list)
+                    and output_payload
+                    and all(isinstance(item, BaseEvent) for item in output_payload)
+                ):
+                    for item in output_payload:
                         yield item
                     continue
-                contents = _workflow_payload_to_contents(payload)
+                contents = _workflow_payload_to_contents(output_payload)
                 if contents:
-                    payload_is_conversation_snapshot = isinstance(payload, AgentResponse) or (
-                        isinstance(payload, list) and payload and all(isinstance(item, Message) for item in payload)
+                    payload_is_conversation_snapshot = isinstance(output_payload, AgentResponse) or (
+                        isinstance(output_payload, list)
+                        and output_payload
+                        and all(isinstance(item, Message) for item in output_payload)
                     )
                     output_text = _text_from_contents(contents)
                     if payload_is_conversation_snapshot and output_text and output_text == last_assistant_text:
                         continue
-                    if not flow.message_id and _has_only_tool_calls(contents):
-                        flow.message_id = generate_event_id()
-                        yield TextMessageStartEvent(message_id=flow.message_id, role="assistant")
                     for content in contents:
                         for out_event in _emit_content(content, flow, predictive_handler=None, skip_text=False):
                             yield out_event
                     if output_text:
                         last_assistant_text = output_text
                 else:
-                    yield CustomEvent(name="workflow_output", value=make_json_safe(payload))
+                    yield CustomEvent(name="workflow_output", value=make_json_safe(output_payload))
                 continue
 
             # Fall back to custom events for diagnostics, orchestration events, and custom workflow events.
@@ -706,8 +722,9 @@ async def run_workflow_stream(
         if not run_started_emitted:
             yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
             run_started_emitted = True
-        yield RunErrorEvent(message=str(exc), code=type(exc).__name__)
-        run_error_emitted = True
+        if not run_error_emitted:
+            yield RunErrorEvent(message=str(exc), code=type(exc).__name__)
+            run_error_emitted = True
         terminal_emitted = True
 
     for end_event in _drain_open_message():

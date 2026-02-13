@@ -14,7 +14,9 @@ Run this server and pair it with the frontend in `../frontend`.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
+import random
 import re
 from collections.abc import AsyncIterable, Awaitable, Mapping, Sequence
 from typing import Any
@@ -45,6 +47,33 @@ logger = logging.getLogger(__name__)
 def submit_refund(refund_description: str, amount: str, order_id: str) -> str:
     """Capture a refund request for manual review before processing."""
     return f"refund recorded for order {order_id} (amount: {amount}) with details: {refund_description}"
+
+
+@tool(approval_mode="never_require")
+def lookup_order_details(order_id: str) -> dict[str, str]:
+    """Return synthetic order details for a given order ID."""
+    normalized_order_id = "".join(ch for ch in order_id if ch.isdigit()) or order_id
+    rng = random.Random(normalized_order_id)
+    catalog = [
+        "Wireless Headphones",
+        "Mechanical Keyboard",
+        "Gaming Mouse",
+        "27-inch Monitor",
+        "USB-C Dock",
+        "Bluetooth Speaker",
+        "Laptop Stand",
+    ]
+    item_name = catalog[rng.randrange(len(catalog))]
+    amount = f"${rng.randint(39, 349)}.{rng.randint(0, 99):02d}"
+    purchase_date = f"2025-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+    return {
+        "order_id": normalized_order_id,
+        "item_name": item_name,
+        "amount": amount,
+        "currency": "USD",
+        "purchase_date": purchase_date,
+        "status": "delivered",
+    }
 
 
 class DeterministicHandoffChatClient(ChatMiddlewareLayer[Any], FunctionInvocationLayer[Any], BaseChatClient[Any]):
@@ -277,10 +306,17 @@ def create_agents() -> tuple[Agent, Agent, Agent]:
         id="refund_agent",
         name="refund_agent",
         instructions=(
-            "You are the refund specialist. Use submit_refund for confirmed refunds and then handoff to order_agent."
+            "You are the refund specialist.\n"
+            "Workflow policy:\n"
+            "1. If order_id is missing, ask only for order_id.\n"
+            "2. Once order_id is available, call lookup_order_details(order_id) to retrieve item and amount.\n"
+            "3. Do not ask the customer how much they paid unless lookup_order_details fails.\n"
+            "4. Gather a short refund reason from user context.\n"
+            "5. Call submit_refund with order_id, amount (from lookup), and refund_description.\n"
+            "6. After approval and successful submission, handoff to order_agent."
         ),
         client=client,
-        tools=[submit_refund],
+        tools=[lookup_order_details, submit_refund],
     )
 
     order = Agent(
@@ -362,7 +398,26 @@ app = create_app()
 def main() -> None:
     """Run the AG-UI demo backend."""
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    # Configure logging format
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    # Configure root logger
+    logging.basicConfig(level=logging.INFO, format=log_format)
+
+    # Add file handler for persistent logging
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ag_ui_handoff_demo.log")
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=10485760, backupCount=5  # 10MB max size, keep 5 backups
+        )
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter(log_format))
+
+        # Add file handler to root logger
+        logging.getLogger().addHandler(file_handler)
+        print(f"Logging to file: {log_file}")
+    except Exception as e:
+        print(f"Warning: Failed to set up file logging: {e}")
 
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8891"))

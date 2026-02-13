@@ -493,9 +493,7 @@ def test_extract_resume_payload_reads_forwarded_command_resume():
     """Forwarded command.resume should be treated as a resume payload."""
     payload = {
         "forwarded_props": {
-            "command": {
-                "resume": '{"airline":"KLM","departure":"Amsterdam (AMS)","arrival":"San Francisco (SFO)"}'
-            }
+            "command": {"resume": '{"airline":"KLM","departure":"Amsterdam (AMS)","arrival":"San Francisco (SFO)"}'}
         }
     }
 

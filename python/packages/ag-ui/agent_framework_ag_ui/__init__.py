@@ -10,7 +10,7 @@ from ._endpoint import add_agent_framework_fastapi_endpoint
 from ._event_converters import AGUIEventConverter
 from ._http_service import AGUIHttpService
 from ._types import AgentState, AGUIChatOptions, AGUIRequest, PredictStateConfig, RunMetadata
-from ._workflow_agent import AgentFrameworkWorkflow
+from ._workflow import AgentFrameworkWorkflow, WorkflowFactory
 
 try:
     __version__ = importlib.metadata.version(__name__)
@@ -23,6 +23,7 @@ DEFAULT_TAGS = ["AG-UI"]
 __all__ = [
     "AgentFrameworkAgent",
     "AgentFrameworkWorkflow",
+    "WorkflowFactory",
     "add_agent_framework_fastapi_endpoint",
     "AGUIChatClient",
     "AGUIChatOptions",

@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Tests for _run.py helper functions and FlowState."""
+"""Tests for _agent_run.py helper functions and FlowState."""
 
 import pytest
 from ag_ui.core import (
@@ -10,19 +10,24 @@ from ag_ui.core import (
 from agent_framework import AgentResponseUpdate, Content, Message
 from agent_framework.exceptions import AgentExecutionException
 
-from agent_framework_ag_ui._run import (
-    FlowState,
-    _build_run_finished_event,
+from agent_framework_ag_ui._agent_run import (
     _build_safe_metadata,
     _create_state_context_message,
-    _emit_approval_request,
-    _emit_content,
-    _emit_tool_result,
-    _has_only_tool_calls,
     _inject_state_context,
     _normalize_response_stream,
     _resume_to_tool_messages,
     _should_suppress_intermediate_snapshot,
+)
+from agent_framework_ag_ui._run_common import (
+    FlowState,
+    _build_run_finished_event,
+    _emit_approval_request,
+    _emit_content,
+    _emit_text,
+    _emit_tool_call,
+    _emit_tool_result,
+    _extract_resume_payload,
+    _has_only_tool_calls,
 )
 
 
@@ -285,13 +290,11 @@ class TestInjectStateContext:
         assert "Hello" in result[2].contents[0].text
 
 
-# Additional tests for _run.py functions
+# Additional tests for _agent_run.py functions
 
 
 def test_emit_text_basic():
     """Test _emit_text emits correct events."""
-    from agent_framework_ag_ui._run import _emit_text
-
     flow = FlowState()
     content = Content.from_text("Hello world")
 
@@ -304,8 +307,6 @@ def test_emit_text_basic():
 
 def test_emit_text_skip_empty():
     """Test _emit_text skips empty text."""
-    from agent_framework_ag_ui._run import _emit_text
-
     flow = FlowState()
     content = Content.from_text("")
 
@@ -316,8 +317,6 @@ def test_emit_text_skip_empty():
 
 def test_emit_text_continues_existing_message():
     """Test _emit_text continues existing message."""
-    from agent_framework_ag_ui._run import _emit_text
-
     flow = FlowState()
     flow.message_id = "existing-id"
     content = Content.from_text("more text")
@@ -330,8 +329,6 @@ def test_emit_text_continues_existing_message():
 
 def test_emit_text_skips_when_waiting_for_approval():
     """Test _emit_text skips when waiting for approval."""
-    from agent_framework_ag_ui._run import _emit_text
-
     flow = FlowState()
     flow.waiting_for_approval = True
     content = Content.from_text("should skip")
@@ -343,8 +340,6 @@ def test_emit_text_skips_when_waiting_for_approval():
 
 def test_emit_text_skips_when_skip_text_flag():
     """Test _emit_text skips with skip_text flag."""
-    from agent_framework_ag_ui._run import _emit_text
-
     flow = FlowState()
     content = Content.from_text("should skip")
 
@@ -355,8 +350,6 @@ def test_emit_text_skips_when_skip_text_flag():
 
 def test_emit_tool_call_basic():
     """Test _emit_tool_call emits correct events."""
-    from agent_framework_ag_ui._run import _emit_tool_call
-
     flow = FlowState()
     content = Content.from_function_call(
         call_id="call_123",
@@ -373,8 +366,6 @@ def test_emit_tool_call_basic():
 
 def test_emit_tool_call_generates_id():
     """Test _emit_tool_call generates ID when not provided."""
-    from agent_framework_ag_ui._run import _emit_tool_call
-
     flow = FlowState()
     # Create content without call_id
     content = Content(type="function_call", name="test_tool", arguments="{}")
@@ -460,6 +451,32 @@ def test_resume_to_tool_messages_from_interrupts_payload():
     assert messages[1]["content"] == "plain value"
 
 
+def test_extract_resume_payload_prefers_top_level_resume():
+    """Top-level resume should take precedence over forwarded props."""
+    payload = {
+        "resume": {"interrupts": [{"id": "req_1", "value": "approved"}]},
+        "forwarded_props": {"command": {"resume": "ignored"}},
+    }
+
+    result = _extract_resume_payload(payload)
+    assert result == {"interrupts": [{"id": "req_1", "value": "approved"}]}
+
+
+def test_extract_resume_payload_reads_forwarded_command_resume():
+    """Forwarded command.resume should be treated as a resume payload."""
+    payload = {
+        "forwarded_props": {
+            "command": {
+                "resume": '{"airline":"KLM","departure":"Amsterdam (AMS)","arrival":"San Francisco (SFO)"}'
+            }
+        }
+    }
+
+    result = _extract_resume_payload(payload)
+    assert isinstance(result, str)
+    assert "KLM" in result
+
+
 def test_build_run_finished_event_with_interrupt():
     """RUN_FINISHED helper should preserve interrupt payloads."""
     event = _build_run_finished_event("run-1", "thread-1", interrupts=[{"id": "req_1", "value": {"x": 1}}])
@@ -472,7 +489,7 @@ def test_build_run_finished_event_with_interrupt():
 
 def test_extract_approved_state_updates_no_handler():
     """Test _extract_approved_state_updates returns empty with no handler."""
-    from agent_framework_ag_ui._run import _extract_approved_state_updates
+    from agent_framework_ag_ui._agent_run import _extract_approved_state_updates
 
     messages = [Message(role="user", contents=[Content.from_text("Hello")])]
     result = _extract_approved_state_updates(messages, None)
@@ -481,8 +498,8 @@ def test_extract_approved_state_updates_no_handler():
 
 def test_extract_approved_state_updates_no_approval():
     """Test _extract_approved_state_updates returns empty when no approval content."""
+    from agent_framework_ag_ui._agent_run import _extract_approved_state_updates
     from agent_framework_ag_ui._orchestration._predictive_state import PredictiveStateHandler
-    from agent_framework_ag_ui._run import _extract_approved_state_updates
 
     handler = PredictiveStateHandler(predict_state_config={"doc": {"tool": "write", "tool_argument": "content"}})
     messages = [Message(role="user", contents=[Content.from_text("Hello")])]
@@ -499,7 +516,7 @@ class TestBuildMessagesSnapshot:
         This is a regression test for issue #3619 where tool calls and content
         were incorrectly merged into a single assistant message.
         """
-        from agent_framework_ag_ui._run import FlowState, _build_messages_snapshot
+        from agent_framework_ag_ui._agent_run import FlowState, _build_messages_snapshot
 
         flow = FlowState()
         flow.message_id = "msg-123"
@@ -536,7 +553,7 @@ class TestBuildMessagesSnapshot:
 
     def test_only_tool_calls_no_text(self):
         """Test snapshot with only tool calls and no accumulated text."""
-        from agent_framework_ag_ui._run import FlowState, _build_messages_snapshot
+        from agent_framework_ag_ui._agent_run import FlowState, _build_messages_snapshot
 
         flow = FlowState()
         flow.message_id = "msg-123"
@@ -556,7 +573,7 @@ class TestBuildMessagesSnapshot:
 
     def test_only_text_no_tool_calls(self):
         """Test snapshot with only text and no tool calls."""
-        from agent_framework_ag_ui._run import FlowState, _build_messages_snapshot
+        from agent_framework_ag_ui._agent_run import FlowState, _build_messages_snapshot
 
         flow = FlowState()
         flow.message_id = "msg-123"
@@ -576,7 +593,7 @@ class TestBuildMessagesSnapshot:
 
     def test_preserves_snapshot_messages(self):
         """Test that existing snapshot messages are preserved."""
-        from agent_framework_ag_ui._run import FlowState, _build_messages_snapshot
+        from agent_framework_ag_ui._agent_run import FlowState, _build_messages_snapshot
 
         flow = FlowState()
         flow.pending_tool_calls = []

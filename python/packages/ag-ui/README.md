@@ -53,6 +53,27 @@ app = FastAPI()
 add_agent_framework_fastapi_endpoint(app, workflow, "/")
 ```
 
+### Server (Thread-Scoped WorkflowBuilder)
+
+Use `workflow_factory` when your workflow keeps runtime state (for example pending `request_info` interrupts) and must be isolated per AG-UI thread:
+
+```python
+from fastapi import FastAPI
+from agent_framework import Workflow, WorkflowBuilder
+from agent_framework.ag_ui import AgentFrameworkWorkflow, add_agent_framework_fastapi_endpoint
+
+def build_workflow_for_thread(thread_id: str) -> Workflow:
+    # Build a fresh workflow instance for each thread id.
+    return WorkflowBuilder(start_executor=...).build()
+
+app = FastAPI()
+thread_scoped_workflow = AgentFrameworkWorkflow(
+    workflow_factory=build_workflow_for_thread,
+    name="my_workflow",
+)
+add_agent_framework_fastapi_endpoint(app, thread_scoped_workflow, "/")
+```
+
 ### Client (Connect to an AG-UI Server)
 
 ```python

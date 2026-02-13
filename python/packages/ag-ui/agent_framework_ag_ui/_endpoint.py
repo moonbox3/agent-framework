@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
 from ._types import AGUIRequest
-from ._workflow_agent import AgentFrameworkWorkflow
+from ._workflow import AgentFrameworkWorkflow
 
 logger = logging.getLogger(__name__)
 

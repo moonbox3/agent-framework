@@ -8,7 +8,7 @@ from typing import Any, cast
 from ag_ui.core import BaseEvent
 from agent_framework import SupportsAgentRun
 
-from ._run import run_agent_stream
+from ._agent_run import run_agent_stream
 
 
 class AgentConfig:

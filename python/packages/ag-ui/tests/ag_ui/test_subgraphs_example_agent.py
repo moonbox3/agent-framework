@@ -49,6 +49,8 @@ async def test_subgraphs_example_initial_run_emits_flight_interrupt() -> None:
     assert interrupt_payload[0]["value"]["agent"] == "flights"
     assert len(interrupt_payload[0]["value"]["options"]) == 2
     assert interrupt_payload[0]["value"]["options"][0]["airline"] == "KLM"
+    custom_event_names = [event.name for event in events if event.type == "CUSTOM"]
+    assert "WorkflowInterruptEvent" in custom_event_names
 
 
 async def test_subgraphs_example_resume_flow_reaches_completion() -> None:
@@ -158,6 +160,7 @@ async def test_subgraphs_example_requires_structured_resume_for_selection() -> N
     second_finished = [event for event in second_events if event.type == "RUN_FINISHED"][0].model_dump()
     assert isinstance(second_finished.get("interrupt"), list)
     assert second_finished["interrupt"][0]["value"]["agent"] == "flights"
+    assert "TOOL_CALL_START" in [event.type for event in second_events]
     assert "TEXT_MESSAGE_CONTENT" not in [event.type for event in second_events]
 
     third_events = await _run(
@@ -189,3 +192,47 @@ async def test_subgraphs_example_requires_structured_resume_for_selection() -> N
 
     third_snapshots = [event.snapshot for event in third_events if event.type == "STATE_SNAPSHOT"]
     assert third_snapshots[-1]["itinerary"]["flight"]["airline"] == "United"
+
+
+async def test_subgraphs_example_forwarded_command_resume_reaches_hotels_interrupt() -> None:
+    """CopilotKit-style forwarded command.resume should continue workflow interrupts."""
+    agent = subgraphs_agent()
+    thread_id = "thread-subgraphs-forwarded-resume"
+
+    first_events = await _run(
+        agent,
+        {
+            "thread_id": thread_id,
+            "run_id": "run-forwarded-1",
+            "messages": [{"role": "user", "content": "Plan my trip"}],
+        },
+    )
+    first_interrupt = [event for event in first_events if event.type == "RUN_FINISHED"][0].model_dump()["interrupt"][0]
+
+    second_events = await _run(
+        agent,
+        {
+            "thread_id": thread_id,
+            "run_id": "run-forwarded-2",
+            "messages": [],
+            "forwarded_props": {
+                "command": {
+                    "resume": json.dumps(
+                        {
+                            "airline": "KLM",
+                            "departure": "Amsterdam (AMS)",
+                            "arrival": "San Francisco (SFO)",
+                            "price": "$650",
+                            "duration": "11h 30m",
+                        }
+                    )
+                }
+            },
+        },
+    )
+
+    second_finished = [event for event in second_events if event.type == "RUN_FINISHED"][0].model_dump()
+    second_interrupt = second_finished.get("interrupt")
+    assert isinstance(second_interrupt, list)
+    assert second_interrupt[0]["value"]["agent"] == "hotels"
+    assert second_interrupt[0]["id"] != first_interrupt["id"]

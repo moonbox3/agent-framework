@@ -362,14 +362,20 @@ class HandoffAgentExecutor(AgentExecutor):
         self, ctx: WorkflowContext[AgentExecutorResponse, AgentResponse | AgentResponseUpdate]
     ) -> None:
         """Override to support handoff."""
+        incoming_messages = list(self._cache)
+
         # When the full conversation is empty, it means this is the first run.
         # Broadcast the initial cache to all other agents. Subsequent runs won't
         # need this since responses are broadcast after each agent run and user input.
         if self._is_start_agent and not self._full_conversation:
-            await self._broadcast_messages(self._cache.copy(), cast(WorkflowContext[AgentExecutorRequest], ctx))
+            await self._broadcast_messages(incoming_messages, cast(WorkflowContext[AgentExecutorRequest], ctx))
 
         # Append the cache to the full conversation history
-        self._full_conversation.extend(self._cache)
+        self._full_conversation.extend(incoming_messages)
+
+        # Always run with full conversation context, even for same-agent request_info resumes.
+        # This keeps behavior consistent across stateful and stateless chat clients.
+        self._cache = list(self._full_conversation)
 
         # Check termination condition before running the agent
         if await self._check_terminate_and_yield(cast(WorkflowContext[Never, list[Message]], ctx)):

@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import re
 from collections.abc import AsyncIterable, Awaitable, Mapping, Sequence
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -123,6 +124,67 @@ class MockHandoffAgent(Agent):
         super().__init__(client=MockChatClient(name=name, handoff_to=handoff_to), name=name, id=name)
 
 
+class ContextAwareRefundClient(ChatMiddlewareLayer[Any], FunctionInvocationLayer[Any], BaseChatClient[Any]):
+    """Mock client that expects prior user context to remain available on resume."""
+
+    def __init__(self) -> None:
+        ChatMiddlewareLayer.__init__(self)
+        FunctionInvocationLayer.__init__(self)
+        BaseChatClient.__init__(self)
+        self._call_index = 0
+
+    def _inner_get_response(
+        self,
+        *,
+        messages: Sequence[Message],
+        stream: bool,
+        options: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+        del kwargs
+        del options
+
+        contents = self._next_contents(messages)
+        if stream:
+            return self._build_streaming_response(contents)
+
+        async def _get() -> ChatResponse:
+            return ChatResponse(messages=[Message(role="assistant", contents=contents)], response_id="context-aware")
+
+        return _get()
+
+    def _build_streaming_response(self, contents: list[Content]) -> ResponseStream[ChatResponseUpdate, ChatResponse]:
+        async def _stream() -> AsyncIterable[ChatResponseUpdate]:
+            yield ChatResponseUpdate(contents=contents, role="assistant", finish_reason="stop")
+
+        def _finalize(updates: Sequence[ChatResponseUpdate]) -> ChatResponse:
+            return ChatResponse.from_updates(updates)
+
+        return ResponseStream(_stream(), finalizer=_finalize)
+
+    def _next_contents(self, messages: Sequence[Message]) -> list[Content]:
+        user_text = " ".join(message.text or "" for message in messages if message.role == "user")
+        order_match = re.search(r"\b(\d{4,12})\b", user_text)
+        order_id = order_match.group(1) if order_match else None
+        asks_refund = any(token in user_text.lower() for token in ("broken", "damaged", "refund", "cracked"))
+
+        if self._call_index == 0:
+            reply = "Refund Agent: Please share your order number."
+        elif self._call_index == 1:
+            if order_id:
+                reply = f"Refund Agent: Thanks, I found order {order_id}. Why do you need the refund?"
+            else:
+                reply = "Refund Agent: I still need your order number."
+        else:
+            if order_id and asks_refund:
+                reply = f"Refund Agent: Got it for order {order_id}. I can proceed with your refund."
+            else:
+                reply = "Refund Agent: I still need your order number."
+
+        self._call_index += 1
+        return [Content.from_text(text=reply)]
+
+
 async def _drain(stream: AsyncIterable[WorkflowEvent]) -> list[WorkflowEvent]:
     return [event async for event in stream]
 
@@ -159,6 +221,59 @@ async def test_handoff():
     request = requests[0]
     assert isinstance(request.data, HandoffAgentUserRequest)
     assert request.source_executor_id == escalation.name
+
+
+def _latest_request_info_event(events: list[WorkflowEvent]) -> WorkflowEvent[Any]:
+    request_events = [event for event in events if event.type == "request_info"]
+    assert request_events
+    request_event = request_events[-1]
+    assert isinstance(request_event.data, HandoffAgentUserRequest)
+    return request_event
+
+
+def _request_text(event: WorkflowEvent[Any]) -> str:
+    request_payload = cast(HandoffAgentUserRequest, event.data)
+    messages = request_payload.agent_response.messages
+    assert messages
+    return messages[-1].text or ""
+
+
+async def test_resume_keeps_prior_user_context_for_same_agent() -> None:
+    """Ensure same-agent request_info resumes retain prior turn context."""
+    refund_agent = Agent(
+        id="refund_agent",
+        name="refund_agent",
+        client=ContextAwareRefundClient(),
+    )
+    workflow = HandoffBuilder(participants=[refund_agent], termination_condition=lambda _: False).with_start_agent(
+        refund_agent
+    ).build()
+
+    first_events = await _drain(workflow.run("My order arrived damaged.", stream=True))
+    first_request = _latest_request_info_event(first_events)
+    assert "order number" in _request_text(first_request).lower()
+
+    second_events = await _drain(
+        workflow.run(
+            stream=True,
+            responses={first_request.request_id: [Message(role="user", text="Order 2939393")]},
+        )
+    )
+    second_request = _latest_request_info_event(second_events)
+    second_text = _request_text(second_request).lower()
+    assert "order 2939393" in second_text
+    assert "order number" not in second_text
+
+    third_events = await _drain(
+        workflow.run(
+            stream=True,
+            responses={second_request.request_id: [Message(role="user", text="It arrived broken and unusable.")]},
+        )
+    )
+    third_request = _latest_request_info_event(third_events)
+    third_text = _request_text(third_request).lower()
+    assert "order 2939393" in third_text
+    assert "order number" not in third_text
 
 
 async def test_autonomous_mode_yields_output_without_user_request():

@@ -4,7 +4,6 @@
 
 import json
 import uuid
-from collections.abc import AsyncGenerator
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -27,7 +26,6 @@ from agent_framework import (
 )
 
 from agent_framework_ag_ui import AgentFrameworkWorkflow
-from agent_framework_ag_ui._workflow_run import run_workflow_stream
 
 STATIC_FLIGHTS: list[dict[str, str]] = [
     {
@@ -392,24 +390,16 @@ def _build_subgraphs_workflow() -> Workflow:
     )
 
 
-class SubgraphsTravelAgent(AgentFrameworkWorkflow):
-    """Thread-aware workflow wrapper for the subgraphs travel planner."""
-
-    def __init__(self) -> None:
-        super().__init__(name="subgraphs", description="Travel planning workflow with interrupt-driven selections.")
-        self._workflow_by_thread: dict[str, Workflow] = {}
-
-    async def run_agent(self, input_data: dict[str, Any]) -> AsyncGenerator[BaseEvent, None]:
-        thread_id = str(input_data.get("thread_id") or input_data.get("threadId") or uuid.uuid4())
-        workflow = self._workflow_by_thread.get(thread_id)
-        if workflow is None:
-            workflow = _build_subgraphs_workflow()
-            self._workflow_by_thread[thread_id] = workflow
-
-        async for event in run_workflow_stream(input_data, workflow):
-            yield event
+def _build_subgraphs_workflow_for_thread(thread_id: str) -> Workflow:
+    """Create a workflow instance scoped to a single AG-UI thread."""
+    del thread_id
+    return _build_subgraphs_workflow()
 
 
-def subgraphs_agent() -> SubgraphsTravelAgent:
+def subgraphs_agent() -> AgentFrameworkWorkflow:
     """Create the subgraphs travel planner agent."""
-    return SubgraphsTravelAgent()
+    return AgentFrameworkWorkflow(
+        workflow_factory=_build_subgraphs_workflow_for_thread,
+        name="subgraphs",
+        description="Travel planning workflow with interrupt-driven selections.",
+    )

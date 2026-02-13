@@ -2,7 +2,7 @@
 
 """Simplified AG-UI orchestration - single linear flow."""
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 import logging
@@ -21,6 +21,7 @@ from ag_ui.core import (
     TextMessageStartEvent,
     ToolCallArgsEvent,
     ToolCallEndEvent,
+    ToolCallResultEvent,
     ToolCallStartEvent,
 )
 from agent_framework import (
@@ -44,11 +45,10 @@ from ._orchestration._predictive_state import PredictiveStateHandler
 from ._orchestration._tooling import collect_server_tools, merge_tools, register_additional_client_tools
 from ._run_common import (
     FlowState,
-    _build_run_finished_event,
-    _emit_content,
-    _extract_resume_payload,
-    _has_only_tool_calls,
-    _normalize_resume_interrupts,
+    _build_run_finished_event,  # type: ignore
+    _extract_resume_payload,  # type: ignore
+    _has_only_tool_calls,  # type: ignore
+    _normalize_resume_interrupts,  # type: ignore
 )
 from ._utils import (
     convert_agui_tools_to_agent_framework,
@@ -183,15 +183,10 @@ async def _normalize_response_stream(response_stream: Any) -> AsyncIterable[Any]
       - AsyncIterable[AgentResponseUpdate] (workflow-style stream)
       - Awaitable that resolves to either of the above
     """
-    if isinstance(response_stream, ResponseStream):
-        return cast(AsyncIterable[Any], response_stream)
-
-    if isinstance(response_stream, AsyncIterable):
-        return cast(AsyncIterable[Any], response_stream)
-
     if isinstance(response_stream, Awaitable):
         resolved_stream = await cast(Awaitable[Any], response_stream)
         if isinstance(resolved_stream, ResponseStream):
+            # AG-UI consumes update iteration only; ResponseStream finalizers are not used here.
             return cast(AsyncIterable[Any], resolved_stream)
         if isinstance(resolved_stream, AsyncIterable):
             return cast(AsyncIterable[Any], resolved_stream)
@@ -200,6 +195,13 @@ async def _normalize_response_stream(response_stream: Any) -> AsyncIterable[Any]
             "Agent did not return a streaming AsyncIterable response. "
             f"Awaitable resolved to unsupported type: {resolved_type}."
         )
+
+    if isinstance(response_stream, ResponseStream):
+        # AG-UI consumes update iteration only; ResponseStream finalizers are not used here.
+        return cast(AsyncIterable[Any], response_stream)
+
+    if isinstance(response_stream, AsyncIterable):
+        return cast(AsyncIterable[Any], response_stream)
 
     stream_type = f"{type(response_stream).__module__}.{type(response_stream).__name__}"
     raise AgentExecutionException(
@@ -283,6 +285,242 @@ def _inject_state_context(
     result.append(state_msg)
     result.append(messages[-1])
     return result
+
+
+def _emit_text(content: Content, flow: FlowState, skip_text: bool = False) -> list[BaseEvent]:
+    """Emit TextMessage events for TextContent."""
+    if not content.text:
+        return []
+
+    # Skip if we're in structured output mode or waiting for approval
+    if skip_text or flow.waiting_for_approval:
+        return []
+
+    events: list[BaseEvent] = []
+    if not flow.message_id:
+        flow.message_id = generate_event_id()
+        events.append(TextMessageStartEvent(message_id=flow.message_id, role="assistant"))
+
+    events.append(TextMessageContentEvent(message_id=flow.message_id, delta=content.text))
+    flow.accumulated_text += content.text
+    return events
+
+
+def _emit_tool_call(
+    content: Content,
+    flow: FlowState,
+    predictive_handler: PredictiveStateHandler | None = None,
+) -> list[BaseEvent]:
+    """Emit ToolCall events for FunctionCallContent."""
+    events: list[BaseEvent] = []
+
+    tool_call_id = content.call_id or flow.tool_call_id or generate_event_id()
+
+    # Emit start event when we have a new tool call
+    if content.name and tool_call_id != flow.tool_call_id:
+        flow.tool_call_id = tool_call_id
+        flow.tool_call_name = content.name
+        if predictive_handler:
+            predictive_handler.reset_streaming()
+
+        events.append(
+            ToolCallStartEvent(
+                tool_call_id=tool_call_id,
+                tool_call_name=content.name,
+                parent_message_id=flow.message_id,
+            )
+        )
+
+        # Track for MessagesSnapshotEvent
+        tool_entry = {
+            "id": tool_call_id,
+            "type": "function",
+            "function": {"name": content.name, "arguments": ""},
+        }
+        flow.pending_tool_calls.append(tool_entry)
+        flow.tool_calls_by_id[tool_call_id] = tool_entry
+
+    elif tool_call_id:
+        flow.tool_call_id = tool_call_id
+
+    # Emit args if present
+    if content.arguments:
+        delta = (
+            content.arguments if isinstance(content.arguments, str) else json.dumps(make_json_safe(content.arguments))
+        )
+        events.append(ToolCallArgsEvent(tool_call_id=tool_call_id, delta=delta))
+
+        # Track args for MessagesSnapshotEvent
+        if tool_call_id in flow.tool_calls_by_id:
+            flow.tool_calls_by_id[tool_call_id]["function"]["arguments"] += delta
+
+        # Emit predictive state deltas
+        if predictive_handler and flow.tool_call_name:
+            delta_events = predictive_handler.emit_streaming_deltas(flow.tool_call_name, delta)
+            events.extend(delta_events)
+
+    return events
+
+
+def _emit_tool_result(
+    content: Content,
+    flow: FlowState,
+    predictive_handler: PredictiveStateHandler | None = None,
+) -> list[BaseEvent]:
+    """Emit ToolCallResult events for function_result content."""
+    events: list[BaseEvent] = []
+
+    # Cannot emit tool result without a call_id to associate it with
+    if not content.call_id:
+        return events
+
+    events.append(ToolCallEndEvent(tool_call_id=content.call_id))
+    flow.tool_calls_ended.add(content.call_id)  # Track ended tool calls
+
+    result_content = content.result if content.result is not None else ""
+    message_id = generate_event_id()
+    events.append(
+        ToolCallResultEvent(
+            message_id=message_id,
+            tool_call_id=content.call_id,
+            content=result_content,
+            role="tool",
+        )
+    )
+
+    # Track for MessagesSnapshotEvent
+    flow.tool_results.append(
+        {
+            "id": message_id,
+            "role": "tool",
+            "toolCallId": content.call_id,
+            "content": result_content,
+        }
+    )
+
+    # Apply predictive state updates and emit snapshot
+    if predictive_handler:
+        predictive_handler.apply_pending_updates()
+        if flow.current_state:
+            events.append(StateSnapshotEvent(snapshot=flow.current_state))
+
+    # Reset tool tracking and message context
+    # After tool result, any subsequent text should start a new message
+    flow.tool_call_id = None
+    flow.tool_call_name = None
+
+    # Close any open text message before resetting message_id (issue #3568)
+    # This handles the case where a TextMessageStartEvent was emitted for tool-only
+    # messages (Feature #4) but needs to be closed before starting a new message
+    if flow.message_id:
+        logger.debug("Closing text message (issue #3568 fix): message_id=%s", flow.message_id)
+        events.append(TextMessageEndEvent(message_id=flow.message_id))
+    flow.message_id = None  # Reset so next text content starts a new message
+
+    return events
+
+
+def _emit_approval_request(
+    content: Content,
+    flow: FlowState,
+    predictive_handler: PredictiveStateHandler | None = None,
+    require_confirmation: bool = True,
+) -> list[BaseEvent]:
+    """Emit events for function approval request."""
+    events: list[BaseEvent] = []
+
+    # function_call is required for approval requests - skip if missing
+    func_call = content.function_call
+    if not func_call:
+        logger.warning("Approval request content missing function_call, skipping")
+        return events
+
+    func_name = func_call.name or ""
+    func_call_id = func_call.call_id
+
+    # Extract state from function arguments if predictive
+    if predictive_handler and func_name:
+        parsed_args = func_call.parse_arguments()
+        result = predictive_handler.extract_state_value(func_name, parsed_args)
+        if result:
+            state_key, state_value = result
+            flow.current_state[state_key] = state_value
+            events.append(StateSnapshotEvent(snapshot=flow.current_state))
+
+    # End the original tool call
+    if func_call_id:
+        events.append(ToolCallEndEvent(tool_call_id=func_call_id))
+        flow.tool_calls_ended.add(func_call_id)  # Track ended tool calls
+
+    # Emit custom event for UI
+    events.append(
+        CustomEvent(
+            name="function_approval_request",
+            value={
+                "id": content.id,
+                "function_call": {
+                    "call_id": func_call_id,
+                    "name": func_name,
+                    "arguments": make_json_safe(func_call.parse_arguments()),
+                },
+            },
+        )
+    )
+
+    # Emit confirm_changes tool call for UI compatibility
+    # The complete sequence (Start -> Args -> End) signals the UI to show the confirmation dialog
+    if require_confirmation:
+        confirm_id = generate_event_id()
+        events.append(
+            ToolCallStartEvent(
+                tool_call_id=confirm_id,
+                tool_call_name="confirm_changes",
+                parent_message_id=flow.message_id,
+            )
+        )
+        args: dict[str, Any] = {
+            "function_name": func_name,
+            "function_call_id": func_call_id,
+            "function_arguments": make_json_safe(func_call.parse_arguments()) or {},
+            "steps": [{"description": f"Execute {func_name}", "status": "enabled"}],
+        }
+        args_json = json.dumps(args)
+        events.append(ToolCallArgsEvent(tool_call_id=confirm_id, delta=args_json))
+        events.append(ToolCallEndEvent(tool_call_id=confirm_id))
+
+        # Track confirm_changes in pending_tool_calls for MessagesSnapshotEvent
+        # The frontend needs to see this in the snapshot to render the confirmation dialog
+        confirm_entry = {
+            "id": confirm_id,
+            "type": "function",
+            "function": {"name": "confirm_changes", "arguments": args_json},
+        }
+        flow.pending_tool_calls.append(confirm_entry)
+        flow.tool_calls_by_id[confirm_id] = confirm_entry
+        flow.tool_calls_ended.add(confirm_id)  # Mark as ended since we emit End event
+
+    flow.waiting_for_approval = True
+    return events
+
+
+def _emit_content(
+    content: Any,
+    flow: FlowState,
+    predictive_handler: PredictiveStateHandler | None = None,
+    skip_text: bool = False,
+    require_confirmation: bool = True,
+) -> list[BaseEvent]:
+    """Emit appropriate events for any content type."""
+    content_type = getattr(content, "type", None)
+    if content_type == "text":
+        return _emit_text(content, flow, skip_text)
+    elif content_type == "function_call":
+        return _emit_tool_call(content, flow, predictive_handler)
+    elif content_type == "function_result":
+        return _emit_tool_result(content, flow, predictive_handler)
+    elif content_type == "function_approval_request":
+        return _emit_approval_request(content, flow, predictive_handler, require_confirmation)
+    return []
 
 
 def _is_confirm_changes_response(messages: list[Any]) -> bool:

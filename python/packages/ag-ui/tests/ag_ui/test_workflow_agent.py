@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from agent_framework import Workflow, WorkflowBuilder, WorkflowContext, executor
@@ -13,7 +13,7 @@ from agent_framework_ag_ui import AgentFrameworkWorkflow
 
 
 async def _run(agent: AgentFrameworkWorkflow, payload: dict[str, Any]) -> list[Any]:
-    return [event async for event in agent.run_agent(payload)]
+    return [event async for event in agent.run(payload)]
 
 
 async def test_workflow_wrapper_rejects_workflow_and_factory_at_once() -> None:
@@ -94,3 +94,19 @@ async def test_workflow_wrapper_factory_is_thread_scoped() -> None:
         },
     )
     assert factory_calls["thread-a"] == 2
+
+
+async def test_workflow_wrapper_without_workflow_raises_not_implemented() -> None:
+    """Without workflow/workflow_factory, run should raise NotImplementedError."""
+    agent = AgentFrameworkWorkflow()
+
+    with pytest.raises(NotImplementedError, match="No workflow is attached"):
+        _ = [event async for event in agent.run({"messages": [{"role": "user", "content": "start"}]})]
+
+
+async def test_workflow_wrapper_factory_return_type_is_validated() -> None:
+    """Factory outputs must be Workflow instances."""
+    agent = AgentFrameworkWorkflow(workflow_factory=lambda _thread_id: cast(Any, object()))
+
+    with pytest.raises(TypeError, match="workflow_factory must return a Workflow instance"):
+        _ = [event async for event in agent.run({"thread_id": "thread-a", "messages": []})]

@@ -3,6 +3,7 @@
 """Tests for native workflow AG-UI runner."""
 
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 
 from ag_ui.core import EventType, StateSnapshotEvent
@@ -20,7 +21,11 @@ from agent_framework import (
 )
 from typing_extensions import Never
 
-from agent_framework_ag_ui._workflow_run import run_workflow_stream
+from agent_framework_ag_ui._workflow_run import (
+    _coerce_message,
+    _coerce_response_for_request,
+    run_workflow_stream,
+)
 
 
 class ProgressEvent(WorkflowEvent):
@@ -470,3 +475,205 @@ async def test_workflow_run_skips_duplicate_text_from_conversation_snapshot() ->
 
     text_deltas = [event.delta for event in events if event.type == "TEXT_MESSAGE_CONTENT"]
     assert text_deltas == ["Order Agent: Got it. I submitted the replacement request."]
+
+
+async def test_workflow_run_skips_consecutive_duplicate_text_outputs() -> None:
+    """Do not emit duplicate assistant text when consecutive outputs are identical."""
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext[Never, Any]) -> None:
+        del message
+        duplicate_text = "Order Agent: Replacement processed. Case complete."
+        await ctx.yield_output(duplicate_text)
+        await ctx.yield_output(duplicate_text)
+
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    events = [event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)]
+
+    text_deltas = [event.delta for event in events if event.type == "TEXT_MESSAGE_CONTENT"]
+    assert text_deltas == ["Order Agent: Replacement processed. Case complete."]
+
+
+async def test_workflow_run_skips_final_snapshot_when_streamed_chunks_already_match() -> None:
+    """Do not append full snapshot text when prior chunk outputs already formed the same message."""
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext[Never, Any]) -> None:
+        del message
+        full_text = (
+            "Your replacement request for order 28939393 has been submitted with expedited shipping, "
+            "as you requested.\n\nCase complete."
+        )
+        await ctx.yield_output(
+            "Your replacement request for order 28939393 has been submitted with expedited shipping, "
+        )
+        await ctx.yield_output("as you requested.\n\nCase complete.")
+        await ctx.yield_output(
+            AgentResponse(
+                messages=[
+                    Message(role="user", contents=[Content.from_text("My order is 28939393.")]),
+                    Message(role="assistant", contents=[Content.from_text(full_text)]),
+                ]
+            )
+        )
+
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    events = [event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)]
+
+    text_deltas = [event.delta for event in events if event.type == "TEXT_MESSAGE_CONTENT"]
+    assert text_deltas == [
+        "Your replacement request for order 28939393 has been submitted with expedited shipping, ",
+        "as you requested.\n\nCase complete.",
+    ]
+
+
+async def test_workflow_run_usage_content_emits_custom_usage_event() -> None:
+    """Usage output from workflows should be surfaced as a custom usage event."""
+
+    @executor(id="usage")
+    async def usage(message: Any, ctx: WorkflowContext[Never, Content]) -> None:
+        del message
+        await ctx.yield_output(
+            Content.from_usage(
+                {
+                    "input_token_count": 12,
+                    "output_token_count": 6,
+                    "total_token_count": 18,
+                }
+            )
+        )
+
+    workflow = WorkflowBuilder(start_executor=usage).build()
+    events = [event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)]
+
+    usage_events = [event for event in events if event.type == "CUSTOM" and event.name == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].value["input_token_count"] == 12
+    assert usage_events[0].value["output_token_count"] == 6
+    assert usage_events[0].value["total_token_count"] == 18
+
+
+async def test_workflow_run_accepts_multimodal_input_messages() -> None:
+    """Workflow runner should normalize multimodal input into workflow Message content."""
+
+    class CapturingWorkflow:
+        def __init__(self) -> None:
+            self.captured_message: list[Message] | None = None
+
+        def run(self, **kwargs: Any):
+            self.captured_message = cast(list[Message] | None, kwargs.get("message"))
+
+            async def _stream():
+                yield SimpleNamespace(type="started")
+
+            return _stream()
+
+    workflow = CapturingWorkflow()
+    events = [
+        event
+        async for event in run_workflow_stream(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Please analyze this image"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": "https://example.com/diagram.png",
+                                    "mimeType": "image/png",
+                                },
+                            },
+                        ],
+                    }
+                ]
+            },
+            cast(Any, workflow),
+        )
+    ]
+
+    event_types = [event.type for event in events]
+    assert "RUN_STARTED" in event_types
+    assert "RUN_FINISHED" in event_types
+    assert "RUN_ERROR" not in event_types
+
+    assert workflow.captured_message is not None
+    assert len(workflow.captured_message) == 1
+    user_message = workflow.captured_message[0]
+    assert user_message.role == "user"
+    assert len(user_message.contents) == 2
+    assert user_message.contents[0].type == "text"
+    assert user_message.contents[0].text == "Please analyze this image"
+    assert user_message.contents[1].type == "uri"
+    assert user_message.contents[1].uri == "https://example.com/diagram.png"
+
+
+def test_coerce_message_accepts_string_payload() -> None:
+    """String values should coerce into a user Message with one text content."""
+    message = _coerce_message("Please continue")
+    assert message is not None
+    assert message.role == "user"
+    assert len(message.contents) == 1
+    assert message.contents[0].type == "text"
+    assert message.contents[0].text == "Please continue"
+
+
+def test_coerce_message_accepts_content_key_variant() -> None:
+    """The 'content' key variant should map into Message.contents."""
+    message = _coerce_message({"role": "assistant", "content": {"type": "text", "content": "Done"}})
+    assert message is not None
+    assert message.role == "assistant"
+    assert len(message.contents) == 1
+    assert message.contents[0].type == "text"
+    assert message.contents[0].text == "Done"
+
+
+def test_coerce_response_for_request_bool_int_float_and_mismatch() -> None:
+    """Scalar coercion should enforce bool/int/float rules and return None on mismatches."""
+    bool_request = SimpleNamespace(response_type=bool)
+    assert _coerce_response_for_request(bool_request, True) is True
+    assert _coerce_response_for_request(bool_request, "true") is True
+    assert _coerce_response_for_request(bool_request, 1) is None
+
+    int_request = SimpleNamespace(response_type=int)
+    assert _coerce_response_for_request(int_request, 7) == 7
+    assert _coerce_response_for_request(int_request, "7") == 7
+    assert _coerce_response_for_request(int_request, True) is None
+
+    float_request = SimpleNamespace(response_type=float)
+    assert _coerce_response_for_request(float_request, 2) == 2
+    assert _coerce_response_for_request(float_request, "2.5") == 2.5
+    assert _coerce_response_for_request(float_request, True) is None
+
+    dict_request = SimpleNamespace(response_type=dict)
+    assert _coerce_response_for_request(dict_request, "[1,2,3]") is None
+
+
+async def test_workflow_run_emits_run_error_when_stream_raises() -> None:
+    """Unexpected stream exceptions should be converted into RUN_ERROR events."""
+
+    class FailingWorkflow:
+        def run(self, **kwargs: Any):
+            del kwargs
+
+            async def _stream():
+                raise RuntimeError("workflow stream exploded")
+                yield  # pragma: no cover
+
+            return _stream()
+
+    events = [
+        event
+        async for event in run_workflow_stream(
+            {"messages": [{"role": "user", "content": "go"}]},
+            cast(Any, FailingWorkflow()),
+        )
+    ]
+
+    event_types = [event.type for event in events]
+    assert event_types[0] == "RUN_STARTED"
+    assert "RUN_ERROR" in event_types
+    run_error = next(event for event in events if event.type == "RUN_ERROR")
+    assert "workflow stream exploded" in run_error.message

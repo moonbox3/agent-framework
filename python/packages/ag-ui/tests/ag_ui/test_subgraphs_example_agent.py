@@ -11,7 +11,7 @@ from agent_framework_ag_ui_examples.agents.subgraphs_agent import subgraphs_agen
 
 
 async def _run(agent: Any, payload: dict[str, Any]) -> list[Any]:
-    return [event async for event in agent.run_agent(payload)]
+    return [event async for event in agent.run(payload)]
 
 
 async def test_subgraphs_example_initial_run_emits_flight_interrupt() -> None:

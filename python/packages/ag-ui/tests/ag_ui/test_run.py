@@ -354,6 +354,19 @@ def test_emit_text_continues_existing_message():
     assert flow.message_id == "existing-id"
 
 
+def test_emit_text_skips_duplicate_full_message_delta():
+    """Test _emit_text skips replayed full-message chunks on an open message."""
+    flow = FlowState()
+    flow.message_id = "existing-id"
+    flow.accumulated_text = "Case complete."
+    content = Content.from_text("Case complete.")
+
+    events = _emit_text(content, flow)
+
+    assert events == []
+    assert flow.accumulated_text == "Case complete."
+
+
 def test_emit_text_skips_when_waiting_for_approval():
     """Test _emit_text skips when waiting for approval."""
     flow = FlowState()
@@ -445,6 +458,32 @@ def test_emit_tool_result_no_open_message():
     # Should have: ToolCallEndEvent, ToolCallResultEvent (no TextMessageEndEvent)
     text_end_events = [e for e in events if isinstance(e, TextMessageEndEvent)]
     assert len(text_end_events) == 0
+
+
+def test_emit_tool_result_serializes_non_string_result():
+    """Non-string tool results should be serialized before emitting TOOL_CALL_RESULT."""
+    flow = FlowState()
+    content = Content.from_function_result(call_id="call_789", result={"ok": True, "items": [1, 2]})
+
+    events = _emit_tool_result(content, flow, predictive_handler=None)
+    result_event = next(event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT")
+
+    assert isinstance(result_event.content, str)
+    assert '"ok": true' in result_event.content
+    assert flow.tool_results[0]["content"] == result_event.content
+
+
+def test_emit_content_usage_emits_custom_usage_event():
+    """Usage content should be emitted as a custom usage event."""
+    flow = FlowState()
+    content = Content.from_usage({"input_token_count": 3, "output_token_count": 2, "total_token_count": 5})
+
+    events = _emit_content(content, flow)
+
+    assert len(events) == 1
+    assert events[0].type == "CUSTOM"
+    assert events[0].name == "usage"
+    assert events[0].value["total_token_count"] == 5
 
 
 def test_emit_approval_request_populates_interrupt_metadata():

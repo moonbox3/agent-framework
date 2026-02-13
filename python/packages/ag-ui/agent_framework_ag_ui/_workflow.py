@@ -19,7 +19,7 @@ WorkflowFactory = Callable[[str], Workflow]
 class AgentFrameworkWorkflow:
     """Base AG-UI workflow wrapper.
 
-    Can wrap a native ``Workflow`` or be subclassed for custom ``run_agent`` behavior.
+    Can wrap a native ``Workflow`` or be subclassed for custom ``run`` behavior.
     """
 
     def __init__(
@@ -53,9 +53,7 @@ class AgentFrameworkWorkflow:
             return self.workflow
 
         if self._workflow_factory is None:
-            raise NotImplementedError(
-                "No workflow is attached. Override run_agent or pass workflow=/workflow_factory=."
-            )
+            raise NotImplementedError("No workflow is attached. Override run or pass workflow=/workflow_factory=.")
 
         workflow = self._workflow_by_thread.get(thread_id)
         if workflow is None:
@@ -73,7 +71,7 @@ class AgentFrameworkWorkflow:
         """Drop all cached thread workflow instances."""
         self._workflow_by_thread.clear()
 
-    async def run_agent(self, input_data: dict[str, Any]) -> AsyncGenerator[BaseEvent, None]:
+    async def run(self, input_data: dict[str, Any]) -> AsyncGenerator[BaseEvent]:
         """Run the wrapped workflow and yield AG-UI events.
 
         Subclasses may override this to provide custom AG-UI streams.
@@ -82,7 +80,3 @@ class AgentFrameworkWorkflow:
         workflow = self._resolve_workflow(thread_id)
         async for event in run_workflow_stream(input_data, workflow):
             yield event
-
-
-# Backward-compatible alias for older imports.
-AgentFrameworkWorkflowAgent = AgentFrameworkWorkflow

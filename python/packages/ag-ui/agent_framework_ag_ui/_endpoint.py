@@ -9,9 +9,10 @@ import logging
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
+from ag_ui.core import RunErrorEvent
 from ag_ui.encoder import EventEncoder
 from agent_framework import SupportsAgentRun, Workflow
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
 
@@ -50,15 +51,15 @@ def add_agent_framework_fastapi_endpoint(
             authentication checks, rate limiting, or other middleware-like behavior.
             Example: `dependencies=[Depends(verify_api_key)]`
     """
-    wrapped_agent: AgentFrameworkAgent | AgentFrameworkWorkflow
+    protocol_runner: AgentFrameworkAgent | AgentFrameworkWorkflow
     if isinstance(agent, AgentFrameworkWorkflow):
-        wrapped_agent = agent
+        protocol_runner = agent
     elif isinstance(agent, AgentFrameworkAgent):
-        wrapped_agent = agent
+        protocol_runner = agent
     elif isinstance(agent, Workflow):
-        wrapped_agent = AgentFrameworkWorkflow(workflow=agent)
+        protocol_runner = AgentFrameworkWorkflow(workflow=agent)
     elif isinstance(agent, SupportsAgentRun):
-        wrapped_agent = AgentFrameworkAgent(
+        protocol_runner = AgentFrameworkAgent(
             agent=agent,
             state_schema=state_schema,
             predict_state_config=predict_state_config,
@@ -67,7 +68,7 @@ def add_agent_framework_fastapi_endpoint(
         raise TypeError("agent must be SupportsAgentRun, Workflow, AgentFrameworkAgent, or AgentFrameworkWorkflow.")
 
     @app.post(path, tags=tags or ["AG-UI"], dependencies=dependencies, response_model=None)  # type: ignore[arg-type]
-    async def agent_endpoint(request_body: AGUIRequest) -> StreamingResponse | dict[str, str]:
+    async def agent_endpoint(request_body: AGUIRequest) -> StreamingResponse:
         """Handle AG-UI agent requests.
 
         Note: Function is accessed via FastAPI's decorator registration,
@@ -90,25 +91,50 @@ def add_agent_framework_fastapi_endpoint(
             async def event_generator() -> AsyncGenerator[str]:
                 encoder = EventEncoder()
                 event_count = 0
-                async for event in wrapped_agent.run_agent(input_data):
-                    event_count += 1
-                    event_type_name = getattr(event, "type", type(event).__name__)
-                    # Log important events at INFO level
-                    if "TOOL_CALL" in str(event_type_name) or "RUN" in str(event_type_name):
-                        if hasattr(event, "model_dump"):
-                            event_data = event.model_dump(exclude_none=True)
-                            logger.info(f"[{path}] Event {event_count}: {event_type_name} - {event_data}")
-                        else:
-                            logger.info(f"[{path}] Event {event_count}: {event_type_name}")
+                try:
+                    async for event in protocol_runner.run(input_data):
+                        event_count += 1
+                        event_type_name = getattr(event, "type", type(event).__name__)
+                        # Log important events at INFO level
+                        if "TOOL_CALL" in str(event_type_name) or "RUN" in str(event_type_name):
+                            if hasattr(event, "model_dump"):
+                                event_data = event.model_dump(exclude_none=True)
+                                logger.info(f"[{path}] Event {event_count}: {event_type_name} - {event_data}")
+                            else:
+                                logger.info(f"[{path}] Event {event_count}: {event_type_name}")
 
-                    encoded = encoder.encode(event)
-                    logger.debug(
-                        f"[{path}] Encoded as: {encoded[:200]}..."
-                        if len(encoded) > 200
-                        else f"[{path}] Encoded as: {encoded}"
+                        try:
+                            encoded = encoder.encode(event)
+                        except Exception as encode_error:
+                            logger.exception("[%s] Failed to encode event %s", path, event_type_name)
+                            run_error = RunErrorEvent(
+                                message="An internal error has occurred while streaming events.",
+                                code=type(encode_error).__name__,
+                            )
+                            try:
+                                yield encoder.encode(run_error)
+                            except Exception:
+                                logger.exception("[%s] Failed to encode RUN_ERROR event", path)
+                            return
+
+                        logger.debug(
+                            f"[{path}] Encoded as: {encoded[:200]}..."
+                            if len(encoded) > 200
+                            else f"[{path}] Encoded as: {encoded}"
+                        )
+                        yield encoded
+
+                    logger.info(f"[{path}] Completed streaming {event_count} events")
+                except Exception as stream_error:
+                    logger.exception("[%s] Streaming failed", path)
+                    run_error = RunErrorEvent(
+                        message="An internal error has occurred while streaming events.",
+                        code=type(stream_error).__name__,
                     )
-                    yield encoded
-                logger.info(f"[{path}] Completed streaming {event_count} events")
+                    try:
+                        yield encoder.encode(run_error)
+                    except Exception:
+                        logger.exception("[%s] Failed to encode RUN_ERROR event", path)
 
             return StreamingResponse(
                 event_generator(),
@@ -121,4 +147,4 @@ def add_agent_framework_fastapi_endpoint(
             )
         except Exception as e:
             logger.error(f"Error in agent endpoint: {e}", exc_info=True)
-            return {"error": "An internal error has occurred."}
+            raise HTTPException(status_code=500, detail="An internal error has occurred.") from e

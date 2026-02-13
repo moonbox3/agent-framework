@@ -74,7 +74,7 @@ async def _pending_request_events(workflow: Workflow) -> dict[str, Any]:
     try:
         pending = await get_pending()
     except Exception:  # pragma: no cover - defensive for internal API drift
-        logger.debug("Could not read pending workflow requests", exc_info=True)
+        logger.warning("Could not read pending workflow requests", exc_info=True)
         return {}
 
     if isinstance(pending, dict):
@@ -573,6 +573,7 @@ async def run_workflow_stream(
             return []
         current_message_id = flow.message_id
         flow.message_id = None
+        flow.accumulated_text = ""
         return [TextMessageEndEvent(message_id=current_message_id)]
 
     try:
@@ -697,18 +698,15 @@ async def run_workflow_stream(
                     continue
                 contents = _workflow_payload_to_contents(output_payload)
                 if contents:
-                    payload_is_conversation_snapshot = isinstance(output_payload, AgentResponse) or (
-                        isinstance(output_payload, list)
-                        and output_payload
-                        and all(isinstance(item, Message) for item in output_payload)
-                    )
                     output_text = _text_from_contents(contents)
-                    if payload_is_conversation_snapshot and output_text and output_text == last_assistant_text:
+                    if output_text and output_text == last_assistant_text:
                         continue
                     for content in contents:
                         for out_event in _emit_content(content, flow, predictive_handler=None, skip_text=False):
                             yield out_event
-                    if output_text:
+                    if flow.message_id and flow.accumulated_text:
+                        last_assistant_text = flow.accumulated_text.strip() or last_assistant_text
+                    elif output_text:
                         last_assistant_text = output_text
                 else:
                     yield CustomEvent(name="workflow_output", value=make_json_safe(output_payload))

@@ -541,6 +541,12 @@ class HandoffAgentExecutor(AgentExecutor):
             self._autonomous_mode_turns = 0  # Reset autonomous mode turn counter on handoff
             return
 
+        # Re-evaluate termination after appending and broadcasting this response.
+        # Without this check, workflows that become terminal due to the latest assistant
+        # message would still emit request_info and require an unnecessary extra resume.
+        if await self._check_terminate_and_yield(cast(WorkflowContext[Never, list[Message]], ctx)):
+            return
+
         # Handle case where no handoff was requested
         if self._autonomous_mode and self._autonomous_mode_turns < self._autonomous_mode_turn_limit:
             # In autonomous mode, continue running the agent until a handoff is requested

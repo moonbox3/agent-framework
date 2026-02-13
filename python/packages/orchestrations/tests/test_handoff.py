@@ -898,6 +898,61 @@ async def test_handoff_async_termination_condition() -> None:
     assert termination_call_count > 0
 
 
+async def test_handoff_terminates_without_request_info_when_latest_response_meets_condition() -> None:
+    """Termination triggered by the latest assistant response should not emit request_info."""
+
+    class FinalizingClient(ChatMiddlewareLayer[Any], FunctionInvocationLayer[Any], BaseChatClient[Any]):
+        def __init__(self) -> None:
+            ChatMiddlewareLayer.__init__(self)
+            FunctionInvocationLayer.__init__(self)
+            BaseChatClient.__init__(self)
+
+        def _inner_get_response(
+            self,
+            *,
+            messages: Sequence[Message],
+            stream: bool,
+            options: Mapping[str, Any],
+            **kwargs: Any,
+        ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+            del messages, options, kwargs
+            contents = [Content.from_text(text="Replacement request submitted. Case complete.")]
+
+            if stream:
+
+                async def _stream() -> AsyncIterable[ChatResponseUpdate]:
+                    yield ChatResponseUpdate(contents=contents, role="assistant", finish_reason="stop")
+
+                return ResponseStream(_stream(), finalizer=lambda updates: ChatResponse.from_updates(updates))
+
+            async def _get() -> ChatResponse:
+                return ChatResponse(messages=[Message(role="assistant", contents=contents)], response_id="finalizing")
+
+            return _get()
+
+    agent = Agent(id="order_agent", name="order_agent", client=FinalizingClient())
+    workflow = (
+        HandoffBuilder(
+            participants=[agent],
+            termination_condition=lambda conv: any(
+                message.role == "assistant" and "case complete." in (message.text or "").lower() for message in conv
+            ),
+        )
+        .with_start_agent(agent)
+        .build()
+    )
+
+    events = await _drain(workflow.run("ship replacement", stream=True))
+
+    requests = [event for event in events if event.type == "request_info"]
+    assert not requests
+
+    outputs = [event for event in events if event.type == "output"]
+    assert outputs
+    conversation_outputs = [event for event in outputs if isinstance(event.data, list)]
+    assert len(conversation_outputs) == 1
+
+
 async def test_tool_choice_preserved_from_agent_config():
     """Verify that agent-level tool_choice configuration is preserved and not overridden."""
     # Create a mock chat client that records the tool_choice used

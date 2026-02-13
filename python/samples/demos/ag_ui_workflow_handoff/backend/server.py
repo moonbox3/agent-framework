@@ -2,11 +2,11 @@
 
 """AG-UI handoff workflow demo backend.
 
-This demo exposes a deterministic HandoffBuilder workflow through AG-UI.
+This demo exposes a dynamic HandoffBuilder workflow through AG-UI.
 It intentionally includes two interrupt styles:
 
-1. Tool approval (`function_approval_request`) for `submit_refund`
-2. Follow-up human input (`HandoffAgentUserRequest`) from the order specialist
+1. Tool approval (`function_approval_request`) for `submit_refund` and `submit_replacement`
+2. Follow-up human input (`HandoffAgentUserRequest`) when an agent needs user details
 
 Run this server and pair it with the frontend in `../frontend`.
 """
@@ -17,21 +17,11 @@ import logging
 import logging.handlers
 import os
 import random
-import re
-from collections.abc import AsyncIterable, Awaitable, Mapping, Sequence
-from typing import Any
 
 import uvicorn
 from agent_framework import (
     Agent,
-    BaseChatClient,
-    ChatMiddlewareLayer,
-    ChatResponse,
-    ChatResponseUpdate,
-    Content,
-    FunctionInvocationLayer,
     Message,
-    ResponseStream,
     Workflow,
     tool,
 )
@@ -47,6 +37,14 @@ logger = logging.getLogger(__name__)
 def submit_refund(refund_description: str, amount: str, order_id: str) -> str:
     """Capture a refund request for manual review before processing."""
     return f"refund recorded for order {order_id} (amount: {amount}) with details: {refund_description}"
+
+
+@tool(approval_mode="always_require")
+def submit_replacement(order_id: str, shipping_preference: str, replacement_note: str) -> str:
+    """Capture a replacement request for manual review before processing."""
+    return (
+        f"replacement recorded for order {order_id} (shipping: {shipping_preference}) with details: {replacement_note}"
+    )
 
 
 @tool(approval_mode="never_require")
@@ -76,211 +74,6 @@ def lookup_order_details(order_id: str) -> dict[str, str]:
     }
 
 
-class DeterministicHandoffChatClient(ChatMiddlewareLayer[Any], FunctionInvocationLayer[Any], BaseChatClient[Any]):
-    """Deterministic client used to make the demo fully reproducible.
-
-    Each agent has a small scripted state machine based on call index.
-    """
-
-    def __init__(self, *, agent_name: str) -> None:
-        ChatMiddlewareLayer.__init__(self)
-        FunctionInvocationLayer.__init__(self)
-        BaseChatClient.__init__(self)
-        self._agent_name = agent_name
-        self._call_index = 0
-
-    def _inner_get_response(
-        self,
-        *,
-        messages: Sequence[Message],
-        stream: bool,
-        options: Mapping[str, Any],
-        **kwargs: Any,
-    ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
-        del kwargs
-        del options
-
-        contents = self._next_contents(messages)
-
-        if stream:
-            return self._build_streaming_response(contents)
-
-        async def _get() -> ChatResponse:
-            return ChatResponse(
-                messages=[
-                    Message(
-                        role="assistant",
-                        contents=contents,
-                        author_name=self._agent_name,
-                    )
-                ],
-                response_id=f"{self._agent_name}-{self._call_index}",
-            )
-
-        return _get()
-
-    def _build_streaming_response(
-        self,
-        contents: list[Content],
-    ) -> ResponseStream[ChatResponseUpdate, ChatResponse]:
-        async def _stream() -> AsyncIterable[ChatResponseUpdate]:
-            yield ChatResponseUpdate(
-                contents=contents,
-                role="assistant",
-                author_name=self._agent_name,
-                finish_reason="stop",
-            )
-
-        def _finalize(updates: Sequence[ChatResponseUpdate]) -> ChatResponse:
-            return ChatResponse.from_updates(updates)
-
-        return ResponseStream(_stream(), finalizer=_finalize)
-
-    def _next_contents(self, messages: Sequence[Message]) -> list[Content]:
-        call_index = self._call_index
-        self._call_index += 1
-
-        if self._agent_name == "triage_agent":
-            if call_index == 0:
-                return [
-                    Content.from_function_call(
-                        call_id=f"triage-handoff-{call_index}",
-                        name="handoff_to_refund_agent",
-                        arguments={"context": "Refund workflow requested by customer."},
-                    ),
-                    Content.from_text(
-                        text=("Triage Agent: I am routing you to the Refund Agent to process the damaged-order refund.")
-                    ),
-                ]
-
-            return [
-                Content.from_text(
-                    text=(
-                        "Triage Agent: Your refund and replacement requests are complete. "
-                        "Let me know if you need anything else."
-                    )
-                )
-            ]
-
-        if self._agent_name == "refund_agent":
-            if call_index == 0:
-                return [
-                    Content.from_text(
-                        text=(
-                            "Refund Agent: I can help with that. "
-                            "Please share your order number so I can locate the purchase."
-                        )
-                    )
-                ]
-
-            if call_index == 1:
-                order_id = self._extract_order_id(messages)
-                if not order_id:
-                    # Stay on the same stage until an order number is provided.
-                    self._call_index = call_index
-                    return [
-                        Content.from_text(
-                            text=(
-                                "Refund Agent: I still need the order number before I can submit a refund. "
-                                "Please send a numeric order ID (for example: 12345)."
-                            )
-                        )
-                    ]
-
-                amount = self._refund_amount_for_order(order_id)
-                return [
-                    Content.from_function_call(
-                        call_id="refund-tool-call-1",
-                        name="submit_refund",
-                        arguments={
-                            "order_id": order_id,
-                            "amount": amount,
-                            "refund_description": "Headphones arrived cracked and unusable.",
-                        },
-                    ),
-                    Content.from_text(
-                        text=(
-                            f"Refund Agent: I prepared the refund request for order {order_id} ({amount}). "
-                            "Please approve the tool call so I can submit it."
-                        )
-                    ),
-                ]
-
-            if call_index == 2:
-                return [
-                    Content.from_function_call(
-                        call_id=f"refund-handoff-{call_index}",
-                        name="handoff_to_order_agent",
-                        arguments={"context": "Refund approved. Continue with replacement handling."},
-                    ),
-                    Content.from_text(
-                        text=(
-                            "Refund Agent: Refund has been recorded. "
-                            "I am routing you to the Order Agent for replacement shipping."
-                        )
-                    ),
-                ]
-
-            return [
-                Content.from_text(text="Refund Agent: Refund flow complete on my side."),
-            ]
-
-        if self._agent_name == "order_agent":
-            if call_index == 0:
-                return [
-                    Content.from_text(
-                        text=(
-                            "Order Agent: I can submit a replacement shipment now. "
-                            "Would you like standard or expedited shipping?"
-                        )
-                    )
-                ]
-
-            user_preference = self._latest_user_text(messages) or "standard"
-            return [
-                Content.from_function_call(
-                    call_id=f"order-handoff-{call_index}",
-                    name="handoff_to_triage_agent",
-                    arguments={"context": "Replacement workflow complete."},
-                ),
-                Content.from_text(
-                    text=(
-                        "Order Agent: Got it. I submitted the replacement request with "
-                        f"{user_preference} shipping. Case complete."
-                    )
-                ),
-            ]
-
-        return [Content.from_text(text=f"{self._agent_name}: ready.")]
-
-    @staticmethod
-    def _latest_user_text(messages: Sequence[Message]) -> str | None:
-        for message in reversed(messages):
-            if message.role != "user":
-                continue
-            if message.text:
-                return message.text
-        return None
-
-    @staticmethod
-    def _extract_order_id(messages: Sequence[Message]) -> str | None:
-        """Extract a numeric order ID from the latest user text."""
-        latest_text = DeterministicHandoffChatClient._latest_user_text(messages)
-        if not latest_text:
-            return None
-
-        match = re.search(r"\b(\d{4,12})\b", latest_text)
-        return match.group(1) if match else None
-
-    @staticmethod
-    def _refund_amount_for_order(order_id: str) -> str:
-        """Derive a deterministic pseudo-amount from an order ID."""
-        digit_sum = sum(int(ch) for ch in order_id if ch.isdigit())
-        dollars = 25 + (digit_sum % 95)
-        cents = (digit_sum * 7) % 100
-        return f"${dollars}.{cents:02d}"
-
-
 def create_agents() -> tuple[Agent, Agent, Agent]:
     """Create triage, refund, and order agents for the handoff workflow."""
 
@@ -297,7 +90,12 @@ def create_agents() -> tuple[Agent, Agent, Agent]:
         id="triage_agent",
         name="triage_agent",
         instructions=(
-            "You are the customer support triage agent. Route refund requests to refund_agent using handoff tools."
+            "You are the customer support triage agent.\n"
+            "Routing policy:\n"
+            "1. Route refund-related requests to refund_agent.\n"
+            "2. Route replacement/shipping requests to order_agent.\n"
+            "3. Do not force replacement if the user asked for refund only.\n"
+            "4. If the issue is fully resolved, send a concise wrap-up that ends with exactly: Case complete."
         ),
         client=client,
     )
@@ -311,9 +109,17 @@ def create_agents() -> tuple[Agent, Agent, Agent]:
             "1. If order_id is missing, ask only for order_id.\n"
             "2. Once order_id is available, call lookup_order_details(order_id) to retrieve item and amount.\n"
             "3. Do not ask the customer how much they paid unless lookup_order_details fails.\n"
-            "4. Gather a short refund reason from user context.\n"
-            "5. Call submit_refund with order_id, amount (from lookup), and refund_description.\n"
-            "6. After approval and successful submission, handoff to order_agent."
+            "4. If user intent is ambiguous, ask one clear choice question and wait for the answer:\n"
+            "   refund only, replacement only, or both.\n"
+            "   Do not call submit_refund until this choice is known.\n"
+            "5. Gather a short refund reason from user context if needed.\n"
+            "6. If the user wants a refund (refund-only or both),\n"
+            "   call submit_refund with order_id, amount (from lookup), and refund_description.\n"
+            "7. After approval and successful refund submission:\n"
+            "   - If the user explicitly requested replacement/exchange, handoff to order_agent.\n"
+            "   - If the user asked for refund only, do not hand off for replacement.\n"
+            "     Finalize in this agent and end with exactly: Case complete.\n"
+            "8. If the user wants replacement only and no refund, handoff to order_agent directly."
         ),
         client=client,
         tools=[lookup_order_details, submit_refund],
@@ -322,22 +128,37 @@ def create_agents() -> tuple[Agent, Agent, Agent]:
     order = Agent(
         id="order_agent",
         name="order_agent",
-        instructions=("You are the order specialist. Ask the user for shipping preference and complete replacement."),
+        instructions=(
+            "You are the order specialist.\n"
+            "Only handle replacement/exchange/shipping tasks.\n"
+            "1. If replacement intent is confirmed but shipping preference is missing,\n"
+            "   ask for shipping preference (standard or expedited).\n"
+            "2. If order_id is missing, ask for order_id.\n"
+            "3. Once order_id and shipping preference are known,\n"
+            "   call submit_replacement(order_id, shipping_preference, replacement_note).\n"
+            "4. While the replacement tool call is pending approval, do not claim completion.\n"
+            "5. If you receive a submit_replacement function result,\n"
+            "   approval has already occurred and submission succeeded.\n"
+            "6. Immediately send a final customer-facing confirmation and end with exactly: Case complete.\n"
+            "If the user wants refund only and no replacement, do not ask shipping questions.\n"
+            "Acknowledge and hand off back to triage_agent for final closure.\n"
+            "Do not fabricate tool outputs."
+        ),
         client=client,
+        tools=[lookup_order_details, submit_replacement],
     )
 
     return triage, refund, order
 
 
 def _termination_condition(conversation: list[Message]) -> bool:
-    """Stop after the order specialist confirms replacement completion."""
+    """Stop when any assistant emits an explicit completion marker."""
 
     for message in reversed(conversation):
         if message.role != "assistant":
             continue
-        if message.author_name != "order_agent":
-            continue
-        if "case complete" in (message.text or "").lower():
+        text = (message.text or "").strip().lower()
+        if text.endswith("case complete."):
             return True
     return False
 
@@ -346,15 +167,49 @@ def create_handoff_workflow() -> Workflow:
     """Build the demo HandoffBuilder workflow."""
 
     triage, refund, order = create_agents()
-    return (
-        HandoffBuilder(
-            name="ag_ui_handoff_workflow_demo",
-            participants=[triage, refund, order],
-            termination_condition=_termination_condition,
-        )
-        .with_start_agent(triage)
-        .build()
+    builder = HandoffBuilder(
+        name="ag_ui_handoff_workflow_demo",
+        participants=[triage, refund, order],
+        termination_condition=_termination_condition,
     )
+
+    # Explicit handoff topology (instead of default mesh) so routing is enforced in orchestration,
+    # not only implied by prompt instructions.
+    (
+        builder
+        .add_handoff(
+            triage,
+            [refund],
+            description="Route when the user requests refunds, damaged-item claims, or refund status updates.",
+        )
+        .add_handoff(
+            triage,
+            [order],
+            description="Route when the user requests replacement, exchange, shipping preference, or shipment changes.",
+        )
+        .add_handoff(
+            refund,
+            [order],
+            description="Route after refund work only if replacement/exchange logistics are explicitly needed.",
+        )
+        .add_handoff(
+            refund,
+            [triage],
+            description="Route back for final case closure when refund-only work is complete.",
+        )
+        .add_handoff(
+            order,
+            [triage],
+            description="Route back after replacement/shipping tasks are complete for final closure.",
+        )
+        .add_handoff(
+            order,
+            [refund],
+            description="Route to refund specialist if the user pivots from replacement to refund processing.",
+        )
+    )
+
+    return builder.with_start_agent(triage).build()
 
 
 def create_app() -> FastAPI:
@@ -376,7 +231,7 @@ def create_app() -> FastAPI:
     demo_workflow = AgentFrameworkWorkflow(
         workflow_factory=lambda _thread_id: create_handoff_workflow(),
         name="ag_ui_handoff_workflow_demo",
-        description="Deterministic handoff workflow demo with tool approvals and request_info resumes.",
+        description="Dynamic handoff workflow demo with tool approvals and request_info resumes.",
     )
 
     add_agent_framework_fastapi_endpoint(
@@ -408,7 +263,9 @@ def main() -> None:
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ag_ui_handoff_demo.log")
     try:
         file_handler = logging.handlers.RotatingFileHandler(
-            log_file, maxBytes=10485760, backupCount=5  # 10MB max size, keep 5 backups
+            log_file,
+            maxBytes=10485760,
+            backupCount=5,  # 10MB max size, keep 5 backups
         )
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(logging.Formatter(log_format))

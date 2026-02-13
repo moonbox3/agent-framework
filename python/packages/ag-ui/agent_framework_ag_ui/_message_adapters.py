@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 from typing import Any, cast
@@ -302,11 +303,17 @@ def _parse_multimodal_media_part(part: dict[str, Any]) -> Content | None:
         try:
             decoded = base64.b64decode(data, validate=True)
             return Content.from_data(data=decoded, media_type=mime_type or "application/octet-stream")
-        except Exception:
+        except (binascii.Error, ValueError):
+            logger.debug("Strict base64 decode failed for AG-UI media payload (mime_type=%s).", mime_type)
             try:
                 decoded = base64.b64decode(data)
                 return Content.from_data(data=decoded, media_type=mime_type or "application/octet-stream")
-            except Exception:
+            except (binascii.Error, ValueError):
+                logger.warning(
+                    "Failed to decode AG-UI media payload as base64; falling back to data URI (mime_type=%s).",
+                    mime_type,
+                    exc_info=True,
+                )
                 # Best effort fallback for malformed payloads.
                 return Content.from_uri(
                     uri=f"data:{mime_type or 'application/octet-stream'};base64,{data}",
@@ -371,6 +378,45 @@ def _normalize_snapshot_content(content: Any) -> Any:
         normalized_parts: list[dict[str, Any]] = []
         text_parts: list[str] = []
 
+        def _legacy_binary_part(part: dict[str, Any]) -> dict[str, Any]:
+            """Convert draft/legacy multimodal parts to AG-UI snapshot binary shape."""
+            normalized: dict[str, Any] = {"type": "binary"}
+
+            mime_type = cast(str | None, part.get("mimeType") or part.get("mime_type"))
+            url = cast(str | None, part.get("url") or part.get("uri"))
+            data = cast(str | None, part.get("data"))
+            binary_id = cast(str | None, part.get("id"))
+
+            source = part.get("source")
+            if isinstance(source, dict):
+                source_part = cast(dict[str, Any], source)
+                source_mime = source_part.get("mimeType") or source_part.get("mime_type")
+                if isinstance(source_mime, str) and source_mime:
+                    mime_type = source_mime
+
+                source_type = str(source_part.get("type", "")).lower()
+                if source_type in {"url", "uri"}:
+                    url = cast(str | None, source_part.get("url") or source_part.get("uri"))
+                elif source_type in {"base64", "data", "binary"}:
+                    data = cast(str | None, source_part.get("data"))
+                elif source_type in {"id", "file"}:
+                    binary_id = cast(str | None, source_part.get("id"))
+                else:
+                    url = cast(str | None, source_part.get("url") or source_part.get("uri") or url)
+                    data = cast(str | None, source_part.get("data") or data)
+                    binary_id = cast(str | None, source_part.get("id") or binary_id)
+
+            if isinstance(mime_type, str) and mime_type:
+                normalized["mimeType"] = mime_type
+            if isinstance(url, str) and url:
+                normalized["url"] = url
+            if isinstance(data, str) and data:
+                normalized["data"] = data
+            if isinstance(binary_id, str) and binary_id:
+                normalized["id"] = binary_id
+
+            return normalized
+
         for item in content:
             if isinstance(item, str):
                 text_parts.append(item)
@@ -389,13 +435,16 @@ def _normalize_snapshot_content(content: Any) -> Any:
                 part["type"] = "text"
                 part_type = "text"
             elif part_type == "input_image":
-                part["type"] = "image"
-                part_type = "image"
+                part["type"] = "binary"
+                part_type = "binary"
 
             if part_type == "text":
                 text_parts.append(str(part.get("text", "")))
             else:
                 has_non_text_parts = True
+                if part_type in {"binary", "image", "audio", "video", "document"}:
+                    normalized_parts.append(_legacy_binary_part(part))
+                    continue
 
             if "mime_type" in part and "mimeType" not in part:
                 part["mimeType"] = part.get("mime_type")
@@ -584,9 +633,6 @@ def agui_messages_to_agent_framework(messages: list[dict[str, Any]]) -> list[Mes
                 approval_payload_text = result_content if isinstance(result_content, str) else json.dumps(parsed)
 
                 # Log the full approval payload to debug modified arguments
-                import logging
-
-                logger = logging.getLogger(__name__)
                 logger.info(f"Approval payload received: {parsed}")
 
                 approval_call_id = tool_call_id

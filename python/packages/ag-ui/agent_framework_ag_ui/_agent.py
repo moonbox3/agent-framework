@@ -101,11 +101,11 @@ class AgentFrameworkAgent:
             require_confirmation=require_confirmation,
         )
 
-    async def run_agent(
+    async def run(
         self,
         input_data: dict[str, Any],
     ) -> AsyncGenerator[BaseEvent, None]:
-        """Run the agent and yield AG-UI events.
+        """Run the wrapped agent and yield AG-UI events.
 
         Args:
             input_data: The AG-UI run input containing messages, state, etc.

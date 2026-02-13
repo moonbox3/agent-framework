@@ -238,3 +238,15 @@ class TestAGUIRequest:
         assert dumped["context"] == [{"type": "snippet", "content": "code here"}]
         assert dumped["forwarded_props"] == {"auth_token": "secret", "user_id": "user-1"}
         assert dumped["parent_run_id"] == "parent-456"
+
+    def test_agui_request_available_interrupts_alias_round_trip(self) -> None:
+        """availableInterrupts should deserialize, while dumps remain snake_case."""
+        request = AGUIRequest(
+            messages=[{"role": "user", "content": "Hello"}],
+            availableInterrupts=[{"id": "req_1", "value": {"choice": "A"}}],
+        )
+
+        assert request.available_interrupts == [{"id": "req_1", "value": {"choice": "A"}}]
+        dumped = request.model_dump(exclude_none=True)
+        assert dumped["available_interrupts"] == [{"id": "req_1", "value": {"choice": "A"}}]
+        assert "availableInterrupts" not in dumped

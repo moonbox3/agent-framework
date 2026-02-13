@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 import pytest
+from ag_ui.core import RunStartedEvent
 from agent_framework import (
     Agent,
     ChatResponseUpdate,
@@ -21,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
+from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
 
 @pytest.fixture
@@ -437,8 +439,32 @@ async def test_endpoint_internal_error_handling(build_chat_client):
         mock_deepcopy.side_effect = Exception("Simulated internal error")
         response = client.post("/error-test", json={"messages": [{"role": "user", "content": "Hello"}]})
 
+    assert response.status_code == 500
+    assert response.json() == {"detail": "An internal error has occurred."}
+
+
+async def test_endpoint_streaming_error_emits_run_error_event():
+    """Streaming exceptions should emit RUN_ERROR instead of terminating silently."""
+
+    class FailingStreamWorkflow(AgentFrameworkWorkflow):
+        async def run(self, input_data: dict[str, Any]):
+            del input_data
+            yield RunStartedEvent(run_id="run-1", thread_id="thread-1")
+            raise RuntimeError("stream exploded")
+
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, FailingStreamWorkflow(), path="/stream-error")
+    client = TestClient(app)
+
+    response = client.post("/stream-error", json={"messages": [{"role": "user", "content": "Hello"}]})
     assert response.status_code == 200
-    assert response.json() == {"error": "An internal error has occurred."}
+
+    content = response.content.decode("utf-8")
+    lines = [line for line in content.split("\n") if line.startswith("data: ")]
+    event_types = [json.loads(line[6:]).get("type") for line in lines]
+
+    assert "RUN_STARTED" in event_types
+    assert "RUN_ERROR" in event_types
 
 
 async def test_endpoint_with_dependencies_blocks_unauthorized(build_chat_client):

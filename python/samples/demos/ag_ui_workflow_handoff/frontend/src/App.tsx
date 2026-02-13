@@ -30,6 +30,15 @@ interface CaseSnapshot {
   shippingPreference: string;
 }
 
+interface UsageDiagnostics {
+  runId: string;
+  inputTokenCount?: number;
+  outputTokenCount?: number;
+  totalTokenCount?: number;
+  recordedAt: number;
+  raw: Record<string, unknown>;
+}
+
 const KNOWN_AGENTS: AgentId[] = ["triage_agent", "refund_agent", "order_agent"];
 
 const AGENT_LABELS: Record<AgentId, string> = {
@@ -198,6 +207,10 @@ function normalizeRole(role: unknown): "assistant" | "user" | "system" {
   return "assistant";
 }
 
+function normalizeTextForDedupe(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function normalizeShippingPreference(text: string): string | null {
   const normalized = text.trim().toLowerCase();
   if (normalized.length === 0) {
@@ -215,12 +228,39 @@ function normalizeShippingPreference(text: string): string | null {
   return null;
 }
 
+function getFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeUsagePayload(value: unknown, runId: string | null): UsageDiagnostics | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  return {
+    runId: runId ?? "unknown",
+    inputTokenCount: getFiniteNumber(value.input_token_count),
+    outputTokenCount: getFiniteNumber(value.output_token_count),
+    totalTokenCount: getFiniteNumber(value.total_token_count),
+    recordedAt: Date.now(),
+    raw: value,
+  };
+}
+
 export default function App(): JSX.Element {
   const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8891";
   const endpoint = `${backendUrl.replace(/\/$/, "")}/handoff_demo`;
 
   const threadIdRef = useRef<string>(randomId());
   const assistantMessageIndexRef = useRef<Record<string, number>>({});
+  const activeRunIdRef = useRef<string | null>(null);
+  const pendingUsageRef = useRef<UsageDiagnostics | null>(null);
 
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [requestInfoById, setRequestInfoById] = useState<Record<string, RequestInfoPayload>>({});
@@ -237,6 +277,8 @@ export default function App(): JSX.Element {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [inputText, setInputText] = useState<string>("");
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState<boolean>(false);
+  const [latestUsage, setLatestUsage] = useState<UsageDiagnostics | null>(null);
+  const [usageHistory, setUsageHistory] = useState<UsageDiagnostics[]>([]);
 
   const currentInterrupt = pendingInterrupts[0];
   const currentInterruptKind = currentInterrupt ? interruptKind(currentInterrupt) : "unknown";
@@ -298,6 +340,15 @@ export default function App(): JSX.Element {
 
       const next = [...prev];
       const existing = next[index];
+      const existingCanonical = normalizeTextForDedupe(existing.text);
+      const deltaCanonical = normalizeTextForDedupe(delta);
+      if (
+        existingCanonical.length >= 24 &&
+        deltaCanonical.length >= 24 &&
+        existingCanonical === deltaCanonical
+      ) {
+        return prev;
+      }
       next[index] = { ...existing, text: `${existing.text}${delta}` };
       return next;
     });
@@ -324,13 +375,16 @@ export default function App(): JSX.Element {
       return;
     }
     const functionCallPayload = getObject(payload.data, "function_call", "functionCall") ?? null;
+    const functionName = functionCallPayload ? getString(functionCallPayload, "name") : undefined;
     const args = parseFunctionArguments(functionCallPayload);
+    const replacementShippingPreference = getString(args, "shipping_preference", "shippingPreference");
 
     setCaseSnapshot((prev) => ({
       ...prev,
       orderId: getString(args, "order_id", "orderId") ?? prev.orderId,
       refundAmount: getString(args, "amount") ?? prev.refundAmount,
-      refundApproved: "pending",
+      shippingPreference: replacementShippingPreference ?? prev.shippingPreference,
+      refundApproved: functionName === "submit_refund" ? "pending" : prev.refundApproved,
     }));
   };
 
@@ -350,6 +404,12 @@ export default function App(): JSX.Element {
   const handleEvent = (event: AgUiEvent): void => {
     switch (event.type) {
       case "RUN_STARTED":
+        if (isObject(event)) {
+          const runId = getString(event, "run_id", "runId");
+          if (runId) {
+            activeRunIdRef.current = runId;
+          }
+        }
         setStatusText("Run started");
         break;
       case "STEP_STARTED":
@@ -442,6 +502,14 @@ export default function App(): JSX.Element {
           }
         }
         break;
+      case "CUSTOM":
+        if (isObject(event) && getString(event, "name") === "usage") {
+          const usage = normalizeUsagePayload(getValue(event, "value"), activeRunIdRef.current);
+          if (usage) {
+            pendingUsageRef.current = usage;
+          }
+        }
+        break;
       case "RUN_ERROR":
         setMessages((prev) => {
           const text = `Run error: ${isObject(event) ? (getString(event, "message") ?? "Unknown error") : "Unknown error"}`;
@@ -452,8 +520,16 @@ export default function App(): JSX.Element {
         });
         setStatusText("Run failed");
         setIsRunning(false);
+        pendingUsageRef.current = null;
         break;
       case "RUN_FINISHED": {
+        const usage = pendingUsageRef.current;
+        if (usage) {
+          setLatestUsage(usage);
+          setUsageHistory((prev) => [usage, ...prev].slice(0, 6));
+          pendingUsageRef.current = null;
+        }
+
         const rawInterrupts = isObject(event) ? getValue(event, "interrupt", "interrupts") : undefined;
         const interruptPayload = Array.isArray(rawInterrupts)
           ? rawInterrupts
@@ -558,6 +634,8 @@ export default function App(): JSX.Element {
   };
 
   const runWithPayload = async (payload: Record<string, unknown>): Promise<void> => {
+    activeRunIdRef.current = typeof payload.run_id === "string" ? payload.run_id : null;
+    pendingUsageRef.current = null;
     setIsRunning(true);
     setStatusText("Connecting");
 
@@ -586,17 +664,21 @@ export default function App(): JSX.Element {
       return;
     }
 
-    setCaseSnapshot((prev) => ({
-      ...prev,
-      refundApproved: approved ? "approved" : "rejected",
-    }));
+    const functionName = getString(functionCall, "name") ?? "tool_call";
+
+    if (functionName === "submit_refund") {
+      setCaseSnapshot((prev) => ({
+        ...prev,
+        refundApproved: approved ? "approved" : "rejected",
+      }));
+    }
 
     setIsApprovalModalOpen(false);
 
     pushMessage({
       id: randomId(),
       role: "system",
-      text: approved ? "HITL Reviewer approved submit_refund." : "HITL Reviewer rejected submit_refund.",
+      text: approved ? `HITL Reviewer approved ${functionName}.` : `HITL Reviewer rejected ${functionName}.`,
     });
 
     const approvalResponse = {
@@ -686,8 +768,8 @@ export default function App(): JSX.Element {
           <p className="eyebrow">AG-UI Workflow Demo</p>
           <h1>Handoff + Tool Approval</h1>
           <p className="subtitle">
-            Deterministic workflow exercising AG-UI run events, interrupt resumes, function approvals, and stateful
-            per-thread workflow execution.
+            Dynamic workflow exercising AG-UI run events, interrupt resumes, function approvals, and stateful
+            per-thread execution.
           </p>
         </div>
         <div className="status-pill" data-running={isRunning}>
@@ -738,6 +820,55 @@ export default function App(): JSX.Element {
             </div>
           </article>
 
+          <article className="card diagnostics-card">
+            <h2>Diagnostics</h2>
+            {!latestUsage && <p className="muted">Usage appears when the final streaming chunk arrives.</p>}
+
+            {latestUsage && (
+              <div className="diagnostics-body">
+                <div className="diagnostics-grid">
+                  <div>
+                    <span>Run ID</span>
+                    <strong>{latestUsage.runId}</strong>
+                  </div>
+                  <div>
+                    <span>Input Tokens</span>
+                    <strong>{latestUsage.inputTokenCount ?? "n/a"}</strong>
+                  </div>
+                  <div>
+                    <span>Output Tokens</span>
+                    <strong>{latestUsage.outputTokenCount ?? "n/a"}</strong>
+                  </div>
+                  <div>
+                    <span>Total Tokens</span>
+                    <strong>{latestUsage.totalTokenCount ?? "n/a"}</strong>
+                  </div>
+                </div>
+
+                <p className="muted diagnostics-timestamp">
+                  Last updated {new Date(latestUsage.recordedAt).toLocaleTimeString()}
+                </p>
+
+                <details className="diagnostics-raw">
+                  <summary>Raw usage payload</summary>
+                  <pre>{JSON.stringify(latestUsage.raw, null, 2)}</pre>
+                </details>
+
+                {usageHistory.length > 1 && (
+                  <div className="diagnostics-history">
+                    <h3>Recent runs</h3>
+                    {usageHistory.map((entry, index) => (
+                      <div key={`${entry.runId}-${entry.recordedAt}-${index}`} className="diagnostics-history-item">
+                        <span>{entry.runId}</span>
+                        <strong>{entry.totalTokenCount ?? "n/a"} total</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </article>
+
           <article className="card interrupt-card">
             <h2>Pending Action</h2>
             {!currentInterrupt && <p className="muted">No interrupt pending. Start with one of the prompts below.</p>}
@@ -753,7 +884,7 @@ export default function App(): JSX.Element {
                     </p>
                     <div className="approval-details">
                       <p>
-                        <strong>Function:</strong> {String(functionCall?.name ?? "submit_refund")}
+                        <strong>Function:</strong> {String(functionCall?.name ?? "tool_call")}
                       </p>
                       <pre>{JSON.stringify(functionArguments, null, 2)}</pre>
                     </div>
@@ -839,7 +970,7 @@ export default function App(): JSX.Element {
 
             <div className="approval-details">
               <p>
-                <strong>Function:</strong> {String(functionCall?.name ?? "submit_refund")}
+                <strong>Function:</strong> {String(functionCall?.name ?? "tool_call")}
               </p>
               <pre>{JSON.stringify(functionArguments, null, 2)}</pre>
             </div>

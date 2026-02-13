@@ -144,7 +144,12 @@ def _emit_text(content: Content, flow: FlowState, skip_text: bool = False) -> li
     events: list[BaseEvent] = []
     if not flow.message_id:
         flow.message_id = generate_event_id()
+        flow.accumulated_text = ""
         events.append(TextMessageStartEvent(message_id=flow.message_id, role="assistant"))
+    elif flow.accumulated_text and content.text == flow.accumulated_text:
+        # Guard against full-message replay chunks that can appear after streaming deltas.
+        logger.debug("Skipping duplicate full-text delta for message_id=%s", flow.message_id)
+        return []
 
     events.append(TextMessageContentEvent(message_id=flow.message_id, delta=content.text))
     flow.accumulated_text += content.text
@@ -249,6 +254,7 @@ def _emit_tool_result(
         logger.debug("Closing text message (issue #3568 fix): message_id=%s", flow.message_id)
         events.append(TextMessageEndEvent(message_id=flow.message_id))
     flow.message_id = None
+    flow.accumulated_text = ""
 
     return events
 
@@ -343,6 +349,12 @@ def _emit_approval_request(
     return events
 
 
+def _emit_usage(content: Content) -> list[BaseEvent]:
+    """Emit usage details as a protocol-level custom event."""
+    usage_details = make_json_safe(content.usage_details or {})
+    return [CustomEvent(name="usage", value=usage_details)]
+
+
 def _emit_content(
     content: Any,
     flow: FlowState,
@@ -360,4 +372,7 @@ def _emit_content(
         return _emit_tool_result(content, flow, predictive_handler)
     if content_type == "function_approval_request":
         return _emit_approval_request(content, flow, predictive_handler, require_confirmation)
+    if content_type == "usage":
+        return _emit_usage(content)
+    logger.debug("Skipping unsupported content type in AG-UI emitter: %s", content_type)
     return []

@@ -4,6 +4,7 @@
 
 import base64
 import json
+import logging
 
 import pytest
 from agent_framework import Content, Message
@@ -455,6 +456,30 @@ def test_agui_multimodal_draft_source_base64_to_agent_framework():
     assert messages[0].contents[0].uri.startswith("data:audio/wav;base64,")
 
 
+def test_agui_multimodal_invalid_base64_logs_warning(caplog):
+    """Malformed base64 payloads should log and fall back to data URI."""
+    with caplog.at_level(logging.WARNING):
+        messages = agui_messages_to_agent_framework(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "data": "abc", "mimeType": "image/png"},
+                        }
+                    ],
+                }
+            ]
+        )
+
+    assert len(messages) == 1
+    assert len(messages[0].contents) == 1
+    assert messages[0].contents[0].type in {"data", "uri"}
+    assert messages[0].contents[0].uri == "data:image/png;base64,abc"
+    assert any("Failed to decode AG-UI media payload as base64" in record.message for record in caplog.records)
+
+
 def test_agui_multimodal_mixed_order_preserved():
     """Mixed text/media multimodal input keeps content ordering."""
     messages = agui_messages_to_agent_framework(
@@ -487,7 +512,7 @@ def test_agui_message_without_id():
 
 
 def test_agui_snapshot_format_preserves_multimodal_content():
-    """Snapshot normalization keeps structured content when media parts are present."""
+    """Snapshot normalization emits legacy binary parts for multimodal content."""
     normalized = agui_messages_to_snapshot_format(
         [
             {
@@ -506,8 +531,9 @@ def test_agui_snapshot_format_preserves_multimodal_content():
     assert isinstance(normalized[0]["content"], list)
     content_parts = normalized[0]["content"]
     assert content_parts[0]["type"] == "text"
-    assert content_parts[1]["type"] == "image"
-    assert content_parts[1]["source"]["mimeType"] == "image/png"
+    assert content_parts[1]["type"] == "binary"
+    assert content_parts[1]["mimeType"] == "image/png"
+    assert content_parts[1]["url"] == "https://example.com/image.png"
 
 
 def test_agui_with_tool_calls_to_agent_framework():

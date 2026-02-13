@@ -85,7 +85,6 @@ class AGUIRequest(BaseModel):
     )
     available_interrupts: list[dict[str, Any]] | None = Field(
         None,
-        alias="availableInterrupts",
         validation_alias=AliasChoices("availableInterrupts", "available_interrupts"),
         description="List of interrupts that can be resumed by the server",
     )

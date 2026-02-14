@@ -12,20 +12,23 @@ var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT") ?? th
 var deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME") ?? "gpt-4o-mini";
 
 // Create the agent
+// WARNING: DefaultAzureCredential is convenient for development but requires careful consideration in production.
+// In production, consider using a specific credential (e.g., ManagedIdentityCredential) to avoid
+// latency issues, unintended credential probing, and potential security risks from fallback mechanisms.
 AIAgent agent = new AzureOpenAIClient(
     new Uri(endpoint),
-    new AzureCliCredential())
+    new DefaultAzureCredential())
     .GetChatClient(deploymentName)
     .AsAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
 
 // Start a new session for the agent conversation.
-AgentSession session = await agent.GetNewSessionAsync();
+AgentSession session = await agent.CreateSessionAsync();
 
 // Run the agent with a new session.
 Console.WriteLine(await agent.RunAsync("Tell me a joke about a pirate.", session));
 
 // Serialize the session state to a JsonElement, so it can be stored for later use.
-JsonElement serializedSession = session.Serialize();
+JsonElement serializedSession = await agent.SerializeSessionAsync(session);
 
 // Save the serialized session to a temporary file (for demonstration purposes).
 string tempFilePath = Path.GetTempFileName();

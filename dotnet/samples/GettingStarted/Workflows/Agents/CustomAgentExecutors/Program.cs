@@ -34,7 +34,10 @@ public static class Program
         // Set up the Azure OpenAI client
         var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT") ?? throw new InvalidOperationException("AZURE_OPENAI_ENDPOINT is not set.");
         var deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME") ?? "gpt-4o-mini";
-        var chatClient = new AzureOpenAIClient(new Uri(endpoint), new AzureCliCredential()).GetChatClient(deploymentName).AsIChatClient();
+        // WARNING: DefaultAzureCredential is convenient for development but requires careful consideration in production.
+        // In production, consider using a specific credential (e.g., ManagedIdentityCredential) to avoid
+        // latency issues, unintended credential probing, and potential security risks from fallback mechanisms.
+        var chatClient = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential()).GetChatClient(deploymentName).AsIChatClient();
 
         // Create the executors
         var sloganWriter = new SloganWriterExecutor("SloganWriter", chatClient);
@@ -136,7 +139,7 @@ internal sealed class SloganWriterExecutor : Executor
 
     public async ValueTask<SloganResult> HandleAsync(string message, IWorkflowContext context, CancellationToken cancellationToken = default)
     {
-        this._session ??= await this._agent.GetNewSessionAsync(cancellationToken);
+        this._session ??= await this._agent.CreateSessionAsync(cancellationToken);
 
         var result = await this._agent.RunAsync(message, this._session, cancellationToken: cancellationToken);
 
@@ -209,7 +212,7 @@ internal sealed class FeedbackExecutor : Executor<SloganResult>
 
     public override async ValueTask HandleAsync(SloganResult message, IWorkflowContext context, CancellationToken cancellationToken = default)
     {
-        this._session ??= await this._agent.GetNewSessionAsync(cancellationToken);
+        this._session ??= await this._agent.CreateSessionAsync(cancellationToken);
 
         var sloganMessage = $"""
             Here is a slogan for the task '{message.Task}':

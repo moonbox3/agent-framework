@@ -624,7 +624,7 @@ def handler(
 
             # Validate signature structure (correct number of params, ctx is WorkflowContext)
             # but skip type extraction since we're using explicit types
-            _validate_handler_signature(func, skip_message_annotation=True)
+            _, ctx_annotation, _, _ = _validate_handler_signature(func, skip_message_annotation=True)
 
             # Use explicit types only - missing params default to empty
             message_type = resolved_input_type
@@ -634,10 +634,6 @@ def handler(
             final_output_types = normalize_type_to_list(resolved_output_type) if resolved_output_type else []
             final_workflow_output_types = (
                 normalize_type_to_list(resolved_workflow_output_type) if resolved_workflow_output_type else []
-            )
-            # Get ctx_annotation for consistency (even though types come from explicit params)
-            ctx_annotation = (
-                inspect.signature(func).parameters[list(inspect.signature(func).parameters.keys())[2]].annotation
             )
         else:
             # Use introspection for ALL types - no explicit params provided

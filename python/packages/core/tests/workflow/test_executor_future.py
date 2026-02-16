@@ -2,19 +2,46 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import get_origin
+
 from agent_framework import Executor, WorkflowContext, handler
 
 
-class TestExecutorFutureAnnotations:
-    """Test suite for Executor with from __future__ import annotations."""
+@dataclass
+class FutureMessage:
+    value: str
 
-    def test_handler_future_annotations(self) -> None:
-        class FutureExecutor(Executor):
-            @handler
-            async def handle(self, message: int, ctx: WorkflowContext[int]) -> None:
-                pass
 
-        executor = FutureExecutor(id="future_executor")
-        spec = executor._handler_specs[0]
-        assert spec["message_type"] is int
-        assert spec["output_types"] == [int]
+@dataclass
+class FutureOutput:
+    value: int
+
+
+@dataclass
+class FutureWorkflowOutput:
+    value: bool
+
+
+class FutureAnnotatedExecutor(Executor):
+    @handler
+    async def handle(
+        self,
+        message: FutureMessage,
+        ctx: WorkflowContext[FutureOutput, FutureWorkflowOutput],
+    ) -> None:
+        pass
+
+
+def test_handler_future_annotations_resolved() -> None:
+    executor = FutureAnnotatedExecutor(id="future_executor")
+
+    assert FutureMessage in executor._handlers
+
+    handler_spec = executor._handler_specs[0]
+    assert handler_spec["message_type"] is FutureMessage
+    assert handler_spec["output_types"] == [FutureOutput]
+    assert handler_spec["workflow_output_types"] == [FutureWorkflowOutput]
+
+    ctx_annotation = handler_spec["ctx_annotation"]
+    assert get_origin(ctx_annotation) is WorkflowContext

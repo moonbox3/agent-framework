@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from agent_framework import FunctionExecutor, WorkflowContext, executor
+from agent_framework import Executor, FunctionExecutor, WorkflowContext, WorkflowMessage, executor, handler
+
+
+@dataclass
+class FutureTypeA:
+    value: str
+
+
+@dataclass
+class FutureTypeB:
+    count: int
 
 
 class TestFunctionExecutorFutureAnnotations:
@@ -37,3 +48,25 @@ class TestFunctionExecutorFutureAnnotations:
         spec = process_complex._handler_specs[0]
         assert spec["message_type"] == dict[str, Any]
         assert spec["output_types"] == [list[str]]
+
+
+class TestExecutorFutureAnnotations:
+    """Test suite for Executor handlers with from __future__ import annotations."""
+
+    def test_handler_future_annotations(self) -> None:
+        """Ensure class handlers resolve postponed WorkflowContext annotations."""
+
+        class FutureAnnotatedExecutor(Executor):
+            @handler
+            async def handle(
+                self,
+                message: FutureTypeA | FutureTypeB,
+                ctx: WorkflowContext[list[str] | dict[str, Any], FutureTypeA | FutureTypeB],
+            ) -> None:
+                pass
+
+        exec_instance = FutureAnnotatedExecutor(id="future_handler")
+        assert exec_instance.can_handle(WorkflowMessage(data=FutureTypeA("hi"), source_id="mock"))
+        assert exec_instance.can_handle(WorkflowMessage(data=FutureTypeB(1), source_id="mock"))
+        assert set(exec_instance.output_types) == {list[str], dict[str, Any]}
+        assert set(exec_instance.workflow_output_types) == {FutureTypeA, FutureTypeB}

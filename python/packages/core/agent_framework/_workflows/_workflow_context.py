@@ -150,7 +150,7 @@ def validate_workflow_context_annotation(
         raise ValueError(
             f"{context_description} {parameter_name} must be annotated as "
             f"WorkflowContext, WorkflowContext[T], or WorkflowContext[T, U], "
-            f"got {annotation}"
+            f"got {annotation!r} (type {type(annotation)!r})"
         )
 
     # Validate type arguments for WorkflowContext[T] or WorkflowContext[T, U]

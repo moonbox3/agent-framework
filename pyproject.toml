@@ -1,0 +1,10 @@
+[project]
+name = "agent-framework-root"
+version = "0.0.0"
+description = "Root tooling configuration for agent-framework"
+requires-python = ">=3.10"
+
+dependencies = []
+
+[tool.uv]
+package = false

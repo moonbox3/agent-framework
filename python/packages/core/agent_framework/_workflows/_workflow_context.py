@@ -146,6 +146,13 @@ def validate_workflow_context_annotation(
             f"where T is output message type and U is workflow output type"
         )
 
+    if isinstance(annotation, str):
+        raise ValueError(
+            f"{context_description} {parameter_name} must be annotated as "
+            f"WorkflowContext, WorkflowContext[T], or WorkflowContext[T, U], "
+            "but received a string annotation. Resolve postponed annotations with typing.get_type_hints."
+        )
+
     if not _is_workflow_context_type(annotation):
         raise ValueError(
             f"{context_description} {parameter_name} must be annotated as "

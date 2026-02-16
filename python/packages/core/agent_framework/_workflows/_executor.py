@@ -6,6 +6,7 @@ import functools
 import inspect
 import logging
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -712,6 +713,21 @@ def _validate_handler_signature(
     signature = inspect.signature(func)
     params = list(signature.parameters.values())
 
+    type_hints: dict[str, Any] = {}
+    type_hint_error: Exception | None = None
+    try:
+        type_hints = typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+            include_extras=True,
+        )
+    except Exception as exc:
+        type_hint_error = exc
+
+    def _get_annotation(param: inspect.Parameter) -> Any:
+        return type_hints.get(param.name, param.annotation)
+
     expected_counts = 3  # self, message, ctx
     param_description = "(self, message: T, ctx: WorkflowContext[U, V])"
     if len(params) != expected_counts:
@@ -719,23 +735,35 @@ def _validate_handler_signature(
 
     # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    message_annotation = _get_annotation(message_param)
+    if not skip_message_annotation and message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
+    if type_hint_error and not skip_message_annotation and isinstance(message_annotation, str):
+        raise ValueError(
+            f"Handler {func.__name__} has an unresolved message annotation for parameter "
+            f"'{message_param.name}'. Ensure all referenced types are available for type resolution."
+        ) from type_hint_error
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    ctx_annotation = _get_annotation(ctx_param)
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
+        if type_hint_error and isinstance(ctx_annotation, str):
+            raise ValueError(
+                f"Handler {func.__name__} has an unresolved WorkflowContext annotation for parameter "
+                f"'{ctx_param.name}'. Ensure all referenced types are available for type resolution."
+            ) from type_hint_error
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
+    ctx_annotation = ctx_annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

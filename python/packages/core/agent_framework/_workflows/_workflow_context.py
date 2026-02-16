@@ -146,6 +146,12 @@ def validate_workflow_context_annotation(
             f"where T is output message type and U is workflow output type"
         )
 
+    if isinstance(annotation, str):
+        raise ValueError(
+            f"{context_description} {parameter_name} annotation '{annotation}' could not be resolved. "
+            "Ensure type hints are evaluated before validation."
+        )
+
     if not _is_workflow_context_type(annotation):
         raise ValueError(
             f"{context_description} {parameter_name} must be annotated as "

@@ -6,6 +6,7 @@ import functools
 import inspect
 import logging
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -640,9 +641,12 @@ def handler(
             )
         else:
             # Use introspection for ALL types - no explicit params provided
-            introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
-                _validate_handler_signature(func, skip_message_annotation=False)
-            )
+            (
+                introspected_message_type,
+                resolved_ctx_annotation,
+                inferred_output_types,
+                inferred_workflow_output_types,
+            ) = _validate_handler_signature(func, skip_message_annotation=False)
 
             message_type = introspected_message_type
             if message_type is None:
@@ -651,6 +655,7 @@ def handler(
                     "or explicit type parameters (input, output, workflow_output)"
                 )
 
+            ctx_annotation = resolved_ctx_annotation
             final_output_types = inferred_output_types
             final_workflow_output_types = inferred_workflow_output_types
 
@@ -690,6 +695,29 @@ def handler(
 # region Handler Validation
 
 
+def _resolve_func_type_hints(func: Callable[..., Any]) -> tuple[dict[str, Any], Exception | None]:
+    """Resolve function annotations, handling __future__.annotations and ForwardRefs.
+
+    Returns (type_hints, error). If resolution fails, type_hints will be {} and error non-None.
+    """
+    try:
+        try:
+            return (
+                typing.get_type_hints(
+                    func,
+                    globalns=getattr(func, "__globals__", None),
+                    localns=None,
+                    include_extras=True,
+                ),
+                None,
+            )
+        except TypeError:
+            # Python versions without include_extras
+            return (typing.get_type_hints(func, globalns=getattr(func, "__globals__", None), localns=None), None)
+    except Exception as exc:  # intentionally broad: NameError/SyntaxError/TypeError/etc.
+        return ({}, exc)
+
+
 def _validate_handler_signature(
     func: Callable[..., Any],
     *,
@@ -717,25 +745,56 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
-    # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    ctx_param = params[2]
+
+    type_hints, type_hints_error = _resolve_func_type_hints(func)
+
+    # Missing-annotation detection: consider it missing ONLY when raw annotation is empty AND
+    # get_type_hints() does not provide a value for that parameter name.
+    def _is_missing_annotation(param: inspect.Parameter) -> bool:
+        return param.annotation == inspect.Parameter.empty and param.name not in type_hints
+
+    # If resolution failed and the handler relies on annotations that may be strings/ForwardRefs,
+    # raise a clear error early rather than letting downstream validators emit confusing messages.
+    if type_hints_error is not None:
+        unresolved_params: list[str] = []
+        if not skip_message_annotation and isinstance(message_param.annotation, (str, typing.ForwardRef)):
+            unresolved_params.append(message_param.name)
+        if isinstance(ctx_param.annotation, (str, typing.ForwardRef)):
+            unresolved_params.append(ctx_param.name)
+
+        if unresolved_params:
+            unresolved_str = ", ".join(f"'{p}'" for p in unresolved_params)
+            raise ValueError(
+                f"Handler {func.__name__} type annotations could not be resolved for parameter(s) {unresolved_str}. "
+                f"Original error: {type_hints_error}. "
+                "If you're using postponed evaluation or forward references, ensure referenced types are "
+                "importable in the handler's module scope, or use explicit @handler(input=..., output=..., "
+                "workflow_output=...) parameters."
+            ) from type_hints_error
+
+    # Check message parameter has type annotation (unless skipped)
+    if not skip_message_annotation and _is_missing_annotation(message_param):
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
+    resolved_message_annotation = type_hints.get(message_param.name, message_param.annotation)
+    message_type = resolved_message_annotation if resolved_message_annotation != inspect.Parameter.empty else None
+
     # Validate ctx parameter is WorkflowContext and extract type args
-    ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    if skip_message_annotation and _is_missing_annotation(ctx_param):
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
+        resolved_ctx_annotation = ctx_param.annotation
     else:
+        resolved_ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            resolved_ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    ctx_annotation = resolved_ctx_annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

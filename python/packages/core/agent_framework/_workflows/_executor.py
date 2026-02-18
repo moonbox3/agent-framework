@@ -7,7 +7,7 @@ import inspect
 import logging
 import types
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, get_type_hints, overload
 
 from ..observability import create_processing_span
 from ._events import (
@@ -717,25 +717,61 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
-    # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    ctx_param = params[2]
+
+    # Best-effort local namespace for resolving annotations declared in the owning class.
+    # Note: `func` here is the original handler function (pre-wrapper), so __globals__ is stable.
+    localns: dict[str, Any] | None = None
+    qualname = getattr(func, "__qualname__", "")
+    if "." in qualname:
+        owner_name = qualname.split(".")[-2]
+        owner = func.__globals__.get(owner_name)
+        if isinstance(owner, type):
+            localns = dict(vars(owner))
+
+    resolved_annotations: dict[str, Any] | None = None
+    try:
+        resolved_annotations = get_type_hints(func, globalns=func.__globals__, localns=localns)
+    except (NameError, TypeError, AttributeError):
+        resolved_annotations = None
+
+    message_annotation: Any = message_param.annotation
+    ctx_annotation: Any = ctx_param.annotation
+
+    if resolved_annotations is not None:
+        message_annotation = resolved_annotations.get(message_param.name, message_annotation)
+        ctx_annotation = resolved_annotations.get(ctx_param.name, ctx_annotation)
+    else:
+        # Fall back to string resolution for BOTH message and ctx annotations.
+        if isinstance(message_annotation, str):
+            try:
+                message_annotation = resolve_type_annotation(message_annotation, func.__globals__, localns)
+            except Exception:
+                message_annotation = message_param.annotation
+
+        if isinstance(ctx_annotation, str):
+            try:
+                ctx_annotation = resolve_type_annotation(ctx_annotation, func.__globals__, localns)
+            except Exception:
+                ctx_annotation = ctx_param.annotation
+
+    # Check message parameter has type annotation (unless skipped)
+    if not skip_message_annotation and message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Validate ctx parameter is WorkflowContext and extract type args
-    ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

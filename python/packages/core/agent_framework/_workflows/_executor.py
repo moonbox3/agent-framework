@@ -5,7 +5,9 @@ import copy
 import functools
 import inspect
 import logging
+import sys
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -717,25 +719,88 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
+    module = sys.modules.get(func.__module__)
+    module_ns: dict[str, Any] = module.__dict__ if module else {}
+
+    # Build localns that also includes owning class symbols for methods.
+    # This helps resolve class-scoped/nested types referenced in annotations.
+    localns: dict[str, Any] = dict(module_ns)
+    try:
+        qualname = getattr(func, "__qualname__", "")
+        # For methods, qualname looks like "Cls.method" or "Outer.Inner.method".
+        if "." in qualname:
+            cls_path = qualname.split(".")[:-1]
+            obj: Any = module
+            for part in cls_path:
+                if part == "<locals>":
+                    break
+                obj = getattr(obj, part)
+            if inspect.isclass(obj):
+                # Merge class dict after module locals so class members can be found.
+                localns.update(getattr(obj, "__dict__", {}))
+    except Exception:
+        # Best-effort only; resolution still falls back to module globals.
+        pass
+
+    globalns = func.__globals__
+
+    # Prefer get_type_hints (handles PEP 563/649), but don't silently swallow failures.
+    try:
+        type_hints = typing.get_type_hints(
+            func,
+            include_extras=True,
+            globalns=globalns,
+            localns=localns,
+        )
+    except Exception:
+        type_hints = None
+
+    def _resolve_from_signature(param: inspect.Parameter) -> Any:
+        ann = param.annotation
+        if ann is inspect.Parameter.empty:
+            return ann
+        if isinstance(ann, str):
+            try:
+                return resolve_type_annotation(ann, globalns=globalns, localns=localns)
+            except (NameError, SyntaxError, TypeError) as exc:
+                raise ValueError(
+                    f"Handler {func.__name__} has unresolved forward reference for parameter '{param.name}': {exc}"
+                ) from exc
+        return ann
+
+    def _get_annotation(param: inspect.Parameter) -> Any:
+        if type_hints is not None and param.name in type_hints:
+            return type_hints[param.name]
+        return _resolve_from_signature(param)
+
     # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    message_annotation = _get_annotation(message_param)
+    if not skip_message_annotation and message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    ctx_annotation = _get_annotation(ctx_param)
+
+    if isinstance(ctx_annotation, str):
+        # Defensive: should never happen due to _resolve_from_signature.
+        raise ValueError(
+            f"Handler {func.__name__} parameter '{ctx_param.name}' annotation could not be resolved "
+            "to a concrete typing object"
+        )
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

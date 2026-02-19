@@ -717,25 +717,57 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
+    # Best-effort resolution for postponed evaluation (from __future__ import annotations).
+    # If this fails, we fall back to raw inspect.signature annotations.
+    import typing
+
+    resolved_hints: dict[str, Any] = {}
+    hints_resolution_error: Exception | None = None
+    try:
+        resolved_hints = typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+            include_extras=True,
+        )
+    except (NameError, TypeError, ValueError) as exc:
+        hints_resolution_error = exc
+
     # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    message_annotation = resolved_hints.get(message_param.name, message_param.annotation)
+    if not skip_message_annotation and message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    ctx_annotation = resolved_hints.get(ctx_param.name, ctx_param.annotation)
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
+        # Provide a more helpful error only when resolution failed AND the user appears
+        # to have intended a WorkflowContext[...] annotation (stringified).
+        if (
+            hints_resolution_error is not None
+            and isinstance(ctx_annotation, str)
+            and "WorkflowContext" in ctx_annotation
+        ):
+            raise ValueError(
+                "Handler parameter 'ctx' annotation could not be resolved under postponed annotations. "
+                "Ensure referenced types are importable in the handler's module namespace, or avoid unresolved "
+                "forward references in WorkflowContext[...] annotations. "
+                f"Original error: {hints_resolution_error!r}"
+            )
+
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

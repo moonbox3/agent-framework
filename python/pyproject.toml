@@ -345,6 +345,12 @@ sequence = [
 ]
 args = [{ name = "files", default = ".", positional = true, multiple = true }]
 
+# Verification harness expects this task name.
+# Keep it as a thin alias to the existing prek-check.
+[tool.poe.tasks.pre-commit-check]
+ref = "prek-check"
+args = [{ name = "files", default = ".", positional = true, multiple = true }]
+
 [tool.setuptools.packages.find]
 where = ["packages"]
 include = ["agent_framework**"]

@@ -730,7 +730,7 @@ def _validate_handler_signature(
             localns=None,
             include_extras=True,
         )
-    except (NameError, TypeError, ValueError) as exc:
+    except (NameError, TypeError, ValueError, AttributeError, SyntaxError) as exc:
         hints_resolution_error = exc
 
     # Check message parameter has type annotation (unless skipped)
@@ -741,7 +741,8 @@ def _validate_handler_signature(
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    ctx_annotation = resolved_hints.get(ctx_param.name, ctx_param.annotation)
+    raw_ctx_annotation = ctx_param.annotation
+    ctx_annotation = resolved_hints.get(ctx_param.name, raw_ctx_annotation)
 
     if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
@@ -751,10 +752,12 @@ def _validate_handler_signature(
     else:
         # Provide a more helpful error only when resolution failed AND the user appears
         # to have intended a WorkflowContext[...] annotation (stringified).
+        # Use the *raw* signature annotation to avoid misclassifying failures where
+        # get_type_hints() failed for unrelated reasons.
         if (
             hints_resolution_error is not None
-            and isinstance(ctx_annotation, str)
-            and "WorkflowContext" in ctx_annotation
+            and isinstance(raw_ctx_annotation, str)
+            and "WorkflowContext" in raw_ctx_annotation
         ):
             raise ValueError(
                 "Handler parameter 'ctx' annotation could not be resolved under postponed annotations. "

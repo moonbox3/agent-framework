@@ -6,6 +6,7 @@ import functools
 import inspect
 import logging
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -724,18 +725,40 @@ def _validate_handler_signature(
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+
+    # Best-effort resolution for postponed annotations (PEP 563/649 behavior).
+    resolved_hints: dict[str, Any]
+    try:
+        resolved_hints = typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+            include_extras=True,
+        )
+    except (AttributeError, NameError, TypeError, ValueError, SyntaxError):
+        resolved_hints = {}
+
+    message_annotation = resolved_hints.get(message_param.name, message_param.annotation)
+    ctx_annotation = resolved_hints.get(ctx_param.name, ctx_param.annotation)
+
+    if isinstance(message_annotation, str):
+        with contextlib.suppress(NameError, SyntaxError):
+            message_annotation = resolve_type_annotation(message_annotation, func.__globals__)
+    if isinstance(ctx_annotation, str):
+        with contextlib.suppress(NameError, SyntaxError):
+            ctx_annotation = resolve_type_annotation(ctx_annotation, func.__globals__)
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

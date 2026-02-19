@@ -18,7 +18,8 @@ from agent_framework import (
     normalize_messages,
 )
 from agent_framework._settings import load_settings
-from agent_framework.exceptions import ServiceException, ServiceInitializationError
+from agent_framework._types import AgentRunInputs
+from agent_framework.exceptions import AgentException
 from microsoft_agents.copilotstudio.client import AgentType, ConnectionSettings, CopilotClient, PowerPlatformCloud
 
 from ._acquire_token import acquire_token
@@ -27,9 +28,9 @@ from ._acquire_token import acquire_token
 class CopilotStudioSettings(TypedDict, total=False):
     """Copilot Studio model settings.
 
-    The settings are first loaded from environment variables with the prefix 'COPILOTSTUDIOAGENT__'.
-    If the environment variables are not found, the settings can be loaded from a .env file
-    with the encoding 'utf-8'.
+    Settings are resolved in this order: explicit keyword arguments, values from an
+    explicitly provided .env file, then environment variables with the prefix
+    'COPILOTSTUDIOAGENT__'.
 
     Keys:
         environmentid: Environment ID of environment with the Copilot Studio App.
@@ -112,7 +113,7 @@ class CopilotStudioAgent(BaseAgent):
             env_file_encoding: Encoding of the .env file, defaults to 'utf-8'.
 
         Raises:
-            ServiceInitializationError: If required configuration is missing or invalid.
+            ValueError: If required configuration is missing or invalid.
         """
         super().__init__(
             id=id,
@@ -135,12 +136,12 @@ class CopilotStudioAgent(BaseAgent):
 
             if not settings:
                 if not copilot_studio_settings["environmentid"]:
-                    raise ServiceInitializationError(
+                    raise ValueError(
                         "Copilot Studio environment ID is required. Set via 'environment_id' parameter "
                         "or 'COPILOTSTUDIOAGENT__ENVIRONMENTID' environment variable."
                     )
                 if not copilot_studio_settings["schemaname"]:
-                    raise ServiceInitializationError(
+                    raise ValueError(
                         "Copilot Studio agent identifier/schema name is required. Set via 'agent_identifier' parameter "
                         "or 'COPILOTSTUDIOAGENT__SCHEMANAME' environment variable."
                     )
@@ -155,13 +156,13 @@ class CopilotStudioAgent(BaseAgent):
 
             if not token:
                 if not copilot_studio_settings["agentappid"]:
-                    raise ServiceInitializationError(
+                    raise ValueError(
                         "Copilot Studio client ID is required. Set via 'client_id' parameter "
                         "or 'COPILOTSTUDIOAGENT__AGENTAPPID' environment variable."
                     )
 
                 if not copilot_studio_settings["tenantid"]:
-                    raise ServiceInitializationError(
+                    raise ValueError(
                         "Copilot Studio tenant ID is required. Set via 'tenant_id' parameter "
                         "or 'COPILOTSTUDIOAGENT__TENANTID' environment variable."
                     )
@@ -187,7 +188,7 @@ class CopilotStudioAgent(BaseAgent):
     @overload
     def run(
         self,
-        messages: str | Message | list[str] | list[Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: Literal[False] = False,
         session: AgentSession | None = None,
@@ -197,7 +198,7 @@ class CopilotStudioAgent(BaseAgent):
     @overload
     def run(
         self,
-        messages: str | Message | list[str] | list[Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: Literal[True],
         session: AgentSession | None = None,
@@ -206,7 +207,7 @@ class CopilotStudioAgent(BaseAgent):
 
     def run(
         self,
-        messages: str | Message | list[str] | list[Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: bool = False,
         session: AgentSession | None = None,
@@ -236,7 +237,7 @@ class CopilotStudioAgent(BaseAgent):
 
     async def _run_impl(
         self,
-        messages: str | Message | list[str] | list[Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         session: AgentSession | None = None,
         **kwargs: Any,
@@ -261,7 +262,7 @@ class CopilotStudioAgent(BaseAgent):
 
     def _run_stream_impl(
         self,
-        messages: str | Message | list[str] | list[Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         session: AgentSession | None = None,
         **kwargs: Any,
@@ -302,7 +303,7 @@ class CopilotStudioAgent(BaseAgent):
             The conversation ID for the new conversation.
 
         Raises:
-            ServiceException: If the conversation could not be started.
+            AgentException: If the conversation could not be started.
         """
         conversation_id: str | None = None
 
@@ -311,7 +312,7 @@ class CopilotStudioAgent(BaseAgent):
                 conversation_id = activity.conversation.id
 
         if not conversation_id:
-            raise ServiceException("Failed to start a new conversation.")
+            raise AgentException("Failed to start a new conversation.")
 
         return conversation_id
 

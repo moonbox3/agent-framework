@@ -140,8 +140,10 @@ class _AutoHandoffMiddleware(FunctionMiddleware):
         from agent_framework._middleware import MiddlewareTermination
 
         # Short-circuit execution and provide deterministic response payload for the tool call.
-        # Keep this payload as JSON text so replayed function_result values stay Responses-compatible.
-        context.result = json.dumps({HANDOFF_FUNCTION_RESULT_KEY: self._handoff_functions[context.function.name]})
+        # Parse the result using the default parser to ensure in a form that can be passed directly to LLM APIs.
+        context.result = FunctionTool.parse_result({
+            HANDOFF_FUNCTION_RESULT_KEY: self._handoff_functions[context.function.name]
+        })
         raise MiddlewareTermination(result=context.result)
 
 
@@ -411,7 +413,7 @@ class HandoffAgentExecutor(AgentExecutor):
         existing_tools = list(default_options.get("tools") or [])
         existing_names = {getattr(tool, "name", "") for tool in existing_tools if hasattr(tool, "name")}
 
-        new_tools: list[FunctionTool[Any]] = []
+        new_tools: list[FunctionTool] = []
         for target in targets:
             handoff_tool = self._create_handoff_tool(target.target_id, target.description)
             if handoff_tool.name in existing_names:
@@ -427,7 +429,7 @@ class HandoffAgentExecutor(AgentExecutor):
         else:
             default_options["tools"] = existing_tools
 
-    def _create_handoff_tool(self, target_id: str, description: str | None = None) -> FunctionTool[Any]:
+    def _create_handoff_tool(self, target_id: str, description: str | None = None) -> FunctionTool:
         """Construct the synthetic handoff tool that signals routing to `target_id`."""
         tool_name = get_handoff_tool_name(target_id)
         doc = description or f"Handoff to the {target_id} agent."

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import sys
 from collections.abc import AsyncIterable, Awaitable, Callable, MutableMapping, Sequence
 from pathlib import Path
@@ -12,6 +13,7 @@ from agent_framework import (
     AgentMiddlewareTypes,
     AgentResponse,
     AgentResponseUpdate,
+    AgentRunInputs,
     AgentSession,
     BaseAgent,
     BaseContextProvider,
@@ -19,12 +21,12 @@ from agent_framework import (
     FunctionTool,
     Message,
     ResponseStream,
-    get_logger,
+    ToolTypes,
+    load_settings,
     normalize_messages,
+    normalize_tools,
 )
-from agent_framework._settings import load_settings
-from agent_framework._types import normalize_tools
-from agent_framework.exceptions import ServiceException
+from agent_framework.exceptions import AgentException
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
@@ -36,8 +38,6 @@ from claude_agent_sdk import (
     ClaudeAgentOptions as SDKOptions,
 )
 from claude_agent_sdk.types import StreamEvent, TextBlock
-
-from ._settings import ClaudeAgentSettings
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
@@ -59,14 +59,38 @@ if TYPE_CHECKING:
         SdkBeta,
     )
 
-__all__ = ["ClaudeAgent", "ClaudeAgentOptions"]
 
-logger = get_logger("agent_framework.claude")
+logger = logging.getLogger("agent_framework.claude")
+
 
 # Name of the in-process MCP server that hosts Agent Framework tools.
 # FunctionTool instances are converted to SDK MCP tools and served
 # through this server, as Claude Code CLI only supports tools via MCP.
 TOOLS_MCP_SERVER_NAME = "_agent_framework_tools"
+
+
+class ClaudeAgentSettings(TypedDict, total=False):
+    """Claude Agent settings.
+
+    Settings are resolved in this order: explicit keyword arguments, values from an
+    explicitly provided .env file, then environment variables with the prefix
+    'CLAUDE_AGENT_'.
+
+    Keys:
+        cli_path: The path to Claude CLI executable.
+        model: The model to use (sonnet, opus, haiku).
+        cwd: The working directory for Claude CLI.
+        permission_mode: Permission mode (default, acceptEdits, plan, bypassPermissions).
+        max_turns: Maximum number of conversation turns.
+        max_budget_usd: Maximum budget in USD.
+    """
+
+    cli_path: str | None
+    model: str | None
+    cwd: str | None
+    permission_mode: str | None
+    max_turns: int | None
+    max_budget_usd: float | None
 
 
 class ClaudeAgentOptions(TypedDict, total=False):
@@ -217,12 +241,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
         description: str | None = None,
         context_providers: Sequence[BaseContextProvider] | None = None,
         middleware: Sequence[AgentMiddlewareTypes] | None = None,
-        tools: FunctionTool
-        | Callable[..., Any]
-        | MutableMapping[str, Any]
-        | str
-        | Sequence[FunctionTool | Callable[..., Any] | MutableMapping[str, Any] | str]
-        | None = None,
+        tools: ToolTypes | Callable[..., Any] | str | Sequence[ToolTypes | Callable[..., Any] | str] | None = None,
         default_options: OptionsT | MutableMapping[str, Any] | None = None,
         env_file_path: str | None = None,
         env_file_encoding: str | None = None,
@@ -289,7 +308,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
         # Separate built-in tools (strings) from custom tools (callables/FunctionTool)
         self._builtin_tools: list[str] = []
-        self._custom_tools: list[FunctionTool | MutableMapping[str, Any]] = []
+        self._custom_tools: list[ToolTypes] = []
         self._normalize_tools(tools)
 
         self._default_options = opts
@@ -298,12 +317,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
     def _normalize_tools(
         self,
-        tools: FunctionTool
-        | Callable[..., Any]
-        | MutableMapping[str, Any]
-        | str
-        | Sequence[FunctionTool | Callable[..., Any] | MutableMapping[str, Any] | str]
-        | None,
+        tools: ToolTypes | Callable[..., Any] | str | Sequence[ToolTypes | Callable[..., Any] | str] | None,
     ) -> None:
         """Separate built-in tools (strings) from custom tools.
 
@@ -316,10 +330,10 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
         # Normalize to sequence
         if isinstance(tools, str):
             tools_list: Sequence[Any] = [tools]
-        elif isinstance(tools, (FunctionTool, MutableMapping)) or callable(tools):
-            tools_list = [tools]
-        else:
+        elif isinstance(tools, Sequence):
             tools_list = list(tools)
+        else:
+            tools_list = [tools]
 
         for tool in tools_list:
             if isinstance(tool, str):
@@ -346,7 +360,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
         as an async context manager.
 
         Raises:
-            ServiceException: If the client fails to start.
+            AgentException: If the client fails to start.
         """
         await self._ensure_session()
 
@@ -393,7 +407,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
                 self._current_session_id = session_id
             except Exception as ex:
                 self._client = None
-                raise ServiceException(f"Failed to start Claude SDK client: {ex}") from ex
+                raise AgentException(f"Failed to start Claude SDK client: {ex}") from ex
 
     def _prepare_client_options(self, resume_session_id: str | None = None) -> SDKOptions:
         """Prepare SDK options for client initialization.
@@ -411,18 +425,18 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
             opts["resume"] = resume_session_id
 
         # Apply settings from environment
-        if self._settings["cli_path"]:
-            opts["cli_path"] = self._settings["cli_path"]
-        if self._settings["model"]:
-            opts["model"] = self._settings["model"]
-        if self._settings["cwd"]:
-            opts["cwd"] = self._settings["cwd"]
-        if self._settings["permission_mode"]:
-            opts["permission_mode"] = self._settings["permission_mode"]
-        if self._settings["max_turns"]:
-            opts["max_turns"] = self._settings["max_turns"]
-        if self._settings["max_budget_usd"]:
-            opts["max_budget_usd"] = self._settings["max_budget_usd"]
+        if cli_path := self._settings.get("cli_path"):
+            opts["cli_path"] = cli_path
+        if model := self._settings.get("model"):
+            opts["model"] = model
+        if cwd := self._settings.get("cwd"):
+            opts["cwd"] = cwd
+        if permission_mode := self._settings.get("permission_mode"):
+            opts["permission_mode"] = permission_mode
+        if max_turns := self._settings.get("max_turns"):
+            opts["max_turns"] = max_turns
+        if max_budget_usd := self._settings.get("max_budget_usd"):
+            opts["max_budget_usd"] = max_budget_usd
 
         # Apply default options
         for key, value in self._default_options.items():
@@ -457,7 +471,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
     def _prepare_tools(
         self,
-        tools: list[FunctionTool | MutableMapping[str, Any]],
+        tools: Sequence[ToolTypes],
     ) -> tuple[Any, list[str]]:
         """Convert Agent Framework tools to SDK MCP server.
 
@@ -484,7 +498,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
         return create_sdk_mcp_server(name=TOOLS_MCP_SERVER_NAME, tools=sdk_tools), tool_names
 
-    def _function_tool_to_sdk_mcp_tool(self, func_tool: FunctionTool[Any]) -> SdkMcpTool[Any]:
+    def _function_tool_to_sdk_mcp_tool(self, func_tool: FunctionTool) -> SdkMcpTool[Any]:
         """Convert a FunctionTool to an SDK MCP tool.
 
         Args:
@@ -557,7 +571,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
     @overload
     def run(
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: Literal[True],
         session: AgentSession | None = None,
@@ -568,7 +582,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
     @overload
     async def run(
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: Literal[False] = ...,
         session: AgentSession | None = None,
@@ -578,7 +592,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
     def run(
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         stream: bool = False,
         session: AgentSession | None = None,
@@ -612,7 +626,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
 
     async def _get_stream(
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: AgentRunInputs | None = None,
         *,
         session: AgentSession | None = None,
         options: OptionsT | MutableMapping[str, Any] | None = None,
@@ -625,7 +639,7 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
         await self._ensure_session(session.service_session_id)
 
         if not self._client:
-            raise ServiceException("Claude SDK client not initialized.")
+            raise RuntimeError("Claude SDK client not initialized.")
 
         prompt = self._format_prompt(normalize_messages(messages))
 
@@ -679,12 +693,12 @@ class ClaudeAgent(BaseAgent, Generic[OptionsT]):
                             if isinstance(block, TextBlock):
                                 error_msg = f"{error_msg}: {block.text}"
                                 break
-                    raise ServiceException(error_msg)
+                    raise AgentException(error_msg)
             elif isinstance(message, ResultMessage):
                 # Check for errors in result message
                 if message.is_error:
                     error_msg = message.result or "Unknown error from Claude API"
-                    raise ServiceException(f"Claude API error: {error_msg}")
+                    raise AgentException(f"Claude API error: {error_msg}")
                 session_id = message.session_id
 
         # Update session with session ID

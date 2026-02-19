@@ -508,7 +508,7 @@ class Executor(RequestInfoMixin, DictConvertible):
         """Hook called when the workflow is restored from a checkpoint.
 
         Override this method in subclasses to implement custom logic that should
-        run when the workflow is restored from a checkpoint.
+        run when the workflow is restored from the checkpoint.
 
         Args:
             state: The state dictionary that was saved during checkpointing.
@@ -724,18 +724,37 @@ def _validate_handler_signature(
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+
+    # Resolve postponed annotations to real typing objects, when possible.
+    # With `from __future__ import annotations`, annotations are stored as strings at
+    # decoration time; typing.get_type_hints() evaluates them.
+    try:
+        import typing
+
+        hints = typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+            include_extras=True,
+        )
+    except (NameError, TypeError):
+        hints = {}
+
+    message_hint = hints.get(message_param.name, message_param.annotation)
+    ctx_hint = hints.get(ctx_param.name, ctx_param.annotation)
+
+    if skip_message_annotation and ctx_hint == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
-        output_types: list[type[Any] | types.UnionType] = []
-        workflow_output_types: list[type[Any] | types.UnionType] = []
+        output_types = []
+        workflow_output_types = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_hint, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_hint if message_hint != inspect.Parameter.empty else None
+    ctx_annotation = ctx_hint
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

@@ -345,6 +345,11 @@ sequence = [
 ]
 args = [{ name = "files", default = ".", positional = true, multiple = true }]
 
+# Compatibility alias for required verification commands.
+# Historically some environments call this task name.
+[tool.poe.tasks.pre-commit-check]
+ref = "prek-check"
+
 [tool.setuptools.packages.find]
 where = ["packages"]
 include = ["agent_framework**"]

@@ -14,6 +14,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import suppress
 from functools import partial, wraps
 from time import perf_counter, time_ns
 from typing import (
@@ -291,12 +292,13 @@ class FunctionTool(SerializationMixin):
         # Track if schema was supplied as JSON dict (for optimization)
         if isinstance(input_model, Mapping):
             self._schema_supplied = True
-            self._input_schema: dict[str, Any] = dict(input_model)
+            self._input_schema_cached: dict[str, Any] = dict(input_model)
             self.input_model: type[BaseModel] | None = None
         else:
             self._schema_supplied = False
             self.input_model = self._resolve_input_model(input_model)
-            self._input_schema = self.input_model.model_json_schema()
+            # Defer schema generation to avoid issues with forward references
+            self._input_schema_cached: dict[str, Any] | None = None
         self._cached_parameters: dict[str, Any] | None = None
         self.approval_mode = approval_mode or "never_require"
         if max_invocations is not None and max_invocations < 1:
@@ -545,6 +547,19 @@ class FunctionTool(SerializationMixin):
                 span.set_attribute(OtelAttr.MEASUREMENT_FUNCTION_INVOCATION_DURATION, duration)
                 self._invocation_duration_histogram.record(duration, attributes=attributes)
                 logger.info("Function duration: %fs", duration)
+
+    @property
+    def _input_schema(self) -> dict[str, Any]:
+        """Get the input schema, generating it lazily if needed."""
+        if self._input_schema_cached is None:
+            if self.input_model is not None:
+                # Try to rebuild the model in case it has forward references
+                with suppress(Exception):
+                    self.input_model.model_rebuild(force=True, raise_errors=False)
+                self._input_schema_cached = self.input_model.model_json_schema()
+            else:
+                self._input_schema_cached = {}
+        return self._input_schema_cached
 
     def parameters(self) -> dict[str, Any]:
         """Create the JSON schema of the parameters.

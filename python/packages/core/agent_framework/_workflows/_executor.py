@@ -634,10 +634,22 @@ def handler(
             final_workflow_output_types = (
                 normalize_type_to_list(resolved_workflow_output_type) if resolved_workflow_output_type else []
             )
-            # Get ctx_annotation for consistency (even though types come from explicit params)
-            ctx_annotation = (
-                inspect.signature(func).parameters[list(inspect.signature(func).parameters.keys())[2]].annotation
-            )
+            # Get ctx_annotation for consistency (even though types come from explicit params).
+            # If a ctx annotation is provided, validate it and prefer the resolved hint.
+            signature = inspect.signature(func)
+            ctx_param = list(signature.parameters.values())[2]
+            raw_ctx_annotation = ctx_param.annotation
+
+            try:
+                import typing
+
+                type_hints = typing.get_type_hints(func, include_extras=True)
+            except Exception:  # pragma: no cover
+                type_hints = {}
+
+            ctx_annotation = type_hints.get(ctx_param.name, raw_ctx_annotation)
+            if raw_ctx_annotation != inspect.Parameter.empty:
+                validate_workflow_context_annotation(ctx_annotation, f"parameter '{ctx_param.name}'", "Handler")
         else:
             # Use introspection for ALL types - no explicit params provided
             introspected_message_type, ctx_annotation, inferred_output_types, inferred_workflow_output_types = (
@@ -717,25 +729,37 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
+    try:
+        import typing
+
+        type_hints = typing.get_type_hints(func, include_extras=True)
+    except Exception:  # pragma: no cover
+        type_hints = {}
+
     # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    resolved_message_annotation = type_hints.get(message_param.name, message_param.annotation)
+
+    if not skip_message_annotation and resolved_message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    raw_ctx_annotation = ctx_param.annotation
+    resolved_ctx_annotation = type_hints.get(ctx_param.name, raw_ctx_annotation)
+
+    if skip_message_annotation and raw_ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            resolved_ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = None if resolved_message_annotation == inspect.Parameter.empty else resolved_message_annotation
+    ctx_annotation = resolved_ctx_annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

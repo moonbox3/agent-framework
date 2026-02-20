@@ -178,29 +178,6 @@ async def test_chat_client_agent_updates_existing_session_id_non_streaming(
     assert session.service_session_id == "resp_new_123"
 
 
-async def test_store_false_skips_service_session_id_as_conversation_id(
-    chat_client_base: SupportsChatGetResponse,
-) -> None:
-    """When store=False, service_session_id must not be used as conversation_id."""
-    chat_client_base.run_responses = [
-        ChatResponse(
-            messages=[Message(role="assistant", contents=[Content.from_text("ok")])],
-        )
-    ]
-
-    agent = Agent(client=chat_client_base, options={"store": False})
-    session = agent.get_session(service_session_id="resp_stale_value")
-
-    _, prepared_opts = await agent._prepare_session_and_messages(  # type: ignore[reportPrivateUsage]
-        session=session,
-        input_messages=[Message(role="user", text="Hello")],
-    )
-
-    assert prepared_opts.get("conversation_id") is None
-    # The session itself is not mutated
-    assert session.service_session_id == "resp_stale_value"
-
-
 async def test_chat_client_agent_update_session_id_streaming_uses_conversation_id(
     chat_client_base: SupportsChatGetResponse,
 ) -> None:

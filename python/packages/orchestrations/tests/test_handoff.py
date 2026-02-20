@@ -695,8 +695,8 @@ def test_handoff_clone_disables_provider_side_storage() -> None:
     assert executor._agent.default_options.get("store") is False
 
 
-async def test_handoff_does_not_mutate_service_session_id() -> None:
-    """Handoff executors must not clear service_session_id; store=False prevents its use."""
+async def test_handoff_clears_stale_service_session_id_before_run() -> None:
+    """Stale service session IDs must be dropped before each handoff agent turn."""
     triage = MockHandoffAgent(name="triage", handoff_to="specialist")
     specialist = MockHandoffAgent(name="specialist")
     workflow = HandoffBuilder(participants=[triage, specialist]).with_start_agent(triage).build()
@@ -707,9 +707,7 @@ async def test_handoff_does_not_mutate_service_session_id() -> None:
 
     await _drain(workflow.run("My order is damaged", stream=True))
 
-    # The session is not mutated; store=False in _agents.py skips service_session_id
-    # when building conversation_id, so the stale value is harmless.
-    assert triage_executor._session.service_session_id == "resp_stale_value"
+    assert triage_executor._session.service_session_id is None
 
 
 def test_clean_conversation_for_handoff_keeps_text_only_history() -> None:

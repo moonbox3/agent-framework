@@ -1048,7 +1048,7 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
         run_opts: dict[str, Any] = {
             "model_id": opts.pop("model_id", None),
             "conversation_id": active_session.service_session_id
-            if active_session and opts.get("store") is not False
+            if active_session
             else opts.pop("conversation_id", None),
             "allow_multiple_tool_calls": opts.pop("allow_multiple_tool_calls", None),
             "additional_function_arguments": additional_function_arguments or None,

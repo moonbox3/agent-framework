@@ -481,6 +481,15 @@ class HandoffAgentExecutor(AgentExecutor):
         self._cache = list(self._full_conversation)
         self._cache.extend(runtime_tool_messages)
 
+        # Handoff workflows are orchestrator-stateful and provider-stateless by design.
+        # If an existing session still has a service conversation id, clear it to avoid
+        # replaying stale unresolved tool calls across resumed turns.
+        if (
+            cast(Agent, self._agent).default_options.get("store") is False
+            and self._session.service_session_id is not None
+        ):
+            self._session.service_session_id = None
+
         # Check termination condition before running the agent
         if await self._check_terminate_and_yield(cast(WorkflowContext[Never, list[Message]], ctx)):
             return

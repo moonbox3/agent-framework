@@ -27,8 +27,11 @@ from agent_framework import (
 )
 from agent_framework.ag_ui import AgentFrameworkWorkflow, add_agent_framework_fastapi_endpoint
 from agent_framework.orchestrations import HandoffBuilder
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

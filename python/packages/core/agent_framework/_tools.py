@@ -289,16 +289,18 @@ class FunctionTool(SerializationMixin):
         self.func = func
         self._instance = None  # Store the instance for bound methods
 
+        # Initialize schema cache (will be lazily populated)
+        self._input_schema_cached: dict[str, Any] | None = None
+
         # Track if schema was supplied as JSON dict (for optimization)
         if isinstance(input_model, Mapping):
             self._schema_supplied = True
-            self._input_schema_cached: dict[str, Any] = dict(input_model)
+            self._input_schema_cached = dict(input_model)
             self.input_model: type[BaseModel] | None = None
         else:
             self._schema_supplied = False
             self.input_model = self._resolve_input_model(input_model)
             # Defer schema generation to avoid issues with forward references
-            self._input_schema_cached: dict[str, Any] | None = None
         self._cached_parameters: dict[str, Any] | None = None
         self.approval_mode = approval_mode or "never_require"
         if max_invocations is not None and max_invocations < 1:

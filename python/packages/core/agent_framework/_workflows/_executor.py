@@ -6,6 +6,7 @@ import functools
 import inspect
 import logging
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -422,14 +423,15 @@ class Executor(RequestInfoMixin, DictConvertible):
         Returns:
             A list of the output types inferred from the handlers' WorkflowContext[T] annotations.
         """
-        output_types: set[type[Any] | types.UnionType] = set()
+        collected: set[type[Any] | types.UnionType]
+        collected = set()
 
         # Collect output types from all handlers
         for handler_spec in self._handler_specs + self._response_handler_specs:
             handler_output_types = handler_spec.get("output_types", [])
-            output_types.update(handler_output_types)
+            collected.update(handler_output_types)
 
-        return list(output_types)
+        return list(collected)
 
     @property
     def workflow_output_types(self) -> list[type[Any] | types.UnionType]:
@@ -438,14 +440,15 @@ class Executor(RequestInfoMixin, DictConvertible):
         Returns:
             A list of the workflow output types inferred from handlers' WorkflowContext[T, U] annotations.
         """
-        output_types: set[type[Any] | types.UnionType] = set()
+        collected: set[type[Any] | types.UnionType]
+        collected = set()
 
         # Collect workflow output types from all handlers
         for handler_spec in self._handler_specs + self._response_handler_specs:
             handler_workflow_output_types = handler_spec.get("workflow_output_types", [])
-            output_types.update(handler_workflow_output_types)
+            collected.update(handler_workflow_output_types)
 
-        return list(output_types)
+        return list(collected)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize executor definition for workflow topology export."""
@@ -709,6 +712,41 @@ def _validate_handler_signature(
     Raises:
         ValueError: If the function signature is invalid
     """
+
+    def _resolve_param_annotation(param: inspect.Parameter, *, desc: str) -> Any:
+        """Resolve a single parameter annotation without forcing evaluation of unrelated hints."""
+        if param.annotation == inspect.Parameter.empty:
+            return inspect.Parameter.empty
+
+        # Fast path: string annotations (common under `from __future__ import annotations`)
+        if isinstance(param.annotation, str):
+            try:
+                return resolve_type_annotation(param.annotation, getattr(func, "__globals__", None))
+            except Exception as exc:
+                raise ValueError(f"Handler {func.__name__} {desc} annotation could not be resolved") from exc
+
+        # Otherwise, attempt a narrow get_type_hints (may still be needed for ForwardRef-like objects)
+        try:
+            return typing.get_type_hints(  # type: ignore[call-arg]
+                func,
+                globalns=getattr(func, "__globals__", None),
+                localns=None,
+                include_extras=True,
+            ).get(param.name, param.annotation)
+        except TypeError:
+            # include_extras unsupported on older runtimes
+            try:
+                return typing.get_type_hints(
+                    func,
+                    globalns=getattr(func, "__globals__", None),
+                    localns=None,
+                ).get(param.name, param.annotation)
+            except Exception:
+                return param.annotation
+        except Exception:
+            # Do not fail due to unrelated annotations; fall back to raw annotation.
+            return param.annotation
+
     signature = inspect.signature(func)
     params = list(signature.parameters.values())
 
@@ -719,23 +757,31 @@ def _validate_handler_signature(
 
     # Check message parameter has type annotation (unless skipped)
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    resolved_message_annotation = _resolve_param_annotation(message_param, desc=f"parameter '{message_param.name}'")
+    if not skip_message_annotation and resolved_message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    resolved_ctx_annotation = _resolve_param_annotation(ctx_param, desc=f"parameter '{ctx_param.name}'")
+    if skip_message_annotation and resolved_ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
-        output_types: list[type[Any] | types.UnionType] = []
-        workflow_output_types: list[type[Any] | types.UnionType] = []
+        output_types = []
+        workflow_output_types = []
     else:
-        output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
-        )
+        try:
+            output_types, workflow_output_types = validate_workflow_context_annotation(
+                resolved_ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
+            )
+        except Exception as exc:
+            # If ctx couldn't be resolved/validated, make this attributable to ctx.
+            raise ValueError(
+                f"Handler {func.__name__} parameter '{ctx_param.name}' annotation could not be resolved/validated"
+            ) from exc
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = resolved_message_annotation if resolved_message_annotation != inspect.Parameter.empty else None
+    ctx_annotation = resolved_ctx_annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

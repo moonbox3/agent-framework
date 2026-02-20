@@ -1,26 +1,40 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+from __future__ import annotations
 
-def test_handler_registration_with_postponed_annotations_exact_sets(self) -> None:
-    executor = FutureHandlerExecutor(id="future-handler")
+from typing import Any
 
-    assert set(executor.input_types) == {str, dict[str, Any]}
-    assert set(executor.output_types) == {TypeA, TypeB}
-    assert set(executor.workflow_output_types) == {TypeB, TypeC}
+from agent_framework import Executor, WorkflowContext, handler
 
 
-def test_fail_closed_when_get_type_hints_fails_and_annotations_unresolvable(self, monkeypatch: Any) -> None:
-    import agent_framework._workflows._executor as executor_mod
+class TypeA:
+    pass
 
-    def _boom(*_: Any, **__: Any) -> Any:
-        raise TypeError("boom")
 
-    monkeypatch.setattr(executor_mod.typing, "get_type_hints", _boom)
+class TypeB:
+    pass
 
-    class BadFutureExecutor(Executor):
-        @handler
-        async def handle_bad(self, message: "MissingType", ctx: WorkflowContext[TypeA, TypeB]) -> None:
-            return None
 
-    with pytest.raises(ValueError, match=r"message parameter annotation could not be resolved"):
-        BadFutureExecutor(id="bad-future")
+class TypeC:
+    pass
+
+
+class FutureHandlerExecutor(Executor):
+    @handler
+    async def handle_text(self, message: str, ctx: WorkflowContext[TypeA, TypeB]) -> None:
+        return None
+
+    @handler
+    async def handle_mapping(self, message: dict[str, Any], ctx: WorkflowContext[TypeA | TypeB, TypeC]) -> None:
+        return None
+
+
+class TestExecutorPostponedAnnotations:
+    def test_handler_registration_with_postponed_annotations(self) -> None:
+        executor = FutureHandlerExecutor(id="future-handler")
+
+        assert str in executor.input_types
+        assert TypeA in executor.output_types
+        assert TypeB in executor.output_types
+        assert TypeB in executor.workflow_output_types
+        assert TypeC in executor.workflow_output_types

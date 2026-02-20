@@ -709,6 +709,8 @@ def _validate_handler_signature(
     Raises:
         ValueError: If the function signature is invalid
     """
+    import typing
+
     signature = inspect.signature(func)
     params = list(signature.parameters.values())
 
@@ -717,26 +719,75 @@ def _validate_handler_signature(
     if len(params) != expected_counts:
         raise ValueError(f"Handler {func.__name__} must have {param_description}. Got {len(params)} parameters.")
 
-    # Check message parameter has type annotation (unless skipped)
+    def _is_unresolved_annotation(annotation: Any) -> bool:
+        if annotation == inspect.Parameter.empty:
+            return True
+        if isinstance(annotation, str):
+            return True
+        forward_ref = getattr(typing, "ForwardRef", None)
+        return isinstance(forward_ref, type) and isinstance(annotation, forward_ref)
+
+    def _build_method_localns() -> dict[str, Any] | None:
+        """Best-effort localns for methods so get_type_hints can resolve class/nested names."""
+        qualname = getattr(func, "__qualname__", "")
+        if "." not in qualname:
+            return None
+
+        owner_name = qualname.split(".", 1)[0]
+        globalns = getattr(func, "__globals__", {})
+        owner = globalns.get(owner_name)
+        if isinstance(owner, type):
+            return {owner.__name__: owner, **dict(getattr(owner, "__dict__", {}))}
+        return None
+
+    def _maybe_resolve_type_hints() -> tuple[dict[str, Any], BaseException | None]:
+        message_param = params[1]
+        ctx_param = params[2]
+
+        if not (_is_unresolved_annotation(message_param.annotation) or _is_unresolved_annotation(ctx_param.annotation)):
+            return {}, None
+
+        globalns = getattr(func, "__globals__", None)
+        localns = _build_method_localns()
+
+        try:
+            try:
+                return (
+                    typing.get_type_hints(func, globalns=globalns, localns=localns, include_extras=True),
+                    None,
+                )
+            except TypeError:
+                return (typing.get_type_hints(func, globalns=globalns, localns=localns), None)
+        except (NameError, TypeError, ValueError) as exc:
+            return {}, exc
+
+    type_hints, type_hints_error = _maybe_resolve_type_hints()
+
     message_param = params[1]
-    if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
+    message_annotation = type_hints.get(message_param.name, message_param.annotation)
+    if not skip_message_annotation and message_annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
-    # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
-        # When explicit types are provided via @handler(input=..., output=...),
-        # the ctx parameter doesn't need a type annotation - types come from the decorator.
+    ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
-    else:
-        output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
-        )
+        message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
+        return message_type, ctx_annotation, output_types, workflow_output_types
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    if type_hints_error is not None and _is_unresolved_annotation(ctx_annotation):
+        raise ValueError(
+            f"Handler {func.__name__} has annotations that could not be resolved. "
+            "This is commonly caused by `from __future__ import annotations` with missing imports/definitions."
+        ) from type_hints_error
 
+    output_types, workflow_output_types = validate_workflow_context_annotation(
+        ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
+    )
+
+    message_type = message_annotation if message_annotation != inspect.Parameter.empty else None
     return message_type, ctx_annotation, output_types, workflow_output_types
 
 

@@ -6,6 +6,7 @@ import functools
 import inspect
 import logging
 import types
+import typing
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
@@ -712,6 +713,57 @@ def _validate_handler_signature(
     signature = inspect.signature(func)
     params = list(signature.parameters.values())
 
+<<<<<<< ours
+    # Resolve annotations (handles `from __future__ import annotations`)
+=======
+    # Resolve annotations (handles `from __future__ import annotations`).
+>>>>>>> theirs
+    # Prefer class-local scope when available (nested/local types, class-level aliases).
+    localns: dict[str, Any] | None = None
+    try:
+        qualname_parts = func.__qualname__.split(".")
+        if len(qualname_parts) >= 2:
+            owner_name = qualname_parts[-2]
+            owner_obj = func.__globals__.get(owner_name)
+            if owner_obj is not None:
+                localns = getattr(owner_obj, "__dict__", None)
+    except Exception:
+        localns = None
+
+    if localns is None:
+        localns = func.__globals__
+
+    try:
+        try:
+            hints = typing.get_type_hints(
+                func,
+                globalns=func.__globals__,
+                localns=localns,
+                include_extras=True,
+            )
+        except TypeError:
+<<<<<<< ours
+            # Python < 3.10 doesn't support include_extras
+=======
+            # Python versions without include_extras support
+>>>>>>> theirs
+            hints = typing.get_type_hints(
+                func,
+                globalns=func.__globals__,
+                localns=localns,
+            )
+    except Exception as exc:
+        raise ValueError(
+            f"Handler {func.__name__} has annotations that could not be resolved. "
+            "If you're using `from __future__ import annotations`, ensure all forward references "
+<<<<<<< ours
+            "refer to resolvable names (import the types or avoid unresolvable forward refs). "
+=======
+            "refer to resolvable names (import the types or avoid runtime-unavailable refs). "
+>>>>>>> theirs
+            f"Original error: {exc}"
+        ) from exc
+
     expected_counts = 3  # self, message, ctx
     param_description = "(self, message: T, ctx: WorkflowContext[U, V])"
     if len(params) != expected_counts:
@@ -722,20 +774,23 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
+    message_ann = hints.get(message_param.name, message_param.annotation)
+
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    ctx_ann = hints.get(ctx_param.name, ctx_param.annotation)
+    if skip_message_annotation and ctx_ann == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_ann, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = message_ann if message_ann != inspect.Parameter.empty else None
+    ctx_annotation = ctx_ann
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

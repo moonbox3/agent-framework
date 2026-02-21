@@ -724,18 +724,38 @@ def _validate_handler_signature(
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
+
+    import typing as _typing
+
+    try:
+        type_hints = _typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+            include_extras=True,
+        )
+    except TypeError:
+        # Older Python versions may not support include_extras.
+        type_hints = _typing.get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=None,
+        )
+
     if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
+        ctx_annotation = ctx_param.annotation
     else:
+        ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation,
+            param_name=ctx_param.name,
         )
 
     message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

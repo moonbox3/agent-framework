@@ -240,3 +240,30 @@ class TestCustomFunctionsRegistry:
         ]
         for name in expected:
             assert name in CUSTOM_FUNCTIONS
+
+
+class TestDeclarativeWorkflowStateFallbackEval:
+    """Regression tests for DeclarativeWorkflowState.eval() without powerfx installed."""
+
+    def test_eval_upper_and_arithmetic_without_powerfx(self, mock_state):
+        state = __import__(
+            "agent_framework_declarative._workflows",
+            fromlist=["DeclarativeWorkflowState"],
+        ).DeclarativeWorkflowState(mock_state)
+        state.initialize()
+        state.set("Local.x", 10)
+        state.set("Local.y", 4)
+
+        assert state.eval('=Upper("hello")') == "HELLO"
+        assert state.eval("=Local.x / Local.y") == 2.5
+
+    def test_eval_nested_message_text_replacement_without_powerfx(self, mock_state):
+        state = __import__(
+            "agent_framework_declarative._workflows",
+            fromlist=["DeclarativeWorkflowState"],
+        ).DeclarativeWorkflowState(mock_state)
+        state.initialize()
+        short_text = "Hello world"
+        state.set("Local.Messages", [{"text": short_text, "contents": [{"type": "text", "text": short_text}]}])
+
+        assert state.eval("=Upper(MessageText(Local.Messages))") == "HELLO WORLD"

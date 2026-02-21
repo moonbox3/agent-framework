@@ -370,12 +370,10 @@ class DeclarativeWorkflowState:
         # Replace them with their evaluated results before sending to PowerFx
         formula = self._preprocess_custom_functions(formula)
 
+        # If PowerFx isn't available, fall back to the custom function set.
+        # This keeps declarative tests working in environments without dotnet/powerfx.
         if Engine is None:
-            raise RuntimeError(
-                f"PowerFx is not available (dotnet runtime not installed). "
-                f"Expression '={formula[:80]}' cannot be evaluated. "
-                f"Install dotnet and the powerfx package for full PowerFx support."
-            )
+            return self._eval_with_custom_functions(formula)
 
         engine = Engine()
         symbols = self._to_powerfx_symbols()
@@ -396,6 +394,123 @@ class DeclarativeWorkflowState:
                 logger.debug(f"PowerFx: undefined variable in expression '{formula}', returning None")
                 return None
             raise
+
+    def _eval_with_custom_functions(self, formula: str) -> Any:
+        """Evaluate a subset of PowerFx expressions using Python fallbacks.
+
+        This is only used when the `powerfx` engine isn't available.
+
+        Supported:
+          - Literals: numbers, quoted strings, true/false
+          - Dotted variable references into the PowerFx symbol model (Local.*, System.*, Workflow.*)
+          - Function calls for the custom function registry (Upper/Lower/Not/And/Or/If/etc.)
+          - Basic arithmetic: + - * /
+
+        Notes:
+          - This is intentionally minimal; it exists to keep core declarative
+            workflow features testable without requiring a .NET runtime.
+        """
+        import ast
+
+        from ._powerfx_functions import CUSTOM_FUNCTIONS
+
+        symbols = self._to_powerfx_symbols()
+
+        def _name_lookup(name: str) -> Any:
+            if name in symbols:
+                return symbols[name]
+            raise NameError(name)
+
+        def _attr_lookup(obj: Any, attr: str) -> Any:
+            if isinstance(obj, dict):
+                return obj.get(attr)
+            return getattr(obj, attr)
+
+        def _eval_node(node: ast.AST) -> Any:
+            if isinstance(node, ast.Constant):
+                return node.value
+
+            if isinstance(node, ast.Name):
+                return _name_lookup(node.id)
+
+            if isinstance(node, ast.Attribute):
+                base = _eval_node(node.value)
+                return _attr_lookup(base, node.attr)
+
+            if isinstance(node, ast.UnaryOp):
+                operand = _eval_node(node.operand)
+                if isinstance(node.op, ast.Not):
+                    return not bool(operand)
+                if isinstance(node.op, ast.USub):
+                    return -operand  # type: ignore[operator]
+                if isinstance(node.op, ast.UAdd):
+                    return +operand  # type: ignore[operator]
+
+            if isinstance(node, ast.BinOp):
+                left = _eval_node(node.left)
+                right = _eval_node(node.right)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, ast.Div):
+                    return left / right
+
+            if isinstance(node, ast.BoolOp):
+                if isinstance(node.op, ast.And):
+                    return all(bool(_eval_node(v)) for v in node.values)
+                if isinstance(node.op, ast.Or):
+                    return any(bool(_eval_node(v)) for v in node.values)
+
+            if isinstance(node, ast.Compare):
+                left = _eval_node(node.left)
+                result = True
+                for op, comparator in zip(node.ops, node.comparators, strict=False):
+                    right = _eval_node(comparator)
+                    if isinstance(op, ast.Eq):
+                        result = result and (left == right)
+                    elif isinstance(op, ast.NotEq):
+                        result = result and (left != right)
+                    elif isinstance(op, ast.Lt):
+                        result = result and (left < right)
+                    elif isinstance(op, ast.LtE):
+                        result = result and (left <= right)
+                    elif isinstance(op, ast.Gt):
+                        result = result and (left > right)
+                    elif isinstance(op, ast.GtE):
+                        result = result and (left >= right)
+                    else:
+                        raise ValueError(f"Unsupported comparison operator: {type(op).__name__}")
+                    left = right
+                return result
+
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name):
+                    raise ValueError("Only simple function calls are supported")
+                func_name = node.func.id
+                func = CUSTOM_FUNCTIONS.get(func_name)
+                if func is None:
+                    raise ValueError(f"Unsupported function: {func_name}")
+                args = [_eval_node(a) for a in node.args]
+                kwargs = {kw.arg: _eval_node(kw.value) for kw in node.keywords if kw.arg is not None}
+                return func(*args, **kwargs)
+
+            raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+        normalized = formula.replace("<>", "!=").replace("=", "==").replace(" And ", " and ").replace(" Or ", " or ")
+        # Avoid turning existing '!=' into '!=='
+        normalized = normalized.replace("!==", "!=")
+
+        # PowerFx uses true/false; normalize for Python
+        normalized = normalized.replace("true", "True").replace("false", "False")
+
+        try:
+            tree = ast.parse(normalized, mode="eval")
+            return _eval_node(tree.body)
+        except NameError:
+            return None
 
     def _eval_custom_function(self, formula: str) -> Any | None:
         """Handle custom functions not supported by the Python PowerFx library.

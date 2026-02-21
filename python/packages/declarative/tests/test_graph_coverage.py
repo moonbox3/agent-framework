@@ -2702,3 +2702,53 @@ class TestLongMessageTextHandling:
 
         result = state.eval('=!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.Messages))))')
         assert result is False
+
+    async def test_message_text_temp_var_counter_persists_across_evals_and_avoids_overwrite(self, mock_state):
+        """Temp vars for long MessageText must not collide across multiple eval() calls."""
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        long_text_0 = "A" * 600
+        long_text_1 = "B" * 600
+
+        # First long MessageText allocates _TempMessageText0
+        state.set(
+            "Local.Messages",
+            [{"text": long_text_0, "contents": [{"type": "text", "text": long_text_0}]}],
+        )
+        assert state.eval("=Upper(MessageText(Local.Messages))") == long_text_0
+        assert state.get("Local._TempMessageText0") == long_text_0
+
+        # Second long MessageText must allocate _TempMessageText1 (not overwrite 0)
+        state.set(
+            "Local.Messages",
+            [{"text": long_text_1, "contents": [{"type": "text", "text": long_text_1}]}],
+        )
+        assert state.eval("=Upper(MessageText(Local.Messages))") == long_text_1
+        assert state.get("Local._TempMessageText0") == long_text_0
+        assert state.get("Local._TempMessageText1") == long_text_1
+        assert state.get("Local._TempMessageTextCounter") == 2
+
+    async def test_message_text_short_does_not_allocate_temp_var_or_advance_counter(self, mock_state):
+        """Short MessageText should be embedded inline and not allocate temp vars."""
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        # Seed counter by forcing one long allocation
+        long_text = "X" * 600
+        state.set(
+            "Local.Messages",
+            [{"text": long_text, "contents": [{"type": "text", "text": long_text}]}],
+        )
+        state.eval("=Upper(MessageText(Local.Messages))")
+        assert state.get("Local._TempMessageTextCounter") == 1
+
+        # Now evaluate a short string; should not create _TempMessageText1 nor advance counter
+        short_text = "Hello world"
+        state.set(
+            "Local.Messages",
+            [{"text": short_text, "contents": [{"type": "text", "text": short_text}]}],
+        )
+        assert state.eval("=Upper(MessageText(Local.Messages))") == "HELLO WORLD"
+        assert state.get("Local._TempMessageText1") is None
+        assert state.get("Local._TempMessageTextCounter") == 1

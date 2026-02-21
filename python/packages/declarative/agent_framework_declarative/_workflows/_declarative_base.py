@@ -480,8 +480,11 @@ class DeclarativeWorkflowState:
         # We use 500 to leave room for the rest of the expression around the replaced value.
         MAX_INLINE_LENGTH = 500
 
-        # Counter for generating unique temp variable names
-        temp_var_counter = 0
+        # Counter for generating unique temp variable names.
+        # Persist in state so multiple eval() calls don't reuse the same temp var names.
+        counter_path = "Local._TempMessageTextCounter"
+        existing_counter = self.get(counter_path)
+        temp_var_counter = int(existing_counter) if isinstance(existing_counter, int) else 0
 
         # Custom functions that need pre-processing: (regex pattern, handler)
         custom_functions = [
@@ -539,6 +542,7 @@ class DeclarativeWorkflowState:
                         # Store long strings in a temp variable to avoid PowerFx expression limit
                         temp_var_name = f"_TempMessageText{temp_var_counter}"
                         temp_var_counter += 1
+                        self.set(counter_path, temp_var_counter)
                         self.set(f"Local.{temp_var_name}", replacement)
                         replacement_str = f"Local.{temp_var_name}"
                         logger.debug(

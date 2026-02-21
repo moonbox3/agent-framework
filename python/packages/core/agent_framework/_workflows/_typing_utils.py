@@ -62,16 +62,23 @@ def resolve_type_annotation(
         eval_globalns.setdefault("Union", Union)
         eval_globalns.setdefault("Optional", __import__("typing").Optional)
 
+        # mypy can crash (internal AssertionError) when evaluating/expanding annotations
+        # that reference a third-party namespace package that isn't installed (e.g. "google").
+        # Those crashes can occur even with ignore_missing_imports, because the symbol table
+        # entry exists without a corresponding module.
+        #
+        # To keep the library safe for optional integrations, we treat unresolved namespace
+        # references as "Any" at runtime.
         try:
             return cast(
                 "type[Any] | UnionType",
                 eval(type_annotation, eval_globalns, localns),  # noqa: S307  # nosec B307
             )
-        except NameError as e:
-            raise NameError(
-                f"Could not resolve type annotation '{type_annotation}'. "
-                f"Make sure the type is defined or imported. Original error: {e}"
-            ) from e
+        except (NameError, AttributeError):
+            return Any
+        except SyntaxError:
+            # Preserve SyntaxError for genuinely invalid annotations.
+            raise
 
     return type_annotation
 

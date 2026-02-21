@@ -2702,3 +2702,22 @@ class TestLongMessageTextHandling:
 
         result = state.eval('=!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.Messages))))')
         assert result is False
+
+    async def test_long_message_text_temp_variable_name_is_powerfx_friendly(self, mock_state):
+        """Regression: long MessageText replacements must use a PowerFx-friendly temp variable name."""
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        long_text = "A" * 600
+        state.set("Local.Messages", [{"text": long_text, "contents": [{"type": "text", "text": long_text}]}])
+
+        # Triggers long-string path and should still evaluate.
+        result = state.eval("=Upper(MessageText(Local.Messages))")
+        assert result == "A" * 600
+
+        # Temp variable should be created using the new name (no leading underscore).
+        temp_var = state.get("Local.TempMessageText0")
+        assert temp_var == long_text
+
+        # Back-compat: old underscore name should not be used.
+        assert state.get("Local._TempMessageText0") is None

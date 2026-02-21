@@ -536,8 +536,9 @@ class DeclarativeWorkflowState:
                 # Replace in formula
                 if isinstance(replacement, str):
                     if len(replacement) > MAX_INLINE_LENGTH:
-                        # Store long strings in a temp variable to avoid PowerFx expression limit
-                        temp_var_name = f"_TempMessageText{temp_var_counter}"
+                        # Store long strings in a temp variable to avoid PowerFx expression limit.
+                        # Use a PowerFx-friendly identifier (avoid leading underscore).
+                        temp_var_name = f"TempMessageText{temp_var_counter}"
                         temp_var_counter += 1
                         self.set(f"Local.{temp_var_name}", replacement)
                         replacement_str = f"Local.{temp_var_name}"

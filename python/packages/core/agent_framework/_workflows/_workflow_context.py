@@ -1,5 +1,4 @@
 # Copyright (c) Microsoft. All rights reserved.
-
 from __future__ import annotations
 
 import copy
@@ -145,6 +144,12 @@ def validate_workflow_context_annotation(
             f"WorkflowContext[T] or WorkflowContext[T, U] type annotation, "
             f"where T is output message type and U is workflow output type"
         )
+
+    # Allow forward-ref strings produced by `from __future__ import annotations`
+    # when `typing.get_type_hints()` wasn't able to resolve them (e.g., nested
+    # classes not present in globals).
+    if isinstance(annotation, str):
+        return [], []
 
     if not _is_workflow_context_type(annotation):
         raise ValueError(

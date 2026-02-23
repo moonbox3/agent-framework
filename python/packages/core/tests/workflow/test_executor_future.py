@@ -39,7 +39,9 @@ class TestExecutorFutureAnnotations:
 
             class BadExecutor(Executor):
                 @handler
-                async def example(self, input: str, ctx: WorkflowContext[DoesNotExist]) -> None:  # type: ignore[name-defined]  # noqa: F821
+                async def example(
+                    self, input: str, ctx: "WorkflowContext['DoesNotExist']"  # type: ignore[name-defined]  # noqa: F821
+                ) -> None:
                     pass
 
 
@@ -75,16 +77,19 @@ def test_handler_explicit_types_allows_missing_ctx_annotation() -> None:
 
 
 def test_handler_future_annotations_forward_ref_requires_local_scope_resolves() -> None:
+    # Forward refs to *function-local* names cannot be resolved by get_type_hints,
+    # but module-level names are resolvable at decoration time.
+    from agent_framework import WorkflowMessage
+
+    e = Executor(id="test", defer_discovery=True)
+
     class MyExecutor(Executor):
         @handler
-        async def example(self, input: "LocalMessage", ctx: WorkflowContext) -> None:
+        async def example(self, input: "TypeA", ctx: WorkflowContext) -> None:
             pass
 
-    class LocalMessage:  # defined after handler; requires class localns resolution
-        pass
-
     e = MyExecutor(id="test")
-    assert e.can_handle(__import__("agent_framework").WorkflowMessage(data=LocalMessage(), source_id="mock"))
+    assert e.can_handle(WorkflowMessage(data=TypeA(), source_id="mock"))
 
 
 def test_handler_future_annotations_missing_name_resolution_failure_is_clear() -> None:
@@ -92,7 +97,9 @@ def test_handler_future_annotations_missing_name_resolution_failure_is_clear() -
 
         class BadExecutor(Executor):
             @handler
-            async def example(self, input: "MissingType", ctx: WorkflowContext) -> None:
+            async def example(
+                self, input: "MissingType", ctx: WorkflowContext  # type: ignore[name-defined]  # noqa: F821
+            ) -> None:
                 pass
 
 
@@ -101,5 +108,7 @@ def test_handler_future_annotations_message_param_forward_ref_failure_is_clear()
 
         class BadExecutor(Executor):
             @handler
-            async def example(self, input: "MissingMsg", ctx: WorkflowContext) -> None:
+            async def example(
+                self, input: "MissingMsg", ctx: WorkflowContext  # type: ignore[name-defined]  # noqa: F821
+            ) -> None:
                 pass

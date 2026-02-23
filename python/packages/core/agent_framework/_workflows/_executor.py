@@ -722,6 +722,19 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
+    # Build locals for forward-ref resolution.
+    # - For methods defined in a class body, local forward refs live in the class namespace.
+    # - For nested definitions, use the function's globals; those locals aren't reliably available.
+    # - Always include the function object itself to support refs like "cls" patterns.
+    localns: dict[str, Any] = {func.__name__: func}
+    qualname = getattr(func, "__qualname__", "")
+    if "." in qualname:
+        cls_name = qualname.split(".", 1)[0]
+        globalns = getattr(func, "__globals__", {})
+        cls_obj = globalns.get(cls_name)
+        if isinstance(cls_obj, type):
+            localns.update(vars(cls_obj))
+
     # When possible, resolve annotations using typing.get_type_hints to:
     # - correctly handle non-__future__ (already evaluated) typing objects
     # - resolve string forward refs using *both* globalns and localns
@@ -731,7 +744,7 @@ def _validate_handler_signature(
         hints = get_type_hints(
             func,
             globalns=getattr(func, "__globals__", None),
-            localns=dict(vars(func)),
+            localns=localns,
             include_extras=True,
         )
     except (NameError, TypeError) as e:
@@ -754,16 +767,9 @@ def _validate_handler_signature(
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
-        try:
-            output_types, workflow_output_types = validate_workflow_context_annotation(
-                ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
-            )
-        except ValueError as e:
-            raise ValueError(
-                f"Handler parameter '{ctx_param.name}' must be annotated as WorkflowContext, WorkflowContext[T], "
-                "or WorkflowContext[T, U] (optionally using forward references). If using forward references, "
-                "ensure they are resolvable at runtime (not only under TYPE_CHECKING)."
-            ) from e
+        output_types, workflow_output_types = validate_workflow_context_annotation(
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
+        )
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

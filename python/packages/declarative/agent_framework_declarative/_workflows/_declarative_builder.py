@@ -120,6 +120,7 @@ class DeclarativeWorkflowBuilder:
         agents: dict[str, Any] | None = None,
         checkpoint_storage: Any | None = None,
         validate: bool = True,
+        max_iterations: int | None = None,
     ):
         """Initialize the builder.
 
@@ -129,6 +130,8 @@ class DeclarativeWorkflowBuilder:
             agents: Registry of agent instances by name (for InvokeAzureAgent actions)
             checkpoint_storage: Optional checkpoint storage for pause/resume support
             validate: Whether to validate the workflow definition before building (default: True)
+            max_iterations: Maximum runner supersteps. Falls back to the YAML ``maxTurns``
+                field, then to the core default (100).
         """
         self._yaml_def = yaml_definition
         self._workflow_id = workflow_id or yaml_definition.get("name", "declarative_workflow")
@@ -139,6 +142,8 @@ class DeclarativeWorkflowBuilder:
         self._pending_gotos: list[tuple[Any, str]] = []  # (goto_executor, target_id)
         self._validate = validate
         self._seen_explicit_ids: set[str] = set()  # Track explicit IDs for duplicate detection
+        # Resolve max_iterations: explicit arg > YAML maxTurns > core default
+        self._max_iterations: int | None = max_iterations or yaml_definition.get("maxTurns")
 
     def build(self) -> Workflow:
         """Build the workflow graph.
@@ -163,11 +168,14 @@ class DeclarativeWorkflowBuilder:
         # _create_executors_for_actions runs (which itself needs the builder to add edges).
         entry_node = JoinExecutor({"kind": "Entry"}, id="_workflow_entry")
         self._executors[entry_node.id] = entry_node
-        builder = WorkflowBuilder(
-            start_executor=entry_node,
-            name=self._workflow_id,
-            checkpoint_storage=self._checkpoint_storage,
-        )
+        builder_kwargs: dict[str, Any] = {
+            "start_executor": entry_node,
+            "name": self._workflow_id,
+            "checkpoint_storage": self._checkpoint_storage,
+        }
+        if self._max_iterations is not None:
+            builder_kwargs["max_iterations"] = self._max_iterations
+        builder = WorkflowBuilder(**builder_kwargs)
 
         # Create all executors and wire sequential edges
         first_executor = self._create_executors_for_actions(actions, builder)

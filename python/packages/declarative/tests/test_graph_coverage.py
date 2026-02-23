@@ -2867,3 +2867,90 @@ class TestLongMessageTextHandling:
 
         result = state.eval('=!IsBlank(Find("CONGRATULATIONS", Upper(MessageText(Local.Messages))))')
         assert result is False
+
+
+class TestCreateConversationExecutor:
+    """Tests for CreateConversationExecutor."""
+
+    async def test_basic_creation(self, mock_context, mock_state):
+        """Test that a UUID is generated, stored at conversationId path, and conversation entry created."""
+        from agent_framework_declarative._workflows._executors_basic import (
+            CreateConversationExecutor,
+        )
+
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        action_def = {
+            "kind": "CreateConversation",
+            "conversationId": "Local.myConvId",
+        }
+        executor = CreateConversationExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        # A UUID should be stored at the requested path
+        conv_id = state.get("Local.myConvId")
+        assert conv_id is not None
+        assert isinstance(conv_id, str)
+        assert len(conv_id) == 36  # UUID format
+
+        # Conversation entry should exist in System.conversations
+        conversations = state.get("System.conversations")
+        assert conversations is not None
+        assert conv_id in conversations
+        assert conversations[conv_id]["id"] == conv_id
+        assert conversations[conv_id]["messages"] == []
+
+    async def test_no_conversation_id_param(self, mock_context, mock_state):
+        """Test that conversation is still created even without a conversationId param."""
+        from agent_framework_declarative._workflows._executors_basic import (
+            CreateConversationExecutor,
+        )
+
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        action_def = {
+            "kind": "CreateConversation",
+        }
+        executor = CreateConversationExecutor(action_def)
+        await executor.handle_action(ActionTrigger(), mock_context)
+
+        # Conversation entry should still exist in System.conversations
+        conversations = state.get("System.conversations")
+        assert conversations is not None
+        assert len(conversations) == 1
+
+    async def test_multiple_conversations(self, mock_context, mock_state):
+        """Test creating multiple conversations produces distinct IDs."""
+        from agent_framework_declarative._workflows._executors_basic import (
+            CreateConversationExecutor,
+        )
+
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        action_def1 = {
+            "kind": "CreateConversation",
+            "conversationId": "Local.conv1",
+        }
+        action_def2 = {
+            "kind": "CreateConversation",
+            "conversationId": "Local.conv2",
+        }
+
+        executor1 = CreateConversationExecutor(action_def1)
+        await executor1.handle_action(ActionTrigger(), mock_context)
+
+        executor2 = CreateConversationExecutor(action_def2)
+        await executor2.handle_action(ActionTrigger(), mock_context)
+
+        conv1 = state.get("Local.conv1")
+        conv2 = state.get("Local.conv2")
+
+        assert conv1 != conv2
+
+        conversations = state.get("System.conversations")
+        assert len(conversations) == 2
+        assert conv1 in conversations
+        assert conv2 in conversations

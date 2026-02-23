@@ -28,7 +28,11 @@ from pathlib import Path
 from agent_framework.azure import AzureOpenAIResponsesClient
 from agent_framework.declarative import WorkflowFactory
 from azure.identity import AzureCliCredential
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Agent Instructions
 
@@ -180,7 +184,11 @@ async def main() -> None:
     )
 
     # Load workflow from YAML
-    workflow_path = Path(__file__).parent / "workflow.yaml"
+    samples_root = Path(__file__).parent.parent.parent.parent.parent.parent
+    workflow_path = samples_root / "workflow-samples" / "DeepResearch.yaml"
+    if not workflow_path.exists():
+        # Fall back to local copy if workflow-samples doesn't exist
+        workflow_path = Path(__file__).parent / "workflow.yaml"
 
     workflow = factory.create_workflow_from_yaml_path(workflow_path)
 
@@ -194,7 +202,7 @@ async def main() -> None:
 
     async for event in workflow.run(task, stream=True):
         if event.type == "output":
-            print(f"{event.data}", end="", flush=True)
+            print(f"\n{event.data}", flush=True)
 
     print("\n" + "=" * 60)
     print("Research Complete")

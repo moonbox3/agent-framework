@@ -722,20 +722,35 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
+    # Resolve postponed annotations (e.g., from `from __future__ import annotations`).
+    # When future annotations are enabled, signature annotations may be strings; we need
+    # concrete typing objects before validating WorkflowContext[...].
+    type_hints: dict[str, Any] = {}
+    with contextlib.suppress(TypeError, NameError):
+        # typing.get_type_hints handles forward refs and returns evaluated typing objects.
+        # It uses func.__globals__ automatically.
+        import typing
+
+        type_hints = typing.get_type_hints(func)
+
+    resolved_message_annotation = type_hints.get(message_param.name, message_param.annotation)
+
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    resolved_ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
+
+    if skip_message_annotation and resolved_ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            resolved_ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+    message_type = resolved_message_annotation if resolved_message_annotation != inspect.Parameter.empty else None
+    ctx_annotation = resolved_ctx_annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

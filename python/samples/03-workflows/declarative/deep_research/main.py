@@ -35,7 +35,6 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 # Agent Instructions
-
 RESEARCH_INSTRUCTIONS = """In order to help begin addressing the user request, please answer the following pre-survey to the best of your ability.
 Keep in mind that you are Ken Jennings-level with trivia, and Mensa-level with puzzles, so there should be a deep well to draw from.
 
@@ -96,8 +95,6 @@ WEATHER_INSTRUCTIONS = """You are a weather expert that can provide weather info
 
 
 # Pydantic models for structured outputs
-
-
 class ReasonedAnswer(BaseModel):
     """A response with reasoning and answer."""
 

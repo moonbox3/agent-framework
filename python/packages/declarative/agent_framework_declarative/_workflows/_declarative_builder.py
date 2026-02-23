@@ -143,7 +143,10 @@ class DeclarativeWorkflowBuilder:
         self._validate = validate
         self._seen_explicit_ids: set[str] = set()  # Track explicit IDs for duplicate detection
         # Resolve max_iterations: explicit arg > YAML maxTurns > core default
-        self._max_iterations: int | None = max_iterations or yaml_definition.get("maxTurns")
+        resolved = max_iterations if max_iterations is not None else yaml_definition.get("maxTurns")
+        if resolved is not None and (not isinstance(resolved, int) or resolved <= 0):
+            raise ValueError(f"Invalid max_iterations/maxTurns value: {resolved!r}. Expected a positive integer.")
+        self._max_iterations: int | None = resolved
 
     def build(self) -> Workflow:
         """Build the workflow graph.

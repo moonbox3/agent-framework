@@ -222,15 +222,16 @@ class TestHandlerCoverage:
 
         registered_executors = set(ALL_ACTION_EXECUTORS.keys())
 
-        # Trigger kinds are not actions and don't need executors
-        trigger_kinds = {"OnConversationStart"}
+        # Kinds handled structurally by the builder (not registered as executors)
+        structural_kinds = {
+            "OnConversationStart",  # Trigger kind, not an action
+            "ConditionGroup",  # Decomposed into evaluator/join nodes
+            "GotoAction",  # Resolved as graph edges, not executor nodes
+            "Goto",  # Alias for GotoAction
+        }
 
-        missing_executors = all_action_kinds - registered_executors - trigger_kinds
+        missing_executors = all_action_kinds - registered_executors - structural_kinds
 
-        if missing_executors:
-            # Informational, not a failure, as some actions may be future work
-            pass
-
-        # Check that we have executors for a reasonable core set
-        core_executors = registered_executors & all_action_kinds
-        assert len(core_executors) > 5, "Expected more executors to cover sample action kinds"
+        assert not missing_executors, (
+            f"Missing executors for action kinds used in workflow samples: {sorted(missing_executors)}"
+        )

@@ -508,7 +508,7 @@ class Executor(RequestInfoMixin, DictConvertible):
         """Hook called when the workflow is restored from a checkpoint.
 
         Override this method in subclasses to implement custom logic that should
-        run when the workflow is restored from a checkpoint.
+        run when the workflow is restored from the checkpoint.
 
         Args:
             state: The state dictionary that was saved during checkpointing.
@@ -722,20 +722,45 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
-    # Validate ctx parameter is WorkflowContext and extract type args
+    # Validate ctx parameter is WorkflowContext and extract type args.
+    #
+    # Note: with `from __future__ import annotations`, annotations may be stringified. We handle
+    # those via resolve_type_annotation(..., func.__globals__) so that WorkflowContext[T, U]
+    # can still be validated.
+    message_type = message_param.annotation
+    ctx_annotation: Any = inspect.Parameter.empty
+
+    if message_type != inspect.Parameter.empty and isinstance(message_type, str):
+        message_type = resolve_type_annotation(message_type, func.__globals__)
+
+    if message_type == inspect.Parameter.empty:
+        message_type = None
+
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    if ctx_param.annotation != inspect.Parameter.empty and isinstance(ctx_param.annotation, str):
+        ctx_annotation = resolve_type_annotation(ctx_param.annotation, func.__globals__)
+    else:
+        ctx_annotation = ctx_param.annotation
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
-        output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
-        )
-
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
+        try:
+            output_types, workflow_output_types = validate_workflow_context_annotation(
+                ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
+            )
+        except ValueError as e:
+            if isinstance(ctx_param.annotation, str):
+                raise ValueError(
+                    f"Handler parameter '{ctx_param.name}' type annotation could not be resolved. "
+                    "If you are using `from __future__ import annotations`, make sure all referenced "
+                    "types are defined/imported at decoration time (or use @handler(input=..., output=..., "
+                    "workflow_output=...) to avoid introspection)."
+                ) from e
+            raise
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

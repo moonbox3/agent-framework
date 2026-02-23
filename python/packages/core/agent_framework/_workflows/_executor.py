@@ -722,6 +722,19 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
+    # typing.get_type_hints resolves stringified/postponed annotations
+    try:
+        import typing
+
+        type_hints = typing.get_type_hints(func)
+    except Exception:
+        # Fall back to raw annotations if hints cannot be resolved (e.g., unresolved forward refs)
+        type_hints = {}
+
+    message_type = type_hints.get(message_param.name, message_param.annotation)
+    if message_type == inspect.Parameter.empty:
+        message_type = None
+
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]
     if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
@@ -729,13 +742,12 @@ def _validate_handler_signature(
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
+        ctx_annotation = ctx_param.annotation
     else:
+        ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
-
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

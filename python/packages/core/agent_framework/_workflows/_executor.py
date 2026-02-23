@@ -508,7 +508,7 @@ class Executor(RequestInfoMixin, DictConvertible):
         """Hook called when the workflow is restored from a checkpoint.
 
         Override this method in subclasses to implement custom logic that should
-        run when the workflow is restored from a checkpoint.
+        run when the workflow is restored from the checkpoint.
 
         Args:
             state: The state dictionary that was saved during checkpointing.
@@ -720,31 +720,40 @@ def _validate_handler_signature(
     message_param = params[1]
     ctx_param = params[2]
 
-    # Resolve PEP-563/PEP-649 style annotations (incl. from __future__ import annotations)
-    # before passing them to WorkflowContext validation.
-    hints: dict[str, Any] = {}
-    try:
-        import typing
+    message_annotation = message_param.annotation
+    ctx_annotation = ctx_param.annotation
 
-        hints = typing.get_type_hints(func, globalns=getattr(func, "__globals__", None), include_extras=True)
-    except Exception:
-        hints = {}
+    # Only attempt to evaluate annotations if we see stringized annotations.
+    # This reduces evaluation of arbitrary annotation expressions during registration.
+    needs_hint_resolution = isinstance(message_annotation, str) or isinstance(ctx_annotation, str)
 
-    message_annotation = hints.get(message_param.name, message_param.annotation)
-    ctx_annotation = hints.get(ctx_param.name, ctx_param.annotation)
-
-    # Conservative fallback: resolve string annotations with the function's globals.
-    if isinstance(message_annotation, str):
+    if needs_hint_resolution:
         try:
-            message_annotation = resolve_type_annotation(message_annotation, getattr(func, "__globals__", None))
-        except Exception:
-            message_annotation = message_param.annotation
+            import typing
 
-    if isinstance(ctx_annotation, str):
-        try:
-            ctx_annotation = resolve_type_annotation(ctx_annotation, getattr(func, "__globals__", None))
-        except Exception:
-            ctx_annotation = ctx_param.annotation
+            hints = typing.get_type_hints(func, globalns=getattr(func, "__globals__", None), include_extras=True)
+        except (NameError, AttributeError, TypeError) as exc:
+            # Do not silently continue with unresolved strings: this can mask genuine annotation bugs.
+            raise ValueError(
+                f"Handler {func.__name__} has annotations that could not be resolved. "
+                "This is often caused by a misspelled type name or a missing import. "
+                f"Original error: {exc.__class__.__name__}: {exc}"
+            ) from exc
+        message_annotation = hints.get(message_param.name, message_annotation)
+        ctx_annotation = hints.get(ctx_param.name, ctx_annotation)
+
+    # Do not proceed with string annotations after resolution attempts.
+    if isinstance(message_annotation, str) and not skip_message_annotation:
+        raise ValueError(
+            f"Handler {func.__name__} message parameter annotation could not be resolved: {message_annotation!r}. "
+            "Ensure the type is defined and importable in the handler's module."
+        )
+
+    if isinstance(ctx_annotation, str) and ctx_annotation != inspect.Parameter.empty:
+        raise ValueError(
+            f"Handler {func.__name__} ctx parameter annotation could not be resolved: {ctx_annotation!r}. "
+            "Ensure WorkflowContext type arguments are defined and importable in the handler's module."
+        )
 
     # Check message parameter has type annotation (unless skipped)
     if not skip_message_annotation and message_annotation == inspect.Parameter.empty:

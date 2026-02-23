@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal as _Decimal
@@ -162,15 +163,19 @@ class DeclarativeWorkflowState:
         Args:
             inputs: Initial workflow inputs (become Workflow.Inputs.*)
         """
+        conversation_id = str(uuid.uuid4())
         state_data: DeclarativeStateData = {
             "Inputs": dict(inputs) if inputs else {},
             "Outputs": {},
             "Local": {},
             "System": {
-                "ConversationId": "default",
+                "ConversationId": conversation_id,
                 "LastMessage": {"Text": "", "Id": ""},
                 "LastMessageText": "",
                 "LastMessageId": "",
+                "conversations": {
+                    conversation_id: {"id": conversation_id, "messages": []},
+                },
             },
             "Agent": {},
             "Conversation": {"messages": [], "history": []},

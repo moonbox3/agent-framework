@@ -2919,9 +2919,10 @@ class TestCreateConversationExecutor:
         await executor.handle_action(ActionTrigger(), mock_context)
 
         # Conversation entry should still exist in System.conversations
+        # (initialize() seeds one default conversation, plus the one just created)
         conversations = state.get("System.conversations")
         assert conversations is not None
-        assert len(conversations) == 1
+        assert len(conversations) == 2
 
     async def test_multiple_conversations(self, mock_context, mock_state):
         """Test creating multiple conversations produces distinct IDs."""
@@ -2952,7 +2953,49 @@ class TestCreateConversationExecutor:
 
         assert conv1 != conv2
 
+        # initialize() seeds one default conversation, plus the two just created
         conversations = state.get("System.conversations")
-        assert len(conversations) == 2
+        assert len(conversations) == 3
         assert conv1 in conversations
         assert conv2 in conversations
+
+
+class TestDeclarativeWorkflowStateConversationIdInit:
+    """Tests that DeclarativeWorkflowState.initialize() generates a real UUID for ConversationId."""
+
+    async def test_conversation_id_is_not_default(self, mock_state):
+        """System.ConversationId should be a UUID, not 'default'."""
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        conv_id = state.get("System.ConversationId")
+        assert conv_id is not None
+        assert conv_id != "default"
+        # Validate it looks like a UUID
+        import uuid
+
+        uuid.UUID(conv_id)  # Raises ValueError if not a valid UUID
+
+    async def test_conversations_dict_initialized(self, mock_state):
+        """System.conversations should contain an entry matching ConversationId."""
+        state = DeclarativeWorkflowState(mock_state)
+        state.initialize()
+
+        conv_id = state.get("System.ConversationId")
+        conversations = state.get("System.conversations")
+        assert conversations is not None
+        assert conv_id in conversations
+        assert conversations[conv_id]["id"] == conv_id
+        assert conversations[conv_id]["messages"] == []
+
+    async def test_each_initialize_generates_unique_id(self, mock_state):
+        """Each call to initialize() should produce a different ConversationId."""
+        state = DeclarativeWorkflowState(mock_state)
+
+        state.initialize()
+        id1 = state.get("System.ConversationId")
+
+        state.initialize()
+        id2 = state.get("System.ConversationId")
+
+        assert id1 != id2

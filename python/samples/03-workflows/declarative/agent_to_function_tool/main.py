@@ -14,7 +14,7 @@ The workflow:
 4. Uses another function tool to format the final confirmation message
 
 Run with:
-    python -m samples.getting_started.workflows.declarative.agent_to_function_tool.main
+    python -m samples.03-workflows.declarative.agent_to_function_tool.main
 """
 
 import asyncio

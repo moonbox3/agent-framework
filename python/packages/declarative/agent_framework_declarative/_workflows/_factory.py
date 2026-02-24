@@ -607,9 +607,9 @@ class WorkflowFactory:
         return self
 
     def register_tool(self, name: str, func: Any) -> WorkflowFactory:
-        """Register a tool function with the factory for use in InvokeFunctionTool actions.
+        """Register a function with the factory for use in InvokeFunctionTool actions.
 
-        Registered tools are available to InvokeFunctionTool actions by name via the functionName field.
+        Registered functions are available to InvokeFunctionTool actions by name via the functionName field.
         This method supports fluent chaining.
 
         Args:

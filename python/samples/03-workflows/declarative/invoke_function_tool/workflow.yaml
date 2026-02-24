@@ -26,6 +26,7 @@ actions:
     output:
       messages: Local.weatherToolCallItems
       result: Local.weatherInfo
+      autoSend: true
 
   # Format a human-readable message using another function
   - kind: InvokeFunctionTool

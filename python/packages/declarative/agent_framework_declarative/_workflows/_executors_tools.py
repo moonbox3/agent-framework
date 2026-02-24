@@ -64,13 +64,11 @@ class ToolApprovalRequest:
         request_id: Unique identifier for this approval request.
         function_name: Evaluated function name to be invoked.
         arguments: Evaluated arguments to be passed to the function.
-        conversation_id: Optional conversation ID for context.
     """
 
     request_id: str
     function_name: str
     arguments: dict[str, Any]
-    conversation_id: str | None = None
 
 
 @dataclass
@@ -105,7 +103,7 @@ class ToolApprovalState:
     arguments: dict[str, Any]
     output_messages_var: str | None
     output_result_var: str | None
-    conversation_id: str | None
+    auto_send: bool
 
 
 # ============================================================================
@@ -175,7 +173,6 @@ class BaseToolExecutor(DeclarativeActionExecutor):
     YAML Schema (common fields):
         kind: <ToolKind>
         id: unique_id
-        conversationId: =System.ConversationId  # optional
         functionName: function_to_call  # required, supports =expression syntax
         requireApproval: true  # optional, default=false
         arguments:  # optional dictionary
@@ -184,6 +181,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         output:
           messages: Local.toolCallMessages  # Message list
           result: Local.toolResult
+          autoSend: true  # optional, default=true
     """
 
     def __init__(
@@ -263,23 +261,25 @@ class BaseToolExecutor(DeclarativeActionExecutor):
 
         return None
 
-    def _get_output_config(self) -> tuple[str | None, str | None]:
+    def _get_output_config(self) -> tuple[str | None, str | None, bool]:
         """Parse output configuration from action definition.
 
         Returns:
-            Tuple of (messages_var, result_var)
+            Tuple of (messages_var, result_var, auto_send)
         """
         output_config = self._action_def.get("output", {})
 
         if not isinstance(output_config, dict):
-            return None, None
+            return None, None, True
 
         messages_var = output_config.get("messages")
         result_var = output_config.get("result")
+        auto_send = bool(output_config.get("autoSend", True))
 
         return (
             str(messages_var) if messages_var else None,
             str(result_var) if result_var else None,
+            auto_send,
         )
 
     def _store_result(
@@ -462,7 +462,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         state = await self._ensure_state_initialized(ctx, trigger)
 
         # Parse output configuration early so we can store errors
-        messages_var, result_var = self._get_output_config()
+        messages_var, result_var, auto_send = self._get_output_config()
 
         # Get and evaluate function name (required)
         function_name_expr = self._action_def.get("functionName")
@@ -497,13 +497,6 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             for key, value in arguments_def.items():
                 arguments[key] = state.eval_if_expression(value)
 
-        # Get conversation ID if specified
-        conversation_id_expr = self._action_def.get("conversationId")
-        conversation_id = None
-        if conversation_id_expr:
-            evaluated_id = state.eval_if_expression(conversation_id_expr)
-            conversation_id = str(evaluated_id) if evaluated_id else None
-
         # Check if approval is required
         require_approval = self._action_def.get("requireApproval", False)
 
@@ -514,7 +507,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                 arguments=arguments,
                 output_messages_var=messages_var,
                 output_result_var=result_var,
-                conversation_id=conversation_id,
+                auto_send=auto_send,
             )
             approval_key = f"{TOOL_APPROVAL_STATE_KEY}_{self.id}"
             ctx.state.set(approval_key, approval_state)
@@ -524,7 +517,6 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                 request_id=str(uuid.uuid4()),
                 function_name=function_name,
                 arguments=arguments,
-                conversation_id=conversation_id,
             )
             logger.info(f"{self.__class__.__name__}: requesting approval for '{function_name}'")
             await ctx.request_info(request, ToolApprovalResponse)
@@ -540,6 +532,8 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         )
 
         self._store_result(result, state, messages_var, result_var)
+        if auto_send and result.success and result.result is not None:
+            await ctx.yield_output(str(result.result))
         await ctx.send_message(ActionComplete())
 
     @response_handler
@@ -564,7 +558,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             error_msg = "Approval state not found, cannot resume tool invocation"
             logger.error(f"{self.__class__.__name__}: {error_msg}")
             # Try to store error - get output config from action def as fallback
-            _, result_var = self._get_output_config()
+            _, result_var, _ = self._get_output_config()
             if result_var and state:
                 state.set(_normalize_variable_path(result_var), {"error": error_msg})
             await ctx.send_message(ActionComplete())
@@ -580,6 +574,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         arguments = approval_state.arguments
         messages_var = approval_state.output_messages_var
         result_var = approval_state.output_result_var
+        auto_send = approval_state.auto_send
 
         # Check if approved
         if not response.approved:
@@ -610,6 +605,8 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         )
 
         self._store_result(result, state, messages_var, result_var)
+        if auto_send and result.success and result.result is not None:
+            await ctx.yield_output(str(result.result))
         await ctx.send_message(ActionComplete())
 
 
@@ -630,7 +627,6 @@ class InvokeFunctionToolExecutor(BaseToolExecutor):
     YAML Schema:
         kind: InvokeFunctionTool
         id: invoke_function_example
-        conversationId: =System.ConversationId  # optional
         functionName: get_weather  # required, supports =expression syntax
         requireApproval: true  # optional, default=false
         arguments:  # optional dictionary
@@ -639,6 +635,7 @@ class InvokeFunctionToolExecutor(BaseToolExecutor):
         output:
           messages: Local.weatherToolCallItems  # Message list
           result: Local.WeatherInfo
+          autoSend: true  # optional, default=true
 
     Tool Registration:
         Tools can be registered via:

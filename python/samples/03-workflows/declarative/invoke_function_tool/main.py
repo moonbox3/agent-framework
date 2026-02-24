@@ -10,7 +10,7 @@ This sample shows how to:
 5. Capture function output in workflow variables
 
 Run with:
-    python -m samples.getting_started.workflows.declarative.invoke_function_tool.main
+    python -m samples.03-workflows.declarative.invoke_function_tool.main
 """
 
 import asyncio

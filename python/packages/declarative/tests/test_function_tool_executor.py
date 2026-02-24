@@ -376,12 +376,10 @@ class TestToolApprovalTypes:
             request_id="test-123",
             function_name="dangerous_operation",
             arguments={"target": "production"},
-            conversation_id="conv-456",
         )
         assert request.request_id == "test-123"
         assert request.function_name == "dangerous_operation"
         assert request.arguments == {"target": "production"}
-        assert request.conversation_id == "conv-456"
 
     def test_approval_response_approved(self):
         """Test creating an approved response."""
@@ -402,13 +400,13 @@ class TestToolApprovalTypes:
             arguments={"user_id": "123"},
             output_messages_var="Local.messages",
             output_result_var="Local.result",
-            conversation_id="conv-789",
+            auto_send=True,
         )
         assert state.function_name == "delete_user"
         assert state.arguments == {"user_id": "123"}
         assert state.output_messages_var == "Local.messages"
         assert state.output_result_var == "Local.result"
-        assert state.conversation_id == "conv-789"
+        assert state.auto_send is True
 
 
 class TestInvokeFunctionToolEdgeCases:
@@ -589,23 +587,21 @@ class TestInvokeFunctionToolEdgeCases:
         assert any("15" in out for out in outputs)
 
     @pytest.mark.asyncio
-    async def test_conversation_id_expression(self):
-        """Test conversationId field with expression."""
+    async def test_auto_send_disabled(self):
+        """Test autoSend=false prevents automatic output yielding."""
 
         def echo_id(msg: str) -> str:
             return msg
 
         yaml_def = {
-            "name": "conversation_id_test",
+            "name": "auto_send_disabled_test",
             "actions": [
-                {"kind": "SetValue", "id": "set_conv_id", "path": "Local.convId", "value": "conv-123"},
                 {
                     "kind": "InvokeFunctionTool",
-                    "id": "call_with_conv_id",
+                    "id": "call_no_auto_send",
                     "functionName": "echo_id",
-                    "conversationId": "=Local.convId",
                     "arguments": {"msg": "hello"},
-                    "output": {"result": "Local.result"},
+                    "output": {"result": "Local.result", "autoSend": False},
                 },
                 {"kind": "SendActivity", "id": "output", "activity": {"text": "=Local.result"}},
             ],
@@ -617,6 +613,7 @@ class TestInvokeFunctionToolEdgeCases:
         events = await workflow.run({})
         outputs = events.get_outputs()
 
+        # Result should still be available via explicit SendActivity
         assert "hello" in outputs
 
     @pytest.mark.asyncio
@@ -852,9 +849,10 @@ class TestNonDictOutputConfig:
         }
 
         executor = InvokeFunctionToolExecutor(action_def, tools={"noop": noop})
-        messages_var, result_var = executor._get_output_config()
+        messages_var, result_var, auto_send = executor._get_output_config()
         assert messages_var is None
         assert result_var is None
+        assert auto_send is True
 
     @pytest.mark.asyncio
     async def test_output_as_list_is_ignored(self):
@@ -872,9 +870,10 @@ class TestNonDictOutputConfig:
         }
 
         executor = InvokeFunctionToolExecutor(action_def, tools={"noop": noop})
-        messages_var, result_var = executor._get_output_config()
+        messages_var, result_var, auto_send = executor._get_output_config()
         assert messages_var is None
         assert result_var is None
+        assert auto_send is True
 
 
 # ============================================================================
@@ -1112,7 +1111,7 @@ class TestApprovalFlow:
             arguments={"x": 7},
             output_messages_var=None,
             output_result_var="Local.result",
-            conversation_id=None,
+            auto_send=True,
         )
 
         # Simulate the response
@@ -1162,7 +1161,7 @@ class TestApprovalFlow:
             arguments={"x": 5},
             output_messages_var=None,
             output_result_var="Local.result",
-            conversation_id=None,
+            auto_send=True,
         )
 
         original_request = ToolApprovalRequest(

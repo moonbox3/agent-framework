@@ -7,19 +7,22 @@ Using entities instead of orchestrations provides better state management and
 allows for long-running agent conversations.
 """
 
+from __future__ import annotations
+
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any, cast
 
 import azure.durable_functions as df
-from agent_framework import SupportsAgentRun, get_logger
+from agent_framework import SupportsAgentRun
 from agent_framework_durabletask import (
     AgentEntity,
     AgentEntityStateProviderMixin,
     AgentResponseCallbackProtocol,
 )
 
-logger = get_logger("agent_framework.azurefunctions.entities")
+logger = logging.getLogger("agent_framework.azurefunctions")
 
 
 class AzureFunctionEntityStateProvider(AgentEntityStateProviderMixin):

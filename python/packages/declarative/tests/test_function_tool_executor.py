@@ -14,12 +14,25 @@ These tests verify:
 - JSON serialization fallbacks
 """
 
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent_framework_declarative._workflows import (
+try:
+    import powerfx  # noqa: F401
+
+    _powerfx_available = True
+except (ImportError, RuntimeError):
+    _powerfx_available = False
+
+pytestmark = pytest.mark.skipif(
+    not _powerfx_available or sys.version_info >= (3, 14),
+    reason="PowerFx engine not available (requires dotnet runtime)",
+)
+
+from agent_framework_declarative._workflows import (  # noqa: E402
     DECLARATIVE_STATE_KEY,
     FUNCTION_TOOL_REGISTRY_KEY,
     TOOL_APPROVAL_STATE_KEY,
@@ -33,7 +46,7 @@ from agent_framework_declarative._workflows import (
     ToolInvocationResult,
     WorkflowFactory,
 )
-from agent_framework_declarative._workflows._executors_tools import (
+from agent_framework_declarative._workflows._executors_tools import (  # noqa: E402
     _normalize_variable_path,
 )
 
@@ -449,7 +462,7 @@ class TestInvokeFunctionToolEdgeCases:
 
     @pytest.mark.asyncio
     async def test_messages_output_configuration(self):
-        """Test that messages output stores ChatMessage list."""
+        """Test that messages output stores Message list."""
 
         def simple_func(x: int) -> int:
             return x * 2

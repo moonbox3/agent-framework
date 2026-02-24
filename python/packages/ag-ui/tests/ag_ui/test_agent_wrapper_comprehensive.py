@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, MutableSequence
 from typing import Any
 
 import pytest
-from agent_framework import ChatAgent, ChatMessage, ChatOptions, ChatResponseUpdate, Content
+from agent_framework import Agent, ChatOptions, ChatResponseUpdate, Content, Message
 from pydantic import BaseModel
 
 
@@ -16,12 +16,12 @@ async def test_agent_initialization_basic(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent[ChatOptions](
-        chat_client=streaming_chat_client_stub(stream_fn),
+    agent = Agent[ChatOptions](
+        client=streaming_chat_client_stub(stream_fn),
         name="test_agent",
         instructions="Test",
     )
@@ -38,11 +38,11 @@ async def test_agent_initialization_with_state_schema(streaming_chat_client_stub
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     state_schema: dict[str, dict[str, Any]] = {"document": {"type": "string"}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
@@ -54,11 +54,11 @@ async def test_agent_initialization_with_predict_state_config(streaming_chat_cli
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     predict_config = {"document": {"tool": "write_doc", "tool_argument": "content"}}
     wrapper = AgentFrameworkAgent(agent=agent, predict_state_config=predict_config)
 
@@ -70,7 +70,7 @@ async def test_agent_initialization_with_pydantic_state_schema(streaming_chat_cl
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
@@ -78,7 +78,7 @@ async def test_agent_initialization_with_pydantic_state_schema(streaming_chat_cl
         document: str
         tags: list[str] = []
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
 
     wrapper_class_schema = AgentFrameworkAgent(agent=agent, state_schema=MyState)
     wrapper_instance_schema = AgentFrameworkAgent(agent=agent, state_schema=MyState(document="hi"))
@@ -93,17 +93,17 @@ async def test_run_started_event_emission(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # First event should be RunStartedEvent
@@ -117,11 +117,11 @@ async def test_predict_state_custom_event_emission(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     predict_config = {
         "document": {"tool": "write_doc", "tool_argument": "content"},
         "summary": {"tool": "summarize", "tool_argument": "text"},
@@ -131,7 +131,7 @@ async def test_predict_state_custom_event_emission(streaming_chat_client_stub):
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Find PredictState event
@@ -144,16 +144,93 @@ async def test_predict_state_custom_event_emission(streaming_chat_client_stub):
     assert {"state_key": "summary", "tool": "summarize", "tool_argument": "text"} in predict_value
 
 
+async def test_usage_content_emits_custom_usage_event(streaming_chat_client_stub):
+    """Usage content from the wrapped agent should be surfaced as a custom usage event."""
+    from agent_framework.ag_ui import AgentFrameworkAgent
+
+    async def stream_fn(
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del messages, options, kwargs
+        yield ChatResponseUpdate(
+            contents=[
+                Content.from_usage(
+                    {
+                        "input_token_count": 10,
+                        "output_token_count": 4,
+                        "total_token_count": 14,
+                    }
+                )
+            ]
+        )
+
+    agent = Agent(name="usage_agent", instructions="Usage test", client=streaming_chat_client_stub(stream_fn))
+    wrapper = AgentFrameworkAgent(agent=agent)
+
+    events: list[Any] = []
+    async for event in wrapper.run({"messages": [{"role": "user", "content": "Hi"}]}):
+        events.append(event)
+
+    usage_events = [event for event in events if event.type == "CUSTOM" and event.name == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].value["input_token_count"] == 10
+    assert usage_events[0].value["output_token_count"] == 4
+    assert usage_events[0].value["total_token_count"] == 14
+
+
+async def test_multimodal_input_is_forwarded_to_agent_run(streaming_chat_client_stub):
+    """Multimodal AG-UI input should be converted and passed through to agent.run."""
+    from agent_framework.ag_ui import AgentFrameworkAgent
+
+    captured_messages: list[Message] = []
+
+    async def stream_fn(
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del options, kwargs
+        captured_messages[:] = list(messages)
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Processed multimodal input")])
+
+    agent = Agent(name="multimodal_agent", instructions="Multimodal test", client=streaming_chat_client_stub(stream_fn))
+    wrapper = AgentFrameworkAgent(agent=agent)
+
+    input_data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image",
+                        "source": {"type": "url", "url": "https://example.com/cat.png", "mimeType": "image/png"},
+                    },
+                ],
+            }
+        ]
+    }
+
+    _ = [event async for event in wrapper.run(input_data)]
+
+    assert len(captured_messages) == 1
+    message = captured_messages[0]
+    assert message.role == "user"
+    assert len(message.contents) == 2
+    assert message.contents[0].type == "text"
+    assert message.contents[0].text == "What is in this image?"
+    assert message.contents[1].type == "uri"
+    assert message.contents[1].uri == "https://example.com/cat.png"
+
+
 async def test_initial_state_snapshot_with_schema(streaming_chat_client_stub):
     """Test initial StateSnapshotEvent emission when state_schema present."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     state_schema = {"document": {"type": "string"}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
@@ -163,7 +240,7 @@ async def test_initial_state_snapshot_with_schema(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Find StateSnapshotEvent
@@ -179,18 +256,18 @@ async def test_state_initialization_object_type(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     state_schema: dict[str, dict[str, Any]] = {"recipe": {"type": "object", "properties": {}}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Find StateSnapshotEvent
@@ -206,18 +283,18 @@ async def test_state_initialization_array_type(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     state_schema: dict[str, dict[str, Any]] = {"steps": {"type": "array", "items": {}}}
     wrapper = AgentFrameworkAgent(agent=agent, state_schema=state_schema)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Find StateSnapshotEvent
@@ -233,17 +310,17 @@ async def test_run_finished_event_emission(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Last event should be RunFinishedEvent
@@ -255,11 +332,11 @@ async def test_tool_result_confirm_changes_accepted(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Document updated")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(
         agent=agent,
         state_schema={"document": {"type": "string"}},
@@ -280,7 +357,7 @@ async def test_tool_result_confirm_changes_accepted(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should emit text message confirming acceptance
@@ -302,11 +379,11 @@ async def test_tool_result_confirm_changes_rejected(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result message with rejection
@@ -322,7 +399,7 @@ async def test_tool_result_confirm_changes_rejected(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should emit text message asking what to change
@@ -336,11 +413,11 @@ async def test_tool_result_function_approval_accepted(streaming_chat_client_stub
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result with multiple steps
@@ -362,7 +439,7 @@ async def test_tool_result_function_approval_accepted(streaming_chat_client_stub
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should list enabled steps
@@ -382,11 +459,11 @@ async def test_tool_result_function_approval_rejected(streaming_chat_client_stub
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="OK")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Simulate tool result rejection with steps
@@ -405,7 +482,7 @@ async def test_tool_result_function_approval_rejected(streaming_chat_client_stub
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should ask what to change about the plan
@@ -425,13 +502,13 @@ async def test_thread_metadata_tracking(streaming_chat_client_stub):
     captured_options: dict[str, Any] = {}
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         # Capture options to verify internal keys are NOT passed to chat client
         captured_options.update(options)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data = {
@@ -441,16 +518,10 @@ async def test_thread_metadata_tracking(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
-    # AG-UI internal metadata should be stored in thread.metadata
-    thread = agent.chat_client.last_thread
-    thread_metadata = thread.metadata if thread and hasattr(thread, "metadata") else {}
-    assert thread_metadata.get("ag_ui_thread_id") == "test_thread_123"
-    assert thread_metadata.get("ag_ui_run_id") == "test_run_456"
-
-    # Internal metadata should NOT be passed to chat client options
+    # AG-UI internal metadata should NOT be passed to chat client options
     options_metadata = captured_options.get("metadata", {})
     assert "ag_ui_thread_id" not in options_metadata
     assert "ag_ui_run_id" not in options_metadata
@@ -467,13 +538,13 @@ async def test_state_context_injection(streaming_chat_client_stub):
     captured_options: dict[str, Any] = {}
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         # Capture options to verify internal keys are NOT passed to chat client
         captured_options.update(options)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(
         agent=agent,
         state_schema={"document": {"type": "string"}},
@@ -485,18 +556,10 @@ async def test_state_context_injection(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
-    # Current state should be stored in thread.metadata
-    thread = agent.chat_client.last_thread
-    thread_metadata = thread.metadata if thread and hasattr(thread, "metadata") else {}
-    current_state = thread_metadata.get("current_state")
-    if isinstance(current_state, str):
-        current_state = json.loads(current_state)
-    assert current_state == {"document": "Test content"}
-
-    # Internal metadata should NOT be passed to chat client options
+    # Current state should NOT be passed to chat client options
     options_metadata = captured_options.get("metadata", {})
     assert "current_state" not in options_metadata
 
@@ -506,17 +569,17 @@ async def test_no_messages_provided(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data: dict[str, Any] = {"messages": []}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should emit RunStartedEvent and RunFinishedEvent only
@@ -530,17 +593,17 @@ async def test_message_end_event_emission(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello world")])
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data: dict[str, Any] = {"messages": [{"role": "user", "content": "Hi"}]}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Should have TextMessageEndEvent before RunFinishedEvent
@@ -558,19 +621,19 @@ async def test_error_handling_with_exception(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         if False:
             yield ChatResponseUpdate(contents=[])
         raise RuntimeError("Simulated failure")
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     input_data: dict[str, Any] = {"messages": [{"role": "user", "content": "Hi"}]}
 
     with pytest.raises(RuntimeError, match="Simulated failure"):
-        async for _ in wrapper.run_agent(input_data):
+        async for _ in wrapper.run(input_data):
             pass
 
 
@@ -579,13 +642,13 @@ async def test_json_decode_error_in_tool_result(streaming_chat_client_stub):
     from agent_framework.ag_ui import AgentFrameworkAgent
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: dict[str, Any], **kwargs: Any
+        messages: MutableSequence[Message], options: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         if False:
             yield ChatResponseUpdate(contents=[])
         raise AssertionError("ChatClient should not be called with orphaned tool result")
 
-    agent = ChatAgent(name="test_agent", instructions="Test", chat_client=streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=streaming_chat_client_stub(stream_fn))
     wrapper = AgentFrameworkAgent(agent=agent)
 
     # Send invalid JSON as tool result without preceding tool call
@@ -600,7 +663,7 @@ async def test_json_decode_error_in_tool_result(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Orphaned tool result should be sanitized out
@@ -611,56 +674,56 @@ async def test_json_decode_error_in_tool_result(streaming_chat_client_stub):
     assert len(tool_events) == 0
 
 
-async def test_agent_with_use_service_thread_is_false(streaming_chat_client_stub):
-    """Test that when use_service_thread is False, the AgentThread used to run the agent is NOT set to the service thread ID."""
+async def test_agent_with_use_service_session_is_false(streaming_chat_client_stub):
+    """Test that when use_service_session is False, the AgentSession used to run the agent is NOT set to the service session ID."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    request_service_thread_id: str | None = None
+    request_service_session_id: str | None = None
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+        messages: MutableSequence[Message], chat_options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         yield ChatResponseUpdate(
             contents=[Content.from_text(text="Response")], response_id="resp_67890", conversation_id="conv_12345"
         )
 
-    agent = ChatAgent(chat_client=streaming_chat_client_stub(stream_fn))
-    wrapper = AgentFrameworkAgent(agent=agent, use_service_thread=False)
+    agent = Agent(client=streaming_chat_client_stub(stream_fn))
+    wrapper = AgentFrameworkAgent(agent=agent, use_service_session=False)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}], "thread_id": "conv_123456"}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
-    assert request_service_thread_id is None  # type: ignore[attr-defined] (service_thread_id should be set)
+    assert request_service_session_id is None  # type: ignore[attr-defined] (service_session_id should be set)
 
 
-async def test_agent_with_use_service_thread_is_true(streaming_chat_client_stub):
-    """Test that when use_service_thread is True, the AgentThread used to run the agent is set to the service thread ID."""
+async def test_agent_with_use_service_session_is_true(streaming_chat_client_stub):
+    """Test that when use_service_session is True, the AgentSession used to run the agent is set to the service session ID."""
     from agent_framework.ag_ui import AgentFrameworkAgent
 
-    request_service_thread_id: str | None = None
+    request_service_session_id: str | None = None
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], chat_options: ChatOptions, **kwargs: Any
+        messages: MutableSequence[Message], chat_options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
-        nonlocal request_service_thread_id
-        thread = kwargs.get("thread")
-        request_service_thread_id = thread.service_thread_id if thread else None
+        nonlocal request_service_session_id
+        session = kwargs.get("session")
+        request_service_session_id = session.service_session_id if session else None
         yield ChatResponseUpdate(
             contents=[Content.from_text(text="Response")], response_id="resp_67890", conversation_id="conv_12345"
         )
 
-    agent = ChatAgent(chat_client=streaming_chat_client_stub(stream_fn))
-    wrapper = AgentFrameworkAgent(agent=agent, use_service_thread=True)
+    agent = Agent(client=streaming_chat_client_stub(stream_fn))
+    wrapper = AgentFrameworkAgent(agent=agent, use_service_session=True)
 
     input_data = {"messages": [{"role": "user", "content": "Hi"}], "thread_id": "conv_123456"}
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
-    request_service_thread_id = agent.chat_client.last_service_thread_id
-    assert request_service_thread_id == "conv_123456"  # type: ignore[attr-defined] (service_thread_id should be set)
+    request_service_session_id = agent.client.last_service_session_id
+    assert request_service_session_id == "conv_123456"  # type: ignore[attr-defined] (service_session_id should be set)
 
 
 async def test_function_approval_mode_executes_tool(streaming_chat_client_stub):
@@ -679,15 +742,15 @@ async def test_function_approval_mode_executes_tool(streaming_chat_client_stub):
         return "2025/12/01 12:00:00"
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: ChatOptions, **kwargs: Any
+        messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         # Capture the messages received by the chat client
         messages_received.clear()
         messages_received.extend(messages)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Processing completed")])
 
-    agent = ChatAgent(
-        chat_client=streaming_chat_client_stub(stream_fn),
+    agent = Agent(
+        client=streaming_chat_client_stub(stream_fn),
         name="test_agent",
         instructions="Test",
         tools=[get_datetime],
@@ -728,7 +791,7 @@ async def test_function_approval_mode_executes_tool(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Verify the run completed successfully
@@ -770,17 +833,17 @@ async def test_function_approval_mode_rejection(streaming_chat_client_stub):
         return "All data deleted"
 
     async def stream_fn(
-        messages: MutableSequence[ChatMessage], options: ChatOptions, **kwargs: Any
+        messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
         # Capture the messages received by the chat client
         messages_received.clear()
         messages_received.extend(messages)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Operation cancelled")])
 
-    agent = ChatAgent(
+    agent = Agent(
         name="test_agent",
         instructions="Test",
-        chat_client=streaming_chat_client_stub(stream_fn),
+        client=streaming_chat_client_stub(stream_fn),
         tools=[delete_all_data],
     )
     wrapper = AgentFrameworkAgent(agent=agent)
@@ -816,7 +879,7 @@ async def test_function_approval_mode_rejection(streaming_chat_client_stub):
     }
 
     events: list[Any] = []
-    async for event in wrapper.run_agent(input_data):
+    async for event in wrapper.run(input_data):
         events.append(event)
 
     # Verify the run completed

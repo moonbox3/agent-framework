@@ -1,3 +1,12 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "semantic-kernel",
+# ]
+# ///
+# Run with any PEP 723 compatible runner, e.g.:
+#   uv run samples/semantic-kernel-migration/processes/nested_process.py
+
 # Copyright (c) Microsoft. All rights reserved.
 
 """Nested process comparison between Semantic Kernel Process Framework and Agent Framework sub-workflows."""
@@ -17,9 +26,9 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowContext,
     WorkflowExecutor,
-    
     handler,
 )
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 ######################################################################
@@ -40,8 +49,10 @@ from typing_extensions import Never
 ######################################################################
 # endregion
 ######################################################################
-
 logging.basicConfig(level=logging.WARNING)
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 class ProcessEvents(Enum):
@@ -136,7 +147,7 @@ async def run_semantic_kernel_nested_process() -> None:
         initial_event=ProcessEvents.START_PROCESS.value,
         data="Test",
     )
-    process_info = await process_handle.get_executor_state()
+    process_info = await process_handle.get_state()
 
     inner_process: KernelProcess | None = next(
         (s for s in process_info.steps if s.state.name == "Inner"),

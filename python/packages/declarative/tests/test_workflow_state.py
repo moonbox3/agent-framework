@@ -418,13 +418,6 @@ class TestWorkflowStateEvalSimple:
         result = state._eval_simple("unknown_identifier")
         assert result == "unknown_identifier"
 
-    def test_system_namespace_reference(self):
-        """Test System namespace variable reference."""
-        state = WorkflowState()
-        # System is initialized with default values
-        result = state._eval_simple("System.ConversationId")
-        assert result == "default"
-
     def test_agent_namespace_reference(self):
         """Test Agent namespace variable reference."""
         state = WorkflowState()
@@ -559,3 +552,33 @@ class TestWorkflowStateGetEdgeCases:
         """Test get from unknown Workflow sub-namespace."""
         state = WorkflowState()
         assert state.get("Workflow.Unknown.path") is None
+
+
+class TestWorkflowStateConversationIdInit:
+    """Tests that WorkflowState generates a real UUID for System.ConversationId."""
+
+    def test_conversation_id_is_not_default(self):
+        """System.ConversationId should be a UUID, not 'default'."""
+        import uuid
+
+        state = WorkflowState()
+        conv_id = state.get("System.ConversationId")
+        assert conv_id is not None
+        assert conv_id != "default"
+        uuid.UUID(conv_id)  # Raises ValueError if not a valid UUID
+
+    def test_conversations_dict_initialized(self):
+        """System.conversations should contain an entry matching ConversationId."""
+        state = WorkflowState()
+        conv_id = state.get("System.ConversationId")
+        conversations = state.get("System.conversations")
+        assert conversations is not None
+        assert conv_id in conversations
+        assert conversations[conv_id]["id"] == conv_id
+        assert conversations[conv_id]["messages"] == []
+
+    def test_each_instance_generates_unique_id(self):
+        """Each WorkflowState instance should have a different ConversationId."""
+        state1 = WorkflowState()
+        state2 = WorkflowState()
+        assert state1.get("System.ConversationId") != state2.get("System.ConversationId")

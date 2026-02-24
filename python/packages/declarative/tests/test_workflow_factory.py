@@ -9,6 +9,15 @@ from agent_framework_declarative._workflows._factory import (
     WorkflowFactory,
 )
 
+try:
+    import powerfx  # noqa: F401
+
+    _powerfx_available = True
+except (ImportError, RuntimeError):
+    _powerfx_available = False
+
+_requires_powerfx = pytest.mark.skipif(not _powerfx_available, reason="PowerFx engine not available")
+
 
 class TestWorkflowFactoryValidation:
     """Tests for workflow definition validation."""
@@ -58,6 +67,7 @@ actions:
         assert workflow.name == "minimal-workflow"
 
 
+@_requires_powerfx
 class TestWorkflowFactoryExecution:
     """Tests for workflow execution."""
 
@@ -204,6 +214,7 @@ actions:
         assert workflow.name == "file-workflow"
 
 
+@_requires_powerfx
 class TestDisplayNameMetadata:
     """Tests for displayName metadata support."""
 
@@ -231,52 +242,6 @@ actions:
 
         # Should execute successfully with displayName metadata
         assert len(outputs) >= 1
-
-    def test_action_context_display_name_property(self):
-        """Test that ActionContext provides displayName property."""
-        from agent_framework_declarative._workflows._handlers import ActionContext
-        from agent_framework_declarative._workflows._state import WorkflowState
-
-        state = WorkflowState()
-        ctx = ActionContext(
-            state=state,
-            action={
-                "kind": "SetValue",
-                "id": "test_action",
-                "displayName": "Test Action Display Name",
-                "path": "Local.value",
-                "value": "test",
-            },
-            execute_actions=lambda a, s: None,
-            agents={},
-            bindings={},
-        )
-
-        assert ctx.action_id == "test_action"
-        assert ctx.display_name == "Test Action Display Name"
-        assert ctx.action_kind == "SetValue"
-
-    def test_action_context_without_display_name(self):
-        """Test ActionContext when displayName is not provided."""
-        from agent_framework_declarative._workflows._handlers import ActionContext
-        from agent_framework_declarative._workflows._state import WorkflowState
-
-        state = WorkflowState()
-        ctx = ActionContext(
-            state=state,
-            action={
-                "kind": "SetValue",
-                "path": "Local.value",
-                "value": "test",
-            },
-            execute_actions=lambda a, s: None,
-            agents={},
-            bindings={},
-        )
-
-        assert ctx.action_id is None
-        assert ctx.display_name is None
-        assert ctx.action_kind == "SetValue"
 
 
 class TestWorkflowFactoryToolRegistration:
@@ -365,6 +330,7 @@ actions:
         assert workflow is not None
         assert workflow.name == "described-workflow"
 
+    @_requires_powerfx
     @pytest.mark.asyncio
     async def test_workflow_with_expression_value(self):
         """Test workflow with expression-based value."""
@@ -388,6 +354,7 @@ actions:
 
         assert any("5" in str(o) for o in outputs)
 
+    @_requires_powerfx
     @pytest.mark.asyncio
     async def test_workflow_with_nested_if(self):
         """Test workflow with nested If statements."""
@@ -433,6 +400,7 @@ actions:
         assert workflow.name == "string-path-workflow"
 
 
+@_requires_powerfx
 class TestWorkflowFactorySwitch:
     """Tests for Switch/Case action."""
 
@@ -501,6 +469,7 @@ actions:
         assert any("Unknown color" in str(o) for o in outputs)
 
 
+@_requires_powerfx
 class TestWorkflowFactoryMultipleActionTypes:
     """Tests for workflows with multiple action types."""
 
@@ -662,7 +631,7 @@ instructions: You are a test agent.
         mock_agent.name = "TestAgent"
         mock_client.create_agent.return_value = mock_agent
 
-        agent_factory = AgentFactory(chat_client=mock_client)
+        agent_factory = AgentFactory(client=mock_client)
 
         # Create workflow that references the agent
         workflow_file = tmp_path / "workflow.yaml"

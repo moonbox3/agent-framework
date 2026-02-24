@@ -1,3 +1,13 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "autogen-agentchat",
+#     "autogen-ext[openai]",
+# ]
+# ///
+# Run with any PEP 723 compatible runner, e.g.:
+#   uv run samples/autogen-migration/single_agent/04_agent_as_tool.py
+
 # Copyright (c) Microsoft. All rights reserved.
 """AutoGen vs Agent Framework: Agent-as-a-Tool pattern.
 
@@ -7,9 +17,15 @@ work to specialized sub-agents wrapped as tools.
 
 import asyncio
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 
 async def run_autogen() -> None:
     """AutoGen's AgentTool for hierarchical agents with streaming."""
+
     from autogen_agentchat.agents import AssistantAgent
     from autogen_agentchat.tools import AgentTool
     from autogen_agentchat.ui import Console
@@ -43,7 +59,7 @@ async def run_autogen() -> None:
 
     # Run coordinator with streaming - it will delegate to writer
     print("[AutoGen]")
-    await Console(coordinator.run(task="Create a tagline for a coffee shop", stream=True))
+    await Console(coordinator.run_stream(task="Create a tagline for a coffee shop"))
 
 
 async def run_agent_framework() -> None:

@@ -8,63 +8,39 @@ No inheritance required - just import and call.
 
 import logging
 
-from agent_framework._types import ChatMessage
+from agent_framework._types import Message
 
 logger = logging.getLogger(__name__)
 
 
-def clean_conversation_for_handoff(conversation: list[ChatMessage]) -> list[ChatMessage]:
-    """Remove tool-related content from conversation for clean handoffs.
+def clean_conversation_for_handoff(conversation: list[Message]) -> list[Message]:
+    """Keep only plain text chat history for handoff routing.
 
-    During handoffs, tool calls can cause API errors because:
-    1. Assistant messages with tool_calls must be followed by tool responses
-    2. Tool response messages must follow an assistant message with tool_calls
+    Handoff executors must not replay prior tool-control artifacts (function calls,
+    tool outputs, approval payloads) into future model turns, or providers may reject
+    the next request due to unmatched tool-call state.
 
-    This creates a cleaned copy removing ALL tool-related content.
-
-    Removes:
-    - function_approval_request and function_call from assistant messages
-    - Tool response messages (role="tool")
-    - Messages with only tool calls and no text
-
-    Preserves:
-    - User messages
-    - Assistant messages with text content
-
-    Args:
-        conversation: Original conversation with potential tool content
-
-    Returns:
-        Cleaned conversation safe for handoff routing
+    This helper builds a text-only copy of the conversation:
+    - Drops all non-text content from every message.
+    - Drops messages with no remaining text content.
+    - Preserves original roles and author names for retained text messages.
     """
-    cleaned: list[ChatMessage] = []
+    cleaned: list[Message] = []
     for msg in conversation:
-        # Skip tool response messages entirely
-        if msg.role == "tool":
+        # Keep only plain text history for handoff routing. Tool-control content
+        # (function_call/function_result/approval payloads) is runtime-only and
+        # must not be replayed in future model turns.
+        text_parts = [content.text for content in msg.contents if content.type == "text" and content.text]
+        if not text_parts:
             continue
 
-        # Check for tool-related content
-        has_tool_content = False
-        if msg.contents:
-            has_tool_content = any(
-                content.type in ("function_approval_request", "function_call") for content in msg.contents
-            )
-
-        # If no tool content, keep original
-        if not has_tool_content:
-            cleaned.append(msg)
-            continue
-
-        # Has tool content - only keep if it also has text
-        if msg.text and msg.text.strip():
-            # Create fresh text-only message while preserving additional_properties
-            msg_copy = ChatMessage(
-                role=msg.role,
-                text=msg.text,
-                author_name=msg.author_name,
-                additional_properties=dict(msg.additional_properties) if msg.additional_properties else None,
-            )
-            cleaned.append(msg_copy)
+        msg_copy = Message(
+            role=msg.role,
+            text=" ".join(text_parts),
+            author_name=msg.author_name,
+            additional_properties=dict(msg.additional_properties) if msg.additional_properties else None,
+        )
+        cleaned.append(msg_copy)
 
     return cleaned
 
@@ -74,7 +50,7 @@ def create_completion_message(
     text: str | None = None,
     author_name: str,
     reason: str = "completed",
-) -> ChatMessage:
+) -> Message:
     """Create a standardized completion message.
 
     Simple helper to avoid duplicating completion message creation.
@@ -85,10 +61,10 @@ def create_completion_message(
         reason: Reason for completion (for default text generation)
 
     Returns:
-        ChatMessage with assistant role
+        Message with assistant role
     """
     message_text = text or f"Conversation {reason}."
-    return ChatMessage(
+    return Message(
         role="assistant",
         text=message_text,
         author_name=author_name,

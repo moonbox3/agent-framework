@@ -11,10 +11,12 @@ action definitions and creates a proper workflow graph with:
 - Loop edges for foreach
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
-from agent_framework._workflows import (
+from agent_framework import (
     Workflow,
     WorkflowBuilder,
 )
@@ -53,7 +55,17 @@ ALL_ACTION_EXECUTORS = {
 
 # Action kinds that terminate control flow (no fall-through to successor)
 # These actions transfer control elsewhere and should not have sequential edges to the next action
-TERMINATOR_ACTIONS = frozenset({"Goto", "GotoAction", "BreakLoop", "ContinueLoop", "EndWorkflow", "EndDialog"})
+TERMINATOR_ACTIONS = frozenset({
+    "Goto",
+    "GotoAction",
+    "BreakLoop",
+    "ContinueLoop",
+    "EndWorkflow",
+    "EndDialog",
+    "EndConversation",
+    "CancelDialog",
+    "CancelAllDialogs",
+})
 
 # Required fields for specific action kinds (schema validation)
 # Each action needs at least one of the listed fields (checked with alternates)
@@ -116,6 +128,7 @@ class DeclarativeWorkflowBuilder:
         tools: dict[str, Any] | None = None,
         checkpoint_storage: Any | None = None,
         validate: bool = True,
+        max_iterations: int | None = None,
     ):
         """Initialize the builder.
 
@@ -126,6 +139,8 @@ class DeclarativeWorkflowBuilder:
             tools: Registry of tool/function instances by name (for InvokeFunctionTool actions)
             checkpoint_storage: Optional checkpoint storage for pause/resume support
             validate: Whether to validate the workflow definition before building (default: True)
+            max_iterations: Maximum runner supersteps. Falls back to the YAML ``maxTurns``
+                field, then to the core default (100).
         """
         self._yaml_def = yaml_definition
         self._workflow_id = workflow_id or yaml_definition.get("name", "declarative_workflow")
@@ -137,6 +152,11 @@ class DeclarativeWorkflowBuilder:
         self._pending_gotos: list[tuple[Any, str]] = []  # (goto_executor, target_id)
         self._validate = validate
         self._seen_explicit_ids: set[str] = set()  # Track explicit IDs for duplicate detection
+        # Resolve max_iterations: explicit arg > YAML maxTurns > core default
+        resolved = max_iterations if max_iterations is not None else yaml_definition.get("maxTurns")
+        if resolved is not None and (not isinstance(resolved, int) or resolved <= 0):
+            raise ValueError(f"Invalid max_iterations/maxTurns value: {resolved!r}. Expected a positive integer.")
+        self._max_iterations: int | None = resolved
 
     def build(self) -> Workflow:
         """Build the workflow graph.
@@ -156,32 +176,28 @@ class DeclarativeWorkflowBuilder:
         if self._validate:
             self._validate_workflow(actions)
 
-        # Use a placeholder for start_executor; it will be overwritten below via _set_start_executor
-        builder = WorkflowBuilder(
-            start_executor="_declarative_placeholder",
-            name=self._workflow_id,
-            checkpoint_storage=self._checkpoint_storage,
-        )
+        # Create a stable entry node as the start executor, then wire it to the first action.
+        # This avoids needing a placeholder since the entry executor isn't known until after
+        # _create_executors_for_actions runs (which itself needs the builder to add edges).
+        entry_node = JoinExecutor({"kind": "Entry"}, id="_workflow_entry")
+        self._executors[entry_node.id] = entry_node
+        builder_kwargs: dict[str, Any] = {
+            "start_executor": entry_node,
+            "name": self._workflow_id,
+            "checkpoint_storage": self._checkpoint_storage,
+        }
+        if self._max_iterations is not None:
+            builder_kwargs["max_iterations"] = self._max_iterations
+        builder = WorkflowBuilder(**builder_kwargs)
 
-        # First pass: create all executors
-        entry_executor = self._create_executors_for_actions(actions, builder)
+        # Create all executors and wire sequential edges
+        first_executor = self._create_executors_for_actions(actions, builder)
 
-        # Set the entry point
-        if entry_executor:
-            # Check if entry is a control flow structure (If/Switch)
-            if getattr(entry_executor, "_is_if_structure", False) or getattr(
-                entry_executor, "_is_switch_structure", False
-            ):
-                # Create an entry passthrough node and wire to the structure's branches
-                entry_node = JoinExecutor({"kind": "Entry"}, id="_workflow_entry")
-                self._executors[entry_node.id] = entry_node
-                builder._set_start_executor(entry_node)
-                # Use _add_sequential_edge which knows how to wire to structures
-                self._add_sequential_edge(builder, entry_node, entry_executor)
-            else:
-                builder._set_start_executor(entry_executor)
-        else:
+        if not first_executor:
             raise ValueError("Failed to create any executors from actions.")
+
+        # Wire entry node to the first action (handles both regular and control flow targets)
+        self._add_sequential_edge(builder, entry_node, first_executor)
 
         # Resolve pending gotos (back-edges for loops, forward-edges for jumps)
         self._resolve_pending_gotos(builder)
@@ -231,9 +247,11 @@ class DeclarativeWorkflowBuilder:
         for action_def in actions:
             kind = action_def.get("kind", "")
 
-            # Check for duplicate explicit IDs
+            # Check for duplicate or reserved explicit IDs
             explicit_id = action_def.get("id")
             if explicit_id:
+                if explicit_id == "_workflow_entry":
+                    raise ValueError(f"Action ID '{explicit_id}' is reserved for internal use. Choose a different ID.")
                 if explicit_id in seen_ids:
                     raise ValueError(f"Duplicate action ID '{explicit_id}'. Action IDs must be unique.")
                 seen_ids.add(explicit_id)
@@ -963,6 +981,11 @@ class DeclarativeWorkflowBuilder:
         chain = getattr(branch_entry, "_chain_executors", [branch_entry])
 
         last_executor = chain[-1]
+
+        # Skip terminators — they handle their own control flow
+        action_def = getattr(last_executor, "_action_def", {})
+        if isinstance(action_def, dict) and action_def.get("kind", "") in TERMINATOR_ACTIONS:
+            return None
 
         # Check if last executor is a structure with branch_exits
         # In that case, we return the structure so its exits can be collected

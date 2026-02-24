@@ -20,8 +20,8 @@ from inspect import isawaitable
 from typing import Any
 
 from agent_framework import (
-    ChatMessage,
     Content,
+    Message,
     WorkflowContext,
     handler,
     response_handler,
@@ -121,7 +121,7 @@ class ToolInvocationResult:
         success: Whether the invocation succeeded.
         result: The return value from the tool (if successful).
         error: Error message (if failed).
-        messages: ChatMessage list format for conversation history.
+        messages: Message list format for conversation history.
         rejected: Whether the invocation was rejected during approval.
         rejection_reason: Reason for rejection.
     """
@@ -129,7 +129,7 @@ class ToolInvocationResult:
     success: bool
     result: Any = None
     error: str | None = None
-    messages: list[ChatMessage] = field(default_factory=list)
+    messages: list[Message] = field(default_factory=list)
     rejected: bool = False
     rejection_reason: str | None = None
 
@@ -166,7 +166,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
     Provides common functionality for all tool-like executors:
     - Tool registry lookup (State + WorkflowFactory registration)
     - Approval flow (request_info pattern with yield/resume)
-    - Output formatting (messages as ChatMessage list + result variable)
+    - Output formatting (messages as Message list + result variable)
     - Error handling (stores error in output, doesn't raise)
 
     Subclasses must implement:
@@ -182,7 +182,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
           param1: value1
           param2: =Local.dynamicValue
         output:
-          messages: Local.toolCallMessages  # ChatMessage list
+          messages: Local.toolCallMessages  # Message list
           result: Local.toolResult
     """
 
@@ -329,8 +329,8 @@ class BaseToolExecutor(DeclarativeActionExecutor):
         function_name: str,
         arguments: dict[str, Any],
         result: Any,
-    ) -> list[ChatMessage]:
-        """Format tool invocation as ChatMessage list.
+    ) -> list[Message]:
+        """Format tool invocation as Message list.
 
         Creates tool call + tool result message pair for conversation history,
         following the same format as agent tool calls.
@@ -341,7 +341,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             result: Result from invocation
 
         Returns:
-            List of ChatMessage objects [tool_call_message, tool_result_message]
+            List of Message objects [tool_call_message, tool_result_message]
         """
         call_id = str(uuid.uuid4())
 
@@ -358,7 +358,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             name=function_name,
             arguments=arguments_str,
         )
-        tool_call_message = ChatMessage(
+        tool_call_message = Message(
             role="assistant",
             contents=[tool_call_content],
         )
@@ -374,7 +374,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
             call_id=call_id,
             result=result_str,
         )
-        tool_result_message = ChatMessage(
+        tool_result_message = Message(
             role="tool",
             contents=[tool_result_content],
         )
@@ -591,7 +591,7 @@ class BaseToolExecutor(DeclarativeActionExecutor):
                 rejected=True,
                 rejection_reason=response.reason,
                 messages=[
-                    ChatMessage(
+                    Message(
                         role="assistant",
                         text=f"Function '{function_name}' was rejected: {response.reason or 'No reason provided'}",
                     )
@@ -625,7 +625,7 @@ class InvokeFunctionToolExecutor(BaseToolExecutor):
     - Expression evaluation for functionName and arguments
     - Optional approval flow (yield/resume pattern)
     - Async function support
-    - ChatMessage list output for conversation history
+    - Message list output for conversation history
 
     YAML Schema:
         kind: InvokeFunctionTool
@@ -637,7 +637,7 @@ class InvokeFunctionToolExecutor(BaseToolExecutor):
           location: =Local.location
           unit: F
         output:
-          messages: Local.weatherToolCallItems  # ChatMessage list
+          messages: Local.weatherToolCallItems  # Message list
           result: Local.WeatherInfo
 
     Tool Registration:

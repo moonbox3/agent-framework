@@ -10,6 +10,9 @@ Each YAML action becomes a real Executor node in the workflow graph,
 enabling checkpointing, visualization, and pause/resume capabilities.
 """
 
+from __future__ import annotations
+
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -20,16 +23,16 @@ from agent_framework import (
     CheckpointStorage,
     SupportsAgentRun,
     Workflow,
-    get_logger,
 )
+from agent_framework.exceptions import WorkflowException
 
 from .._loader import AgentFactory
 from ._declarative_builder import DeclarativeWorkflowBuilder
 
-logger = get_logger("agent_framework.declarative.workflows")
+logger = logging.getLogger("agent_framework.declarative")
 
 
-class DeclarativeWorkflowError(Exception):
+class DeclarativeWorkflowError(WorkflowException):
     """Exception raised for errors in declarative workflow processing."""
 
     pass
@@ -71,8 +74,8 @@ class WorkflowFactory:
             from agent_framework.declarative import WorkflowFactory
 
             # Pre-register agents for InvokeAzureAgent actions
-            chat_client = AzureOpenAIChatClient()
-            agent = chat_client.as_agent(name="MyAgent", instructions="You are helpful.")
+            client = AzureOpenAIChatClient()
+            agent = client.as_agent(name="MyAgent", instructions="You are helpful.")
 
             factory = WorkflowFactory(agents={"MyAgent": agent})
             workflow = factory.create_workflow_from_yaml_path("workflow.yaml")
@@ -88,6 +91,7 @@ class WorkflowFactory:
         bindings: Mapping[str, Any] | None = None,
         env_file: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        max_iterations: int | None = None,
     ) -> None:
         """Initialize the workflow factory.
 
@@ -98,6 +102,9 @@ class WorkflowFactory:
             bindings: Optional function bindings for tool calls within workflow actions.
             env_file: Optional path to .env file for environment variables used in agent creation.
             checkpoint_storage: Optional checkpoint storage enabling pause/resume functionality.
+            max_iterations: Optional maximum runner supersteps.  Overrides the YAML ``maxTurns``
+                field and the core default (100).  Workflows with ``GotoAction`` loops (e.g.
+                DeepResearch) typically need a higher value.
 
         Examples:
             .. code-block:: python
@@ -136,6 +143,7 @@ class WorkflowFactory:
         self._bindings: dict[str, Any] = dict(bindings) if bindings else {}
         self._tools: dict[str, Any] = {}  # Tool registry for InvokeFunctionTool actions
         self._checkpoint_storage = checkpoint_storage
+        self._max_iterations = max_iterations
 
     def create_workflow_from_yaml_path(
         self,
@@ -378,6 +386,7 @@ class WorkflowFactory:
                 agents=agents,
                 tools=self._tools,
                 checkpoint_storage=self._checkpoint_storage,
+                max_iterations=self._max_iterations,
             )
             workflow = graph_builder.build()
         except ValueError as e:
@@ -509,7 +518,7 @@ class WorkflowFactory:
             f"Invalid agent definition. Expected 'file', 'kind', or 'connection': {agent_def}"
         )
 
-    def register_agent(self, name: str, agent: SupportsAgentRun | AgentExecutor) -> "WorkflowFactory":
+    def register_agent(self, name: str, agent: SupportsAgentRun | AgentExecutor) -> WorkflowFactory:
         """Register an agent instance with the factory for use in workflows.
 
         Registered agents are available to InvokeAzureAgent actions by name.
@@ -518,7 +527,7 @@ class WorkflowFactory:
         Args:
             name: The name to register the agent under. Must match the agent name
                 referenced in InvokeAzureAgent actions.
-            agent: The agent instance (typically a ChatAgent or similar).
+            agent: The agent instance (typically a Agent or similar).
 
         Returns:
             Self for method chaining.
@@ -555,7 +564,7 @@ class WorkflowFactory:
         self._agents[name] = agent
         return self
 
-    def register_binding(self, name: str, func: Any) -> "WorkflowFactory":
+    def register_binding(self, name: str, func: Any) -> WorkflowFactory:
         """Register a function binding with the factory for use in workflow actions.
 
         Bindings allow workflow actions to invoke Python functions by name.
@@ -597,7 +606,7 @@ class WorkflowFactory:
         self._bindings[name] = func
         return self
 
-    def register_tool(self, name: str, func: Any) -> "WorkflowFactory":
+    def register_tool(self, name: str, func: Any) -> WorkflowFactory:
         """Register a tool function with the factory for use in InvokeFunctionTool actions.
 
         Registered tools are available to InvokeFunctionTool actions by name via the functionName field.

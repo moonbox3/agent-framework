@@ -3,7 +3,7 @@
 """Tests to ensure PowerFx evaluation supports all expressions used in declarative YAML workflows.
 
 This test suite validates that all PowerFx expressions found in the sample YAML workflows
-under samples/getting_started/workflows/declarative/ work correctly with our implementation.
+under samples/03-workflows/declarative/ work correctly with our implementation.
 
 Coverage includes:
 - Built-in PowerFx functions: Concat, If, IsBlank, Not, Or, Upper, Find
@@ -20,7 +20,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent_framework_declarative._workflows._declarative_base import (
+try:
+    import powerfx  # noqa: F401
+
+    _powerfx_available = True
+except (ImportError, RuntimeError):
+    _powerfx_available = False
+
+pytestmark = pytest.mark.skipif(not _powerfx_available, reason="PowerFx engine not available")
+
+from agent_framework_declarative._workflows._declarative_base import (  # noqa: E402
     DeclarativeWorkflowState,
 )
 

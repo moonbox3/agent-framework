@@ -37,7 +37,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from typing import Any, Generic, Literal, TypeVar, overload
 
-from .._types import ResponseStream
+from .._types import AgentResponse, AgentResponseUpdate, ResponseStream
 from ..observability import OtelAttr, capture_exception, create_workflow_span
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
 from ._events import (
@@ -999,9 +999,11 @@ def workflow(
 class FunctionalWorkflowAgent:
     """Agent adapter for a :class:`FunctionalWorkflow`.
 
-    Provides a ``run()`` method that executes the workflow and converts the
-    first output into an :class:`AgentResponse`, making functional workflows
-    usable anywhere a ``BaseAgent``-compatible object is expected.
+    Provides a ``run()`` method with the same overloaded signature as
+    :class:`BaseAgent` — returning an :class:`AgentResponse` (non-streaming)
+    or a :class:`ResponseStream[AgentResponseUpdate, AgentResponse]`
+    (streaming), making functional workflows usable anywhere an
+    agent-compatible object is expected.
 
     Args:
         workflow: The :class:`FunctionalWorkflow` to wrap.
@@ -1011,24 +1013,96 @@ class FunctionalWorkflowAgent:
     def __init__(self, workflow: FunctionalWorkflow, *, name: str | None = None) -> None:
         self._workflow = workflow
         self.name = name or workflow.name
+        self.id = f"FunctionalWorkflowAgent_{self.name}"
+        self.description: str | None = workflow.description
 
-    async def run(self, message: Any, **kwargs: Any) -> Any:
-        """Run the underlying workflow and return the result as an ``AgentResponse``.
+    @overload
+    def run(
+        self,
+        messages: Any | None = None,
+        *,
+        stream: Literal[True],
+        **kwargs: Any,
+    ) -> ResponseStream[AgentResponseUpdate, AgentResponse]: ...
+
+    @overload
+    def run(
+        self,
+        messages: Any | None = None,
+        *,
+        stream: Literal[False] = ...,
+        **kwargs: Any,
+    ) -> Awaitable[AgentResponse]: ...
+
+    def run(
+        self,
+        messages: Any | None = None,
+        *,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> ResponseStream[AgentResponseUpdate, AgentResponse] | Awaitable[AgentResponse]:
+        """Run the underlying workflow and return the result as an agent response.
 
         Args:
-            message: Input data forwarded to :meth:`FunctionalWorkflow.run`.
+            messages: Input data forwarded to :meth:`FunctionalWorkflow.run`.
 
         Keyword Args:
+            stream: If ``True``, return a :class:`ResponseStream` of
+                :class:`AgentResponseUpdate` items.
             **kwargs: Extra keyword arguments forwarded to the workflow run.
 
         Returns:
-            An :class:`AgentResponse` containing the first workflow output
-            as an assistant message.
+            An :class:`AgentResponse` (non-streaming) or a
+            :class:`ResponseStream` (streaming).
         """
-        from .._types import AgentResponse, Message
+        if stream:
+            return self._run_streaming(messages, **kwargs)
+        return self._run_non_streaming(messages, **kwargs)
 
-        result = await self._workflow.run(message, **kwargs)
-        outputs = result.get_outputs()
-        text = str(outputs[0]) if outputs else ""
-        msg = Message("assistant", [text])
-        return AgentResponse(messages=[msg])
+    async def _run_non_streaming(self, messages: Any | None, **kwargs: Any) -> AgentResponse:
+        result = await self._workflow.run(messages, **kwargs)
+        return self._result_to_agent_response(result)
+
+    def _run_streaming(self, messages: Any | None, **kwargs: Any) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
+        from .._types import Content
+
+        agent_name = self.name
+        workflow_stream = self._workflow.run(messages, stream=True, **kwargs)
+
+        async def _generate_updates() -> AsyncIterable[AgentResponseUpdate]:
+            async for event in workflow_stream:
+                if event.type != "output":
+                    continue
+                data = event.data
+                if isinstance(data, str):
+                    contents = [Content.from_text(text=data)]
+                elif isinstance(data, Content):
+                    contents = [data]
+                else:
+                    contents = [Content.from_text(text=str(data))]
+                yield AgentResponseUpdate(
+                    contents=contents,
+                    role="assistant",
+                    author_name=agent_name,
+                )
+
+        return ResponseStream(
+            _generate_updates(),
+            finalizer=AgentResponse.from_updates,
+        )
+
+    @staticmethod
+    def _result_to_agent_response(result: WorkflowRunResult) -> AgentResponse:
+        from .._types import Content
+        from .._types import Message as Msg
+
+        messages: list[Msg] = []
+        for output in result.get_outputs():
+            if isinstance(output, str):
+                contents = [Content.from_text(text=output)]
+            elif isinstance(output, Content):
+                contents = [output]
+            else:
+                contents = [Content.from_text(text=str(output))]
+            messages.append(Msg("assistant", contents))
+        return AgentResponse(messages=messages)

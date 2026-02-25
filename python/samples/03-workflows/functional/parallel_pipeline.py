@@ -2,8 +2,8 @@
 
 """Parallel pipeline using asyncio.gather with functional workflows.
 
-Still just plain async functions — no @step needed. Fan-out/fan-in
-uses native Python concurrency via asyncio.gather.
+Fan-out/fan-in uses native Python concurrency via asyncio.gather.
+No @step needed — still just plain async functions.
 """
 
 import asyncio
@@ -11,6 +11,8 @@ import asyncio
 from agent_framework import RunContext, workflow
 
 
+# Plain async functions — asyncio.gather handles the concurrency,
+# no framework primitives needed for parallelism.
 async def research_web(topic: str) -> str:
     """Simulate web research."""
     await asyncio.sleep(0.05)
@@ -34,9 +36,14 @@ async def synthesize(sources: list[str]) -> str:
     return "Research Summary:\n" + "\n".join(f"  - {s}" for s in sources)
 
 
+# @workflow wraps the orchestration logic so you get .run(), streaming,
+# and events. The functions it calls are plain Python — no decorators
+# needed just because they're inside a workflow.
 @workflow
 async def research_pipeline(topic: str, ctx: RunContext) -> str:
     """Fan-out to three research tasks, then synthesize results."""
+    # asyncio.gather runs all three concurrently — this is standard Python,
+    # not a framework concept. Use it the same way you would anywhere else.
     web, papers, news = await asyncio.gather(
         research_web(topic),
         research_papers(topic),

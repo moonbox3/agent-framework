@@ -4,11 +4,6 @@
 
 The simplest possible workflow: plain async functions orchestrated by @workflow.
 No @step decorator needed — just write Python.
-
-The @workflow decorator gives you:
-- A .run() method that returns a WorkflowRunResult with events and outputs
-- Streaming support via .run(stream=True)
-- A .as_agent() method to wrap the workflow as an agent
 """
 
 import asyncio
@@ -16,6 +11,8 @@ import asyncio
 from agent_framework import RunContext, workflow
 
 
+# These are plain async functions — no decorators needed.
+# They run normally inside the workflow, just like any other Python function.
 async def fetch_data(url: str) -> dict[str, str | int]:
     """Simulate fetching data from a URL."""
     return {"url": url, "content": f"Data from {url}", "status": 200}
@@ -31,23 +28,30 @@ async def validate_result(summary: str) -> bool:
     return len(summary) > 0 and "[200]" in summary
 
 
+# @workflow turns this async function into a FunctionalWorkflow object.
+# Without it, this is just a normal async function. With it, you get:
+#   - .run() that returns a WorkflowRunResult with events and outputs
+#   - .run(stream=True) for streaming events in real time
+#   - .as_agent() to use this workflow anywhere an agent is expected
+#
+# The function's first parameter receives the input from .run("...").
+# Any parameter annotated as RunContext gets the execution context injected.
 @workflow
 async def data_pipeline(url: str, ctx: RunContext) -> str:
-    """A simple sequential data pipeline.
-
-    These are plain async functions — no decorators, no framework concepts.
-    The workflow is just Python control flow.
-    """
+    """A simple sequential data pipeline."""
     raw = await fetch_data(url)
     summary = await transform_data(raw)
     is_valid = await validate_result(summary)
 
     result = f"{summary} (valid={is_valid})"
+
+    # yield_output() emits a value that callers retrieve via result.get_outputs()
     await ctx.yield_output(result)
     return result
 
 
 async def main():
+    # .run() is provided by @workflow — a plain async function wouldn't have it
     result = await data_pipeline.run("https://example.com/api/data")
     print("Output:", result.get_outputs()[0])
     print("State:", result.get_final_state())

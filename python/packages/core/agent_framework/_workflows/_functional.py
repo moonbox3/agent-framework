@@ -348,14 +348,15 @@ class StepWrapper(Generic[R]):
 
         cache_key = ctx._get_step_cache_key(self._name)
         found, cached = ctx._get_cached_result(cache_key)
+        invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
             # Replay path: emit events and return cached result
-            ctx._add_event(WorkflowEvent.executor_invoked(self._name, deepcopy(args) if args else None))
+            ctx._add_event(WorkflowEvent.executor_invoked(self._name, invocation_data))
             ctx._add_event(WorkflowEvent.executor_completed(self._name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
         # Live execution path
-        ctx._add_event(WorkflowEvent.executor_invoked(self._name, deepcopy(args) if args else None))
+        ctx._add_event(WorkflowEvent.executor_invoked(self._name, invocation_data))
         try:
             result = await self._func(*args, **kwargs)
         except Exception as exc:

@@ -20,8 +20,9 @@ Start with `01-get-started/` and work through the numbered files:
 2. **[02_add_tools.py](./01-get-started/02_add_tools.py)** — Add function tools with `@tool`
 3. **[03_multi_turn.py](./01-get-started/03_multi_turn.py)** — Multi-turn conversations with `AgentThread`
 4. **[04_memory.py](./01-get-started/04_memory.py)** — Agent memory with `ContextProvider`
-5. **[05_first_workflow.py](./01-get-started/05_first_workflow.py)** — Build a workflow with executors and edges
-6. **[06_host_your_agent.py](./01-get-started/06_host_your_agent.py)** — Host your agent via A2A
+5. **[05_first_functional_workflow.py](./01-get-started/05_first_functional_workflow.py)** — Write a workflow as a plain async function
+6. **[06_first_graph_workflow.py](./01-get-started/06_first_graph_workflow.py)** — Build a workflow with executors and edges
+7. **[07_host_your_agent.py](./01-get-started/07_host_your_agent.py)** — Host your agent via A2A
 
 ## Prerequisites
 

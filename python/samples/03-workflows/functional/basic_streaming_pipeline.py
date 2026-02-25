@@ -7,7 +7,7 @@ Stream workflow events in real time with run(stream=True).
 
 import asyncio
 
-from agent_framework import RunContext, workflow
+from agent_framework import workflow
 
 
 # Plain async functions — no decorators needed for simple helpers.
@@ -30,15 +30,13 @@ async def validate_result(summary: str) -> bool:
 # you can iterate over with `async for`. Without @workflow, you'd just
 # have a normal async function with no streaming capability.
 @workflow
-async def data_pipeline(url: str, ctx: RunContext) -> str:
+async def data_pipeline(url: str) -> str:
     """A simple sequential data pipeline."""
     raw = await fetch_data(url)
     summary = await transform_data(raw)
     is_valid = await validate_result(summary)
 
-    result = f"{summary} (valid={is_valid})"
-    await ctx.yield_output(result)
-    return result
+    return f"{summary} (valid={is_valid})"
 
 
 async def main():

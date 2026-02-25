@@ -50,9 +50,7 @@ async def review_pipeline(topic: str, ctx: RunContext) -> str:
     # This only executes after the caller resumes with run(responses={...}).
     # write_draft above returns its saved result (thanks to @step),
     # request_info returns the provided response, and we continue here.
-    final = await revise_draft(draft, feedback)
-    await ctx.yield_output(final)
-    return final
+    return await revise_draft(draft, feedback)
 
 
 async def main():

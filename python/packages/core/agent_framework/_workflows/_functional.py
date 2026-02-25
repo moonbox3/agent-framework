@@ -7,8 +7,9 @@ define workflows using native Python control flow (if/else, loops,
 ``asyncio.gather``) instead of a graph-based topology.
 
 A ``@workflow``-decorated async function receives its input as the first
-positional argument and a :class:`RunContext` wherever a parameter is annotated
-with that type.  Inside the function, plain ``async`` calls run normally.
+positional argument.  If the function needs HITL (``request_info``), custom
+events, or key/value state, add a :class:`RunContext` parameter — otherwise it
+can be omitted.  Inside the function, plain ``async`` calls run normally.
 Optionally, ``@step``-decorated functions gain caching, per-step checkpointing,
 and event emission.
 
@@ -85,9 +86,12 @@ class RunContext:
     """Execution context injected into ``@workflow`` functions.
 
     Every ``@workflow`` invocation receives a ``RunContext`` instance that
-    provides output emission, human-in-the-loop (HITL) requests, key/value
-    state, and event collection.  The context is available to the workflow
-    function via a parameter annotated as ``RunContext``.
+    provides human-in-the-loop (HITL) requests, custom event emission,
+    key/value state, and event collection.  The context is available to the
+    workflow function via a parameter annotated as ``RunContext``.
+
+    The workflow's return value is automatically emitted as the output.
+    Use :meth:`add_event` to emit custom events during execution.
 
     Args:
         workflow_name: Identifier for the enclosing workflow, used when
@@ -101,10 +105,15 @@ class RunContext:
         .. code-block:: python
 
             @workflow
-            async def my_pipeline(data: str, ctx: RunContext) -> str:
-                result = await some_step(data)
-                await ctx.yield_output(result)
-                return result
+            async def my_pipeline(data: str) -> str:
+                return await some_step(data)
+
+
+            # Add ctx: RunContext only when you need HITL, state, or custom events:
+            @workflow
+            async def hitl_pipeline(data: str, ctx: RunContext) -> str:
+                feedback = await ctx.request_info({"draft": data}, response_type=str)
+                return feedback
     """
 
     def __init__(
@@ -140,18 +149,6 @@ class RunContext:
     # ------------------------------------------------------------------
     # Public API (for @workflow functions)
     # ------------------------------------------------------------------
-
-    async def yield_output(self, output: Any) -> None:
-        """Emit a workflow output event.
-
-        The emitted event is included in the :class:`WorkflowRunResult`
-        returned by :meth:`FunctionalWorkflow.run` and can be retrieved via
-        :meth:`WorkflowRunResult.get_outputs`.
-
-        Args:
-            output: The value to emit as a workflow output.
-        """
-        self._add_event(WorkflowEvent.output(self._workflow_name, output))
 
     async def request_info(
         self,
@@ -467,10 +464,8 @@ class FunctionalWorkflow:
         .. code-block:: python
 
             @workflow
-            async def my_pipeline(data: str, ctx: RunContext) -> str:
-                upper = await to_upper(data)
-                await ctx.yield_output(upper)
-                return upper
+            async def my_pipeline(data: str) -> str:
+                return await to_upper(data)
 
 
             result = await my_pipeline.run("hello")
@@ -709,7 +704,11 @@ class FunctionalWorkflow:
                     yield WorkflowEvent.status(WorkflowRunState.IN_PROGRESS)
 
                 # Execute the user function
-                await self._execute(ctx, effective_message)
+                return_value = await self._execute(ctx, effective_message)
+
+                # Emit the return value as the workflow output.
+                if return_value is not None:
+                    ctx._add_event(WorkflowEvent.output(self.name, return_value))
 
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
@@ -972,15 +971,13 @@ def workflow(
 
             # Bare form
             @workflow
-            async def pipeline(data: str, ctx: RunContext) -> str:
-                result = await process(data)
-                await ctx.yield_output(result)
-                return result
+            async def pipeline(data: str) -> str:
+                return await process(data)
 
 
             # Parameterized form
             @workflow(name="my_pipeline", checkpoint_storage=storage)
-            async def pipeline(data: str, ctx: RunContext) -> str: ...
+            async def pipeline(data: str) -> str: ...
     """
     if func is not None:
         return FunctionalWorkflow(func, name=name, description=description, checkpoint_storage=checkpoint_storage)

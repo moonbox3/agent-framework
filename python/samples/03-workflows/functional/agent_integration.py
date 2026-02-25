@@ -19,7 +19,7 @@ Environment variables:
 
 import asyncio
 
-from agent_framework import Agent, RunContext, step, workflow
+from agent_framework import Agent, step, workflow
 from agent_framework.azure import AzureOpenAIChatClient
 from dotenv import load_dotenv
 
@@ -82,15 +82,13 @@ async def review_summary(summary: str) -> str:
 
 
 @workflow
-async def document_pipeline(document: str, ctx: RunContext) -> str:
+async def document_pipeline(document: str) -> str:
     """Process a document through classification, summarization, and review."""
     classification = await classify_document(document)
     summary = await generate_summary(document)
     review = await review_summary(summary)
 
-    result = f"Classification: {classification}\nSummary: {summary}\nReview: {review}"
-    await ctx.yield_output(result)
-    return result
+    return f"Classification: {classification}\nSummary: {summary}\nReview: {review}"
 
 
 async def main():

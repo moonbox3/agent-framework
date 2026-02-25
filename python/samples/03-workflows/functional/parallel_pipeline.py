@@ -8,7 +8,7 @@ No @step needed — still just plain async functions.
 
 import asyncio
 
-from agent_framework import RunContext, workflow
+from agent_framework import workflow
 
 
 # Plain async functions — asyncio.gather handles the concurrency,
@@ -40,7 +40,7 @@ async def synthesize(sources: list[str]) -> str:
 # and events. The functions it calls are plain Python — no decorators
 # needed just because they're inside a workflow.
 @workflow
-async def research_pipeline(topic: str, ctx: RunContext) -> str:
+async def research_pipeline(topic: str) -> str:
     """Fan-out to three research tasks, then synthesize results."""
     # asyncio.gather runs all three concurrently — this is standard Python,
     # not a framework concept. Use it the same way you would anywhere else.
@@ -50,9 +50,7 @@ async def research_pipeline(topic: str, ctx: RunContext) -> str:
         research_news(topic),
     )
 
-    summary = await synthesize([web, papers, news])
-    await ctx.yield_output(summary)
-    return summary
+    return await synthesize([web, papers, news])
 
 
 async def main():

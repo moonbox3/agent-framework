@@ -809,6 +809,33 @@ class TestAsAgent:
         response = await agent.run(10)
         assert response.text == "11"
 
+    async def test_as_agent_run_streaming(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> None:
+            await ctx.yield_output(f"first: {x}")
+            await ctx.yield_output(f"second: {x + 1}")
+
+        agent = wf.as_agent()
+        stream = agent.run(10, stream=True)
+        updates = []
+        async for update in stream:
+            updates.append(update)
+        assert len(updates) == 2
+        assert updates[0].text == "first: 10"
+        assert updates[1].text == "second: 11"
+
+        response = await stream.get_final_response()
+        assert len(response.messages) >= 1
+
+    async def test_as_agent_has_id_and_description(self):
+        @workflow(description="A test workflow")
+        async def wf(x: int, ctx: RunContext) -> None:
+            await ctx.yield_output(x)
+
+        agent = wf.as_agent(name="my_agent")
+        assert agent.id == "FunctionalWorkflowAgent_my_agent"
+        assert agent.description == "A test workflow"
+
 
 # ---------------------------------------------------------------------------
 # Concurrent execution guard

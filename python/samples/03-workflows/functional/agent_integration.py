@@ -2,48 +2,56 @@
 
 """Calling agents inside functional workflows.
 
-Agent calls are typically the most expensive operations in a workflow.
-Wrapping them with @step ensures their results are cached and checkpointed,
-so they don't re-execute on HITL resume or crash recovery.
+Agent calls work inside @workflow with or without @step. The difference:
+- Without @step: agent calls re-execute on resume (same prompt, same cost).
+- With @step: completed agent calls return their saved result instantly.
+
+Since each agent call hits an LLM API (time + money), @step is almost always
+worth it here. Each @step also emits executor events for tracing.
 
 This sample also demonstrates .as_agent() to wrap a workflow as an agent.
 
-NOTE: Uses a mock agent for demonstration. Replace with a real
-Agent + ChatClient for production use.
+Environment variables:
+  AZURE_OPENAI_ENDPOINT        — Your Azure OpenAI endpoint
+  AZURE_OPENAI_API_VERSION     — API version (e.g. 2025-04-01-preview)
+  AZURE_OPENAI_CHAT_DEPLOYMENT_NAME — Model deployment name (e.g. gpt-4o)
 """
 
 import asyncio
-from dataclasses import dataclass
 
-from agent_framework import RunContext, step, workflow
+from agent_framework import Agent, RunContext, step, workflow
+from agent_framework.azure import AzureOpenAIChatClient
+from dotenv import load_dotenv
 
-# ---------------------------------------------------------------------------
-# Mock agent (replace with real Agent + ChatClient for production use)
-# ---------------------------------------------------------------------------
-
-
-class MockAgent:
-    """Simulates an agent that returns a fixed response."""
-
-    def __init__(self, name: str):
-        self.name = name
-
-    async def run(self, prompt: str) -> "MockResponse":
-        return MockResponse(text=f"[{self.name}] Response to: {prompt[:50]}")
-
-
-@dataclass
-class MockResponse:
-    text: str
-
-
-classifier_agent = MockAgent("classifier")
-writer_agent = MockAgent("writer")
-reviewer_agent = MockAgent("reviewer")
-
+load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Agent calls wrapped in @step for caching and observability
+# Create agents with focused, concise instructions
+# ---------------------------------------------------------------------------
+
+classifier_agent = Agent(
+    name="ClassifierAgent",
+    instructions=(
+        "Classify documents into one category: Technical, Legal, Marketing, or Scientific. "
+        "Reply with only the category name."
+    ),
+    client=AzureOpenAIChatClient(),
+)
+
+writer_agent = Agent(
+    name="WriterAgent",
+    instructions="Summarize the given content in one sentence.",
+    client=AzureOpenAIChatClient(),
+)
+
+reviewer_agent = Agent(
+    name="ReviewerAgent",
+    instructions="Review the given summary in one sentence. Is it accurate and complete?",
+    client=AzureOpenAIChatClient(),
+)
+
+# ---------------------------------------------------------------------------
+# @step saves each agent result so it won't re-execute on resume.
 # ---------------------------------------------------------------------------
 
 
@@ -88,13 +96,12 @@ async def document_pipeline(document: str, ctx: RunContext) -> str:
 async def main():
     result = await document_pipeline.run("This is a technical document about machine learning...")
     print(result.get_outputs()[0])
-    print()
-    print(f"Events emitted: {len(result)}")
 
-    # Wrap the workflow as an agent
+    # .as_agent() wraps the workflow so it can be used anywhere an agent
+    # is expected — for example, as a node in a graph workflow.
     agent = document_pipeline.as_agent(name="doc_processor")
-    response = await agent.run("Another document to process")
-    print(f"\nAgent response: {response.text[:100]}...")
+    response = await agent.run("A short story about a robot learning to paint.")
+    print(f"\nAs agent: {response.text}")
 
 
 if __name__ == "__main__":

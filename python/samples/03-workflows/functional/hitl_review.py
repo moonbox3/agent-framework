@@ -2,12 +2,15 @@
 
 """Human-in-the-loop review pipeline using functional workflows.
 
-Demonstrates request_info() for pausing the workflow and resuming
-with external input.
+Demonstrates ctx.request_info() for pausing the workflow to wait for
+external input and resuming with run(responses={...}).
 
-This sample uses @step because HITL workflows re-execute the function
-on resume. Without @step, write_draft() would run again even though
-it already completed. With @step, it replays instantly from cache.
+HITL works with or without @step. The difference is what happens on resume:
+- Without @step: every function re-executes from the top (fine for cheap calls).
+- With @step: completed functions return their saved result instantly.
+
+This sample uses @step on write_draft() because it simulates an expensive
+operation that shouldn't re-run just because the workflow was paused.
 """
 
 import asyncio
@@ -15,13 +18,11 @@ import asyncio
 from agent_framework import RunContext, WorkflowRunState, step, workflow
 
 
+# @step saves the result. When the workflow resumes after the HITL pause,
+# this returns its saved result instead of running the expensive operation again.
 @step
 async def write_draft(topic: str) -> str:
-    """Simulate writing a draft document.
-
-    Decorated with @step so it doesn't re-execute when the workflow
-    resumes after the human review.
-    """
+    """Simulate writing a draft — expensive, shouldn't re-run on resume."""
     print(f"  write_draft executing for '{topic}'")
     return f"Draft document about '{topic}': Lorem ipsum dolor sit amet..."
 
@@ -37,22 +38,25 @@ async def review_pipeline(topic: str, ctx: RunContext) -> str:
     """Write a draft, get human review, then revise."""
     draft = await write_draft(topic)
 
-    # Suspends the workflow and emits a request_info event.
-    # The caller provides the response via run(responses={...}).
+    # ctx.request_info() suspends the workflow here. The caller gets back
+    # a WorkflowRunResult with state IDLE_WITH_PENDING_REQUESTS and can
+    # inspect the pending request via result.get_request_info_events().
     feedback = await ctx.request_info(
         {"draft": draft, "instructions": "Please review this draft"},
         response_type=str,
         request_id="review_request",
     )
 
-    # Only runs after resume — write_draft replays from cache above.
+    # This only executes after the caller resumes with run(responses={...}).
+    # write_draft above returns its saved result (thanks to @step),
+    # request_info returns the provided response, and we continue here.
     final = await revise_draft(draft, feedback)
     await ctx.yield_output(final)
     return final
 
 
 async def main():
-    # Phase 1: Run until HITL interrupt
+    # Phase 1: Run until the workflow pauses for human input
     print("=== Phase 1: Initial run ===")
     result1 = await review_pipeline.run("AI Safety")
 
@@ -62,9 +66,9 @@ async def main():
     requests = result1.get_request_info_events()
     print(f"Pending request: {requests[0].request_id}")
 
-    # Phase 2: Resume with human response
+    # Phase 2: Resume with the human's response
     print("\n=== Phase 2: Resume with feedback ===")
-    print("(write_draft should NOT execute again)")
+    print("(write_draft should NOT execute again — saved by @step)")
     result2 = await review_pipeline.run(responses={"review_request": "Add more details about alignment research"})
 
     print(f"State: {result2.get_final_state()}")

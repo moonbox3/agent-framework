@@ -2,12 +2,12 @@
 
 """Calling agents inside functional workflows.
 
-Agent calls work inside @workflow with or without @step. The difference:
-- Without @step: agent calls re-execute on resume (same prompt, same cost).
-- With @step: completed agent calls return their saved result instantly.
+Agent calls work inside @workflow as plain function calls — no decorator needed.
+Just call the agent and use the result.
 
-Since each agent call hits an LLM API (time + money), @step is almost always
-worth it here. Each @step also emits executor events for tracing.
+If you want per-step caching (so agent calls don't re-execute on HITL resume
+or crash recovery), add @step. Since each agent call hits an LLM API (time +
+money), @step is often worth it. But it's always opt-in.
 
 This sample also demonstrates .as_agent() to wrap a workflow as an agent.
 
@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Create agents with focused, concise instructions
+# Create agents
 # ---------------------------------------------------------------------------
 
 classifier_agent = Agent(
@@ -51,39 +51,46 @@ reviewer_agent = Agent(
 )
 
 # ---------------------------------------------------------------------------
-# @step saves each agent result so it won't re-execute on resume.
+# Simplest approach: call agents directly inside the workflow.
+# No @step, no wrappers — just plain function calls.
+# ---------------------------------------------------------------------------
+
+
+@workflow
+async def simple_pipeline(document: str) -> str:
+    """Process a document — agents called inline, no @step."""
+    classification = (await classifier_agent.run(f"Classify this document: {document}")).text
+    summary = (await writer_agent.run(f"Summarize: {document}")).text
+    review = (await reviewer_agent.run(f"Review this summary: {summary}")).text
+
+    return f"Classification: {classification}\nSummary: {summary}\nReview: {review}"
+
+
+# ---------------------------------------------------------------------------
+# With @step: agent results are cached. On HITL resume or checkpoint
+# recovery, completed steps return their saved result instead of calling
+# the LLM again. Worth it for expensive operations.
 # ---------------------------------------------------------------------------
 
 
 @step
 async def classify_document(doc: str) -> str:
-    """Use an agent to classify a document."""
-    response = await classifier_agent.run(f"Classify this document: {doc}")
-    return response.text
+    return (await classifier_agent.run(f"Classify this document: {doc}")).text
 
 
 @step
 async def generate_summary(doc: str) -> str:
-    """Use an agent to generate a summary."""
-    response = await writer_agent.run(f"Summarize: {doc}")
-    return response.text
+    return (await writer_agent.run(f"Summarize: {doc}")).text
 
 
 @step
 async def review_summary(summary: str) -> str:
-    """Use an agent to review the summary."""
-    response = await reviewer_agent.run(f"Review this summary: {summary}")
-    return response.text
-
-
-# ---------------------------------------------------------------------------
-# Workflow
-# ---------------------------------------------------------------------------
+    return (await reviewer_agent.run(f"Review this summary: {summary}")).text
 
 
 @workflow
-async def document_pipeline(document: str) -> str:
-    """Process a document through classification, summarization, and review."""
+async def cached_pipeline(document: str) -> str:
+    """Same pipeline, but @step caches each agent call."""
     classification = await classify_document(document)
     summary = await generate_summary(document)
     review = await review_summary(summary)
@@ -92,12 +99,13 @@ async def document_pipeline(document: str) -> str:
 
 
 async def main():
-    result = await document_pipeline.run("This is a technical document about machine learning...")
+    # Simple version — agents called inline
+    result = await simple_pipeline.run("This is a technical document about machine learning...")
     print(result.get_outputs()[0])
 
     # .as_agent() wraps the workflow so it can be used anywhere an agent
     # is expected — for example, as a node in a graph workflow.
-    agent = document_pipeline.as_agent(name="doc_processor")
+    agent = cached_pipeline.as_agent(name="doc_processor")
     response = await agent.run("A short story about a robot learning to paint.")
     print(f"\nAs agent: {response.text}")
 

@@ -23,11 +23,6 @@ async def transform_data(data: dict[str, str | int]) -> str:
     return f"[{data['status']}] {data['content']}"
 
 
-async def validate_result(summary: str) -> bool:
-    """Validate the transformed result."""
-    return len(summary) > 0 and "[200]" in summary
-
-
 # @workflow turns this async function into a FunctionalWorkflow object.
 # Without it, this is just a normal async function. With it, you get:
 #   - .run() that returns a WorkflowRunResult with events and outputs
@@ -41,11 +36,15 @@ async def data_pipeline(url: str) -> str:
     """A simple sequential data pipeline."""
     raw = await fetch_data(url)
     summary = await transform_data(raw)
-    is_valid = await validate_result(summary)
+
+    # This is just a function — plain Python works between calls.
+    # No need to wrap every operation in a separate async function.
+    is_valid = len(summary) > 0 and "[200]" in summary
+    tag = "VALID" if is_valid else "INVALID"
 
     # Returning a value automatically emits it as an output.
     # Callers retrieve it via result.get_outputs().
-    return f"{summary} (valid={is_valid})"
+    return f"[{tag}] {summary}"
 
 
 async def main():

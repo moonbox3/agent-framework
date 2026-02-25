@@ -19,7 +19,7 @@ call from the top. That's fine for cheap functions. But for expensive operations
 
 import asyncio
 
-from agent_framework import InMemoryCheckpointStorage, RunContext, step, workflow
+from agent_framework import InMemoryCheckpointStorage, step, workflow
 
 # Track call counts to show which functions actually execute on resume
 fetch_calls = 0
@@ -58,15 +58,13 @@ storage = InMemoryCheckpointStorage()
 # checkpoint_storage tells @workflow where to persist step results.
 # Each @step saves a checkpoint after it completes.
 @workflow(checkpoint_storage=storage)
-async def data_pipeline(url: str, ctx: RunContext) -> str:
+async def data_pipeline(url: str) -> str:
     """Mix of @step functions and plain functions."""
     raw = await fetch_data(url)
     summary = await transform_data(raw)
     is_valid = await validate_result(summary)
 
-    result = f"{summary} (valid={is_valid})"
-    await ctx.yield_output(result)
-    return result
+    return f"{summary} (valid={is_valid})"
 
 
 async def main():

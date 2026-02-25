@@ -16,7 +16,7 @@ No external services are required.
 
 import asyncio
 
-from agent_framework import RunContext, workflow
+from agent_framework import workflow
 
 
 # Plain async functions — no decorators needed
@@ -32,12 +32,10 @@ async def reverse_text(text: str) -> str:
 
 # <create_workflow>
 @workflow
-async def text_pipeline(text: str, ctx: RunContext) -> str:
+async def text_pipeline(text: str) -> str:
     """Uppercase the text, then reverse it."""
     upper = await to_upper_case(text)
-    result = await reverse_text(upper)
-    await ctx.yield_output(result)
-    return result
+    return await reverse_text(upper)
 # </create_workflow>
 
 

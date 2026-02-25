@@ -61,11 +61,9 @@ async def failing_step(x: int) -> int:
 class TestBasicExecution:
     async def test_simple_sequential_pipeline(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> int:
+        async def pipeline(x: int) -> int:
             a = await add_one(x)
-            b = await double(a)
-            await ctx.yield_output(b)
-            return b
+            return await double(a)
 
         result = await pipeline.run(5)
         assert isinstance(result, WorkflowRunResult)
@@ -74,47 +72,31 @@ class TestBasicExecution:
 
     async def test_workflow_with_string_data(self):
         @workflow
-        async def upper_pipeline(text: str, ctx: RunContext) -> str:
-            result = await to_upper(text)
-            await ctx.yield_output(result)
-            return result
+        async def upper_pipeline(text: str) -> str:
+            return await to_upper(text)
 
         result = await upper_pipeline.run("hello")
         assert result.get_outputs() == ["HELLO"]
 
     async def test_workflow_returns_result(self):
         @workflow
-        async def simple(x: int, ctx: RunContext) -> int:
-            val = await add_one(x)
-            await ctx.yield_output(val)
-            return val
+        async def simple(x: int) -> int:
+            return await add_one(x)
 
         result = await simple.run(10)
         assert result.get_outputs() == [11]
 
-    async def test_multiple_outputs(self):
-        @workflow
-        async def multi_out(x: int, ctx: RunContext) -> int:
-            a = await add_one(x)
-            await ctx.yield_output(a)
-            b = await double(a)
-            await ctx.yield_output(b)
-            return b
-
-        result = await multi_out.run(3)
-        assert result.get_outputs() == [4, 8]
-
     async def test_workflow_name_defaults_to_function_name(self):
         @workflow
-        async def my_pipeline(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def my_pipeline(x: int) -> int:
+            return x
 
         assert my_pipeline.name == "my_pipeline"
 
     async def test_workflow_custom_name(self):
         @workflow(name="custom_wf", description="A test workflow")
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         assert wf.name == "custom_wf"
         assert wf.description == "A test workflow"
@@ -128,10 +110,8 @@ class TestBasicExecution:
 class TestEventEmission:
     async def test_step_events_emitted(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> int:
-            result = await add_one(x)
-            await ctx.yield_output(result)
-            return result
+        async def pipeline(x: int) -> int:
+            return await add_one(x)
 
         result = await pipeline.run(5)
         event_types = [e.type for e in result]
@@ -141,10 +121,8 @@ class TestEventEmission:
 
     async def test_step_events_carry_executor_id(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> int:
-            result = await add_one(x)
-            await ctx.yield_output(result)
-            return result
+        async def pipeline(x: int) -> int:
+            return await add_one(x)
 
         result = await pipeline.run(5)
         invoked_events = [e for e in result if e.type == "executor_invoked"]
@@ -158,8 +136,8 @@ class TestEventEmission:
 
     async def test_status_events_in_timeline(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def pipeline(x: int) -> int:
+            return x
 
         result = await pipeline.run(1)
         states = [e.state for e in result.status_timeline()]
@@ -168,8 +146,8 @@ class TestEventEmission:
 
     async def test_final_state_is_idle(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def pipeline(x: int) -> int:
+            return x
 
         result = await pipeline.run(1)
         assert result.get_final_state() == WorkflowRunState.IDLE
@@ -178,9 +156,9 @@ class TestEventEmission:
         from agent_framework import WorkflowEvent
 
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> None:
+        async def pipeline(x: int, ctx: RunContext) -> int:
             await ctx.add_event(WorkflowEvent.emit("pipeline", "custom_data"))
-            await ctx.yield_output(x)
+            return x
 
         result = await pipeline.run(1)
         data_events = [e for e in result if e.type == "data"]
@@ -206,11 +184,9 @@ class TestParallelExecution:
             return x * 2
 
         @workflow
-        async def parallel_wf(x: int, ctx: RunContext) -> list[int]:
+        async def parallel_wf(x: int) -> list[int]:
             a, b = await asyncio.gather(slow_add(x), slow_double(x))
-            results = [a, b]
-            await ctx.yield_output(results)
-            return results
+            return [a, b]
 
         result = await parallel_wf.run(5)
         outputs = result.get_outputs()
@@ -226,9 +202,9 @@ class TestParallelExecution:
             return x * 2
 
         @workflow
-        async def par_wf(x: int, ctx: RunContext) -> None:
+        async def par_wf(x: int) -> tuple[int, int]:
             a, b = await asyncio.gather(task_a(x), task_b(x))
-            await ctx.yield_output((a, b))
+            return (a, b)
 
         result = await par_wf.run(3)
         invoked = [e for e in result if e.type == "executor_invoked"]
@@ -247,7 +223,6 @@ class TestHITL:
         @workflow
         async def review_wf(doc: str, ctx: RunContext) -> str:
             feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
-            await ctx.yield_output(f"Final: {feedback}")
             return f"Final: {feedback}"
 
         # Phase 1: should interrupt with pending request
@@ -261,7 +236,6 @@ class TestHITL:
         @workflow
         async def review_wf(doc: str, ctx: RunContext) -> str:
             feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
-            await ctx.yield_output(f"Final: {feedback}")
             return f"Final: {feedback}"
 
         # Phase 1
@@ -279,7 +253,6 @@ class TestHITL:
         async def multi_hitl(data: str, ctx: RunContext) -> str:
             r1 = await ctx.request_info("step1", response_type=str, request_id="r1")
             r2 = await ctx.request_info("step2", response_type=str, request_id="r2")
-            await ctx.yield_output(f"{r1}+{r2}")
             return f"{r1}+{r2}"
 
         # Phase 1: first interrupt
@@ -315,7 +288,7 @@ class TestHITL:
 class TestErrorHandling:
     async def test_step_failure_propagates(self):
         @workflow
-        async def failing_wf(x: int, ctx: RunContext) -> None:
+        async def failing_wf(x: int) -> None:
             await failing_step(x)
 
         with pytest.raises(ValueError, match="step failed with 42"):
@@ -323,7 +296,7 @@ class TestErrorHandling:
 
     async def test_step_failure_emits_executor_failed(self):
         @workflow
-        async def failing_wf(x: int, ctx: RunContext) -> None:
+        async def failing_wf(x: int) -> None:
             await failing_step(x)
 
         # Use stream to collect events before the raise
@@ -339,7 +312,7 @@ class TestErrorHandling:
 
     async def test_workflow_failure_emits_failed_status(self):
         @workflow
-        async def bad_wf(x: int, ctx: RunContext) -> None:
+        async def bad_wf(x: int) -> None:
             raise RuntimeError("workflow broke")
 
         stream = bad_wf.run(42, stream=True)
@@ -355,7 +328,7 @@ class TestErrorHandling:
 
     async def test_invalid_params_message_and_responses(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int) -> None:
             pass
 
         with pytest.raises(ValueError, match="Cannot provide both"):
@@ -363,7 +336,7 @@ class TestErrorHandling:
 
     async def test_invalid_params_message_and_checkpoint(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int) -> None:
             pass
 
         with pytest.raises(ValueError, match="Cannot provide both"):
@@ -371,7 +344,7 @@ class TestErrorHandling:
 
     async def test_invalid_params_nothing(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int) -> None:
             pass
 
         with pytest.raises(ValueError, match="Must provide at least one"):
@@ -386,10 +359,8 @@ class TestErrorHandling:
 class TestStreaming:
     async def test_streaming_yields_events(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> int:
-            result = await add_one(x)
-            await ctx.yield_output(result)
-            return result
+        async def pipeline(x: int) -> int:
+            return await add_one(x)
 
         stream = pipeline.run(5, stream=True)
         events = []
@@ -404,10 +375,8 @@ class TestStreaming:
 
     async def test_streaming_final_response(self):
         @workflow
-        async def pipeline(x: int, ctx: RunContext) -> int:
-            result = await add_one(x)
-            await ctx.yield_output(result)
-            return result
+        async def pipeline(x: int) -> int:
+            return await add_one(x)
 
         stream = pipeline.run(5, stream=True)
         final = await stream.get_final_response()
@@ -418,10 +387,10 @@ class TestStreaming:
         streaming_flag = None
 
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int, ctx: RunContext) -> int:
             nonlocal streaming_flag
             streaming_flag = ctx.is_streaming()
-            await ctx.yield_output(x)
+            return x
 
         stream = wf.run(1, stream=True)
         await stream.get_final_response()
@@ -463,19 +432,17 @@ class TestStepPassthrough:
 class TestStateManagement:
     async def test_get_set_state(self):
         @workflow
-        async def stateful_wf(x: int, ctx: RunContext) -> None:
+        async def stateful_wf(x: int, ctx: RunContext) -> int:
             ctx.set_state("counter", x)
-            val = ctx.get_state("counter")
-            await ctx.yield_output(val)
+            return ctx.get_state("counter")
 
         result = await stateful_wf.run(42)
         assert result.get_outputs() == [42]
 
     async def test_get_state_default(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            val = ctx.get_state("missing", "default_val")
-            await ctx.yield_output(val)
+        async def wf(x: int, ctx: RunContext) -> str:
+            return ctx.get_state("missing", "default_val")
 
         result = await wf.run(1)
         assert result.get_outputs() == ["default_val"]
@@ -495,9 +462,8 @@ class TestCheckpointing:
             return x * 100
 
         @workflow(checkpoint_storage=storage)
-        async def ckpt_wf(x: int, ctx: RunContext) -> None:
-            result = await expensive(x)
-            await ctx.yield_output(result)
+        async def ckpt_wf(x: int) -> int:
+            return await expensive(x)
 
         result = await ckpt_wf.run(5)
         assert result.get_outputs() == [500]
@@ -514,9 +480,8 @@ class TestCheckpointing:
             return x + 1
 
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            result = await compute(x)
-            await ctx.yield_output(result)
+        async def wf(x: int) -> int:
+            return await compute(x)
 
         result = await wf.run(10, checkpoint_storage=storage)
         assert result.get_outputs() == [11]
@@ -535,9 +500,8 @@ class TestCheckpointing:
             return x + 1
 
         @workflow(checkpoint_storage=storage)
-        async def wf(x: int, ctx: RunContext) -> None:
-            result = await counting_task(x)
-            await ctx.yield_output(result)
+        async def wf(x: int) -> int:
+            return await counting_task(x)
 
         # First run
         result1 = await wf.run(5)
@@ -559,7 +523,6 @@ class TestCheckpointing:
         @workflow(checkpoint_storage=storage)
         async def hitl_wf(doc: str, ctx: RunContext) -> str:
             feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
-            await ctx.yield_output(f"Done: {feedback}")
             return f"Done: {feedback}"
 
         # Phase 1: interrupt
@@ -576,8 +539,8 @@ class TestCheckpointing:
 
     async def test_checkpoint_without_storage_raises(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         with pytest.raises(ValueError, match="checkpoint_storage"):
             await wf.run(checkpoint_id="nonexistent")
@@ -586,11 +549,11 @@ class TestCheckpointing:
         storage = InMemoryCheckpointStorage()
 
         @workflow(checkpoint_storage=storage)
-        async def stateful_wf(x: int, ctx: RunContext) -> None:
+        async def stateful_wf(x: int, ctx: RunContext) -> str:
             ctx.set_state("key", "value")
             feedback = await ctx.request_info("need info", response_type=str, request_id="r1")
             val = ctx.get_state("key")
-            await ctx.yield_output(f"{val}:{feedback}")
+            return f"{val}:{feedback}"
 
         # Phase 1
         result1 = await stateful_wf.run(1)
@@ -626,10 +589,9 @@ class TestCheckpointing:
             return x * 2
 
         @workflow(checkpoint_storage=storage)
-        async def crash_wf(x: int, ctx: RunContext) -> None:
+        async def crash_wf(x: int) -> int:
             a = await slow_step1(x)
-            b = await crashing_step2(a)
-            await ctx.yield_output(b)
+            return await crashing_step2(a)
 
         # First run: step1 succeeds and checkpoints, step2 crashes
         with pytest.raises(RuntimeError, match="simulated crash"):
@@ -666,11 +628,10 @@ class TestCheckpointing:
             return x + 3
 
         @workflow(checkpoint_storage=storage)
-        async def multi_step_wf(x: int, ctx: RunContext) -> None:
+        async def multi_step_wf(x: int) -> int:
             a = await s1(x)
             b = await s2(a)
-            c = await s3(b)
-            await ctx.yield_output(c)
+            return await s3(b)
 
         result = await multi_step_wf.run(0)
         assert result.get_outputs() == [6]  # 0+1+2+3
@@ -688,9 +649,8 @@ class TestCheckpointing:
             return x + 1
 
         @workflow(checkpoint_storage=storage)
-        async def wf(x: int, ctx: RunContext) -> None:
-            result = await compute(x)
-            await ctx.yield_output(result)
+        async def wf(x: int) -> int:
+            return await compute(x)
 
         # First run: 1 per-step + 1 final = 2 checkpoints
         await wf.run(5)
@@ -729,13 +689,12 @@ class TestControlFlow:
             return f"quarantined: {text}"
 
         @workflow
-        async def email_pipeline(email: str, ctx: RunContext) -> str:
+        async def email_pipeline(email: str) -> str:
             cl = await classify(email)
             if cl.is_spam:
                 result = await quarantine(email)
             else:
                 result = await process_normal(email)
-            await ctx.yield_output(result)
             return result
 
         result_spam = await email_pipeline.run("Buy spam now!")
@@ -757,10 +716,8 @@ class TestNestedWorkflows:
             return x + 1
 
         @workflow
-        async def inner_wf(x: int, ctx: RunContext) -> int:
-            result = await step_a(x)
-            await ctx.yield_output(result)
-            return result
+        async def inner_wf(x: int) -> int:
+            return await step_a(x)
 
         @step
         async def call_inner(x: int) -> int:
@@ -768,10 +725,8 @@ class TestNestedWorkflows:
             return result.get_outputs()[0]
 
         @workflow
-        async def outer_wf(x: int, ctx: RunContext) -> int:
-            result = await call_inner(x)
-            await ctx.yield_output(result)
-            return result
+        async def outer_wf(x: int) -> int:
+            return await call_inner(x)
 
         result = await outer_wf.run(5)
         assert result.get_outputs() == [6]
@@ -785,25 +740,24 @@ class TestNestedWorkflows:
 class TestAsAgent:
     async def test_as_agent_returns_agent(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(f"result: {x}")
+        async def wf(x: int) -> str:
+            return f"result: {x}"
 
         agent = wf.as_agent()
         assert agent.name == "wf"
 
     async def test_as_agent_custom_name(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         agent = wf.as_agent(name="my_agent")
         assert agent.name == "my_agent"
 
     async def test_as_agent_run(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            val = await add_one(x)
-            await ctx.yield_output(val)
+        async def wf(x: int) -> int:
+            return await add_one(x)
 
         agent = wf.as_agent()
         response = await agent.run(10)
@@ -811,26 +765,24 @@ class TestAsAgent:
 
     async def test_as_agent_run_streaming(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(f"first: {x}")
-            await ctx.yield_output(f"second: {x + 1}")
+        async def wf(x: int) -> str:
+            return f"result: {x}"
 
         agent = wf.as_agent()
         stream = agent.run(10, stream=True)
         updates = []
         async for update in stream:
             updates.append(update)
-        assert len(updates) == 2
-        assert updates[0].text == "first: 10"
-        assert updates[1].text == "second: 11"
+        assert len(updates) == 1
+        assert updates[0].text == "result: 10"
 
         response = await stream.get_final_response()
         assert len(response.messages) >= 1
 
     async def test_as_agent_has_id_and_description(self):
         @workflow(description="A test workflow")
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         agent = wf.as_agent(name="my_agent")
         assert agent.id == "FunctionalWorkflowAgent_my_agent"
@@ -845,9 +797,9 @@ class TestAsAgent:
 class TestConcurrencyGuard:
     async def test_concurrent_run_raises(self):
         @workflow
-        async def slow_wf(x: int, ctx: RunContext) -> None:
+        async def slow_wf(x: int) -> int:
             await asyncio.sleep(0.1)
-            await ctx.yield_output(x)
+            return x
 
         # Start first run
         stream = slow_wf.run(1, stream=True)
@@ -861,8 +813,8 @@ class TestConcurrencyGuard:
 
     async def test_run_after_completion(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         result1 = await wf.run(1)
         assert result1.get_outputs() == [1]
@@ -896,7 +848,7 @@ class TestDecoratorForms:
 
     def test_workflow_bare_decorator(self):
         @workflow
-        async def my_wf(x: int, ctx: RunContext) -> None:
+        async def my_wf(x: int) -> None:
             pass
 
         assert isinstance(my_wf, FunctionalWorkflow)
@@ -904,7 +856,7 @@ class TestDecoratorForms:
 
     def test_workflow_with_params(self):
         @workflow(name="custom", description="desc")
-        async def my_wf(x: int, ctx: RunContext) -> None:
+        async def my_wf(x: int) -> None:
             pass
 
         assert isinstance(my_wf, FunctionalWorkflow)
@@ -920,8 +872,8 @@ class TestDecoratorForms:
 class TestIncludeStatusEvents:
     async def test_status_events_excluded_by_default(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         result = await wf.run(1)
         status_in_list = [e for e in result if e.type == "status"]
@@ -929,8 +881,8 @@ class TestIncludeStatusEvents:
 
     async def test_status_events_included_when_requested(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         result = await wf.run(1, include_status_events=True)
         status_in_list = [e for e in result if e.type == "status"]
@@ -945,27 +897,36 @@ class TestIncludeStatusEvents:
 class TestEdgeCases:
     async def test_workflow_with_no_tasks(self):
         @workflow
-        async def no_tasks(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x * 2)
+        async def no_tasks(x: int) -> int:
+            return x * 2
 
         result = await no_tasks.run(5)
         assert result.get_outputs() == [10]
 
     async def test_workflow_with_no_output(self):
         @workflow
-        async def silent_wf(x: int, ctx: RunContext) -> int:
-            return x
+        async def silent_wf(x: int) -> None:
+            pass  # returns None — no output emitted
 
         result = await silent_wf.run(5)
         assert result.get_outputs() == []
 
+    async def test_return_value_auto_yields_output(self):
+        """Returning a non-None value automatically emits it as an output."""
+
+        @workflow
+        async def wf(x: int) -> int:
+            return x * 3
+
+        result = await wf.run(5)
+        assert result.get_outputs() == [15]
+
     async def test_step_called_multiple_times(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int) -> int:
             a = await add_one(x)
             b = await add_one(a)
-            c = await add_one(b)
-            await ctx.yield_output(c)
+            return await add_one(b)
 
         result = await wf.run(0)
         assert result.get_outputs() == [3]  # 0+1+1+1
@@ -985,10 +946,10 @@ class TestEdgeCases:
 class TestRecoveryAfterErrors:
     async def test_run_after_failure_is_allowed(self):
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int) -> int:
             if x == 1:
                 raise RuntimeError("boom")
-            await ctx.yield_output(x)
+            return x
 
         with pytest.raises(RuntimeError, match="boom"):
             await wf.run(1)
@@ -1013,20 +974,23 @@ class TestRecoveryAfterErrors:
 class TestWorkflowInterruptedIsBaseException:
     async def test_except_exception_does_not_catch_interrupt(self):
         """User code with ``except Exception`` should not catch WorkflowInterrupted."""
+        caught = False
 
         @workflow
-        async def wf(x: int, ctx: RunContext) -> None:
+        async def wf(x: int, ctx: RunContext) -> str:
+            nonlocal caught
             try:
-                feedback = await ctx.request_info("need review", response_type=str, request_id="r1")
-                await ctx.yield_output(feedback)
+                return await ctx.request_info("need review", response_type=str, request_id="r1")
             except Exception:
                 # This should NOT catch WorkflowInterrupted
-                await ctx.yield_output("caught!")
+                caught = True
+                return "caught!"
 
         result = await wf.run("data")
         # Should have a pending request, NOT "caught!"
         assert result.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
         assert result.get_outputs() == []
+        assert caught is False
 
 
 # ---------------------------------------------------------------------------
@@ -1041,8 +1005,8 @@ class TestCheckpointValidation:
         storage = InMemoryCheckpointStorage()
 
         @workflow(name="my_wf", checkpoint_storage=storage)
-        async def wf(x: int, ctx: RunContext) -> None:
-            await ctx.yield_output(x)
+        async def wf(x: int) -> int:
+            return x
 
         # Manually create a checkpoint with a different signature hash
         bad_checkpoint = WorkflowCheckpoint(

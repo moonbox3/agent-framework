@@ -8,7 +8,7 @@ No @step decorator needed — just write Python.
 
 import asyncio
 
-from agent_framework import RunContext, workflow
+from agent_framework import workflow
 
 
 # These are plain async functions — no decorators needed.
@@ -35,19 +35,17 @@ async def validate_result(summary: str) -> bool:
 #   - .as_agent() to use this workflow anywhere an agent is expected
 #
 # The function's first parameter receives the input from .run("...").
-# Any parameter annotated as RunContext gets the execution context injected.
+# Add a `ctx: RunContext` parameter only if you need HITL, state, or custom events.
 @workflow
-async def data_pipeline(url: str, ctx: RunContext) -> str:
+async def data_pipeline(url: str) -> str:
     """A simple sequential data pipeline."""
     raw = await fetch_data(url)
     summary = await transform_data(raw)
     is_valid = await validate_result(summary)
 
-    result = f"{summary} (valid={is_valid})"
-
-    # yield_output() emits a value that callers retrieve via result.get_outputs()
-    await ctx.yield_output(result)
-    return result
+    # Returning a value automatically emits it as an output.
+    # Callers retrieve it via result.get_outputs().
+    return f"{summary} (valid={is_valid})"
 
 
 async def main():

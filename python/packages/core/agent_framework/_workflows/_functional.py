@@ -792,14 +792,17 @@ class FunctionalWorkflow:
                 )
                 hints = {}
 
-            # Build call arguments: inject RunContext where annotated,
-            # and pass `message` to the first non-ctx parameter.
+            # Build call arguments: inject RunContext and pass `message`.
+            # RunContext is detected by type annotation first, then by
+            # parameter name "ctx" — so both of these work:
+            #   async def my_workflow(data: str, ctx: RunContext) -> str:
+            #   async def my_workflow(data: str, ctx) -> str:
             call_args: list[Any] = []
             message_injected = False
 
             for param in params:
                 resolved = hints.get(param.name, param.annotation)
-                if resolved is RunContext:
+                if resolved is RunContext or param.name == "ctx":
                     call_args.append(ctx)
                 elif not message_injected:
                     # First non-ctx param gets the message

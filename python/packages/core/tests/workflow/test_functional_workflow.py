@@ -248,6 +248,20 @@ class TestHITL:
         assert outputs == ["Final: Looks great!"]
         assert result2.get_final_state() == WorkflowRunState.IDLE
 
+    async def test_untyped_ctx_parameter(self):
+        """ctx is injected by parameter name even without a RunContext annotation."""
+
+        @workflow
+        async def review_wf(doc: str, ctx) -> str:
+            feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
+            return f"Final: {feedback}"
+
+        result1 = await review_wf.run("my doc")
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+
+        result2 = await review_wf.run(responses={"req1": "LGTM"})
+        assert result2.get_outputs() == ["Final: LGTM"]
+
     async def test_multiple_sequential_interrupts(self):
         @workflow
         async def multi_hitl(data: str, ctx: RunContext) -> str:

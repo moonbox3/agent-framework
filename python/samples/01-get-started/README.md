@@ -24,8 +24,9 @@ export FOUNDRY_MODEL="gpt-4o"   # optional, defaults to gpt-4o
 | 2 | [02_add_tools.py](02_add_tools.py) | Define a function tool with `@tool` and attach it to an agent. |
 | 3 | [03_multi_turn.py](03_multi_turn.py) | Keep conversation history across turns with `AgentSession`. |
 | 4 | [04_memory.py](04_memory.py) | Add dynamic context with a custom `ContextProvider`. |
-| 5 | [05_first_workflow.py](05_first_workflow.py) | Chain executors into a workflow with edges. |
-| 6 | [06_host_your_agent.py](06_host_your_agent.py) | Host a single agent with Azure Functions. |
+| 5 | [05_first_functional_workflow.py](05_first_functional_workflow.py) | Write a workflow as a plain async function. |
+| 6 | [06_first_graph_workflow.py](06_first_graph_workflow.py) | Chain executors into a graph workflow with edges. |
+| 7 | [07_host_your_agent.py](07_host_your_agent.py) | Host a single agent with Azure Functions. |
 
 Run any sample with:
 

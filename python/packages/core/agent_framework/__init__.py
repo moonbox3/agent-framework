@@ -213,6 +213,14 @@ from ._workflows._executor import (
     handler,
 )
 from ._workflows._function_executor import FunctionExecutor, executor
+from ._workflows._functional import (
+    FunctionalWorkflow,
+    FunctionalWorkflowAgent,
+    RunContext,
+    StepWrapper,
+    step,
+    workflow,
+)
 from ._workflows._request_info_mixin import response_handler
 from ._workflows._runner import Runner
 from ._workflows._runner_context import (
@@ -332,6 +340,8 @@ __all__ = [
     "FunctionMiddleware",
     "FunctionMiddlewareTypes",
     "FunctionTool",
+    "FunctionalWorkflow",
+    "FunctionalWorkflowAgent",
     "GeneratedEmbeddings",
     "GraphConnectivityError",
     "HistoryProvider",
@@ -354,6 +364,7 @@ __all__ = [
     "ResponseStream",
     "Role",
     "RoleLiteral",
+    "RunContext",
     "Runner",
     "RunnerContext",
     "SecretString",
@@ -366,6 +377,7 @@ __all__ = [
     "SkillScriptRunner",
     "SkillsProvider",
     "SlidingWindowStrategy",
+    "StepWrapper",
     "SubWorkflowRequestMessage",
     "SubWorkflowResponseMessage",
     "SummarizationStrategy",
@@ -439,6 +451,7 @@ __all__ = [
     "register_state_type",
     "resolve_agent_id",
     "response_handler",
+    "step",
     "tool",
     "tool_call_args_match",
     "tool_called_check",
@@ -447,4 +460,5 @@ __all__ = [
     "validate_tool_mode",
     "validate_tools",
     "validate_workflow_graph",
+    "workflow",
 ]

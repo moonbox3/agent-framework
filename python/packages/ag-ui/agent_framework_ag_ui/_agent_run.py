@@ -521,7 +521,9 @@ def _clean_resolved_approvals_from_snapshot(
             continue
         for content in msg.contents or []:
             if content.type == "function_result" and content.call_id:
-                result_text = content.result if isinstance(content.result, str) else json.dumps(content.result)
+                result_text = (
+                    content.result if isinstance(content.result, str) else json.dumps(make_json_safe(content.result))
+                )
                 result_by_call_id[str(content.call_id)] = result_text
 
     if not result_by_call_id:

@@ -58,6 +58,8 @@ async def main():
     print("=== Phase 1: Initial run ===")
     result1 = await review_pipeline.run("AI Safety")
 
+    # If request_info() was reached, the state is IDLE_WITH_PENDING_REQUESTS.
+    # If the workflow completed without hitting request_info(), it would be IDLE.
     print(f"State: {result1.get_final_state()}")
     assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
 

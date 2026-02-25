@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 R = TypeVar("R")
 
 # ContextVar holding the active RunContext during workflow execution.
+# ContextVar is per-asyncio-Task, so concurrent workflows each get their own context.
 _active_run_ctx: ContextVar[RunContext | None] = ContextVar("_active_run_ctx", default=None)
 
 
@@ -332,13 +333,8 @@ class StepWrapper(Generic[R]):
                 f"@step can only decorate async functions, but '{func.__name__}' is not a coroutine function."
             )
         self._func = func
-        self._name = name or func.__name__
+        self.name: str = name or func.__name__
         functools.update_wrapper(self, func)
-
-    @property
-    def name(self) -> str:
-        """The display name of this step."""
-        return self._name
 
     async def __call__(self, *args: Any, **kwargs: Any) -> R:
         ctx = _active_run_ctx.get()
@@ -346,24 +342,24 @@ class StepWrapper(Generic[R]):
             # Outside a workflow — pass through directly
             return await self._func(*args, **kwargs)
 
-        cache_key = ctx._get_step_cache_key(self._name)
+        cache_key = ctx._get_step_cache_key(self.name)
         found, cached = ctx._get_cached_result(cache_key)
         invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
             # Replay path: emit events and return cached result
-            ctx._add_event(WorkflowEvent.executor_invoked(self._name, invocation_data))
-            ctx._add_event(WorkflowEvent.executor_completed(self._name, cached))
+            ctx._add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
+            ctx._add_event(WorkflowEvent.executor_completed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
         # Live execution path
-        ctx._add_event(WorkflowEvent.executor_invoked(self._name, invocation_data))
+        ctx._add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
         try:
             result = await self._func(*args, **kwargs)
         except Exception as exc:
-            ctx._add_event(WorkflowEvent.executor_failed(self._name, WorkflowErrorDetails.from_exception(exc)))
+            ctx._add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
             raise
         ctx._set_cached_result(cache_key, result)
-        ctx._add_event(WorkflowEvent.executor_completed(self._name, result))
+        ctx._add_event(WorkflowEvent.executor_completed(self.name, result))
         if ctx._on_step_completed is not None:
             await ctx._on_step_completed()
         return result
@@ -635,9 +631,6 @@ class FunctionalWorkflow:
         # Build context
         ctx = RunContext(self.name, streaming=streaming, run_kwargs=kwargs if kwargs else None)
 
-        # Determine effective message for this execution
-        effective_message = message
-
         # Restore from checkpoint if requested
         prev_checkpoint_id: str | None = None
         if checkpoint_id is not None:
@@ -662,13 +655,13 @@ class FunctionalWorkflow:
             # Restore pending request info events
             ctx._pending_requests = dict(checkpoint.pending_request_info_events)
             # Restore original message for replay
-            if effective_message is None:
-                effective_message = checkpoint.state.get("_original_message")
+            if message is None:
+                message = checkpoint.state.get("_original_message")
 
         # For response-only replay (no checkpoint), restore cached state
         if checkpoint_id is None and responses:
-            if effective_message is None:
-                effective_message = self._last_message
+            if message is None:
+                message = self._last_message
             ctx._step_cache = dict(self._last_step_cache)
 
         # Store message for future replays
@@ -705,7 +698,7 @@ class FunctionalWorkflow:
                     yield WorkflowEvent.status(WorkflowRunState.IN_PROGRESS)
 
                 # Execute the user function
-                return_value = await self._execute(ctx, effective_message)
+                return_value = await self._execute(ctx, message)
 
                 # Emit the return value as the workflow output.
                 if return_value is not None:

@@ -1193,6 +1193,34 @@ def test_prepare_tools_for_openai_with_mcp() -> None:
     assert "require_approval" in mcp
 
 
+def test_prepare_tools_for_openai_single_function_tool() -> None:
+    """Test that a single FunctionTool (not wrapped in a list) is handled correctly."""
+    client = OpenAIResponsesClient(model_id="test-model", api_key="test-key")
+
+    @tool
+    def hello(name: str) -> str:
+        """Say hello."""
+        return name
+
+    resp_tools = client._prepare_tools_for_openai(hello)
+    assert isinstance(resp_tools, list)
+    assert len(resp_tools) == 1
+    assert resp_tools[0]["type"] == "function"
+    assert resp_tools[0]["name"] == "hello"
+
+
+def test_prepare_tools_for_openai_single_dict_tool() -> None:
+    """Test that a single dict tool (not wrapped in a list) is handled correctly."""
+    client = OpenAIResponsesClient(model_id="test-model", api_key="test-key")
+
+    web_tool = OpenAIResponsesClient.get_web_search_tool(search_context_size="low")
+    resp_tools = client._prepare_tools_for_openai(web_tool)
+    assert isinstance(resp_tools, list)
+    assert len(resp_tools) == 1
+    assert "type" in resp_tools[0]
+    assert resp_tools[0]["search_context_size"] == "low"
+
+
 def test_parse_response_from_openai_with_mcp_approval_request() -> None:
     """Test that a non-streaming mcp_approval_request is parsed into FunctionApprovalRequestContent."""
     client = OpenAIResponsesClient(model_id="test-model", api_key="test-key")

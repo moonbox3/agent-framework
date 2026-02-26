@@ -107,7 +107,7 @@ def _merge_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, 
             continue
         if key == "tools" and result.get("tools"):
             # Combine tool lists, avoiding duplicates by name
-            existing_names = {_get_tool_name(t) for t in result["tools"]}
+            existing_names = {_get_tool_name(t) for t in result["tools"]} - {None}
             unique_new = [t for t in value if _get_tool_name(t) not in existing_names]
             result["tools"] = list(result["tools"]) + unique_new
         elif key == "logit_bias" and result.get("logit_bias"):

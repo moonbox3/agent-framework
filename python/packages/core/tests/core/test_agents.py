@@ -945,6 +945,87 @@ def test_merge_options_mixed_tools_combined():
     assert "tool_b" in names
 
 
+def test_merge_options_mixed_tools_deduplicates():
+    """Test _merge_options deduplicates when a dict tool and object tool share the same name."""
+
+    class MockTool:
+        def __init__(self, name):
+            self.name = name
+
+    base = {"tools": [MockTool("tool_a")]}
+    override = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_a"}},
+        ]
+    }
+
+    result = _merge_options(base, override)
+
+    assert len(result["tools"]) == 1
+    assert _get_tool_name(result["tools"][0]) == "tool_a"
+
+
+def test_merge_options_nameless_tools_not_deduplicated():
+    """Test that tools with no extractable name (None) are not falsely deduplicated."""
+    base = {
+        "tools": [
+            {"type": "function"},  # no 'function.name' -> _get_tool_name returns None
+        ]
+    }
+    override = {
+        "tools": [
+            {"type": "function"},  # also returns None
+        ]
+    }
+
+    result = _merge_options(base, override)
+
+    # Both nameless tools should be kept (None is excluded from dedup set)
+    assert len(result["tools"]) == 2
+
+
+def test_get_tool_name_dict_no_function_key():
+    """_get_tool_name returns None for a dict without a 'function' key."""
+    assert _get_tool_name({"type": "function"}) is None
+
+
+def test_get_tool_name_dict_function_not_dict():
+    """_get_tool_name returns None when 'function' value is not a dict."""
+    assert _get_tool_name({"function": "not_a_dict"}) is None
+
+
+def test_get_tool_name_dict_function_no_name():
+    """_get_tool_name returns None when 'function' dict has no 'name' key."""
+    assert _get_tool_name({"function": {"description": "does stuff"}}) is None
+
+
+def test_get_tool_name_object_no_name_attr():
+    """_get_tool_name returns None for an object without a 'name' attribute."""
+    assert _get_tool_name(object()) is None
+
+
+def test_get_tool_name_non_dict_non_object():
+    """_get_tool_name returns None for non-dict inputs like int or string."""
+    assert _get_tool_name(42) is None
+    assert _get_tool_name("tool_name") is None
+
+
+def test_get_tool_name_valid_dict():
+    """_get_tool_name extracts name from a well-formed dict tool."""
+    tool_dict = {"type": "function", "function": {"name": "my_tool"}}
+    assert _get_tool_name(tool_dict) == "my_tool"
+
+
+def test_get_tool_name_valid_object():
+    """_get_tool_name extracts name from an object with a name attribute."""
+
+    class MockTool:
+        def __init__(self, name):
+            self.name = name
+
+    assert _get_tool_name(MockTool("my_tool")) == "my_tool"
+
+
 def test_merge_options_logit_bias_merged():
     """Test _merge_options merges logit_bias dicts."""
     base = {"logit_bias": {"token1": 1.0}}

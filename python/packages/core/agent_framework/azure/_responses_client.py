@@ -181,6 +181,8 @@ class AzureOpenAIResponsesClient(  # type: ignore[misc]
                 response = await client.get_response("Hello", options={"my_custom_option": "value"})
         """
         model_id = kwargs.pop("model_id", None)
+        if model_id is not None and not str(model_id).strip():
+            raise ValueError("model_id must not be empty")
         if model_id is not None and deployment_name is None:
             deployment_name = str(model_id)
 

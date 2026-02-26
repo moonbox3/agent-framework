@@ -724,7 +724,13 @@ def _validate_handler_signature(
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
     # Resolve string annotations from `from __future__ import annotations`
-    type_hints = typing.get_type_hints(func)
+    try:
+        type_hints = typing.get_type_hints(func)
+    except Exception as e:
+        raise ValueError(
+            f"Failed to resolve type annotations for handler '{func.__name__}': {e}. "
+            f"Ensure all annotated types are importable and resolvable at handler registration time."
+        ) from e
 
     # Validate ctx parameter is WorkflowContext and extract type args
     ctx_param = params[2]

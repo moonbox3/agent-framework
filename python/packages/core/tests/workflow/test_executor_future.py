@@ -17,6 +17,10 @@ class MyTypeB(BaseModel):
     pass
 
 
+class MyTypeC(BaseModel):
+    pass
+
+
 class TestExecutorFutureAnnotations:
     """Test suite for Executor with from __future__ import annotations."""
 
@@ -72,3 +76,34 @@ class TestExecutorFutureAnnotations:
 
         exec_instance = MyExecutor(id="test")
         assert str in exec_instance._handlers
+        spec = exec_instance._handler_specs[0]
+        assert spec["output_types"] == []
+        assert spec["workflow_output_types"] == []
+
+    def test_handler_decorator_future_annotations_explicit_types(self):
+        """Test @handler with explicit type parameters under future annotations."""
+
+        class MyExecutor(Executor):
+            @handler(input=str, output=MyTypeA)
+            async def example(self, input, ctx) -> None:
+                pass
+
+        exec_instance = MyExecutor(id="test")
+        assert str in exec_instance._handlers
+        spec = exec_instance._handler_specs[0]
+        assert spec["message_type"] is str
+        assert spec["output_types"] == [MyTypeA]
+
+    def test_handler_decorator_future_annotations_union_context(self):
+        """Test @handler with union type context annotations and future annotations."""
+
+        class MyExecutor(Executor):
+            @handler
+            async def example(self, input: str, ctx: WorkflowContext[MyTypeA | MyTypeB, MyTypeC]) -> None:
+                pass
+
+        exec_instance = MyExecutor(id="test")
+        assert str in exec_instance._handlers
+        spec = exec_instance._handler_specs[0]
+        assert spec["output_types"] == [MyTypeA, MyTypeB]
+        assert spec["workflow_output_types"] == [MyTypeC]

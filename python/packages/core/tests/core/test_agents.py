@@ -25,7 +25,7 @@ from agent_framework import (
     SupportsChatGetResponse,
     tool,
 )
-from agent_framework._agents import _merge_options, _sanitize_agent_name
+from agent_framework._agents import _get_tool_name, _merge_options, _sanitize_agent_name
 from agent_framework._mcp import MCPTool
 
 
@@ -878,6 +878,71 @@ def test_merge_options_tools_combined():
     tool_names = [t.name for t in result["tools"]]
     assert "tool1" in tool_names
     assert "tool2" in tool_names
+
+
+def test_merge_options_dict_tools_combined():
+    """Test _merge_options combines dict-defined tool lists without duplicates."""
+    base = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_a"}},
+        ]
+    }
+    override = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_b"}},
+        ]
+    }
+
+    result = _merge_options(base, override)
+
+    assert len(result["tools"]) == 2
+    names = [_get_tool_name(t) for t in result["tools"]]
+    assert "tool_a" in names
+    assert "tool_b" in names
+
+
+def test_merge_options_dict_tools_deduplicates():
+    """Test _merge_options deduplicates dict-defined tools by function name."""
+    base = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_a"}},
+        ]
+    }
+    override = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_a"}},
+            {"type": "function", "function": {"name": "tool_b"}},
+        ]
+    }
+
+    result = _merge_options(base, override)
+
+    assert len(result["tools"]) == 2
+    names = [_get_tool_name(t) for t in result["tools"]]
+    assert names.count("tool_a") == 1
+    assert "tool_b" in names
+
+
+def test_merge_options_mixed_tools_combined():
+    """Test _merge_options combines object and dict-defined tools."""
+
+    class MockTool:
+        def __init__(self, name):
+            self.name = name
+
+    base = {"tools": [MockTool("tool_a")]}
+    override = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_b"}},
+        ]
+    }
+
+    result = _merge_options(base, override)
+
+    assert len(result["tools"]) == 2
+    names = [_get_tool_name(t) for t in result["tools"]]
+    assert "tool_a" in names
+    assert "tool_b" in names
 
 
 def test_merge_options_logit_bias_merged():

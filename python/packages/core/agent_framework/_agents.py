@@ -937,7 +937,7 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
 
         def _finalizer(updates: Sequence[AgentResponseUpdate]) -> AgentResponse[Any]:
             ctx = ctx_holder["ctx"]
-            rf = ctx["chat_options"].get("response_format") if ctx else (options.get("response_format") if options else None)
+            rf = ctx.get("chat_options", {}).get("response_format") if ctx else (options.get("response_format") if options else None)
             return self._finalize_response_updates(updates, response_format=rf)
 
         return (

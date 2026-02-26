@@ -1205,8 +1205,17 @@ def test_prepare_tools_for_openai_single_function_tool() -> None:
     resp_tools = client._prepare_tools_for_openai(hello)
     assert isinstance(resp_tools, list)
     assert len(resp_tools) == 1
-    assert resp_tools[0]["type"] == "function"
-    assert resp_tools[0]["name"] == "hello"
+    tool_def = resp_tools[0]
+    assert tool_def["type"] == "function"
+    assert tool_def["name"] == "hello"
+    assert tool_def["strict"] is False
+    assert "parameters" in tool_def
+    params = tool_def["parameters"]
+    assert isinstance(params, dict)
+    assert params.get("type") == "object"
+    assert "properties" in params
+    assert "name" in params["properties"]
+    assert params["properties"]["name"]["type"] == "string"
 
 
 def test_prepare_tools_for_openai_single_dict_tool() -> None:
@@ -1219,6 +1228,15 @@ def test_prepare_tools_for_openai_single_dict_tool() -> None:
     assert len(resp_tools) == 1
     assert "type" in resp_tools[0]
     assert resp_tools[0]["search_context_size"] == "low"
+
+
+def test_prepare_tools_for_openai_none() -> None:
+    """Test that passing None returns an empty list."""
+    client = OpenAIResponsesClient(model_id="test-model", api_key="test-key")
+
+    resp_tools = client._prepare_tools_for_openai(None)
+    assert isinstance(resp_tools, list)
+    assert len(resp_tools) == 0
 
 
 def test_parse_response_from_openai_with_mcp_approval_request() -> None:

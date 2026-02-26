@@ -7,7 +7,7 @@ import inspect
 import logging
 import types
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, get_type_hints, overload
 
 from ..observability import create_processing_span
 from ._events import (
@@ -508,7 +508,7 @@ class Executor(RequestInfoMixin, DictConvertible):
         """Hook called when the workflow is restored from a checkpoint.
 
         Override this method in subclasses to implement custom logic that should
-        run when the workflow is restored from a checkpoint.
+        run when the workflow is restored from the checkpoint.
 
         Args:
             state: The state dictionary that was saved during checkpointing.
@@ -722,20 +722,54 @@ def _validate_handler_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Handler {func.__name__} must have a type annotation for the message parameter")
 
-    # Validate ctx parameter is WorkflowContext and extract type args
+    # Build locals for forward-ref resolution.
+    # - For methods defined in a class body, local forward refs live in the class namespace.
+    # - For nested definitions, use the function's globals; those locals aren't reliably available.
+    # - Always include the function object itself to support refs like "cls" patterns.
+    localns: dict[str, Any] = {func.__name__: func}
+    qualname = getattr(func, "__qualname__", "")
+    if "." in qualname:
+        cls_name = qualname.split(".", 1)[0]
+        globalns = getattr(func, "__globals__", {})
+        cls_obj = globalns.get(cls_name)
+        if isinstance(cls_obj, type):
+            localns.update(vars(cls_obj))
+
+    # When possible, resolve annotations using typing.get_type_hints to:
+    # - correctly handle non-__future__ (already evaluated) typing objects
+    # - resolve string forward refs using *both* globalns and localns
+    # - avoid custom eval logic for introspection path
+    hints: dict[str, Any] = {}
+    try:
+        hints = get_type_hints(
+            func,
+            globalns=getattr(func, "__globals__", None),
+            localns=localns,
+            include_extras=True,
+        )
+    except (NameError, TypeError) as e:
+        raise ValueError(
+            f"Handler {func.__name__} type annotations could not be resolved. "
+            "Make sure all referenced types are defined/imported at runtime (not only under TYPE_CHECKING)."
+        ) from e
+
+    # Validate ctx parameter is WorkflowContext and extract type args.
+    message_type = hints.get(message_param.name, message_param.annotation)
+    if message_type == inspect.Parameter.empty:
+        message_type = None
+
     ctx_param = params[2]
-    if skip_message_annotation and ctx_param.annotation == inspect.Parameter.empty:
+    ctx_annotation: Any = hints.get(ctx_param.name, ctx_param.annotation)
+
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
         # When explicit types are provided via @handler(input=..., output=...),
         # the ctx parameter doesn't need a type annotation - types come from the decorator.
         output_types: list[type[Any] | types.UnionType] = []
         workflow_output_types: list[type[Any] | types.UnionType] = []
     else:
         output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_param.annotation, f"parameter '{ctx_param.name}'", "Handler"
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
-
-    message_type = message_param.annotation if message_param.annotation != inspect.Parameter.empty else None
-    ctx_annotation = ctx_param.annotation
 
     return message_type, ctx_annotation, output_types, workflow_output_types
 

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+import pytest
+
 from agent_framework import Executor, WorkflowContext, handler
 
 
@@ -107,3 +109,12 @@ class TestExecutorFutureAnnotations:
         spec = exec_instance._handler_specs[0]
         assert spec["output_types"] == [MyTypeA, MyTypeB]
         assert spec["workflow_output_types"] == [MyTypeC]
+
+    def test_handler_unresolvable_annotation_raises(self):
+        """Test that an unresolvable forward-reference annotation raises ValueError."""
+        with pytest.raises(ValueError, match="Failed to resolve type annotations"):
+
+            class Bad(Executor):
+                @handler
+                async def example(self, input: "NonExistentType", ctx: WorkflowContext[MyTypeA, MyTypeB]) -> None:
+                    pass

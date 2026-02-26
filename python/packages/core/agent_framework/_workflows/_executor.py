@@ -726,7 +726,7 @@ def _validate_handler_signature(
     # Resolve string annotations from `from __future__ import annotations`
     try:
         type_hints = typing.get_type_hints(func)
-    except Exception as e:
+    except (NameError, AttributeError, TypeError) as e:
         raise ValueError(
             f"Failed to resolve type annotations for handler '{func.__name__}': {e}. "
             f"Ensure all annotated types are importable and resolvable at handler registration time."

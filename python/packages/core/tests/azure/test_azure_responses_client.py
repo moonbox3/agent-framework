@@ -98,6 +98,27 @@ def test_init_model_id_kwarg(azure_openai_unit_test_env: dict[str, str]) -> None
     assert isinstance(azure_responses_client, SupportsChatGetResponse)
 
 
+def test_init_model_id_kwarg_does_not_override_deployment_name(azure_openai_unit_test_env: dict[str, str]) -> None:
+    """Test that deployment_name takes precedence over model_id kwarg (issue #4299)."""
+    azure_responses_client = AzureOpenAIResponsesClient(deployment_name="my-deployment", model_id="gpt-4o")
+
+    assert azure_responses_client.model_id == "my-deployment"
+    assert isinstance(azure_responses_client, SupportsChatGetResponse)
+
+
+def test_init_model_id_kwarg_empty_string(azure_openai_unit_test_env: dict[str, str]) -> None:
+    """Test that model_id="" surfaces as invalid rather than silently falling back."""
+    with pytest.raises(ValueError):
+        AzureOpenAIResponsesClient(model_id="")
+
+
+def test_init_model_id_kwarg_none(azure_openai_unit_test_env: dict[str, str]) -> None:
+    """Test that model_id=None does not override the env-var deployment name."""
+    azure_responses_client = AzureOpenAIResponsesClient(model_id=None)
+
+    assert azure_responses_client.model_id == azure_openai_unit_test_env["AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME"]
+
+
 def test_init_with_default_header(azure_openai_unit_test_env: dict[str, str]) -> None:
     default_headers = {"X-Unit-Test": "test-guid"}
 

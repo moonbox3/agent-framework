@@ -111,8 +111,13 @@ class TestExecutorFutureAnnotations:
         assert spec["workflow_output_types"] == [MyTypeC]
 
     def test_handler_unresolvable_annotation_raises(self):
-        """Test that an unresolvable forward-reference annotation raises ValueError."""
-        with pytest.raises(ValueError, match="Failed to resolve type annotations"):
+        """Test that an unresolvable forward-reference annotation raises ValueError.
+
+        When get_type_hints fails (e.g. NameError for NonExistentType), the code falls back
+        to raw string annotations. The ctx parameter's raw string annotation is then not
+        recognised as a valid WorkflowContext type, so a ValueError is still raised.
+        """
+        with pytest.raises(ValueError):
 
             class Bad(Executor):
                 @handler

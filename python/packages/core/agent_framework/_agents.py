@@ -935,6 +935,15 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
                 session.service_session_id = conv_id
             return update
 
+        def _get_merged_response_format() -> Any | None:
+            ctx = ctx_holder["ctx"]
+            if ctx is not None:
+                return ctx["chat_options"].get("response_format")
+            return options.get("response_format") if options else None
+
+        def _finalize_with_merged_options(updates: Sequence[AgentResponseUpdate]) -> AgentResponse:
+            return self._finalize_response_updates(updates, response_format=_get_merged_response_format())
+
         return (
             ResponseStream
             .from_awaitable(_get_stream())
@@ -943,9 +952,7 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):  # type: ignore[misc]
                     map_chat_to_agent_update,
                     agent_name=self.name,
                 ),
-                finalizer=partial(
-                    self._finalize_response_updates, response_format=options.get("response_format") if options else None
-                ),
+                finalizer=_finalize_with_merged_options,
             )
             .with_transform_hook(_propagate_conversation_id)
             .with_result_hook(_post_hook)

@@ -1136,4 +1136,47 @@ async def test_stores_by_default_with_store_false_injects_inmemory(client: Suppo
 # endregion
 
 
+async def test_streaming_run_uses_default_options_response_format(client: SupportsChatGetResponse) -> None:
+    """Streaming run should honor default_options response_format for final value parsing (#4300)."""
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        x: int
+
+    client.streaming_responses = [  # type: ignore[attr-defined]
+        [ChatResponseUpdate(contents=[Content.from_text('{"x": 42}')], role="assistant")],
+    ]
+
+    agent = Agent(client=client, default_options={"response_format": Out})
+
+    stream = agent.run("hi", stream=True)
+    async for _ in stream:
+        pass
+    final = await stream.get_final_response()
+
+    assert final.value is not None
+    assert isinstance(final.value, Out)
+    assert final.value.x == 42
+
+
+async def test_non_streaming_run_uses_default_options_response_format(client: SupportsChatGetResponse) -> None:
+    """Non-streaming run should honor default_options response_format for value parsing."""
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        x: int
+
+    client.responses = [  # type: ignore[attr-defined]
+        ChatResponse(messages=Message(role="assistant", text='{"x": 42}')),
+    ]
+
+    agent = Agent(client=client, default_options={"response_format": Out})
+
+    result = await agent.run("hi")
+
+    assert result.value is not None
+    assert isinstance(result.value, Out)
+    assert result.value.x == 42
+
+
 # endregion

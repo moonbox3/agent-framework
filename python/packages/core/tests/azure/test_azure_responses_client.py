@@ -90,6 +90,14 @@ def test_init_model_id_constructor(azure_openai_unit_test_env: dict[str, str]) -
     assert isinstance(azure_responses_client, SupportsChatGetResponse)
 
 
+def test_init_model_id_kwarg(azure_openai_unit_test_env: dict[str, str]) -> None:
+    """Test that model_id kwarg correctly sets the deployment name (issue #4299)."""
+    azure_responses_client = AzureOpenAIResponsesClient(model_id="gpt-4o")
+
+    assert azure_responses_client.model_id == "gpt-4o"
+    assert isinstance(azure_responses_client, SupportsChatGetResponse)
+
+
 def test_init_with_default_header(azure_openai_unit_test_env: dict[str, str]) -> None:
     default_headers = {"X-Unit-Test": "test-guid"}
 

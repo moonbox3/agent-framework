@@ -417,7 +417,7 @@ class AgentExecutor(Executor):
 
     # Parameters that are explicitly passed to agent.run() by AgentExecutor
     # and must not appear in **run_kwargs to avoid TypeError from duplicate values.
-    _RESERVED_RUN_PARAMS: frozenset[str] = frozenset({"session", "stream", "messages", "options", "additional_function_arguments"})
+    _RESERVED_RUN_PARAMS: frozenset[str] = frozenset({"session", "stream", "messages"})
 
     @staticmethod
     def _prepare_agent_run_args(raw_run_kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -435,7 +435,7 @@ class AgentExecutor(Executor):
         run_kwargs = dict(raw_run_kwargs)
 
         # Strip reserved params that AgentExecutor passes explicitly to agent.run().
-        for key in ("session", "stream", "messages"):
+        for key in AgentExecutor._RESERVED_RUN_PARAMS:
             if key in run_kwargs:
                 logger.warning(
                     "Workflow kwarg '%s' is reserved by AgentExecutor and will be ignored. "

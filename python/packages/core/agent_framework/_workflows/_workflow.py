@@ -569,6 +569,10 @@ class Workflow(DictConvertible):
             initial_executor_fn=initial_executor_fn,
             reset_context=reset_context,
             streaming=streaming,
+            # Empty **kwargs (no caller-provided kwargs) is collapsed to None so that
+            # continuation calls without explicit kwargs preserve the original run's kwargs.
+            # A non-empty kwargs dict (even one with empty values like {"key": {}})
+            # is passed through and will overwrite stored kwargs.
             run_kwargs=kwargs if kwargs else None,
         ):
             if event.type == "output" and not self._should_yield_output_event(event):

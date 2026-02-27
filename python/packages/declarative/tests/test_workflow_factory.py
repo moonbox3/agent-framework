@@ -192,9 +192,7 @@ actions:
         # age=8 -> child branch
         result_child = await workflow.run({"age": 8})
         outputs_child = result_child.get_outputs()
-        assert any("child" in str(o) for o in outputs_child), (
-            f"Expected 'child' for age=8 but got: {outputs_child}"
-        )
+        assert any("child" in str(o) for o in outputs_child), f"Expected 'child' for age=8 but got: {outputs_child}"
         assert not any("adult" in str(o) for o in outputs_child), (
             f"Did not expect 'adult' for age=8 but got: {outputs_child}"
         )
@@ -202,9 +200,7 @@ actions:
         # age=25 -> adult branch (bug: blank treated as 0 made this always go to child)
         result_adult = await workflow.run({"age": 25})
         outputs_adult = result_adult.get_outputs()
-        assert any("adult" in str(o) for o in outputs_adult), (
-            f"Expected 'adult' for age=25 but got: {outputs_adult}"
-        )
+        assert any("adult" in str(o) for o in outputs_adult), f"Expected 'adult' for age=25 but got: {outputs_adult}"
         assert not any("child" in str(o) for o in outputs_adult), (
             f"Did not expect 'child' for age=25 but got: {outputs_adult}"
         )
@@ -230,9 +226,7 @@ actions:
 
         result = await workflow.run("hello-world")
         outputs = result.get_outputs()
-        assert any("hello-world" in str(o) for o in outputs), (
-            f"Expected 'hello-world' in outputs but got: {outputs}"
-        )
+        assert any("hello-world" in str(o) for o in outputs), f"Expected 'hello-world' in outputs but got: {outputs}"
 
 
 class TestWorkflowFactoryAgentRegistration:

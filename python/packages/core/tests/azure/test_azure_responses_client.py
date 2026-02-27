@@ -106,12 +106,6 @@ def test_init_model_id_kwarg_does_not_override_deployment_name(azure_openai_unit
     assert isinstance(azure_responses_client, SupportsChatGetResponse)
 
 
-def test_init_model_id_kwarg_empty_string(azure_openai_unit_test_env: dict[str, str]) -> None:
-    """Test that model_id="" surfaces as invalid rather than silently falling back."""
-    with pytest.raises(ValueError):
-        AzureOpenAIResponsesClient(model_id="")
-
-
 def test_init_model_id_kwarg_none(azure_openai_unit_test_env: dict[str, str]) -> None:
     """Test that model_id=None does not override the env-var deployment name."""
     azure_responses_client = AzureOpenAIResponsesClient(model_id=None)

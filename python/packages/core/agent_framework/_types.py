@@ -93,12 +93,12 @@ def detect_media_type_from_base64(
             This will look at the actual data to determine the media_type and not at the URI prefix.
             Will also not compare those two values.
 
-    Raises:
-        ValueError: If not exactly 1 of data_bytes, data_str, or data_uri is provided, or if base64 decoding fails.
-
     Returns:
         The detected media type (e.g., 'image/png', 'audio/wav', 'application/pdf')
         or None if the format is not recognized.
+
+    Raises:
+        ValueError: If not exactly 1 of data_bytes, data_str, or data_uri is provided, or if base64 decoding fails.
 
     Examples:
         .. code-block:: python
@@ -377,6 +377,12 @@ class UsageDetails(TypedDict, total=False):
 
     This is a non-closed dictionary, so any specific provider fields can be added as needed.
     Whenever they can be mapped to standard fields, they will be.
+
+    Keys:
+        input_token_count: The number of input tokens used.
+        output_token_count: The number of output tokens generated.
+        total_token_count: The total number of tokens (input + output).
+
     """
 
     input_token_count: int | None
@@ -664,6 +670,9 @@ class Content:
             additional_properties: Optional additional properties.
             raw_representation: Optional raw representation from an underlying implementation.
 
+        Returns:
+            A Content instance with type="data" for data URIs or type="uri" for external URIs.
+
         Raises:
             ContentError: If the URI is not valid.
 
@@ -687,9 +696,6 @@ class Content:
                         raw_base64_string
                     }"
                 )
-
-        Returns:
-            A Content instance with type="data" for data URIs or type="uri" for external URIs.
         """
         return cls(
             **_validate_uri(uri, media_type),
@@ -3289,7 +3295,7 @@ class GeneratedEmbeddings(list[Embedding[EmbeddingT]], Generic[EmbeddingT, Embed
         embeddings: Iterable[Embedding[EmbeddingT]] | None = None,
         *,
         options: EmbeddingOptionsT | None = None,
-        usage: dict[str, Any] | None = None,
+        usage: UsageDetails | None = None,
         additional_properties: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(embeddings or [])

@@ -1670,7 +1670,7 @@ def _update_conversation_id(
         return
     if "chat_options" in kwargs:
         chat_opts = kwargs["chat_options"]
-        if isinstance(chat_opts, dict):
+        if isinstance(chat_opts, Mapping):
             chat_opts["conversation_id"] = conversation_id
         else:
             chat_opts.conversation_id = conversation_id

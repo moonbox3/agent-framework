@@ -3514,5 +3514,27 @@ class TestUpdateConversationId:
         assert kwargs["chat_options"]["conversation_id"] == "conv_5"
         assert options["conversation_id"] == "conv_5"
 
+    def test_options_dict_also_updated_with_object_chat_options(self):
+        """The optional options dict should also receive conversation_id when chat_options is object-style."""
+        from agent_framework._tools import _update_conversation_id
+
+        class ObjOptions:
+            conversation_id: str | None = None
+
+        obj = ObjOptions()
+        kwargs: dict[str, Any] = {"chat_options": obj}
+        options: dict[str, Any] = {}
+        _update_conversation_id(kwargs, "conv_6", options)
+        assert obj.conversation_id == "conv_6"
+        assert options["conversation_id"] == "conv_6"
+
+    def test_dict_overwrites_existing_conversation_id(self):
+        """When a dict already has a conversation_id, it should be overwritten."""
+        from agent_framework._tools import _update_conversation_id
+
+        kwargs: dict[str, Any] = {"chat_options": {"conversation_id": "old_id"}}
+        _update_conversation_id(kwargs, "new_id")
+        assert kwargs["chat_options"]["conversation_id"] == "new_id"
+
 
 # endregion

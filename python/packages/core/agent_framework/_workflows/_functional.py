@@ -9,7 +9,7 @@ define workflows using native Python control flow (if/else, loops,
 A ``@workflow``-decorated async function receives its input as the first
 positional argument.  If the function needs HITL (``request_info``), custom
 events, or key/value state, add a :class:`RunContext` parameter — otherwise it
-can be omitted.  Inside the function, plain ``async`` calls run normally.
+can be omitted.  Inside the workflow, plain ``async`` calls run normally.
 Optionally, ``@step``-decorated functions gain caching, per-step checkpointing,
 and event emission.
 
@@ -162,7 +162,8 @@ class RunContext:
 
         On first execution this suspends the workflow by raising an internal
         ``WorkflowInterrupted`` signal (caught by the framework, never exposed
-        to user code).  The caller receives a ``WorkflowRunResult`` whose
+        to user code).  The caller receives a ``WorkflowRunResult`` (or a
+        ``ResponseStream`` when ``stream=True``) whose
         :meth:`~WorkflowRunResult.get_request_info_events` contains the pending
         request.  When the workflow is resumed with
         ``run(responses={request_id: value})``, the same function re-executes
@@ -196,7 +197,7 @@ class RunContext:
             request_data=request_data,
             response_type=response_type,
         )
-        self._add_event(event)
+        await self.add_event(event)
         self._pending_requests[rid] = event
         raise WorkflowInterrupted(rid, request_data, response_type)
 
@@ -209,7 +210,7 @@ class RunContext:
         Args:
             event: The workflow event to append.
         """
-        self._add_event(event)
+        self._events.append(event)
 
     def get_state(self, key: str, default: Any = None) -> Any:
         """Retrieve a value from the workflow's key/value state.
@@ -247,9 +248,6 @@ class RunContext:
     # ------------------------------------------------------------------
     # Internal API (for StepWrapper and FunctionalWorkflow)
     # ------------------------------------------------------------------
-
-    def _add_event(self, event: WorkflowEvent[Any]) -> None:
-        self._events.append(event)
 
     def _get_events(self) -> list[WorkflowEvent[Any]]:
         return list(self._events)
@@ -347,19 +345,19 @@ class StepWrapper(Generic[R]):
         invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
             # Replay path: emit events and return cached result
-            ctx._add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
-            ctx._add_event(WorkflowEvent.executor_completed(self.name, cached))
+            await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
+            await ctx.add_event(WorkflowEvent.executor_completed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
         # Live execution path
-        ctx._add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
+        await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
         try:
             result = await self._func(*args, **kwargs)
         except Exception as exc:
-            ctx._add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
+            await ctx.add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
             raise
         ctx._set_cached_result(cache_key, result)
-        ctx._add_event(WorkflowEvent.executor_completed(self.name, result))
+        await ctx.add_event(WorkflowEvent.executor_completed(self.name, result))
         if ctx._on_step_completed is not None:
             await ctx._on_step_completed()
         return result
@@ -702,7 +700,7 @@ class FunctionalWorkflow:
 
                 # Emit the return value as the workflow output.
                 if return_value is not None:
-                    ctx._add_event(WorkflowEvent.output(self.name, return_value))
+                    await ctx.add_event(WorkflowEvent.output(self.name, return_value))
 
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)

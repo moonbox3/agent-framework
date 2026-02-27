@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
-
 import pytest
+from pydantic import BaseModel
 
 from agent_framework import Executor, WorkflowContext, handler
 
@@ -121,5 +120,5 @@ class TestExecutorFutureAnnotations:
 
             class Bad(Executor):
                 @handler
-                async def example(self, input: NonExistentType, ctx: WorkflowContext[MyTypeA, MyTypeB]) -> None:
+                async def example(self, input: NonExistentType, ctx: WorkflowContext[MyTypeA, MyTypeB]) -> None:  # noqa: F821
                     pass

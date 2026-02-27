@@ -121,5 +121,5 @@ class TestExecutorFutureAnnotations:
 
             class Bad(Executor):
                 @handler
-                async def example(self, input: "NonExistentType", ctx: WorkflowContext[MyTypeA, MyTypeB]) -> None:
+                async def example(self, input: NonExistentType, ctx: WorkflowContext[MyTypeA, MyTypeB]) -> None:
                     pass

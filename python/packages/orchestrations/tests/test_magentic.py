@@ -1113,7 +1113,7 @@ async def test_standard_manager_propagates_session_to_agent():
     assert captured_sessions[0] is getattr(mgr, "_session")
 
 
-async def test_standard_manager_checkpoint_preserves_session():
+def test_standard_manager_checkpoint_preserves_session():
     """Verify that checkpoint save/restore preserves the manager's session identity."""
     agent = StubManagerAgent()
     mgr = StandardMagenticManager(agent=agent)
@@ -1129,7 +1129,7 @@ async def test_standard_manager_checkpoint_preserves_session():
     assert getattr(mgr2, "_session").session_id == original_session_id
 
 
-async def test_standard_manager_checkpoint_restore_empty_state():
+def test_standard_manager_checkpoint_restore_empty_state():
     """Verify that restoring from a state without agent_session leaves the session intact."""
     agent = StubManagerAgent()
     mgr = StandardMagenticManager(agent=agent)

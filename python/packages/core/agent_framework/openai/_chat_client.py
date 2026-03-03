@@ -576,11 +576,8 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                     # Functions returning None should still have a tool result message
                     args["content"] = content.result if content.result is not None else ""
                 case "text_reasoning" if (protected_data := content.protected_data) is not None:
-                    if all_messages:
-                        all_messages[-1]["reasoning_details"] = json.loads(protected_data)
-                    else:
-                        # Buffer reasoning to attach to the next message with content/tool_calls
-                        pending_reasoning = json.loads(protected_data)
+                    # Buffer reasoning to attach to the next message with content/tool_calls
+                    pending_reasoning = json.loads(protected_data)
                 case _:
                     if "content" not in args:
                         args["content"] = []
@@ -594,10 +591,13 @@ class RawOpenAIChatClient(  # type: ignore[misc]
 
         # If reasoning was the only content, emit a valid message with empty content
         if pending_reasoning is not None:
-            pending_args: dict[str, Any] = {"role": message.role, "content": "", "reasoning_details": pending_reasoning}
-            if message.author_name and message.role != "tool":
-                pending_args["name"] = message.author_name
-            all_messages.append(pending_args)
+            if all_messages:
+                all_messages[-1]["reasoning_details"] = pending_reasoning
+            else:
+                pending_args: dict[str, Any] = {"role": message.role, "content": "", "reasoning_details": pending_reasoning}
+                if message.author_name and message.role != "tool":
+                    pending_args["name"] = message.author_name
+                all_messages.append(pending_args)
 
         # Flatten text-only content lists to plain strings for broader
         # compatibility with OpenAI-like endpoints (e.g. Foundry Local).

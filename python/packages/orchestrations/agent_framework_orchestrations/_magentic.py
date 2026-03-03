@@ -744,7 +744,7 @@ class StandardMagenticManager(MagenticManagerBase):
             except Exception:  # pragma: no cover - defensive
                 logger.warning("Failed to restore manager task ledger from checkpoint state")
         session_payload = state.get("agent_session")
-        if session_payload:
+        if session_payload is not None:
             try:
                 self._session = AgentSession.from_dict(session_payload)
             except Exception:  # pragma: no cover - defensive

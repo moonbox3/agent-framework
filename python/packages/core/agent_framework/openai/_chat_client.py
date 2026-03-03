@@ -594,7 +594,11 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             if all_messages:
                 all_messages[-1]["reasoning_details"] = pending_reasoning
             else:
-                pending_args: dict[str, Any] = {"role": message.role, "content": "", "reasoning_details": pending_reasoning}
+                pending_args: dict[str, Any] = {
+                    "role": message.role,
+                    "content": "",
+                    "reasoning_details": pending_reasoning,
+                }
                 if message.author_name and message.role != "tool":
                     pending_args["name"] = message.author_name
                 all_messages.append(pending_args)

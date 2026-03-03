@@ -1110,23 +1110,23 @@ async def test_standard_manager_propagates_session_to_agent():
     assert len(captured_sessions) == 2
     assert all(s is not None for s in captured_sessions), "session must be passed to agent.run()"
     assert captured_sessions[0] is captured_sessions[1], "same session instance must be reused across calls"
-    assert captured_sessions[0] is getattr(mgr, "_session")
+    assert captured_sessions[0] is mgr._session
 
 
 async def test_standard_manager_checkpoint_preserves_session():
     """Verify that checkpoint save/restore preserves the manager's session identity."""
     agent = StubManagerAgent()
     mgr = StandardMagenticManager(agent=agent)
-    original_session_id = getattr(mgr, "_session").session_id
+    original_session_id = mgr._session.session_id
 
     state = mgr.on_checkpoint_save()
     assert "agent_session" in state
 
     # Restore into a fresh manager and verify session_id is preserved
     mgr2 = StandardMagenticManager(agent=agent)
-    assert getattr(mgr2, "_session").session_id != original_session_id
+    assert mgr2._session.session_id != original_session_id
     mgr2.on_checkpoint_restore(state)
-    assert getattr(mgr2, "_session").session_id == original_session_id
+    assert mgr2._session.session_id == original_session_id
 
 
 # endregion

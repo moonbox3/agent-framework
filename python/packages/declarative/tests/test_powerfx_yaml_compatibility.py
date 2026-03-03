@@ -513,6 +513,8 @@ class TestPowerFxUndefinedVariables:
             # Should return None, not raise ValueError with Italian error text
             result = state.eval("=Local.StatusConversationId")
             assert result is None
+            # Verify the production code restored CurrentUICulture after eval
+            assert str(CultureInfo.CurrentUICulture) == str(CultureInfo("it-IT"))
         finally:
             CultureInfo.CurrentUICulture = original_ui_culture
 

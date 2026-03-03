@@ -575,6 +575,8 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                     # Functions returning None should still have a tool result message
                     args["content"] = content.result if content.result is not None else ""
                 case "text_reasoning" if (protected_data := content.protected_data) is not None:
+                    if not all_messages:
+                        all_messages.append(args)
                     all_messages[-1]["reasoning_details"] = json.loads(protected_data)
                 case _:
                     if "content" not in args:

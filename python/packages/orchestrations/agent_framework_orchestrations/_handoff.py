@@ -395,9 +395,7 @@ class HandoffAgentExecutor(AgentExecutor):
         context_providers: list[BaseContextProvider] = [
             p for p in agent.context_providers if not isinstance(p, BaseHistoryProvider)
         ]
-        context_providers.append(
-            InMemoryHistoryProvider(load_messages=False, store_inputs=False, store_outputs=False)
-        )
+        context_providers.append(InMemoryHistoryProvider(load_messages=False, store_inputs=False, store_outputs=False))
 
         return Agent(
             client=agent.client,

@@ -39,7 +39,7 @@ from typing import Any, cast
 
 from agent_framework import Agent, SupportsAgentRun
 from agent_framework._middleware import FunctionInvocationContext, FunctionMiddleware
-from agent_framework._sessions import AgentSession
+from agent_framework._sessions import AgentSession, BaseContextProvider, BaseHistoryProvider, InMemoryHistoryProvider
 from agent_framework._tools import FunctionTool, tool
 from agent_framework._types import AgentResponse, AgentResponseUpdate, Content, Message
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
@@ -390,12 +390,21 @@ class HandoffAgentExecutor(AgentExecutor):
             "user": options.get("user"),
         }
 
+        # Handoff workflows manage full conversation state via _full_conversation.
+        # Suppress history providers to prevent duplicate messages on approval resume.
+        context_providers: list[BaseContextProvider] = [
+            p for p in agent.context_providers if not isinstance(p, BaseHistoryProvider)
+        ]
+        context_providers.append(
+            InMemoryHistoryProvider(load_messages=False, store_inputs=False, store_outputs=False)
+        )
+
         return Agent(
             client=agent.client,
             id=agent.id,
             name=agent.name,
             description=agent.description,
-            context_providers=agent.context_providers,
+            context_providers=context_providers,
             middleware=middleware,
             default_options=cloned_options,  # type: ignore[arg-type]
         )

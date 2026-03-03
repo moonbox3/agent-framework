@@ -672,6 +672,9 @@ def test_prepare_message_with_only_text_reasoning_content(openai_unit_test_env: 
     assert prepared[0]["role"] == "assistant"
     assert "reasoning_details" in prepared[0]
     assert prepared[0]["reasoning_details"] == mock_reasoning_data
+    # Message should also include a content field to be a valid Chat Completions payload
+    assert "content" in prepared[0]
+    assert prepared[0]["content"] in ("", None)
 
 
 def test_prepare_message_with_text_reasoning_before_text(openai_unit_test_env: dict[str, str]) -> None:
@@ -701,9 +704,19 @@ def test_prepare_message_with_text_reasoning_before_text(openai_unit_test_env: d
 
     # Should produce messages without raising IndexError
     assert len(prepared) >= 1
-    # Reasoning details should be present on a message
-    has_reasoning = any("reasoning_details" in msg for msg in prepared)
-    assert has_reasoning
+
+    # There should be a message containing the expected text content
+    assert any(msg.get("content") == "The answer is 42." for msg in prepared)
+
+    # The message containing the text should also carry the reasoning details
+    text_message = next(msg for msg in prepared if msg.get("content") == "The answer is 42.")
+    assert "reasoning_details" in text_message
+    assert text_message["role"] == "assistant"
+
+    # Ensure we don't end up with a standalone reasoning-only message
+    for msg in prepared:
+        if "reasoning_details" in msg:
+            assert "content" in msg or "tool_calls" in msg
 
 
 def test_function_approval_content_is_skipped_in_preparation(openai_unit_test_env: dict[str, str]) -> None:

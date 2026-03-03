@@ -389,8 +389,9 @@ class DeclarativeWorkflowState:
 
             original_culture = CultureInfo.CurrentCulture
             original_ui_culture = CultureInfo.CurrentUICulture
-            CultureInfo.CurrentCulture = CultureInfo("en-US")
-            CultureInfo.CurrentUICulture = CultureInfo("en-US")
+            en_us_culture = CultureInfo("en-US")
+            CultureInfo.CurrentCulture = en_us_culture
+            CultureInfo.CurrentUICulture = en_us_culture
             try:
                 return engine.eval(formula, symbols=symbols)
             finally:

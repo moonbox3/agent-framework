@@ -6,9 +6,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from _sample_validation.models import ExecutionResult, Report, RunResult, RunStatus
 from agent_framework import Executor, WorkflowContext, handler
 from typing_extensions import Never
+
+from sample_validation.models import ExecutionResult, Report, RunResult, RunStatus
 
 
 def generate_report(results: list[RunResult]) -> Report:
@@ -21,6 +22,14 @@ def generate_report(results: list[RunResult]) -> Report:
     Returns:
         Report object with aggregated statistics
     """
+    # Sort results: failures, timeouts, errors first, then successes
+    status_priority = {
+        RunStatus.FAILURE: 0,
+        RunStatus.TIMEOUT: 1,
+        RunStatus.ERROR: 2,
+        RunStatus.SUCCESS: 3,
+    }
+    sorted_results = sorted(results, key=lambda r: status_priority[r.status])
 
     return Report(
         timestamp=datetime.now(),
@@ -29,11 +38,13 @@ def generate_report(results: list[RunResult]) -> Report:
         failure_count=sum(1 for r in results if r.status == RunStatus.FAILURE),
         timeout_count=sum(1 for r in results if r.status == RunStatus.TIMEOUT),
         error_count=sum(1 for r in results if r.status == RunStatus.ERROR),
-        results=results,
+        results=sorted_results,
     )
 
 
-def save_report(report: Report, output_dir: Path, name: str | None = None) -> tuple[Path, Path]:
+def save_report(
+    report: Report, output_dir: Path, name: str | None = None
+) -> tuple[Path, Path]:
     """
     Save the report to markdown and JSON files.
 
@@ -73,7 +84,11 @@ def print_summary(report: Report) -> None:
     print("SAMPLE VALIDATION SUMMARY")
     print("=" * 80)
 
-    if report.failure_count == 0 and report.timeout_count == 0 and report.error_count == 0:
+    if (
+        report.failure_count == 0
+        and report.timeout_count == 0
+        and report.error_count == 0
+    ):
         print("[PASS] ALL SAMPLES PASSED!")
     else:
         print("[FAIL] SOME SAMPLES FAILED")
@@ -84,8 +99,12 @@ def print_summary(report: Report) -> None:
     print(f"  [PASS] Success: {report.success_count}")
     print(f"  [FAIL] Failure: {report.failure_count}")
     print(f"  [TIMEOUT] Timeout: {report.timeout_count}")
-    print(f"  [ERROR] Error: {report.error_count}")
+    print(f"  [ERR] Errors: {report.error_count}")
     print("=" * 80)
+
+    # Print JSON output for GitHub Actions visibility
+    print("\nJSON Report:")
+    print(json.dumps(report.to_dict(), indent=2))
 
 
 class GenerateReportExecutor(Executor):
@@ -95,7 +114,9 @@ class GenerateReportExecutor(Executor):
         super().__init__(id="generate_report")
 
     @handler
-    async def generate(self, execution: ExecutionResult, ctx: WorkflowContext[Never, Report]) -> None:
+    async def generate(
+        self, execution: ExecutionResult, ctx: WorkflowContext[Never, Report]
+    ) -> None:
         """Generate the validation report from fan-in results."""
         print("\nGenerating report...")
 

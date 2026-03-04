@@ -241,3 +241,83 @@ def stream_from_updates_fixture() -> Callable[[list[ChatResponseUpdate]], Stream
 def stub_agent() -> type[SupportsAgentRun]:
     """Return the StubAgent class for creating test instances."""
     return StubAgent  # type: ignore[return-value]
+
+
+# ── Fixtures for golden / integration tests ──
+
+
+@pytest.fixture
+def collect_events() -> Callable[..., Any]:
+    """Return an async helper that collects all events from an async generator."""
+
+    async def _collect(async_gen: AsyncIterable[Any]) -> list[Any]:
+        return [event async for event in async_gen]
+
+    return _collect
+
+
+@pytest.fixture
+def make_agent_wrapper() -> Callable[..., Any]:
+    """Factory that builds an AgentFrameworkAgent from a stream function.
+
+    Usage::
+
+        agent = make_agent_wrapper(
+            stream_fn=stream_from_updates(updates),
+            state_schema=...,
+        )
+        events = [e async for e in agent.run(payload)]
+    """
+    from agent_framework_ag_ui import AgentFrameworkAgent
+
+    def _factory(
+        stream_fn: StreamFn,
+        *,
+        state_schema: Any | None = None,
+        predict_state_config: dict[str, dict[str, str]] | None = None,
+        require_confirmation: bool = True,
+    ) -> Any:
+        client = StreamingChatClientStub(stream_fn)
+        stub = StubAgent(client=client)
+        return AgentFrameworkAgent(
+            agent=stub,
+            state_schema=state_schema,
+            predict_state_config=predict_state_config,
+            require_confirmation=require_confirmation,
+        )
+
+    return _factory
+
+
+@pytest.fixture
+def make_app() -> Callable[..., Any]:
+    """Factory that builds a FastAPI app with an AG-UI endpoint.
+
+    Usage::
+
+        app = make_app(agent_or_wrapper, path="/test")
+    """
+    from fastapi import FastAPI
+
+    from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
+
+    def _factory(
+        agent: Any,
+        *,
+        path: str = "/",
+        state_schema: Any | None = None,
+        predict_state_config: dict[str, dict[str, str]] | None = None,
+        default_state: dict[str, Any] | None = None,
+    ) -> FastAPI:
+        app = FastAPI()
+        add_agent_framework_fastapi_endpoint(
+            app,
+            agent,
+            path=path,
+            state_schema=state_schema,
+            predict_state_config=predict_state_config,
+            default_state=default_state,
+        )
+        return app
+
+    return _factory

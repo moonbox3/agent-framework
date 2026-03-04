@@ -796,7 +796,7 @@ class TestCoerceContent:
         assert _coerce_content(42) is None
 
     def test_auto_function_approval_response_type_attempted(self):
-        """Dict with approved+id+function_call triggers auto-type path (line 180-181)."""
+        """Dict with approved+id+function_call triggers the auto-type detection path."""
         # The function injects type="function_approval_response" into a copy,
         # but Content.from_dict may fail for complex nested types - returns None.
         value = {

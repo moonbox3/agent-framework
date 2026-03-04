@@ -127,10 +127,12 @@ class EventStream:
             t = self._type_str(event)
             if t == "TOOL_CALL_START":
                 tid = event.tool_call_id
+                assert tid not in starts, f"Duplicate TOOL_CALL_START for tool_call_id={tid}"
                 starts[tid] = i
             elif t == "TOOL_CALL_END":
                 tid = event.tool_call_id
                 assert tid in starts, f"TOOL_CALL_END for unknown tool_call_id={tid}"
+                assert tid not in ends, f"Duplicate TOOL_CALL_END for tool_call_id={tid}"
                 ends.add(tid)
 
         unclosed = set(starts.keys()) - ends

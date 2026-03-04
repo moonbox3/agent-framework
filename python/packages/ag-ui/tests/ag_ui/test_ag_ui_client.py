@@ -422,12 +422,15 @@ class TestAGUIChatClient:
             updates.append(update)
 
         # Find the function_call content - it should have agui_thread_id
+        found = False
         for update in updates:
             for content in update.contents:
                 if content.type == "function_call" and content.name == "my_tool":
                     assert content.additional_properties is not None
                     assert "agui_thread_id" in content.additional_properties
+                    found = True
                     break
+        assert found, "Expected to find function_call content for my_tool"
 
     async def test_interrupt_options_transmission(self, monkeypatch: MonkeyPatch) -> None:
         """Interrupt option fields are forwarded to the HTTP service."""

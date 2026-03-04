@@ -17,13 +17,18 @@ def parse_sse_response(response_content: bytes) -> list[dict[str, Any]]:
     """
     text = response_content.decode("utf-8")
     events: list[dict[str, Any]] = []
+    decode_errors: list[str] = []
     for line in text.splitlines():
         if line.startswith("data: "):
             payload = line[6:]
             try:
                 events.append(json.loads(payload))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                decode_errors.append(f"payload={payload!r}, error={exc}")
                 continue
+    if decode_errors:
+        joined = "; ".join(decode_errors)
+        raise AssertionError(f"Failed to decode one or more SSE data lines: {joined}")
     return events
 
 
@@ -61,6 +66,7 @@ _FIELD_MAP: dict[str, str] = {
     "threadId": "thread_id",
     "toolCallId": "tool_call_id",
     "toolCallName": "tool_call_name",
+    "toolName": "tool_call_name",
     "parentMessageId": "parent_message_id",
     "stepName": "step_name",
 }

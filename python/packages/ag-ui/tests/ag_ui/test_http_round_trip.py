@@ -8,13 +8,14 @@ parsing the raw SSE byte stream and validating through EventStream assertions.
 
 from __future__ import annotations
 
-from typing import Any, Never
+from typing import Any
 
 from agent_framework import AgentResponseUpdate, Content, WorkflowBuilder, WorkflowContext, executor
 from conftest import StubAgent
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sse_helpers import parse_sse_response, parse_sse_to_event_stream
+from typing_extensions import Never
 
 from agent_framework_ag_ui import AgentFrameworkAgent, AgentFrameworkWorkflow, add_agent_framework_fastapi_endpoint
 

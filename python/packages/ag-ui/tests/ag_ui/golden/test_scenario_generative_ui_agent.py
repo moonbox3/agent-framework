@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Never
+from typing import Any
 
 from agent_framework import WorkflowBuilder, WorkflowContext, executor
 from event_stream import EventStream
+from typing_extensions import Never
 
 from agent_framework_ag_ui import AgentFrameworkWorkflow
 

@@ -3455,7 +3455,7 @@ async def test_streaming_function_calling_response_includes_reasoning_and_tool_r
 
 
 class TestUpdateConversationId:
-    """Tests for _update_conversation_id handling dict and object chat_options."""
+    """Tests for _update_conversation_id handling dict chat_options."""
 
     def test_chat_options_as_dict(self):
         """When chat_options is a plain dict, conversation_id should be set via key access."""
@@ -3474,18 +3474,6 @@ class TestUpdateConversationId:
         kwargs: dict[str, Any] = {"chat_options": opts}
         _update_conversation_id(kwargs, "conv_2")
         assert kwargs["chat_options"]["conversation_id"] == "conv_2"
-
-    def test_chat_options_as_object_with_attribute(self):
-        """When chat_options is an object with attribute access, conversation_id should be set as attribute."""
-        from agent_framework._tools import _update_conversation_id
-
-        class ObjOptions:
-            conversation_id: str | None = None
-
-        obj = ObjOptions()
-        kwargs: dict[str, Any] = {"chat_options": obj}
-        _update_conversation_id(kwargs, "conv_3")
-        assert obj.conversation_id == "conv_3"
 
     def test_no_chat_options_falls_back_to_kwargs(self):
         """When chat_options is absent, conversation_id should be set directly on kwargs."""
@@ -3513,20 +3501,6 @@ class TestUpdateConversationId:
         _update_conversation_id(kwargs, "conv_5", options)
         assert kwargs["chat_options"]["conversation_id"] == "conv_5"
         assert options["conversation_id"] == "conv_5"
-
-    def test_options_dict_also_updated_with_object_chat_options(self):
-        """The optional options dict should also receive conversation_id when chat_options is object-style."""
-        from agent_framework._tools import _update_conversation_id
-
-        class ObjOptions:
-            conversation_id: str | None = None
-
-        obj = ObjOptions()
-        kwargs: dict[str, Any] = {"chat_options": obj}
-        options: dict[str, Any] = {}
-        _update_conversation_id(kwargs, "conv_6", options)
-        assert obj.conversation_id == "conv_6"
-        assert options["conversation_id"] == "conv_6"
 
     def test_dict_overwrites_existing_conversation_id(self):
         """When a dict already has a conversation_id, it should be overwritten."""

@@ -705,7 +705,12 @@ class FunctionalWorkflow:
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
 
-                # Yield collected events
+                # Yield collected events.
+                # NOTE: Events are buffered during _execute() and yielded after
+                # the user function completes.  This is *not* true streaming —
+                # all events have already been produced by this point.  True
+                # per-token streaming from inner agent calls is a future
+                # enhancement.
                 for event in ctx._get_events():
                     if event.type == "request_info":
                         saw_request = True

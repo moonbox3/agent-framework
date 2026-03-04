@@ -4,6 +4,7 @@
 
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, MutableSequence, Sequence
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Generic, Literal, cast, overload
 
@@ -34,6 +35,13 @@ else:
 
 StreamFn = Callable[..., AsyncIterable[ChatResponseUpdate]]
 ResponseFn = Callable[..., Awaitable[ChatResponse]]
+
+
+def pytest_configure() -> None:
+    """Ensure this test directory is on sys.path so helper modules can be imported by name."""
+    test_dir = str(Path(__file__).resolve().parent)
+    if test_dir not in sys.path:
+        sys.path.insert(0, test_dir)
 
 
 class StreamingChatClientStub(

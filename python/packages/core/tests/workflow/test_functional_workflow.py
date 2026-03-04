@@ -10,10 +10,12 @@ from dataclasses import dataclass
 import pytest
 
 from agent_framework import (
+    AgentResponseUpdate,
     FunctionalWorkflow,
     InMemoryCheckpointStorage,
     RunContext,
     StepWrapper,
+    WorkflowEvent,
     WorkflowRunResult,
     WorkflowRunState,
     step,
@@ -251,9 +253,9 @@ class TestHITL:
     async def test_untyped_ctx_parameter(self):
         """ctx is injected by parameter name even without a RunContext annotation."""
 
-        @workflow
-        async def review_wf(doc: str, ctx) -> str:
-            feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
+        @workflow  # pyright: ignore[reportUnknownArgumentType]
+        async def review_wf(doc: str, ctx) -> str:  # pyright: ignore[reportUnknownParameterType,reportMissingParameterType]
+            feedback: str = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             return f"Final: {feedback}"
 
         result1 = await review_wf.run("my doc")
@@ -315,7 +317,7 @@ class TestErrorHandling:
 
         # Use stream to collect events before the raise
         stream = failing_wf.run(42, stream=True)
-        events: list = []
+        events: list[WorkflowEvent[object]] = []
         with pytest.raises(ValueError):
             async for event in stream:
                 events.append(event)
@@ -330,7 +332,7 @@ class TestErrorHandling:
             raise RuntimeError("workflow broke")
 
         stream = bad_wf.run(42, stream=True)
-        events: list = []
+        events: list[WorkflowEvent[object]] = []
         with pytest.raises(RuntimeError, match="workflow broke"):
             async for event in stream:
                 events.append(event)
@@ -377,7 +379,7 @@ class TestStreaming:
             return await add_one(x)
 
         stream = pipeline.run(5, stream=True)
-        events = []
+        events: list[WorkflowEvent[object]] = []
         async for event in stream:
             events.append(event)
 
@@ -784,7 +786,7 @@ class TestAsAgent:
 
         agent = wf.as_agent()
         stream = agent.run(10, stream=True)
-        updates = []
+        updates: list[AgentResponseUpdate] = []
         async for update in stream:
             updates.append(update)
         assert len(updates) == 1
@@ -975,8 +977,8 @@ class TestRecoveryAfterErrors:
     async def test_step_sync_function_raises(self):
         with pytest.raises(TypeError, match="async functions"):
 
-            @step
-            def not_async(x: int) -> int:
+            @step  # pyright: ignore[reportArgumentType]
+            def not_async(x: int) -> int:  # pyright: ignore[reportUnusedFunction]
                 return x
 
 
@@ -1037,9 +1039,9 @@ class TestCheckpointValidation:
     async def test_import_step_cache_malformed_key(self):
         ctx = _RunContext("test")
         with pytest.raises(ValueError, match="Corrupted step cache"):
-            ctx._import_step_cache({"invalid_key_no_separator": 42})
+            ctx._import_step_cache({"invalid_key_no_separator": 42})  # pyright: ignore[reportPrivateUsage]
 
     async def test_import_step_cache_non_integer_index(self):
         ctx = _RunContext("test")
         with pytest.raises(ValueError, match="Corrupted step cache"):
-            ctx._import_step_cache({"step_name::abc": 42})
+            ctx._import_step_cache({"step_name::abc": 42})  # pyright: ignore[reportPrivateUsage]

@@ -20,6 +20,11 @@ from agent_framework import RunContext, WorkflowRunState, step, workflow
 
 # @step saves the result. When the workflow resumes after the HITL pause,
 # this returns its saved result instead of running the expensive operation again.
+#
+# In a real workflow you might call an agent here instead:
+#   @step
+#   async def write_draft(topic: str) -> str:
+#       return (await writer_agent.run(f"Write a draft about: {topic}")).text
 @step
 async def write_draft(topic: str) -> str:
     """Simulate writing a draft — expensive, shouldn't re-run on resume."""

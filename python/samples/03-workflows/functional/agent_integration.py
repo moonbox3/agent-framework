@@ -9,18 +9,19 @@ If you want per-step caching (so agent calls don't re-execute on HITL resume
 or crash recovery), add @step. Since each agent call hits an LLM API (time +
 money), @step is often worth it. But it's always opt-in.
 
-This sample also demonstrates .as_agent() to wrap a workflow as an agent.
+This sample shows both approaches side-by-side so you can see the difference.
 
 Environment variables:
-  AZURE_OPENAI_ENDPOINT        — Your Azure OpenAI endpoint
-  AZURE_OPENAI_API_VERSION     — API version (e.g. 2025-04-01-preview)
-  AZURE_OPENAI_CHAT_DEPLOYMENT_NAME — Model deployment name (e.g. gpt-4o)
+  AZURE_AI_PROJECT_ENDPOINT              — Your Azure AI Foundry project endpoint
+  AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME — Model deployment name (e.g. gpt-4o)
 """
 
 import asyncio
+import os
 
 from agent_framework import Agent, step, workflow
-from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.azure import AzureOpenAIResponsesClient
+from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,25 +30,31 @@ load_dotenv()
 # Create agents
 # ---------------------------------------------------------------------------
 
+client = AzureOpenAIResponsesClient(
+    project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+    deployment_name=os.environ["AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME"],
+    credential=AzureCliCredential(),
+)
+
 classifier_agent = Agent(
     name="ClassifierAgent",
     instructions=(
         "Classify documents into one category: Technical, Legal, Marketing, or Scientific. "
         "Reply with only the category name."
     ),
-    client=AzureOpenAIChatClient(),
+    client=client,
 )
 
 writer_agent = Agent(
     name="WriterAgent",
     instructions="Summarize the given content in one sentence.",
-    client=AzureOpenAIChatClient(),
+    client=client,
 )
 
 reviewer_agent = Agent(
     name="ReviewerAgent",
     instructions="Review the given summary in one sentence. Is it accurate and complete?",
-    client=AzureOpenAIChatClient(),
+    client=client,
 )
 
 # ---------------------------------------------------------------------------
@@ -103,11 +110,9 @@ async def main():
     result = await simple_pipeline.run("This is a technical document about machine learning...")
     print(result.get_outputs()[0])
 
-    # .as_agent() wraps the workflow so it can be used anywhere an agent
-    # is expected — for example, as a node in a graph workflow.
-    agent = cached_pipeline.as_agent(name="doc_processor")
-    response = await agent.run("A short story about a robot learning to paint.")
-    print(f"\nAs agent: {response.text}")
+    # Cached version — same result, but steps won't re-execute on resume
+    result = await cached_pipeline.run("This is a technical document about machine learning...")
+    print(f"\nCached: {result.get_outputs()[0]}")
 
 
 if __name__ == "__main__":

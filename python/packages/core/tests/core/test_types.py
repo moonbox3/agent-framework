@@ -1979,6 +1979,40 @@ def test_nested_deepcopy_preserves_raw_representation():
     assert cloned.text == "hello"
 
 
+def test_content_deepcopy_shallow_copy_fields_identity():
+    """Test that Content._SHALLOW_COPY_FIELDS fields are identity-preserved while others are deep-copied."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    content = Content.from_text("hello", raw_representation=raw)
+    content.additional_properties["key"] = "value"
+
+    cloned = copy.deepcopy(content)
+
+    # _SHALLOW_COPY_FIELDS (raw_representation) should be same object
+    assert cloned.raw_representation is raw
+    # Non-shallow fields should be independent deep copies
+    assert cloned.additional_properties is not content.additional_properties
+    assert cloned.additional_properties == {"key": "value"}
+
+
+def test_chat_response_deepcopy_deep_copies_additional_properties():
+    """Test that ChatResponse deepcopy deep-copies additional_properties despite it being in DEFAULT_EXCLUDE."""
+    import copy
+
+    response = ChatResponse(
+        messages=[Message("assistant", ["test"])],
+        additional_properties={"key": [1, 2, 3]},
+    )
+
+    cloned = copy.deepcopy(response)
+
+    # additional_properties is in DEFAULT_EXCLUDE for serialization but not in _SHALLOW_COPY_FIELDS,
+    # so it should be deep-copied (independent copy)
+    assert cloned.additional_properties is not response.additional_properties
+    assert cloned.additional_properties == {"key": [1, 2, 3]}
+
+
 # endregion
 
 

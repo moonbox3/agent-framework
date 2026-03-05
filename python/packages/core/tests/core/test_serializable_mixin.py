@@ -428,8 +428,8 @@ class TestSerializationMixin:
         assert obj.options["existing"] == "value"
         assert obj.options["injected"] == "option"
 
-    def test_deepcopy_preserves_excluded_fields_by_reference(self):
-        """Test that deepcopy keeps DEFAULT_EXCLUDE fields as shallow references."""
+    def test_deepcopy_preserves_shallow_copy_fields_by_reference(self):
+        """Test that deepcopy keeps _SHALLOW_COPY_FIELDS fields as shallow references."""
         import copy
 
         class NonCopyable:
@@ -437,7 +437,7 @@ class TestSerializationMixin:
                 raise TypeError("cannot deepcopy")
 
         class TestClass(SerializationMixin):
-            DEFAULT_EXCLUDE = {"raw_representation", "other_opaque"}
+            _SHALLOW_COPY_FIELDS = {"raw_representation", "other_opaque"}
 
             def __init__(self, items: list, raw_representation: Any = None, other_opaque: Any = None):
                 self.items = items
@@ -450,19 +450,19 @@ class TestSerializationMixin:
         obj = TestClass(items=original_items, raw_representation=raw, other_opaque=opaque)
         cloned = copy.deepcopy(obj)
 
-        # Excluded fields should be the same object (shallow copy)
+        # _SHALLOW_COPY_FIELDS fields should be the same object (shallow copy)
         assert cloned.raw_representation is raw
         assert cloned.other_opaque is opaque
         # Normal attributes should be independent copies
         assert cloned.items is not original_items
         assert cloned.items == ["a", "b"]
 
-    def test_deepcopy_deep_copies_non_excluded_fields(self):
-        """Test that deepcopy fully copies fields not in DEFAULT_EXCLUDE."""
+    def test_deepcopy_deep_copies_non_shallow_copy_fields(self):
+        """Test that deepcopy fully copies fields not in _SHALLOW_COPY_FIELDS."""
         import copy
 
         class TestClass(SerializationMixin):
-            DEFAULT_EXCLUDE = {"raw_representation"}
+            _SHALLOW_COPY_FIELDS = {"raw_representation"}
 
             def __init__(self, items: list, raw_representation: Any = None):
                 self.items = items
@@ -477,3 +477,22 @@ class TestSerializationMixin:
         assert cloned.items == ["a", "b"]
         # raw_representation should be the same object
         assert cloned.raw_representation is obj.raw_representation
+
+    def test_deepcopy_deep_copies_default_exclude_fields(self):
+        """Test that DEFAULT_EXCLUDE fields are deep-copied unless also in _SHALLOW_COPY_FIELDS."""
+        import copy
+
+        class TestClass(SerializationMixin):
+            DEFAULT_EXCLUDE = {"additional_properties"}
+
+            def __init__(self, items: list, additional_properties: dict | None = None):
+                self.items = items
+                self.additional_properties = additional_properties or {}
+
+        original_props = {"key": "value"}
+        obj = TestClass(items=["a"], additional_properties=original_props)
+        cloned = copy.deepcopy(obj)
+
+        # DEFAULT_EXCLUDE field should be deep-copied (independent copy)
+        assert cloned.additional_properties is not original_props
+        assert cloned.additional_properties == {"key": "value"}

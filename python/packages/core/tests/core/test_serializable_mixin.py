@@ -437,20 +437,25 @@ class TestSerializationMixin:
                 raise TypeError("cannot deepcopy")
 
         class TestClass(SerializationMixin):
-            DEFAULT_EXCLUDE = {"raw_representation"}
+            DEFAULT_EXCLUDE = {"raw_representation", "other_opaque"}
 
-            def __init__(self, value: str, raw_representation: Any = None):
-                self.value = value
+            def __init__(self, items: list, raw_representation: Any = None, other_opaque: Any = None):
+                self.items = items
                 self.raw_representation = raw_representation
+                self.other_opaque = other_opaque
 
         raw = NonCopyable()
-        obj = TestClass(value="hello", raw_representation=raw)
+        opaque = NonCopyable()
+        original_items = ["a", "b"]
+        obj = TestClass(items=original_items, raw_representation=raw, other_opaque=opaque)
         cloned = copy.deepcopy(obj)
 
-        assert cloned.value == "hello"
+        # Excluded fields should be the same object (shallow copy)
         assert cloned.raw_representation is raw
+        assert cloned.other_opaque is opaque
         # Normal attributes should be independent copies
-        assert cloned.value is not obj.value or cloned.value == obj.value
+        assert cloned.items is not original_items
+        assert cloned.items == ["a", "b"]
 
     def test_deepcopy_deep_copies_non_excluded_fields(self):
         """Test that deepcopy fully copies fields not in DEFAULT_EXCLUDE."""

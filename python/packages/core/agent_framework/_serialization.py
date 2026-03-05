@@ -266,17 +266,19 @@ class SerializationMixin:
     INJECTABLE: ClassVar[set[str]] = set()
 
     def __deepcopy__(self, memo: dict[int, Any]) -> SerializationMixin:
-        """Create a deep copy, preserving ``raw_representation`` by reference.
+        """Create a deep copy, preserving ``DEFAULT_EXCLUDE`` fields by reference.
 
-        ``raw_representation`` may contain LLM SDK objects (e.g., proto/gRPC
-        responses) that are not safe to deep-copy.  It is kept as a shallow
-        reference in the copy; all other attributes are deep-copied normally.
+        Fields listed in ``DEFAULT_EXCLUDE`` may contain LLM SDK objects
+        (e.g., proto/gRPC responses) that are not safe to deep-copy.  They are
+        kept as shallow references in the copy; all other attributes are
+        deep-copied normally.
         """
         cls = type(self)
         result = cls.__new__(cls)
         memo[id(self)] = result
+        exclude = cls.DEFAULT_EXCLUDE
         for k, v in self.__dict__.items():
-            if k == "raw_representation":
+            if k in exclude:
                 object.__setattr__(result, k, v)
             else:
                 object.__setattr__(result, k, copy.deepcopy(v, memo))

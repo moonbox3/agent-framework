@@ -1852,6 +1852,136 @@ def test_agent_run_response_update_all_content_types():
     assert update_str.role == "user"
 
 
+# region DeepCopy
+
+
+class _NonCopyableRaw:
+    """Simulates an LLM SDK response object that cannot be deep-copied (e.g., proto/gRPC)."""
+
+    def __deepcopy__(self, memo: dict) -> Any:
+        raise TypeError("Cannot deepcopy this object")
+
+
+def test_content_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of Content keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    content = Content.from_text("hello", raw_representation=raw)
+
+    cloned = copy.deepcopy(content)
+
+    assert cloned.text == "hello"
+    assert cloned.raw_representation is raw
+    assert cloned.additional_properties is not content.additional_properties
+
+
+def test_message_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of Message keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    msg = Message("assistant", ["hello"], raw_representation=raw)
+
+    cloned = copy.deepcopy(msg)
+
+    assert cloned.text == "hello"
+    assert cloned.raw_representation is raw
+    assert cloned.contents is not msg.contents
+
+
+def test_agent_response_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of AgentResponse keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    response = AgentResponse(
+        messages=[Message("assistant", ["test"])],
+        raw_representation=raw,
+    )
+
+    cloned = copy.deepcopy(response)
+
+    assert cloned.text == "test"
+    assert cloned.raw_representation is raw
+    assert cloned.messages is not response.messages
+
+
+def test_chat_response_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of ChatResponse keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    response = ChatResponse(
+        messages=[Message("assistant", ["test"])],
+        raw_representation=raw,
+    )
+
+    cloned = copy.deepcopy(response)
+
+    assert cloned.text == "test"
+    assert cloned.raw_representation is raw
+    assert cloned.messages is not response.messages
+
+
+def test_chat_response_update_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of ChatResponseUpdate keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    update = ChatResponseUpdate(
+        contents=[Content.from_text("hello")],
+        role="assistant",
+        raw_representation=raw,
+    )
+
+    cloned = copy.deepcopy(update)
+
+    assert cloned.text == "hello"
+    assert cloned.raw_representation is raw
+    assert cloned.contents is not update.contents
+
+
+def test_agent_response_update_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of AgentResponseUpdate keeps raw_representation by reference."""
+    import copy
+
+    raw = _NonCopyableRaw()
+    update = AgentResponseUpdate(
+        contents=[Content.from_text("hello")],
+        role="assistant",
+        raw_representation=raw,
+    )
+
+    cloned = copy.deepcopy(update)
+
+    assert cloned.text == "hello"
+    assert cloned.raw_representation is raw
+    assert cloned.contents is not update.contents
+
+
+def test_nested_deepcopy_preserves_raw_representation():
+    """Test that deepcopy of an AgentResponse with nested Message raw_representations works."""
+    import copy
+
+    raw_msg = _NonCopyableRaw()
+    raw_response = _NonCopyableRaw()
+    response = AgentResponse(
+        messages=[Message("assistant", ["hello"], raw_representation=raw_msg)],
+        raw_representation=raw_response,
+    )
+
+    cloned = copy.deepcopy(response)
+
+    assert cloned.raw_representation is raw_response
+    assert cloned.messages[0].raw_representation is raw_msg
+    assert cloned.messages is not response.messages
+    assert cloned.text == "hello"
+
+
+# endregion
+
+
 # region Serialization
 
 

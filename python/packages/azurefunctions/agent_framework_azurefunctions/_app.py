@@ -59,6 +59,18 @@ EntityHandler = Callable[[df.DurableEntityContext], None]
 HandlerT = TypeVar("HandlerT", bound=Callable[..., Any])
 
 
+def _create_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """Create a deep copy of the deserialized state for later diffing."""
+    return copy.deepcopy(state)
+
+
+def _compute_state_updates(
+    original_snapshot: dict[str, Any], current_state: dict[str, Any]
+) -> dict[str, Any]:
+    """Compute state updates by comparing current state against the original snapshot."""
+    return {k: v for k, v in current_state.items() if k not in original_snapshot or original_snapshot[k] != v}
+
+
 @dataclass
 class AgentMetadata:
     """Metadata for a registered agent.
@@ -301,7 +313,7 @@ class AgentFunctionApp(DFAppBase):
 
                 # Deserialize shared state values to reconstruct dataclasses/Pydantic models
                 deserialized_state = {k: deserialize_value(v) for k, v in (shared_state_snapshot or {}).items()}
-                original_snapshot = copy.deepcopy(deserialized_state)
+                original_snapshot = _create_state_snapshot(deserialized_state)
                 shared_state.import_state(deserialized_state)
 
                 if is_hitl_response:
@@ -331,9 +343,7 @@ class AgentFunctionApp(DFAppBase):
                 deletes = original_keys - current_keys
 
                 # Updates = keys in current that are new or have different values
-                updates = {
-                    k: v for k, v in current_state.items() if k not in original_snapshot or original_snapshot[k] != v
-                }
+                updates = _compute_state_updates(original_snapshot, current_state)
 
                 # Drain messages and events from runner context
                 sent_messages = await runner_context.drain_messages()

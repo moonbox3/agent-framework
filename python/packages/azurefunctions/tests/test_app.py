@@ -4,7 +4,6 @@
 
 # pyright: reportPrivateUsage=false
 
-import copy
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -1446,26 +1445,22 @@ class TestStateSnapshotDiff:
     """Test suite for state snapshot diffing in activity execution.
 
     The activity executor snapshots state before execution and diffs against the
-    post-execution state to determine which keys were updated. The snapshot must
-    be independent of the live state so that in-place mutations to nested objects
-    (dicts, lists) are correctly detected as changes.
+    post-execution state to determine which keys were updated. These tests exercise
+    the production snapshot and diff helpers from _app.py to ensure that in-place
+    mutations to nested objects (dicts, lists) are correctly detected as changes.
     """
-
-    @staticmethod
-    def _compute_updates(original_snapshot: dict[str, Any], current_state: dict[str, Any]) -> dict[str, Any]:
-        """Compute state updates the same way as _app.py run()."""
-        return {k: v for k, v in current_state.items() if k not in original_snapshot or original_snapshot[k] != v}
 
     def test_nested_dict_mutation_detected_in_diff(self) -> None:
         """Test that mutating values inside a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
+        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.config": {"code": "", "enabled": False},
             "simple_key": "simple_value",
         }
 
-        original_snapshot = copy.deepcopy(deserialized_state)
+        original_snapshot = _create_state_snapshot(deserialized_state)
 
         shared_state = State()
         shared_state.import_state(deserialized_state)
@@ -1477,7 +1472,7 @@ class TestStateSnapshotDiff:
         shared_state.commit()
         current_state = shared_state.export_state()
 
-        updates = self._compute_updates(original_snapshot, current_state)
+        updates = _compute_state_updates(original_snapshot, current_state)
 
         assert "Local.config" in updates
         assert updates["Local.config"]["code"] == "SOMECODEXXX"
@@ -1486,12 +1481,13 @@ class TestStateSnapshotDiff:
     def test_new_key_in_nested_dict_detected_in_diff(self) -> None:
         """Test that adding a key to a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
+        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.data": {"existing": "value"},
         }
 
-        original_snapshot = copy.deepcopy(deserialized_state)
+        original_snapshot = _create_state_snapshot(deserialized_state)
 
         shared_state = State()
         shared_state.import_state(deserialized_state)
@@ -1502,7 +1498,7 @@ class TestStateSnapshotDiff:
         shared_state.commit()
         current_state = shared_state.export_state()
 
-        updates = self._compute_updates(original_snapshot, current_state)
+        updates = _compute_state_updates(original_snapshot, current_state)
 
         assert "Local.data" in updates
         assert updates["Local.data"]["code"] == "NEW_CODE"
@@ -1510,12 +1506,13 @@ class TestStateSnapshotDiff:
     def test_nested_list_mutation_detected_in_diff(self) -> None:
         """Test that appending to a nested list appears in the diff."""
         from agent_framework._workflows._state import State
+        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.items": [1, 2, 3],
         }
 
-        original_snapshot = copy.deepcopy(deserialized_state)
+        original_snapshot = _create_state_snapshot(deserialized_state)
 
         shared_state = State()
         shared_state.import_state(deserialized_state)
@@ -1526,7 +1523,7 @@ class TestStateSnapshotDiff:
         shared_state.commit()
         current_state = shared_state.export_state()
 
-        updates = self._compute_updates(original_snapshot, current_state)
+        updates = _compute_state_updates(original_snapshot, current_state)
 
         assert "Local.items" in updates
         assert updates["Local.items"] == [1, 2, 3, 4]
@@ -1534,12 +1531,13 @@ class TestStateSnapshotDiff:
     def test_new_top_level_key_detected_in_diff(self) -> None:
         """Test that setting a new top-level key appears in the diff."""
         from agent_framework._workflows._state import State
+        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "existing": "value",
         }
 
-        original_snapshot = copy.deepcopy(deserialized_state)
+        original_snapshot = _create_state_snapshot(deserialized_state)
 
         shared_state = State()
         shared_state.import_state(deserialized_state)
@@ -1549,7 +1547,7 @@ class TestStateSnapshotDiff:
         shared_state.commit()
         current_state = shared_state.export_state()
 
-        updates = self._compute_updates(original_snapshot, current_state)
+        updates = _compute_state_updates(original_snapshot, current_state)
 
         assert "Local.code" in updates
         assert updates["Local.code"] == "SOMECODEXXX"
@@ -1557,13 +1555,14 @@ class TestStateSnapshotDiff:
     def test_unchanged_nested_state_produces_empty_diff(self) -> None:
         """Test that unmodified nested state produces no updates."""
         from agent_framework._workflows._state import State
+        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.config": {"code": "existing", "enabled": True},
             "simple_key": "simple_value",
         }
 
-        original_snapshot = copy.deepcopy(deserialized_state)
+        original_snapshot = _create_state_snapshot(deserialized_state)
 
         shared_state = State()
         shared_state.import_state(deserialized_state)
@@ -1572,7 +1571,7 @@ class TestStateSnapshotDiff:
         shared_state.commit()
         current_state = shared_state.export_state()
 
-        updates = self._compute_updates(original_snapshot, current_state)
+        updates = _compute_state_updates(original_snapshot, current_state)
 
         assert updates == {}
 

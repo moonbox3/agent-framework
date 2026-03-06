@@ -1580,6 +1580,62 @@ class TestStateSnapshotDiff:
 
         assert updates == {}
 
+    def test_shallow_copy_would_miss_nested_mutations(self) -> None:
+        """Regression test: a shallow copy (dict()) shares nested refs, hiding mutations.
+
+        This reproduces the original bug from #4500 where ``dict(deserialized_state)``
+        was used instead of ``copy.deepcopy()``. With a shallow copy the snapshot and
+        the live state share nested objects, so in-place mutations appear in both and
+        the diff produces an empty update set.
+        """
+        from agent_framework._workflows._state import State
+
+        from agent_framework_azurefunctions._app import _compute_state_updates
+
+        deserialized_state: dict[str, Any] = {
+            "Local.config": {"code": "", "enabled": False},
+        }
+
+        # Shallow copy (the OLD, buggy behaviour)
+        shallow_snapshot = dict(deserialized_state)
+
+        shared_state = State()
+        shared_state.import_state(deserialized_state)
+
+        config = shared_state.get("Local.config")
+        config["code"] = "SOMECODEXXX"
+        config["enabled"] = True
+
+        shared_state.commit()
+        current_state = shared_state.export_state()
+
+        # With a shallow copy the mutation leaks into the snapshot → empty diff
+        updates_shallow = _compute_state_updates(shallow_snapshot, current_state)
+        assert updates_shallow == {}, "shallow copy should miss nested mutations (demonstrating the bug)"
+
+    def test_create_state_snapshot_isolates_nested_objects(self) -> None:
+        """Verify _create_state_snapshot produces a deep copy that is mutation-proof.
+
+        This ensures the production snapshot helper is not equivalent to ``dict()``
+        and will correctly isolate nested objects so that later mutations are detected.
+        """
+        from agent_framework_azurefunctions._app import _create_state_snapshot
+
+        original: dict[str, Any] = {
+            "nested_dict": {"a": 1},
+            "nested_list": [1, 2, 3],
+        }
+
+        snapshot = _create_state_snapshot(original)
+
+        # Mutate the originals in place
+        original["nested_dict"]["a"] = 999
+        original["nested_list"].append(4)
+
+        # Snapshot must be unaffected
+        assert snapshot["nested_dict"]["a"] == 1
+        assert snapshot["nested_list"] == [1, 2, 3]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

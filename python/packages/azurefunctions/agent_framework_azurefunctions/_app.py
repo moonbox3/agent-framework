@@ -64,9 +64,7 @@ def _create_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(state)
 
 
-def _compute_state_updates(
-    original_snapshot: dict[str, Any], current_state: dict[str, Any]
-) -> dict[str, Any]:
+def _compute_state_updates(original_snapshot: dict[str, Any], current_state: dict[str, Any]) -> dict[str, Any]:
     """Compute state updates by comparing current state against the original snapshot."""
     return {k: v for k, v in current_state.items() if k not in original_snapshot or original_snapshot[k] != v}
 

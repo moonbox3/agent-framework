@@ -1453,6 +1453,7 @@ class TestStateSnapshotDiff:
     def test_nested_dict_mutation_detected_in_diff(self) -> None:
         """Test that mutating values inside a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
+
         from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
@@ -1481,6 +1482,7 @@ class TestStateSnapshotDiff:
     def test_new_key_in_nested_dict_detected_in_diff(self) -> None:
         """Test that adding a key to a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
+
         from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
@@ -1506,6 +1508,7 @@ class TestStateSnapshotDiff:
     def test_nested_list_mutation_detected_in_diff(self) -> None:
         """Test that appending to a nested list appears in the diff."""
         from agent_framework._workflows._state import State
+
         from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
@@ -1531,6 +1534,7 @@ class TestStateSnapshotDiff:
     def test_new_top_level_key_detected_in_diff(self) -> None:
         """Test that setting a new top-level key appears in the diff."""
         from agent_framework._workflows._state import State
+
         from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
@@ -1555,6 +1559,7 @@ class TestStateSnapshotDiff:
     def test_unchanged_nested_state_produces_empty_diff(self) -> None:
         """Test that unmodified nested state produces no updates."""
         from agent_framework._workflows._state import State
+
         from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {

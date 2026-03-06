@@ -9,6 +9,7 @@ with Azure Durable Entities, enabling stateful and durable AI agent execution.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -300,7 +301,7 @@ class AgentFunctionApp(DFAppBase):
 
                 # Deserialize shared state values to reconstruct dataclasses/Pydantic models
                 deserialized_state = {k: deserialize_value(v) for k, v in (shared_state_snapshot or {}).items()}
-                original_snapshot = dict(deserialized_state)
+                original_snapshot = copy.deepcopy(deserialized_state)
                 shared_state.import_state(deserialized_state)
 
                 if is_hitl_response:

@@ -1636,6 +1636,79 @@ class TestStateSnapshotDiff:
         assert snapshot["nested_dict"]["a"] == 1
         assert snapshot["nested_list"] == [1, 2, 3]
 
+    def test_executor_activity_detects_nested_state_mutations(self) -> None:
+        """Integration test: the full activity wrapper detects nested mutations.
+
+        This exercises the actual executor_activity function registered by
+        _setup_executor_activity to verify the production code path uses
+        _create_state_snapshot (deep copy) rather than dict() (shallow copy).
+        If line 314 of _app.py regressed to ``dict(deserialized_state)``,
+        this test would fail because in-place mutations would leak into the
+        snapshot and produce an empty diff.
+        """
+        mock_executor = Mock()
+        mock_executor.id = "test-exec"
+
+        async def mutate_nested_state(
+            message: Any,
+            source_executor_ids: Any,
+            state: Any,
+            runner_context: Any,
+        ) -> None:
+            config = state.get("Local.config")
+            config["code"] = "MUTATED"
+            config["enabled"] = True
+            state.commit()
+
+        mock_executor.execute = AsyncMock(side_effect=mutate_nested_state)
+
+        mock_workflow = Mock()
+        mock_workflow.executors = {"test-exec": mock_executor}
+
+        # Capture the activity function by making decorators pass-through
+        captured_activity: dict[str, Any] = {}
+
+        def passthrough_function_name(name: str) -> Callable[[FuncT], FuncT]:
+            def decorator(fn: FuncT) -> FuncT:
+                captured_activity["fn"] = fn
+                return fn
+
+            return decorator
+
+        def passthrough_activity_trigger(input_name: str) -> Callable[[FuncT], FuncT]:
+            def decorator(fn: FuncT) -> FuncT:
+                return fn
+
+            return decorator
+
+        with (
+            patch.object(AgentFunctionApp, "function_name", side_effect=passthrough_function_name),
+            patch.object(AgentFunctionApp, "activity_trigger", side_effect=passthrough_activity_trigger),
+            patch.object(AgentFunctionApp, "_setup_workflow_orchestration"),
+        ):
+            AgentFunctionApp(workflow=mock_workflow)
+
+        assert "fn" in captured_activity, "activity function was not captured"
+
+        # Call the activity with nested state that the executor will mutate
+        input_data = json.dumps({
+            "message": "test",
+            "shared_state_snapshot": {
+                "Local.config": {"code": "", "enabled": False},
+            },
+            "source_executor_ids": ["orchestrator"],
+        })
+
+        result = json.loads(captured_activity["fn"](input_data))
+
+        # The deep copy snapshot must detect the in-place nested mutations
+        assert "Local.config" in result["shared_state_updates"], (
+            "nested mutation not detected — snapshot may be using shallow copy"
+        )
+        updated_config = result["shared_state_updates"]["Local.config"]
+        assert updated_config["code"] == "MUTATED"
+        assert updated_config["enabled"] is True
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

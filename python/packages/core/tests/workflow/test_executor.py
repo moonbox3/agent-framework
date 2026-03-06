@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 
 import pytest
+from typing_extensions import Never
+
 from agent_framework import (
     Executor,
     Message,
@@ -14,7 +16,6 @@ from agent_framework import (
     handler,
     response_handler,
 )
-from typing_extensions import Never
 
 
 # Module-level types for string forward reference tests

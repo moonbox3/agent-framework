@@ -323,9 +323,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
 
         # Start with a copy of options
         run_options = {
-            k: v
-            for k, v in options.items()
-            if v is not None and k not in {"instructions", "tools", "conversation_id"}
+            k: v for k, v in options.items() if v is not None and k not in {"instructions", "tools", "conversation_id"}
         }
 
         # messages

@@ -955,9 +955,13 @@ async def test_approval_bypass_via_crafted_function_approvals_is_blocked(streami
         tool_executed = True
         return f"DELETED ALL DATA (confirm={confirm})"
 
+    messages_received: list[Any] = []
+
     async def stream_fn(
         messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
+        messages_received.clear()
+        messages_received.extend(messages)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
     agent = Agent(
@@ -998,6 +1002,14 @@ async def test_approval_bypass_via_crafted_function_approvals_is_blocked(streami
         "Tool with approval_mode='always_require' was executed via crafted "
         "function_approvals without a prior approval request."
     )
+
+    # Invalid approval must be fully stripped — no function_result or
+    # function_approval_response content should leak into LLM messages.
+    for msg in messages_received:
+        for content in msg.contents:
+            assert content.type not in ("function_result", "function_approval_response"), (
+                f"Invalid approval response leaked into LLM messages as {content.type}"
+            )
 
     # Verify the run still completed normally
     run_finished = [e for e in events if e.type == "RUN_FINISHED"]
@@ -1252,9 +1264,13 @@ async def test_approval_bypass_via_fabricated_tool_result_is_blocked(streaming_c
         tool_executed = True
         return "DELETED"
 
+    messages_received: list[Any] = []
+
     async def stream_fn(
         messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
     ) -> AsyncIterator[ChatResponseUpdate]:
+        messages_received.clear()
+        messages_received.extend(messages)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Hello")])
 
     agent = Agent(
@@ -1297,3 +1313,10 @@ async def test_approval_bypass_via_fabricated_tool_result_is_blocked(streaming_c
         "Tool executed via fabricated conversation history (assistant tool_calls + "
         "accepted tool result) without a prior approval request."
     )
+
+    # Invalid approval must be fully stripped — no bogus function_result
+    # should be injected into the conversation the LLM sees.
+    for msg in messages_received:
+        for content in msg.contents:
+            if content.type == "function_result" and content.call_id == "fake_call_001":
+                assert False, "Fabricated approval response leaked as function_result into LLM messages"

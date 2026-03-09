@@ -401,8 +401,12 @@ async def _resolve_approval_responses(
     rejected_responses = [resp for resp in fcc_todo.values() if not resp.approved]
 
     # Validate every approval response against the pending approvals registry.
+    # Invalid responses are stripped from messages entirely — not converted to
+    # rejection results, which would inject attacker-controlled content into
+    # the LLM conversation.
     if pending_approvals is not None and approved_responses:
         validated: list[Any] = []
+        invalid_ids: set[str] = set()
         for resp in approved_responses:
             resp_id = resp.id or ""
             resp_name = resp.function_call.name if resp.function_call else None
@@ -413,7 +417,7 @@ async def _resolve_approval_responses(
                     "Rejected approval response id=%s: no matching pending approval request",
                     resp_id,
                 )
-                rejected_responses.append(resp)
+                invalid_ids.add(resp_id)
                 continue
 
             pending_name = pending_approvals[registry_key]
@@ -424,12 +428,22 @@ async def _resolve_approval_responses(
                     resp_name,
                     pending_name,
                 )
-                rejected_responses.append(resp)
+                invalid_ids.add(resp_id)
                 continue
 
             # Valid — consume entry to prevent replay
             del pending_approvals[registry_key]
             validated.append(resp)
+
+        # Strip invalid approval responses from messages and fcc_todo so
+        # _replace_approval_contents_with_results never sees them.
+        if invalid_ids:
+            for inv_id in invalid_ids:
+                fcc_todo.pop(inv_id, None)
+            for msg in messages:
+                msg.contents = [
+                    c for c in msg.contents if not (c.type == "function_approval_response" and c.id in invalid_ids)
+                ]
 
         approved_responses = validated
 

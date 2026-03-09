@@ -277,9 +277,8 @@ class SerializationMixin:
         cls = type(self)
         result = cls.__new__(cls)
         memo[id(self)] = result
-        shallow = cls._SHALLOW_COPY_FIELDS
         for k, v in self.__dict__.items():
-            if k in shallow:
+            if k in cls._SHALLOW_COPY_FIELDS:
                 object.__setattr__(result, k, v)
             else:
                 object.__setattr__(result, k, copy.deepcopy(v, memo))

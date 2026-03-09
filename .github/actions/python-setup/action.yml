@@ -28,6 +28,6 @@ runs:
         run: |
           EXCLUDE_ARGS=""
           for pkg in ${{ inputs.exclude-packages }}; do
-            EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude-package $pkg"
+            EXCLUDE_ARGS="$EXCLUDE_ARGS --no-install-package $pkg"
           done
           cd python && uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit $EXCLUDE_ARGS

@@ -124,7 +124,13 @@ def _request_payload_from_request_event(request_event: Any) -> dict[str, Any] | 
 
 
 def _extract_responses_from_messages(messages: list[Message]) -> dict[str, Any]:
-    """Extract request-info responses from incoming tool/function-result messages."""
+    """Extract request-info responses from incoming messages.
+
+    Handles both ``function_result`` content (keyed by ``call_id``) and
+    ``function_approval_response`` content (keyed by ``id``), so that
+    approval decisions sent via messages are forwarded into the workflow
+    responses map.
+    """
     responses: dict[str, Any] = {}
     for message in messages:
         for content in message.contents:

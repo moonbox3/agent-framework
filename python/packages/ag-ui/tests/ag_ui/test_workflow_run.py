@@ -1264,6 +1264,142 @@ class TestExtractResponsesFromMessages:
 # ── Stream integration tests ──
 
 
+async def test_workflow_run_approval_via_messages_approved() -> None:
+    """Approval response sent via messages (function_approvals) should satisfy the pending request."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval_executor")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345", "amount": "$89.99"},
+            )
+            approval_request = Content.from_function_approval_request(id="approval-1", function_call=function_call)
+            await ctx.request_info(approval_request, Content, request_id="approval-1")
+
+        @response_handler
+        async def handle_approval(self, original_request: Content, response: Content, ctx: WorkflowContext) -> None:
+            del original_request
+            status = "approved" if bool(response.approved) else "rejected"
+            await ctx.yield_output(f"Refund {status}.")
+
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    first_events = [
+        event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)
+    ]
+    first_finished = [event for event in first_events if event.type == "RUN_FINISHED"][0].model_dump()
+    interrupt_payload = cast(list[dict[str, Any]], first_finished.get("interrupt"))
+    assert isinstance(interrupt_payload, list) and len(interrupt_payload) == 1
+
+    # Second turn: send approval via function_approvals on a message (not resume.interrupts)
+    resumed_events = [
+        event
+        async for event in run_workflow_stream(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "",
+                        "function_approvals": [
+                            {
+                                "approved": True,
+                                "id": "approval-1",
+                                "call_id": "refund-call",
+                                "name": "submit_refund",
+                                "arguments": {"order_id": "12345", "amount": "$89.99"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            workflow,
+        )
+    ]
+
+    resumed_types = [event.type for event in resumed_events]
+    assert "RUN_STARTED" in resumed_types
+    assert "RUN_FINISHED" in resumed_types
+    assert "RUN_ERROR" not in resumed_types
+    assert "TEXT_MESSAGE_CONTENT" in resumed_types
+    text_deltas = [event.delta for event in resumed_events if event.type == "TEXT_MESSAGE_CONTENT"]
+    assert any("approved" in delta for delta in text_deltas)
+    resumed_finished = [event for event in resumed_events if event.type == "RUN_FINISHED"][0].model_dump()
+    assert "interrupt" not in resumed_finished
+
+
+async def test_workflow_run_approval_via_messages_denied() -> None:
+    """Denied approval response sent via messages (function_approvals) should satisfy the pending request."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval_executor")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="delete-call",
+                name="delete_record",
+                arguments={"record_id": "abc"},
+            )
+            approval_request = Content.from_function_approval_request(id="deny-1", function_call=function_call)
+            await ctx.request_info(approval_request, Content, request_id="deny-1")
+
+        @response_handler
+        async def handle_approval(self, original_request: Content, response: Content, ctx: WorkflowContext) -> None:
+            del original_request
+            status = "approved" if bool(response.approved) else "rejected"
+            await ctx.yield_output(f"Delete {status}.")
+
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    first_events = [
+        event async for event in run_workflow_stream({"messages": [{"role": "user", "content": "go"}]}, workflow)
+    ]
+    first_finished = [event for event in first_events if event.type == "RUN_FINISHED"][0].model_dump()
+    interrupt_payload = cast(list[dict[str, Any]], first_finished.get("interrupt"))
+    assert isinstance(interrupt_payload, list) and len(interrupt_payload) == 1
+
+    # Second turn: send denial via function_approvals on a message (not resume.interrupts)
+    resumed_events = [
+        event
+        async for event in run_workflow_stream(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "",
+                        "function_approvals": [
+                            {
+                                "approved": False,
+                                "id": "deny-1",
+                                "call_id": "delete-call",
+                                "name": "delete_record",
+                                "arguments": {"record_id": "abc"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            workflow,
+        )
+    ]
+
+    resumed_types = [event.type for event in resumed_events]
+    assert "RUN_STARTED" in resumed_types
+    assert "RUN_FINISHED" in resumed_types
+    assert "RUN_ERROR" not in resumed_types
+    assert "TEXT_MESSAGE_CONTENT" in resumed_types
+    text_deltas = [event.delta for event in resumed_events if event.type == "TEXT_MESSAGE_CONTENT"]
+    assert any("rejected" in delta for delta in text_deltas)
+    resumed_finished = [event for event in resumed_events if event.type == "RUN_FINISHED"][0].model_dump()
+    assert "interrupt" not in resumed_finished
+
+
 async def test_workflow_run_available_interrupts_logged():
     """available_interrupts in input data should be logged without errors."""
 

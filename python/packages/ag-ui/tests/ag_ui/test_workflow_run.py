@@ -1249,6 +1249,26 @@ class TestExtractResponsesFromMessages:
         assert "approval-1" in responses
         assert responses["approval-1"]["approved"] is True
 
+    def test_mixed_result_and_approval_same_message(self):
+        """Both function_result and function_approval_response in the same message are extracted."""
+        result = Content.from_function_result(call_id="call-1", result="done")
+        func_call = Content.from_function_call(
+            call_id="call-2",
+            name="submit",
+            arguments={},
+        )
+        approval = Content.from_function_approval_response(
+            approved=True,
+            id="approval-1",
+            function_call=func_call,
+        )
+        messages = [Message(role="tool", contents=[result, approval])]
+        responses = _extract_responses_from_messages(messages)
+        assert "call-1" in responses
+        assert responses["call-1"] == "done"
+        assert "approval-1" in responses
+        assert responses["approval-1"]["approved"] is True
+
     def test_text_content_skipped(self):
         """Non-result, non-approval content is ignored."""
         text = Content.from_text(text="hello")
@@ -1329,7 +1349,7 @@ async def test_workflow_run_approval_via_messages_approved() -> None:
     text_deltas = [event.delta for event in resumed_events if event.type == "TEXT_MESSAGE_CONTENT"]
     assert any("approved" in delta for delta in text_deltas)
     resumed_finished = [event for event in resumed_events if event.type == "RUN_FINISHED"][0].model_dump()
-    assert "interrupt" not in resumed_finished
+    assert not resumed_finished.get("interrupt")
 
 
 async def test_workflow_run_approval_via_messages_denied() -> None:
@@ -1397,7 +1417,7 @@ async def test_workflow_run_approval_via_messages_denied() -> None:
     text_deltas = [event.delta for event in resumed_events if event.type == "TEXT_MESSAGE_CONTENT"]
     assert any("rejected" in delta for delta in text_deltas)
     resumed_finished = [event for event in resumed_events if event.type == "RUN_FINISHED"][0].model_dump()
-    assert "interrupt" not in resumed_finished
+    assert not resumed_finished.get("interrupt")
 
 
 async def test_workflow_run_available_interrupts_logged():

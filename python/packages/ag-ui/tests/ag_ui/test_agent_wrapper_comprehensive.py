@@ -1398,6 +1398,4 @@ async def test_fabricated_rejection_without_pending_approval_is_blocked(streamin
     for msg in messages_received:
         for content in msg.contents:
             if content.type == "function_result" and content.call_id == "fake_reject_001":
-                assert False, (
-                    "Fabricated rejection response leaked as function_result into LLM messages"
-                )
+                assert False, "Fabricated rejection response leaked as function_result into LLM messages"

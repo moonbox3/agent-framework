@@ -779,6 +779,55 @@ class TestGitHubCopilotAgentToolConversion:
         assert "Something went wrong" in result.text_result_for_llm
         assert "Something went wrong" in result.error
 
+    async def test_tool_handler_rejects_raw_dict_invocation(
+        self,
+        mock_client: MagicMock,
+        mock_session: MagicMock,
+    ) -> None:
+        """Test that tool handler raises TypeError when called with a raw dict instead of ToolInvocation."""
+
+        def my_tool(arg: str) -> str:
+            """A test tool."""
+            return f"Result: {arg}"
+
+        agent = GitHubCopilotAgent(client=mock_client, tools=[my_tool])
+        await agent.start()
+
+        await agent._get_or_create_session(AgentSession())  # type: ignore
+
+        call_args = mock_client.create_session.call_args
+        config = call_args[0][0]
+        copilot_tool = config["tools"][0]
+
+        with pytest.raises((TypeError, AttributeError)):
+            await copilot_tool.handler({"arguments": {"arg": "test"}})
+
+    async def test_tool_handler_with_empty_arguments(
+        self,
+        mock_client: MagicMock,
+        mock_session: MagicMock,
+    ) -> None:
+        """Test that tool handler handles ToolInvocation with empty arguments."""
+
+        def no_args_tool() -> str:
+            """A tool with no arguments."""
+            return "no args result"
+
+        agent = GitHubCopilotAgent(client=mock_client, tools=[no_args_tool])
+        await agent.start()
+
+        await agent._get_or_create_session(AgentSession())  # type: ignore
+
+        call_args = mock_client.create_session.call_args
+        config = call_args[0][0]
+        copilot_tool = config["tools"][0]
+
+        result = await copilot_tool.handler(ToolInvocation(arguments={}))
+
+        assert isinstance(result, ToolResult)
+        assert result.result_type == "success"
+        assert result.text_result_for_llm == "no args result"
+
     def test_copilot_tool_passthrough(
         self,
         mock_client: MagicMock,

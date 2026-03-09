@@ -16,7 +16,7 @@ from agent_framework import (
 )
 from agent_framework.exceptions import AgentException
 from copilot.generated.session_events import Data, SessionEvent, SessionEventType
-from copilot.types import ToolResult
+from copilot.types import ToolInvocation, ToolResult
 
 from agent_framework_github_copilot import GitHubCopilotAgent, GitHubCopilotOptions
 
@@ -746,7 +746,7 @@ class TestGitHubCopilotAgentToolConversion:
         config = call_args[0][0]
         copilot_tool = config["tools"][0]
 
-        result = await copilot_tool.handler({"arguments": {"arg": "test"}})
+        result = await copilot_tool.handler(ToolInvocation(arguments={"arg": "test"}))
 
         assert isinstance(result, ToolResult)
         assert result.result_type == "success"
@@ -772,7 +772,7 @@ class TestGitHubCopilotAgentToolConversion:
         config = call_args[0][0]
         copilot_tool = config["tools"][0]
 
-        result = await copilot_tool.handler({"arguments": {"arg": "test"}})
+        result = await copilot_tool.handler(ToolInvocation(arguments={"arg": "test"}))
 
         assert isinstance(result, ToolResult)
         assert result.result_type == "failure"

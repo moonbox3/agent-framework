@@ -8,6 +8,10 @@ inputs:
     os:
       description: The operating system to set up
       required: true
+    exclude-packages:
+      description: Space-separated list of packages to exclude from uv sync
+      required: false
+      default: ''
 
 runs:
     using: "composite"
@@ -22,4 +26,8 @@ runs:
       - name: Install the project
         shell: bash
         run: |
-          cd python && uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit
+          EXCLUDE_ARGS=""
+          for pkg in ${{ inputs.exclude-packages }}; do
+            EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude-package $pkg"
+          done
+          cd python && uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit $EXCLUDE_ARGS

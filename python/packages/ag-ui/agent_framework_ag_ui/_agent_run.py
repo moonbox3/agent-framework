@@ -369,6 +369,21 @@ def _handle_step_based_approval(messages: list[Any]) -> list[BaseEvent]:
     return events
 
 
+def _evict_oldest_approvals(registry: dict[str, str], max_size: int = 10_000) -> None:
+    """Evict the oldest entries from the pending-approvals registry (LRU).
+
+    Only effective when *registry* is an ``OrderedDict``;  plain dicts are
+    left untouched because insertion-order eviction is unreliable for them.
+    """
+    if len(registry) <= max_size:
+        return
+    try:
+        while len(registry) > max_size:
+            registry.popitem(last=False)  # type: ignore[call-arg]
+    except (TypeError, KeyError):
+        pass
+
+
 async def _resolve_approval_responses(
     messages: list[Any],
     tools: list[Any],
@@ -400,14 +415,15 @@ async def _resolve_approval_responses(
     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
     rejected_responses = [resp for resp in fcc_todo.values() if not resp.approved]
 
-    # Validate every approval response against the pending approvals registry.
-    # Invalid responses are stripped from messages entirely — not converted to
-    # rejection results, which would inject attacker-controlled content into
-    # the LLM conversation.
-    if pending_approvals is not None and approved_responses:
+    # Validate every approval response (approved AND rejected) against the
+    # pending approvals registry.  Invalid responses are stripped from messages
+    # entirely — not converted to rejection results, which would inject
+    # attacker-controlled content into the LLM conversation.
+    if pending_approvals is not None and (approved_responses or rejected_responses):
         validated: list[Any] = []
+        validated_rejected: list[Any] = []
         invalid_ids: set[str] = set()
-        for resp in approved_responses:
+        for resp in approved_responses + rejected_responses:
             resp_id = resp.id or ""
             resp_name = resp.function_call.name if resp.function_call else None
             registry_key = f"{thread_id}:{resp_id}"
@@ -433,7 +449,10 @@ async def _resolve_approval_responses(
 
             # Valid — consume entry to prevent replay
             del pending_approvals[registry_key]
-            validated.append(resp)
+            if resp.approved:
+                validated.append(resp)
+            else:
+                validated_rejected.append(resp)
 
         # Strip invalid approval responses from messages and fcc_todo so
         # _replace_approval_contents_with_results never sees them.
@@ -446,6 +465,7 @@ async def _resolve_approval_responses(
                 ]
 
         approved_responses = validated
+        rejected_responses = validated_rejected
 
     approved_function_results: list[Any] = []
 
@@ -663,6 +683,10 @@ async def run_agent_stream(
         input_data: AG-UI request data with messages, state, tools, etc.
         agent: The Agent Framework agent to run
         config: Agent configuration
+        pending_approvals: Optional server-side registry of pending approval
+            requests.  Keys are ``{thread_id}:{request_id}``, values are
+            function names.  When provided, approval responses are validated
+            against this registry to prevent bypass, spoofing, and replay.
 
     Yields:
         AG-UI events
@@ -841,8 +865,16 @@ async def run_agent_stream(
 
             # Register pending approval requests so we can validate responses later
             if content_type == "function_approval_request" and pending_approvals is not None:
-                if content.id and content.function_call:
-                    pending_approvals[f"{thread_id}:{content.id}"] = content.function_call.name or ""
+                if content.id and content.function_call and content.function_call.name:
+                    pending_approvals[f"{thread_id}:{content.id}"] = content.function_call.name
+                    # Evict oldest entries if the registry exceeds a safe bound (LRU)
+                    _evict_oldest_approvals(pending_approvals, max_size=10_000)
+                else:
+                    logger.warning(
+                        "Approval request not registered: missing id=%s, function_call=%s, or function name",
+                        getattr(content, "id", None),
+                        getattr(content, "function_call", None),
+                    )
 
             for event in _emit_content(
                 content,

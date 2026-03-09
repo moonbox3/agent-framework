@@ -23,11 +23,21 @@ runs:
             enable-cache: true
             cache-suffix: ${{ inputs.os }}-${{ inputs.python-version }}
             cache-dependency-glob: "**/uv.lock"
+      - name: Exclude incompatible workspace packages
+        if: ${{ inputs.exclude-packages != '' }}
+        shell: bash
+        run: |
+          for pkg in ${{ inputs.exclude-packages }}; do
+            for f in python/packages/*/pyproject.toml; do
+              if grep -q "name = \"$pkg\"" "$f"; then
+                pkg_dir=$(dirname "$f" | sed 's|python/||')
+                echo "Excluding workspace package: $pkg ($pkg_dir)"
+                sed -i.bak '/\[tool\.uv\.workspace\]/a\exclude = ["'"$pkg_dir"'"]' python/pyproject.toml
+                sed -i.bak '/'"$pkg"' = { workspace = true }/d' python/pyproject.toml
+              fi
+            done
+          done
       - name: Install the project
         shell: bash
         run: |
-          EXCLUDE_ARGS=""
-          for pkg in ${{ inputs.exclude-packages }}; do
-            EXCLUDE_ARGS="$EXCLUDE_ARGS --no-install-package $pkg"
-          done
-          cd python && uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit $EXCLUDE_ARGS
+          cd python && uv sync --all-packages --all-extras --dev -U --prerelease=if-necessary-or-explicit

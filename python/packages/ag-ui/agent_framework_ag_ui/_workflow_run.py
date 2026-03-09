@@ -128,10 +128,18 @@ def _extract_responses_from_messages(messages: list[Message]) -> dict[str, Any]:
     responses: dict[str, Any] = {}
     for message in messages:
         for content in message.contents:
-            if content.type != "function_result" or not content.call_id:
-                continue
-            value = _coerce_json_value(content.result)
-            responses[str(content.call_id)] = value
+            if content.type == "function_result" and content.call_id:
+                value = _coerce_json_value(content.result)
+                responses[str(content.call_id)] = value
+            elif content.type == "function_approval_response" and getattr(content, "id", None):
+                approval_value: dict[str, Any] = {
+                    "approved": getattr(content, "approved", False),
+                    "id": str(content.id),  # type: ignore[union-attr]
+                }
+                func_call = getattr(content, "function_call", None)
+                if func_call is not None:
+                    approval_value["function_call"] = make_json_safe(func_call.to_dict())
+                responses[str(content.id)] = approval_value  # type: ignore[union-attr]
     return responses
 
 

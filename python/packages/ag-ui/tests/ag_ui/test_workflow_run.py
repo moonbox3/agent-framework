@@ -33,6 +33,7 @@ from agent_framework_ag_ui._workflow_run import (
     _custom_event_value,
     _details_code,
     _details_message,
+    _extract_responses_from_messages,
     _interrupt_entry_for_request_event,
     _latest_assistant_contents,
     _latest_user_text,
@@ -1170,6 +1171,82 @@ class TestDetailsCode:
         """Details without .error_type returns None."""
         details = SimpleNamespace(message="err")
         assert _details_code(details) is None
+
+
+class TestExtractResponsesFromMessages:
+    """Tests for _extract_responses_from_messages helper."""
+
+    def test_function_result_extracted(self):
+        """function_result content is extracted keyed by call_id."""
+        result = Content.from_function_result(call_id="call-1", result="ok")
+        messages = [Message(role="tool", contents=[result])]
+        responses = _extract_responses_from_messages(messages)
+        assert responses == {"call-1": "ok"}
+
+    def test_function_result_without_call_id_skipped(self):
+        """function_result with no call_id is ignored."""
+        result = Content.from_function_result(call_id="", result="ok")
+        messages = [Message(role="tool", contents=[result])]
+        responses = _extract_responses_from_messages(messages)
+        assert responses == {}
+
+    def test_function_approval_response_extracted(self):
+        """function_approval_response content is extracted keyed by id."""
+        func_call = Content.from_function_call(
+            call_id="call-1", name="do_action", arguments={"x": 1},
+        )
+        approval = Content.from_function_approval_response(
+            approved=True, id="approval-1", function_call=func_call,
+        )
+        messages = [Message(role="user", contents=[approval])]
+        responses = _extract_responses_from_messages(messages)
+        assert "approval-1" in responses
+        assert responses["approval-1"]["approved"] is True
+        assert responses["approval-1"]["id"] == "approval-1"
+        assert "function_call" in responses["approval-1"]
+
+    def test_denied_approval_response_extracted(self):
+        """Denied function_approval_response is extracted with approved=False."""
+        func_call = Content.from_function_call(
+            call_id="call-2", name="delete_item", arguments={},
+        )
+        approval = Content.from_function_approval_response(
+            approved=False, id="approval-2", function_call=func_call,
+        )
+        messages = [Message(role="user", contents=[approval])]
+        responses = _extract_responses_from_messages(messages)
+        assert "approval-2" in responses
+        assert responses["approval-2"]["approved"] is False
+
+    def test_mixed_result_and_approval(self):
+        """Both function_result and function_approval_response are extracted."""
+        result = Content.from_function_result(call_id="call-1", result="done")
+        func_call = Content.from_function_call(
+            call_id="call-2", name="submit", arguments={},
+        )
+        approval = Content.from_function_approval_response(
+            approved=True, id="approval-1", function_call=func_call,
+        )
+        messages = [
+            Message(role="tool", contents=[result]),
+            Message(role="user", contents=[approval]),
+        ]
+        responses = _extract_responses_from_messages(messages)
+        assert "call-1" in responses
+        assert responses["call-1"] == "done"
+        assert "approval-1" in responses
+        assert responses["approval-1"]["approved"] is True
+
+    def test_text_content_skipped(self):
+        """Non-result, non-approval content is ignored."""
+        text = Content.from_text(text="hello")
+        messages = [Message(role="user", contents=[text])]
+        responses = _extract_responses_from_messages(messages)
+        assert responses == {}
+
+    def test_empty_messages(self):
+        """Empty message list returns empty responses."""
+        assert _extract_responses_from_messages([]) == {}
 
 
 # ── Stream integration tests ──

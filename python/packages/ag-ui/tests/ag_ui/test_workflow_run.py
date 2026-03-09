@@ -1193,10 +1193,14 @@ class TestExtractResponsesFromMessages:
     def test_function_approval_response_extracted(self):
         """function_approval_response content is extracted keyed by id."""
         func_call = Content.from_function_call(
-            call_id="call-1", name="do_action", arguments={"x": 1},
+            call_id="call-1",
+            name="do_action",
+            arguments={"x": 1},
         )
         approval = Content.from_function_approval_response(
-            approved=True, id="approval-1", function_call=func_call,
+            approved=True,
+            id="approval-1",
+            function_call=func_call,
         )
         messages = [Message(role="user", contents=[approval])]
         responses = _extract_responses_from_messages(messages)
@@ -1208,10 +1212,14 @@ class TestExtractResponsesFromMessages:
     def test_denied_approval_response_extracted(self):
         """Denied function_approval_response is extracted with approved=False."""
         func_call = Content.from_function_call(
-            call_id="call-2", name="delete_item", arguments={},
+            call_id="call-2",
+            name="delete_item",
+            arguments={},
         )
         approval = Content.from_function_approval_response(
-            approved=False, id="approval-2", function_call=func_call,
+            approved=False,
+            id="approval-2",
+            function_call=func_call,
         )
         messages = [Message(role="user", contents=[approval])]
         responses = _extract_responses_from_messages(messages)
@@ -1222,10 +1230,14 @@ class TestExtractResponsesFromMessages:
         """Both function_result and function_approval_response are extracted."""
         result = Content.from_function_result(call_id="call-1", result="done")
         func_call = Content.from_function_call(
-            call_id="call-2", name="submit", arguments={},
+            call_id="call-2",
+            name="submit",
+            arguments={},
         )
         approval = Content.from_function_approval_response(
-            approved=True, id="approval-1", function_call=func_call,
+            approved=True,
+            id="approval-1",
+            function_call=func_call,
         )
         messages = [
             Message(role="tool", contents=[result]),

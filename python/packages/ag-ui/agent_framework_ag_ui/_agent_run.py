@@ -374,6 +374,8 @@ async def _resolve_approval_responses(
     tools: list[Any],
     agent: SupportsAgentRun,
     run_kwargs: dict[str, Any],
+    pending_approvals: dict[str, str] | None = None,
+    thread_id: str = "",
 ) -> None:
     """Execute approved function calls and replace approval content with results.
 
@@ -385,6 +387,11 @@ async def _resolve_approval_responses(
         tools: List of available tools
         agent: The agent instance (to get client and config)
         run_kwargs: Kwargs for tool execution
+        pending_approvals: Server-side registry of pending approval requests.
+            Keys are ``{thread_id}:{request_id}``, values are function names.
+            When provided, every approval response is validated against this
+            registry to prevent bypass, function name spoofing, and replay.
+        thread_id: The conversation thread ID used to scope registry keys.
     """
     fcc_todo = _collect_approval_responses(messages)
     if not fcc_todo:
@@ -392,6 +399,40 @@ async def _resolve_approval_responses(
 
     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
     rejected_responses = [resp for resp in fcc_todo.values() if not resp.approved]
+
+    # Validate every approval response against the pending approvals registry.
+    if pending_approvals is not None and approved_responses:
+        validated: list[Any] = []
+        for resp in approved_responses:
+            resp_id = resp.id or ""
+            resp_name = resp.function_call.name if resp.function_call else None
+            registry_key = f"{thread_id}:{resp_id}"
+
+            if registry_key not in pending_approvals:
+                logger.warning(
+                    "Rejected approval response id=%s: no matching pending approval request",
+                    resp_id,
+                )
+                rejected_responses.append(resp)
+                continue
+
+            pending_name = pending_approvals[registry_key]
+            if resp_name != pending_name:
+                logger.warning(
+                    "Rejected approval response id=%s: function name mismatch (response=%s, pending=%s)",
+                    resp_id,
+                    resp_name,
+                    pending_name,
+                )
+                rejected_responses.append(resp)
+                continue
+
+            # Valid — consume entry to prevent replay
+            del pending_approvals[registry_key]
+            validated.append(resp)
+
+        approved_responses = validated
+
     approved_function_results: list[Any] = []
 
     # Execute approved tool calls
@@ -597,6 +638,7 @@ async def run_agent_stream(
     input_data: dict[str, Any],
     agent: SupportsAgentRun,
     config: AgentConfig,
+    pending_approvals: dict[str, str] | None = None,
 ) -> AsyncGenerator[BaseEvent]:
     """Run agent and yield AG-UI events.
 
@@ -707,7 +749,7 @@ async def run_agent_stream(
     # Resolve approval responses (execute approved tools, replace approvals with results)
     # This must happen before running the agent so it sees the tool results
     tools_for_execution = tools if tools is not None else server_tools
-    await _resolve_approval_responses(messages, tools_for_execution, agent, run_kwargs)
+    await _resolve_approval_responses(messages, tools_for_execution, agent, run_kwargs, pending_approvals, thread_id)
 
     # Defense-in-depth: replace approval payloads in snapshot with actual tool results
     # so CopilotKit does not re-send stale approval content on subsequent turns.
@@ -782,6 +824,12 @@ async def run_agent_stream(
         for content in update.contents:
             content_type = getattr(content, "type", None)
             logger.debug(f"Processing content type={content_type}, message_id={flow.message_id}")
+
+            # Register pending approval requests so we can validate responses later
+            if content_type == "function_approval_request" and pending_approvals is not None:
+                if content.id and content.function_call:
+                    pending_approvals[f"{thread_id}:{content.id}"] = content.function_call.name or ""
+
             for event in _emit_content(
                 content,
                 flow,

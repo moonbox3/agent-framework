@@ -101,6 +101,12 @@ class AgentFrameworkAgent:
             require_confirmation=require_confirmation,
         )
 
+        # Server-side registry of pending approval requests.
+        # Keys are "{thread_id}:{request_id}", values are the function name.
+        # Populated when approval requests are emitted; consumed when responses arrive.
+        # Prevents bypass, function name spoofing, and replay attacks.
+        self._pending_approvals: dict[str, str] = {}
+
     async def run(
         self,
         input_data: dict[str, Any],
@@ -113,5 +119,7 @@ class AgentFrameworkAgent:
         Yields:
             AG-UI events
         """
-        async for event in run_agent_stream(input_data, self.agent, self.config):
+        async for event in run_agent_stream(
+            input_data, self.agent, self.config, pending_approvals=self._pending_approvals
+        ):
             yield event

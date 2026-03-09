@@ -16,6 +16,7 @@ from agent_framework import (
 )
 from agent_framework.exceptions import AgentException
 from copilot.generated.session_events import Data, SessionEvent, SessionEventType
+from copilot.types import ToolResult
 
 from agent_framework_github_copilot import GitHubCopilotAgent, GitHubCopilotOptions
 
@@ -747,8 +748,9 @@ class TestGitHubCopilotAgentToolConversion:
 
         result = await copilot_tool.handler({"arguments": {"arg": "test"}})
 
-        assert result["resultType"] == "success"
-        assert result["textResultForLlm"] == "Result: test"
+        assert isinstance(result, ToolResult)
+        assert result.result_type == "success"
+        assert result.text_result_for_llm == "Result: test"
 
     async def test_tool_handler_returns_failure_result_on_error(
         self,
@@ -772,9 +774,10 @@ class TestGitHubCopilotAgentToolConversion:
 
         result = await copilot_tool.handler({"arguments": {"arg": "test"}})
 
-        assert result["resultType"] == "failure"
-        assert "Something went wrong" in result["textResultForLlm"]
-        assert "Something went wrong" in result["error"]
+        assert isinstance(result, ToolResult)
+        assert result.result_type == "failure"
+        assert "Something went wrong" in result.text_result_for_llm
+        assert "Something went wrong" in result.error
 
     def test_copilot_tool_passthrough(
         self,
@@ -784,7 +787,7 @@ class TestGitHubCopilotAgentToolConversion:
         from copilot.types import Tool as CopilotTool
 
         async def tool_handler(invocation: Any) -> Any:
-            return {"textResultForLlm": "result", "resultType": "success"}
+            return {"text_result_for_llm": "result", "result_type": "success"}
 
         copilot_tool = CopilotTool(
             name="direct_tool",
@@ -813,7 +816,7 @@ class TestGitHubCopilotAgentToolConversion:
             return arg
 
         async def tool_handler(invocation: Any) -> Any:
-            return {"textResultForLlm": "result", "resultType": "success"}
+            return {"text_result_for_llm": "result", "result_type": "success"}
 
         copilot_tool = CopilotTool(
             name="direct_tool",

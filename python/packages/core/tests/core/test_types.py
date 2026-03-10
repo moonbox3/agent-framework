@@ -550,7 +550,6 @@ def test_usage_details():
     assert usage["input_token_count"] == 5
     assert usage["output_token_count"] == 10
     assert usage["total_token_count"] == 15
-    assert usage.get("additional_counts", {}) == {}
 
 
 def test_usage_details_addition():
@@ -581,8 +580,8 @@ def test_usage_details_addition():
 def test_usage_details_fail():
     # TypedDict doesn't validate types at runtime, so this test no longer applies
     # Creating UsageDetails with wrong types won't raise ValueError
-    usage = UsageDetails(input_token_count=5, output_token_count=10, total_token_count=15, wrong_type="42.923")  # type: ignore[typeddict-item]
-    assert usage["wrong_type"] == "42.923"  # type: ignore[typeddict-item]
+    usage = UsageDetails(input_token_count=5, output_token_count=10, total_token_count=15, wrong_type="42.923")
+    assert usage["wrong_type"] == "42.923"
 
 
 def test_usage_details_additional_counts():
@@ -599,6 +598,15 @@ def test_usage_details_add_with_none_and_type_errors():
     v2 = add_usage_details(None, u)
     assert v2 == u
     # TypedDict doesn't support + operator, use add_usage_details
+
+
+def test_usage_details_add_skips_non_int():
+    u1 = UsageDetails(input_token_count=10, other="test")
+    u2 = UsageDetails(input_token_count=10, another="test")
+    u3 = add_usage_details(u1, u2)
+    assert len(u3.keys()) == 1
+    assert "input_token_count" in u3
+    assert u3["input_token_count"] == 20
 
 
 # region UserInputRequest and Response
@@ -1705,7 +1713,7 @@ def test_chat_response_complex_serialization():
             {"role": "user", "contents": [{"type": "text", "text": "Hello"}]},
             {"role": "assistant", "contents": [{"type": "text", "text": "Hi there"}]},
         ],
-        "finish_reason": {"value": "stop"},
+        "finish_reason": "stop",
         "usage_details": {
             "type": "usage_details",
             "input_token_count": 5,
@@ -1831,7 +1839,7 @@ def test_agent_run_response_update_all_content_types():
             },
             {"type": "text_reasoning", "text": "reasoning"},
         ],
-        "role": {"value": "assistant"},  # Test role as dict
+        "role": "assistant",  # Test role as dict
     }
 
     update = AgentResponseUpdate.from_dict(update_data)
@@ -2394,7 +2402,7 @@ def test_content_add_usage_content_non_integer_values():
     result = usage1 + usage2
 
     # Non-integer "model" should take first non-None value
-    assert result.usage_details["model"] == "gpt-4"
+    assert "model" not in result.usage_details
     # Integer "count" should be summed
     assert result.usage_details["count"] == 30
 
@@ -2657,6 +2665,58 @@ class TestResponseStreamBasicIteration:
         assert len(stream.updates) == 2
         assert stream.updates[0].text == "update_0"
         assert stream.updates[1].text == "update_1"
+
+    async def test_auto_finalize_on_iteration_completion(self) -> None:
+        """Stream auto-finalizes when async iteration completes."""
+        stream = ResponseStream(_generate_updates(2), finalizer=_combine_updates)
+
+        async for _ in stream:
+            pass
+
+        assert stream._finalized is True
+        assert stream._final_result is not None
+        assert stream._final_result.text == "update_0update_1"
+
+    async def test_auto_finalize_runs_result_hooks(self) -> None:
+        """Result hooks run automatically when iteration completes."""
+        hook_called = {"value": False}
+
+        def tracking_hook(response: ChatResponse) -> ChatResponse:
+            hook_called["value"] = True
+            response.additional_properties["auto_finalized"] = True
+            return response
+
+        stream = ResponseStream(
+            _generate_updates(2),
+            finalizer=_combine_updates,
+            result_hooks=[tracking_hook],
+        )
+
+        async for _ in stream:
+            pass
+
+        assert hook_called["value"] is True
+        final = await stream.get_final_response()
+        assert final.additional_properties["auto_finalized"] is True
+
+    async def test_get_final_response_idempotent_after_auto_finalize(self) -> None:
+        """get_final_response returns cached result after auto-finalization."""
+        call_count = {"value": 0}
+
+        def counting_finalizer(updates: list[ChatResponseUpdate]) -> ChatResponse:
+            call_count["value"] += 1
+            return _combine_updates(updates)
+
+        stream = ResponseStream(_generate_updates(2), finalizer=counting_finalizer)
+
+        async for _ in stream:
+            pass
+
+        final1 = await stream.get_final_response()
+        final2 = await stream.get_final_response()
+
+        assert call_count["value"] == 1
+        assert final1.text == final2.text
 
 
 class TestResponseStreamTransformHooks:

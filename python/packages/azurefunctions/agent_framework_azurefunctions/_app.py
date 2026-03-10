@@ -9,7 +9,7 @@ with Azure Durable Entities, enabling stateful and durable AI agent execution.
 from __future__ import annotations
 
 import asyncio
-import copy
+from copy import deepcopy
 import json
 import logging
 import re
@@ -61,12 +61,20 @@ HandlerT = TypeVar("HandlerT", bound=Callable[..., Any])
 
 def _create_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     """Create a deep copy of the deserialized state for later diffing."""
-    return copy.deepcopy(state)
+    return deepcopy(state)
 
 
 def _compute_state_updates(original_snapshot: dict[str, Any], current_state: dict[str, Any]) -> dict[str, Any]:
     """Compute state updates by comparing current state against the original snapshot."""
-    return {k: v for k, v in current_state.items() if k not in original_snapshot or original_snapshot[k] != v}
+    original_keys = set(original_snapshot.keys())
+    current_keys = set(current_state.keys())
+    # Start with any newly added keys
+    updates: dict[str, Any] = {k: current_state[k] for k in current_keys - original_keys}
+    # Only compare values for keys present in both snapshots
+    for k in current_keys & original_keys:
+        if current_state[k] != original_snapshot[k]:
+            updates[k] = current_state[k]
+    return updates
 
 
 @dataclass

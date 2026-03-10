@@ -1442,20 +1442,34 @@ class TestAgentFunctionAppWorkflow:
         assert "instance-456" in url
 
 
+def _compute_state_updates(original_snapshot: dict[str, Any], current_state: dict[str, Any]) -> dict[str, Any]:
+    """Compute state updates by comparing current state against the original snapshot.
+
+    This mirrors the inlined logic in ``_app.py``'s ``executor_activity.run()``.
+    """
+    original_keys = set(original_snapshot.keys())
+    current_keys = set(current_state.keys())
+    updates: dict[str, Any] = {}
+    for key in current_keys:
+        if key not in original_keys or current_state[key] != original_snapshot.get(key):
+            updates[key] = current_state[key]
+    return updates
+
+
 class TestStateSnapshotDiff:
     """Test suite for state snapshot diffing in activity execution.
 
     The activity executor snapshots state before execution and diffs against the
     post-execution state to determine which keys were updated. These tests exercise
-    the production snapshot and diff helpers from _app.py to ensure that in-place
-    mutations to nested objects (dicts, lists) are correctly detected as changes.
+    the production snapshot helper and the state-update diffing logic to ensure that
+    in-place mutations to nested objects (dicts, lists) are correctly detected as changes.
     """
 
     def test_nested_dict_mutation_detected_in_diff(self) -> None:
         """Test that mutating values inside a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
 
-        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
+        from agent_framework_azurefunctions._app import _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.config": {"code": "", "enabled": False},
@@ -1484,7 +1498,7 @@ class TestStateSnapshotDiff:
         """Test that adding a key to a nested dict appears in the diff."""
         from agent_framework._workflows._state import State
 
-        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
+        from agent_framework_azurefunctions._app import _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.data": {"existing": "value"},
@@ -1510,7 +1524,7 @@ class TestStateSnapshotDiff:
         """Test that appending to a nested list appears in the diff."""
         from agent_framework._workflows._state import State
 
-        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
+        from agent_framework_azurefunctions._app import _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.items": [1, 2, 3],
@@ -1536,7 +1550,7 @@ class TestStateSnapshotDiff:
         """Test that setting a new top-level key appears in the diff."""
         from agent_framework._workflows._state import State
 
-        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
+        from agent_framework_azurefunctions._app import _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "existing": "value",
@@ -1561,7 +1575,7 @@ class TestStateSnapshotDiff:
         """Test that unmodified nested state produces no updates."""
         from agent_framework._workflows._state import State
 
-        from agent_framework_azurefunctions._app import _compute_state_updates, _create_state_snapshot
+        from agent_framework_azurefunctions._app import _create_state_snapshot
 
         deserialized_state: dict[str, Any] = {
             "Local.config": {"code": "existing", "enabled": True},
@@ -1590,8 +1604,6 @@ class TestStateSnapshotDiff:
         the diff produces an empty update set.
         """
         from agent_framework._workflows._state import State
-
-        from agent_framework_azurefunctions._app import _compute_state_updates
 
         deserialized_state: dict[str, Any] = {
             "Local.config": {"code": "", "enabled": False},

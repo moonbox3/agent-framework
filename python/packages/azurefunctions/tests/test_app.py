@@ -26,6 +26,7 @@ from agent_framework_durabletask import (
 
 from agent_framework_azurefunctions import AgentFunctionApp
 from agent_framework_azurefunctions._entities import create_agent_entity
+from agent_framework_azurefunctions._workflow import SOURCE_ORCHESTRATOR
 
 FuncT = TypeVar("FuncT", bound=Callable[..., Any])
 
@@ -1642,9 +1643,9 @@ class TestStateSnapshotDiff:
         This exercises the actual executor_activity function registered by
         _setup_executor_activity to verify the production code path uses
         _create_state_snapshot (deep copy) rather than dict() (shallow copy).
-        If line 314 of _app.py regressed to ``dict(deserialized_state)``,
-        this test would fail because in-place mutations would leak into the
-        snapshot and produce an empty diff.
+        If the implementation regressed to using a shallow copy such as
+        ``dict(deserialized_state)``, this test would fail because in-place
+        mutations would leak into the snapshot and produce an empty diff.
         """
         mock_executor = Mock()
         mock_executor.id = "test-exec"
@@ -1696,7 +1697,7 @@ class TestStateSnapshotDiff:
             "shared_state_snapshot": {
                 "Local.config": {"code": "", "enabled": False},
             },
-            "source_executor_ids": ["orchestrator"],
+            "source_executor_ids": [SOURCE_ORCHESTRATOR],
         })
 
         result = json.loads(captured_activity["fn"](input_data))

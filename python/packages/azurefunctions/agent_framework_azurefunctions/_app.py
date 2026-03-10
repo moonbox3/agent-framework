@@ -358,7 +358,10 @@ class AgentFunctionApp(DFAppBase):
                 deletes: set[str] = original_keys - current_keys
 
                 # Updates = keys in current that are new or have different values
-                updates: dict[str, Any] = _compute_state_updates(original_snapshot, current_state)
+                updates: dict[str, Any] = {}
+                for key in current_keys:
+                    if key not in original_keys or current_state[key] != original_snapshot.get(key):
+                        updates[key] = current_state[key]
 
                 # Drain messages and events from runner context
                 sent_messages = await runner_context.drain_messages()

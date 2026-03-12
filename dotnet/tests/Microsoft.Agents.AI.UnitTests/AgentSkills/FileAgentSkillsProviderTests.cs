@@ -128,6 +128,20 @@ public sealed class FileAgentSkillsProviderTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_PromptWithoutPlaceholder_ThrowsArgumentException()
+    {
+        // Arrange -- valid format string but missing the required placeholder
+        var options = new FileAgentSkillsProviderOptions
+        {
+            SkillsInstructionPrompt = "No placeholder here"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => new FileAgentSkillsProvider(this._testRoot, options));
+        Assert.Contains("{0}", ex.Message);
+        Assert.Equal("options", ex.ParamName);
+    }
+
+    [Fact]
     public async Task InvokingCoreAsync_SkillNamesAreXmlEscapedAsync()
     {
         // Arrange — description with XML-sensitive characters

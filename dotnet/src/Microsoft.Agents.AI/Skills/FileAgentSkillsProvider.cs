@@ -172,10 +172,12 @@ public sealed partial class FileAgentSkillsProvider : AIContextProvider
 
         if (options?.SkillsInstructionPrompt is { } optionsInstructions)
         {
+            const string sentinel = "\x01PLACEHOLDER_PRESENT\x01";
+
+            string formatted;
             try
             {
-                _ = string.Format(optionsInstructions, string.Empty);
-                promptTemplate = optionsInstructions;
+                formatted = string.Format(optionsInstructions, sentinel);
             }
             catch (FormatException ex)
             {
@@ -184,6 +186,15 @@ public sealed partial class FileAgentSkillsProvider : AIContextProvider
                     nameof(options),
                     ex);
             }
+
+            if (!formatted.Contains(sentinel, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "The provided SkillsInstructionPrompt must contain a '{0}' placeholder for the generated skills list.",
+                    nameof(options));
+            }
+
+            promptTemplate = optionsInstructions;
         }
 
         if (skills.Count == 0)

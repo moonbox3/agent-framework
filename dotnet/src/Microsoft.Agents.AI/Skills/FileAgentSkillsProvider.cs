@@ -172,22 +172,19 @@ public sealed partial class FileAgentSkillsProvider : AIContextProvider
 
         if (options?.SkillsInstructionPrompt is { } optionsInstructions)
         {
-            const string sentinel = "\x01PLACEHOLDER_PRESENT\x01";
-
-            string formatted;
             try
             {
-                formatted = string.Format(optionsInstructions, sentinel);
+                _ = string.Format(optionsInstructions, string.Empty);
             }
             catch (FormatException ex)
             {
                 throw new ArgumentException(
-                    "The provided SkillsInstructionPrompt is not a valid format string. It must contain a '{0}' placeholder and escape any literal '{' or '}' by doubling them ('{{' or '}}').",
+                    "The provided SkillsInstructionPrompt is not a valid format string.",
                     nameof(options),
                     ex);
             }
 
-            if (!formatted.Contains(sentinel, StringComparison.Ordinal))
+            if (optionsInstructions.IndexOf("{0}", StringComparison.Ordinal) < 0)
             {
                 throw new ArgumentException(
                     "The provided SkillsInstructionPrompt must contain a '{0}' placeholder for the generated skills list.",

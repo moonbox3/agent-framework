@@ -1015,15 +1015,16 @@ def test_deduplicate_assistant_tool_calls():
     assert len(result) == 1
 
 
-def test_deduplicate_general_messages():
-    """Repeated general messages with same content are preserved."""
+def test_deduplicate_consecutive_general_messages():
+    """Consecutive duplicate general messages are deduplicated."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
     msg1 = Message(role="user", contents=[Content.from_text(text="Hello")])
     msg2 = Message(role="user", contents=[Content.from_text(text="Hello")])
 
     result = _deduplicate_messages([msg1, msg2])
-    assert len(result) == 2
+    assert len(result) == 1
+    assert result == [msg1]
 
 
 def test_deduplicate_preserves_repeated_confirmations():
@@ -1035,17 +1036,40 @@ def test_deduplicate_preserves_repeated_confirmations():
     confirm2 = Message(role="user", contents=[Content.from_text(text="yes")])
 
     result = _deduplicate_messages([confirm1, assistant, confirm2])
-    assert len(result) == 3
+    assert result == [confirm1, assistant, confirm2]
 
 
 def test_deduplicate_preserves_repeated_system_messages():
-    """Multiple identical system messages are preserved."""
+    """Non-consecutive identical system messages are preserved."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    sys_msg = Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")])
+    user_msg = Message(role="user", contents=[Content.from_text(text="Hi")])
+
+    result = _deduplicate_messages([sys_msg, user_msg, sys_msg])
+    assert result == [sys_msg, user_msg, sys_msg]
+
+
+def test_deduplicate_skips_consecutive_duplicate_system_messages():
+    """Consecutive identical system messages are deduplicated."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
     msgs = [Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")]) for _ in range(3)]
 
     result = _deduplicate_messages(msgs)
-    assert len(result) == 3
+    assert len(result) == 1
+
+
+def test_deduplicate_handles_none_contents():
+    """Messages with contents=None pass through without errors."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    msg1 = Message(role="user", contents=None)
+    msg2 = Message(role="assistant", contents=[Content.from_text(text="Hello")])
+    msg3 = Message(role="user", contents=None)
+
+    result = _deduplicate_messages([msg1, msg2, msg3])
+    assert result == [msg1, msg2, msg3]
 
 
 def test_deduplicate_replaces_empty_tool_result():

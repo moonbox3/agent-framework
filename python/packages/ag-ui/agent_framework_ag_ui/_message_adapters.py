@@ -242,6 +242,14 @@ def _deduplicate_messages(messages: list[Message]) -> list[Message]:
             unique_messages.append(msg)
 
         else:
+            # Only skip consecutive duplicates (same role + content) to guard against
+            # upstream replays while still allowing the same message at different
+            # points in the conversation (e.g., repeated user confirmations).
+            content_str = str([str(c) for c in msg.contents]) if msg.contents else ""
+            prev = unique_messages[-1] if unique_messages else None
+            if prev is not None and get_role_value(prev) == role_value and (str([str(c) for c in prev.contents]) if prev.contents else "") == content_str:
+                logger.info(f"Skipping consecutive duplicate message at index {idx}: role={role_value}")
+                continue
             unique_messages.append(msg)
 
     return unique_messages

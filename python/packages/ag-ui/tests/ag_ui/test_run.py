@@ -538,6 +538,27 @@ def test_emit_approval_request_populates_interrupt_metadata():
     assert flow.interrupts[0]["value"]["type"] == "function_approval_request"
 
 
+def test_emit_approval_request_accumulates_multiple_interrupts():
+    """Multiple approval requests in the same turn should accumulate in flow.interrupts."""
+    flow = FlowState(message_id="msg-1")
+
+    for i in range(1, 4):
+        function_call = Content.from_function_call(
+            call_id=f"call_{i}",
+            name=f"tool_{i}",
+            arguments={"arg": f"value_{i}"},
+        )
+        approval_content = Content.from_function_approval_request(
+            id=f"approval_{i}",
+            function_call=function_call,
+        )
+        _emit_approval_request(approval_content, flow)
+
+    assert len(flow.interrupts) == 3
+    interrupt_ids = {intr["id"] for intr in flow.interrupts}
+    assert interrupt_ids == {"call_1", "call_2", "call_3"}
+
+
 def test_resume_to_tool_messages_from_interrupts_payload():
     """Resume payload interrupt responses map to tool messages."""
     resume = {

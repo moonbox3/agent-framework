@@ -242,14 +242,6 @@ def _deduplicate_messages(messages: list[Message]) -> list[Message]:
             unique_messages.append(msg)
 
         else:
-            content_str = str([str(c) for c in msg.contents]) if msg.contents else ""
-            key = (role_value, hash(content_str))
-
-            if key in seen_keys:
-                logger.info(f"Skipping duplicate message at index {idx}: role={role_value}")
-                continue
-
-            seen_keys[key] = len(unique_messages)
             unique_messages.append(msg)
 
     return unique_messages

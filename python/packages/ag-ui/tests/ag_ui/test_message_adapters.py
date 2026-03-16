@@ -1016,14 +1016,36 @@ def test_deduplicate_assistant_tool_calls():
 
 
 def test_deduplicate_general_messages():
-    """Duplicate general user messages are deduplicated."""
+    """Repeated general messages with same content are preserved."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
     msg1 = Message(role="user", contents=[Content.from_text(text="Hello")])
     msg2 = Message(role="user", contents=[Content.from_text(text="Hello")])
 
     result = _deduplicate_messages([msg1, msg2])
-    assert len(result) == 1
+    assert len(result) == 2
+
+
+def test_deduplicate_preserves_repeated_confirmations():
+    """Identical user confirmations at different points in conversation are preserved."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    assistant = Message(role="assistant", contents=[Content.from_text(text="Are you sure?")])
+    confirm1 = Message(role="user", contents=[Content.from_text(text="yes")])
+    confirm2 = Message(role="user", contents=[Content.from_text(text="yes")])
+
+    result = _deduplicate_messages([confirm1, assistant, confirm2])
+    assert len(result) == 3
+
+
+def test_deduplicate_preserves_repeated_system_messages():
+    """Multiple identical system messages are preserved."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    msgs = [Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")]) for _ in range(3)]
+
+    result = _deduplicate_messages(msgs)
+    assert len(result) == 3
 
 
 def test_deduplicate_replaces_empty_tool_result():

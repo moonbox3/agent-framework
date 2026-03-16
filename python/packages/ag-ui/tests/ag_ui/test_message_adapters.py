@@ -1015,49 +1015,73 @@ def test_deduplicate_assistant_tool_calls():
     assert len(result) == 1
 
 
-def test_deduplicate_consecutive_general_messages():
-    """Consecutive duplicate general messages are deduplicated."""
+def test_deduplicate_by_message_id():
+    """Messages with the same message_id are deduplicated."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
     msg1 = Message(role="user", contents=[Content.from_text(text="Hello")])
+    msg1.message_id = "msg-1"
     msg2 = Message(role="user", contents=[Content.from_text(text="Hello")])
+    msg2.message_id = "msg-1"
 
     result = _deduplicate_messages([msg1, msg2])
     assert len(result) == 1
     assert result == [msg1]
 
 
-def test_deduplicate_preserves_repeated_confirmations():
-    """Identical user confirmations at different points in conversation are preserved."""
+def test_deduplicate_preserves_repeated_confirmations_with_distinct_ids():
+    """Identical content with different message_ids is preserved."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
     assistant = Message(role="assistant", contents=[Content.from_text(text="Are you sure?")])
+    assistant.message_id = "msg-1"
     confirm1 = Message(role="user", contents=[Content.from_text(text="yes")])
+    confirm1.message_id = "msg-2"
     confirm2 = Message(role="user", contents=[Content.from_text(text="yes")])
+    confirm2.message_id = "msg-3"
 
     result = _deduplicate_messages([confirm1, assistant, confirm2])
     assert result == [confirm1, assistant, confirm2]
 
 
-def test_deduplicate_preserves_repeated_system_messages():
-    """Non-consecutive identical system messages are preserved."""
+def test_deduplicate_preserves_repeated_system_messages_with_distinct_ids():
+    """Non-consecutive identical system messages with different ids are preserved."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
-    sys_msg = Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")])
+    sys1 = Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")])
+    sys1.message_id = "msg-1"
     user_msg = Message(role="user", contents=[Content.from_text(text="Hi")])
+    user_msg.message_id = "msg-2"
+    sys2 = Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")])
+    sys2.message_id = "msg-3"
 
-    result = _deduplicate_messages([sys_msg, user_msg, sys_msg])
-    assert result == [sys_msg, user_msg, sys_msg]
+    result = _deduplicate_messages([sys1, user_msg, sys2])
+    assert result == [sys1, user_msg, sys2]
 
 
-def test_deduplicate_skips_consecutive_duplicate_system_messages():
-    """Consecutive identical system messages are deduplicated."""
+def test_deduplicate_skips_replayed_system_messages_with_same_id():
+    """System messages replayed with the same message_id are deduplicated."""
     from agent_framework_ag_ui._message_adapters import _deduplicate_messages
 
-    msgs = [Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")]) for _ in range(3)]
+    msgs = []
+    for _ in range(3):
+        m = Message(role="system", contents=[Content.from_text(text="You are a helpful assistant.")])
+        m.message_id = "msg-1"
+        msgs.append(m)
 
     result = _deduplicate_messages(msgs)
     assert len(result) == 1
+
+
+def test_deduplicate_without_message_id_always_preserves():
+    """Messages without message_id are always preserved (no dedup possible)."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    msg1 = Message(role="user", contents=[Content.from_text(text="Hello")])
+    msg2 = Message(role="user", contents=[Content.from_text(text="Hello")])
+
+    result = _deduplicate_messages([msg1, msg2])
+    assert result == [msg1, msg2]
 
 
 def test_deduplicate_handles_none_contents():
@@ -1070,6 +1094,21 @@ def test_deduplicate_handles_none_contents():
 
     result = _deduplicate_messages([msg1, msg2, msg3])
     assert result == [msg1, msg2, msg3]
+
+
+def test_deduplicate_mixed_id_and_no_id():
+    """Messages with and without message_id coexist correctly."""
+    from agent_framework_ag_ui._message_adapters import _deduplicate_messages
+
+    msg1 = Message(role="user", contents=[Content.from_text(text="Hello")])
+    msg1.message_id = "msg-1"
+    msg2 = Message(role="user", contents=[Content.from_text(text="Hello")])  # no id
+    msg3 = Message(role="user", contents=[Content.from_text(text="Hello")])
+    msg3.message_id = "msg-1"  # duplicate of msg1
+
+    result = _deduplicate_messages([msg1, msg2, msg3])
+    assert len(result) == 2
+    assert result == [msg1, msg2]
 
 
 def test_deduplicate_replaces_empty_tool_result():

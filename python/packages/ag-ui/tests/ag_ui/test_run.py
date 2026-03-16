@@ -953,8 +953,12 @@ async def test_run_agent_stream_accumulates_multiple_confirm_interrupts():
     events = [event async for event in agent.run(payload)]
 
     # Find RUN_FINISHED event and verify multiple interrupts
-    finished_events = [e for e in events if getattr(e, "type", None) == "RUN_FINISHED"
-                       or getattr(getattr(e, "type", None), "value", None) == "RUN_FINISHED"]
+    finished_events = [
+        e
+        for e in events
+        if getattr(e, "type", None) == "RUN_FINISHED"
+        or getattr(getattr(e, "type", None), "value", None) == "RUN_FINISHED"
+    ]
     assert finished_events, f"Expected RUN_FINISHED event. Types: {[getattr(e, 'type', None) for e in events]}"
     finished = finished_events[-1]
     interrupt = getattr(finished, "interrupt", None)

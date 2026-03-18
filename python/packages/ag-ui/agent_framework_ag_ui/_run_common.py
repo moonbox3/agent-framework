@@ -433,7 +433,7 @@ def _emit_mcp_tool_call(content: Content, flow: FlowState) -> list[BaseEvent]:
     return events
 
 
-def _emit_mcp_tool_result(content: Content, flow: FlowState) -> list[BaseEvent]:
+def _emit_mcp_tool_result(content: Content, flow: FlowState, predictive_handler: PredictiveStateHandler | None = None) -> list[BaseEvent]:
     """Emit ToolCallResult events for MCP server tool result content.
 
     Maps MCP tool results to the same AG-UI ToolCallEnd + ToolCallResult events
@@ -473,6 +473,11 @@ def _emit_mcp_tool_result(content: Content, flow: FlowState) -> list[BaseEvent]:
             "content": result_content,
         }
     )
+
+    if predictive_handler:
+        predictive_handler.apply_pending_updates()
+        if flow.current_state:
+            events.append(StateSnapshotEvent(snapshot=flow.current_state))
 
     # Mirror _emit_tool_result cleanup so MCP results behave consistently
     flow.tool_call_id = None
@@ -552,7 +557,7 @@ def _emit_content(
     if content_type == "mcp_server_tool_call":
         return _emit_mcp_tool_call(content, flow)
     if content_type == "mcp_server_tool_result":
-        return _emit_mcp_tool_result(content, flow)
+        return _emit_mcp_tool_result(content, flow, predictive_handler)
     if content_type == "text_reasoning":
         return _emit_text_reasoning(content)
     logger.debug("Skipping unsupported content type in AG-UI emitter: %s", content_type)

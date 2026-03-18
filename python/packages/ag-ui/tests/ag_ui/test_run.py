@@ -1045,6 +1045,7 @@ class TestEmitMcpToolCall:
         assert flow.pending_tool_calls[0]["id"] == "mcp_call_2"
         assert "mcp_call_2" in flow.tool_calls_by_id
         assert flow.tool_calls_by_id["mcp_call_2"]["function"]["name"] == "get_file"
+        assert flow.tool_calls_by_id["mcp_call_2"]["function"]["arguments"] == '{"path": "/tmp/test.txt"}'
 
     def test_no_server_name_uses_tool_name_only(self):
         """Without server_name, display name is just tool_name."""
@@ -1179,6 +1180,27 @@ class TestEmitMcpToolResult:
 
         text_end_events = [e for e in events if isinstance(e, TextMessageEndEvent)]
         assert len(text_end_events) == 0
+
+    def test_predictive_handler_emits_state_snapshot(self):
+        """MCP tool result applies pending updates and emits StateSnapshotEvent when predictive_handler is set."""
+        from unittest.mock import MagicMock
+
+        from ag_ui.core import StateSnapshotEvent
+
+        flow = FlowState()
+        flow.current_state = {"doc": "hello"}
+        content = Content.from_mcp_server_tool_result(
+            call_id="mcp_call_9",
+            output="done",
+        )
+
+        handler = MagicMock()
+        events = _emit_mcp_tool_result(content, flow, predictive_handler=handler)
+
+        handler.apply_pending_updates.assert_called_once()
+        snapshot_events = [e for e in events if isinstance(e, StateSnapshotEvent)]
+        assert len(snapshot_events) == 1
+        assert snapshot_events[0].snapshot == {"doc": "hello"}
 
 
 class TestEmitTextReasoning:

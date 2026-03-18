@@ -433,7 +433,9 @@ def _emit_mcp_tool_call(content: Content, flow: FlowState) -> list[BaseEvent]:
     return events
 
 
-def _emit_mcp_tool_result(content: Content, flow: FlowState, predictive_handler: PredictiveStateHandler | None = None) -> list[BaseEvent]:
+def _emit_mcp_tool_result(
+    content: Content, flow: FlowState, predictive_handler: PredictiveStateHandler | None = None
+) -> list[BaseEvent]:
     """Emit ToolCallResult events for MCP server tool result content.
 
     Maps MCP tool results to the same AG-UI ToolCallEnd + ToolCallResult events

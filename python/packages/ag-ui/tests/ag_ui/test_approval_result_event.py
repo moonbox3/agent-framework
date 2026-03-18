@@ -367,6 +367,7 @@ async def test_approval_resume_zero_updates_emits_tool_result() -> None:
 async def test_resolve_approval_responses_returns_only_approved() -> None:
     """_resolve_approval_responses should return only approved results; rejection results go into messages only."""
     from agent_framework import Message
+
     from agent_framework_ag_ui._agent_run import _resolve_approval_responses
 
     weather_tool = _make_weather_tool()

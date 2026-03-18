@@ -21,6 +21,7 @@ from ag_ui.core import (
     TextMessageStartEvent,
     ToolCallArgsEvent,
     ToolCallEndEvent,
+    ToolCallResultEvent,
     ToolCallStartEvent,
 )
 from agent_framework import (
@@ -391,7 +392,7 @@ async def _resolve_approval_responses(
     run_kwargs: dict[str, Any],
     pending_approvals: dict[str, str] | None = None,
     thread_id: str = "",
-) -> None:
+) -> list[Content]:
     """Execute approved function calls and replace approval content with results.
 
     This modifies the messages list in place, replacing function_approval_response
@@ -407,10 +408,13 @@ async def _resolve_approval_responses(
             When provided, every approval response is validated against this
             registry to prevent bypass, function name spoofing, and replay.
         thread_id: The conversation thread ID used to scope registry keys.
+
+    Returns:
+        List of resolved function_result Content objects (empty if no approvals).
     """
     fcc_todo = _collect_approval_responses(messages)
     if not fcc_todo:
-        return
+        return []
 
     approved_responses = [resp for resp in fcc_todo.values() if resp.approved]
     rejected_responses = [resp for resp in fcc_todo.values() if not resp.approved]
@@ -524,6 +528,8 @@ async def _resolve_approval_responses(
     # placed in user messages. OpenAI requires tool results to be in role="tool" messages.
     # This transformation ensures the message history is valid for the LLM provider.
     _convert_approval_results_to_tool_messages(messages)
+
+    return normalized_results
 
 
 def _convert_approval_results_to_tool_messages(messages: list[Message]) -> None:
@@ -787,7 +793,9 @@ async def run_agent_stream(
     # Resolve approval responses (execute approved tools, replace approvals with results)
     # This must happen before running the agent so it sees the tool results
     tools_for_execution = tools if tools is not None else server_tools
-    await _resolve_approval_responses(messages, tools_for_execution, agent, run_kwargs, pending_approvals, thread_id)
+    resolved_approval_results = await _resolve_approval_responses(
+        messages, tools_for_execution, agent, run_kwargs, pending_approvals, thread_id
+    )
 
     # Defense-in-depth: replace approval payloads in snapshot with actual tool results
     # so CopilotKit does not re-send stale approval content on subsequent turns.
@@ -850,6 +858,18 @@ async def run_agent_stream(
             if state_schema and flow.current_state:
                 yield StateSnapshotEvent(snapshot=flow.current_state)
             run_started_emitted = True
+
+            # Emit TOOL_CALL_RESULT events for tools executed during approval resolution
+            for resolved in resolved_approval_results:
+                if resolved.call_id:
+                    raw = resolved.result if resolved.result is not None else ""
+                    result_str = raw if isinstance(raw, str) else json.dumps(make_json_safe(raw))
+                    yield ToolCallResultEvent(
+                        message_id=generate_event_id(),
+                        tool_call_id=resolved.call_id,
+                        content=result_str,
+                        role="tool",
+                    )
 
         # Feature #4: Detect tool-only messages (no text content)
         # Emit TextMessageStartEvent to create message context for tool calls

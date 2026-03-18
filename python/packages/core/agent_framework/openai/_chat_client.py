@@ -713,9 +713,17 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                     "content": content.result if content.result is not None else "",
                 }
             case "data" | "uri" if content.has_top_level_media_type("image"):
+                image_url_obj: dict[str, Any] = {"url": content.uri}
+                detail = (
+                    content.additional_properties.get("detail")
+                    if hasattr(content, "additional_properties") and content.additional_properties
+                    else None
+                )
+                if detail:
+                    image_url_obj["detail"] = detail
                 return {
                     "type": "image_url",
-                    "image_url": {"url": content.uri},
+                    "image_url": image_url_obj,
                 }
             case "data" | "uri" if content.has_top_level_media_type("audio"):
                 if content.media_type and "wav" in content.media_type:

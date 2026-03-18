@@ -370,6 +370,24 @@ def _handle_step_based_approval(messages: list[Any]) -> list[BaseEvent]:
     return events
 
 
+def _make_approval_tool_result_events(resolved_approval_results: list[Content]) -> list[ToolCallResultEvent]:
+    """Build TOOL_CALL_RESULT events for tools executed during approval resolution."""
+    events: list[ToolCallResultEvent] = []
+    for resolved in resolved_approval_results:
+        if resolved.call_id:
+            raw = resolved.result if resolved.result is not None else ""
+            result_str = raw if isinstance(raw, str) else json.dumps(make_json_safe(raw))
+            events.append(
+                ToolCallResultEvent(
+                    message_id=generate_event_id(),
+                    tool_call_id=resolved.call_id,
+                    content=result_str,
+                    role="tool",
+                )
+            )
+    return events
+
+
 def _evict_oldest_approvals(registry: dict[str, str], max_size: int = 10_000) -> None:
     """Evict the oldest entries from the pending-approvals registry (LRU).
 
@@ -516,17 +534,7 @@ async def _resolve_approval_responses(
             Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed.")
         )
 
-    # Build rejection results (included in message history but not emitted as events)
-    rejection_results: list[Content] = []
-    for rejection in rejected_responses:
-        func_call = rejection.function_call
-        call_id = (func_call.call_id if func_call else None) or rejection.id or ""
-        rejection_results.append(
-            Content.from_function_result(call_id=call_id, result="Error: Tool call invocation was rejected by user.")
-        )
-
-    all_results = approved_results + rejection_results
-    _replace_approval_contents_with_results(messages, fcc_todo, all_results)  # type: ignore
+    _replace_approval_contents_with_results(messages, fcc_todo, approved_results)  # type: ignore
 
     # Post-process: Convert user messages with function_result content to proper tool messages.
     # After _replace_approval_contents_with_results, approved tool calls have their results
@@ -864,17 +872,8 @@ async def run_agent_stream(
                 yield StateSnapshotEvent(snapshot=flow.current_state)
             run_started_emitted = True
 
-            # Emit TOOL_CALL_RESULT events for tools executed during approval resolution
-            for resolved in resolved_approval_results:
-                if resolved.call_id:
-                    raw = resolved.result if resolved.result is not None else ""
-                    result_str = raw if isinstance(raw, str) else json.dumps(make_json_safe(raw))
-                    yield ToolCallResultEvent(
-                        message_id=generate_event_id(),
-                        tool_call_id=resolved.call_id,
-                        content=result_str,
-                        role="tool",
-                    )
+            for event in _make_approval_tool_result_events(resolved_approval_results):
+                yield event
 
         # Feature #4: Detect tool-only messages (no text content)
         # Emit TextMessageStartEvent to create message context for tool calls
@@ -930,17 +929,8 @@ async def run_agent_stream(
         if state_schema and flow.current_state:
             yield StateSnapshotEvent(snapshot=flow.current_state)
 
-        # Emit TOOL_CALL_RESULT events for tools executed during approval resolution
-        for resolved in resolved_approval_results:
-            if resolved.call_id:
-                raw = resolved.result if resolved.result is not None else ""
-                result_str = raw if isinstance(raw, str) else json.dumps(make_json_safe(raw))
-                yield ToolCallResultEvent(
-                    message_id=generate_event_id(),
-                    tool_call_id=resolved.call_id,
-                    content=result_str,
-                    role="tool",
-                )
+        for event in _make_approval_tool_result_events(resolved_approval_results):
+            yield event
     if response_format is not None and all_updates:
         from agent_framework import AgentResponse
         from pydantic import BaseModel

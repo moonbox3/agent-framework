@@ -12,6 +12,12 @@ from typing import Any, cast
 from ag_ui.core import (
     BaseEvent,
     CustomEvent,
+    ReasoningEncryptedValueEvent,
+    ReasoningEndEvent,
+    ReasoningMessageContentEvent,
+    ReasoningMessageEndEvent,
+    ReasoningMessageStartEvent,
+    ReasoningStartEvent,
     RunFinishedEvent,
     StateSnapshotEvent,
     TextMessageContentEvent,
@@ -381,6 +387,147 @@ def _emit_oauth_consent(content: Content) -> list[BaseEvent]:
     )
 
 
+def _emit_mcp_tool_call(content: Content, flow: FlowState) -> list[BaseEvent]:
+    """Emit ToolCall start/args events for MCP server tool call content.
+
+    MCP tool calls arrive as complete items (not streamed deltas), so we emit a
+    ``ToolCallStartEvent`` (and, when arguments are present, a ``ToolCallArgsEvent``)
+    immediately. This maps MCP-specific fields (tool_name, server_name) to the
+    same AG-UI ToolCall* events used by regular function calls, making MCP tool
+    execution visible to AG-UI consumers. Completion/end events are handled
+    separately by ``_emit_mcp_tool_result``.
+    """
+    events: list[BaseEvent] = []
+
+    tool_call_id = content.call_id or generate_event_id()
+    tool_name = content.tool_name or "mcp_tool"
+
+    # Prefix with server name for disambiguation when available
+    display_name = f"{content.server_name}/{tool_name}" if content.server_name else tool_name
+
+    events.append(
+        ToolCallStartEvent(
+            tool_call_id=tool_call_id,
+            tool_call_name=display_name,
+            parent_message_id=flow.message_id,
+        )
+    )
+
+    # Serialize arguments
+    args_str = ""
+    if content.arguments:
+        args_str = (
+            content.arguments if isinstance(content.arguments, str) else json.dumps(make_json_safe(content.arguments))
+        )
+        events.append(ToolCallArgsEvent(tool_call_id=tool_call_id, delta=args_str))
+
+    # Track in flow state for MESSAGES_SNAPSHOT
+    tool_entry = {
+        "id": tool_call_id,
+        "type": "function",
+        "function": {"name": display_name, "arguments": args_str},
+    }
+    flow.pending_tool_calls.append(tool_entry)
+    flow.tool_calls_by_id[tool_call_id] = tool_entry
+
+    return events
+
+
+def _emit_mcp_tool_result(content: Content, flow: FlowState) -> list[BaseEvent]:
+    """Emit ToolCallResult events for MCP server tool result content.
+
+    Maps MCP tool results to the same AG-UI ToolCallEnd + ToolCallResult events
+    used by regular function results.  Uses ``content.output`` (the MCP-specific
+    result field) instead of ``content.result``.
+
+    Mirrors the FlowState cleanup performed by ``_emit_tool_result`` (resetting
+    tool_call_id/tool_call_name, closing any open text message) so MCP results
+    behave consistently with standard tool results.
+    """
+    events: list[BaseEvent] = []
+
+    if not content.call_id:
+        logger.warning("MCP tool result content missing call_id, skipping")
+        return events
+
+    events.append(ToolCallEndEvent(tool_call_id=content.call_id))
+    flow.tool_calls_ended.add(content.call_id)
+
+    raw_output = content.output if content.output is not None else ""
+    result_content = raw_output if isinstance(raw_output, str) else json.dumps(make_json_safe(raw_output))
+    message_id = generate_event_id()
+    events.append(
+        ToolCallResultEvent(
+            message_id=message_id,
+            tool_call_id=content.call_id,
+            content=result_content,
+            role="tool",
+        )
+    )
+
+    flow.tool_results.append(
+        {
+            "id": message_id,
+            "role": "tool",
+            "toolCallId": content.call_id,
+            "content": result_content,
+        }
+    )
+
+    # Mirror _emit_tool_result cleanup so MCP results behave consistently
+    flow.tool_call_id = None
+    flow.tool_call_name = None
+
+    if flow.message_id:
+        logger.debug("Closing text message for MCP tool result: message_id=%s", flow.message_id)
+        events.append(TextMessageEndEvent(message_id=flow.message_id))
+    flow.message_id = None
+    flow.accumulated_text = ""
+
+    return events
+
+
+def _emit_text_reasoning(content: Content) -> list[BaseEvent]:
+    """Emit AG-UI reasoning events for text_reasoning content.
+
+    Uses the protocol-defined reasoning event types so that AG-UI consumers
+    such as CopilotKit can render reasoning natively.
+
+    Only ``content.text`` is used for the visible reasoning message. If
+    ``content.protected_data`` is present it is emitted as a
+    ``ReasoningEncryptedValueEvent`` so that consumers can persist encrypted
+    reasoning for state continuity without conflating it with display text.
+    """
+    text = content.text or ""
+    if not text and content.protected_data is None:
+        return []
+
+    message_id = content.id or generate_event_id()
+
+    events: list[BaseEvent] = [
+        ReasoningStartEvent(message_id=message_id),
+        ReasoningMessageStartEvent(message_id=message_id, role="assistant"),
+    ]
+
+    if text:
+        events.append(ReasoningMessageContentEvent(message_id=message_id, delta=text))
+
+    events.append(ReasoningMessageEndEvent(message_id=message_id))
+
+    if content.protected_data is not None:
+        events.append(
+            ReasoningEncryptedValueEvent(
+                subtype="message",
+                entity_id=message_id,
+                encrypted_value=content.protected_data,
+            )
+        )
+
+    events.append(ReasoningEndEvent(message_id=message_id))
+
+    return events
+
+
 def _emit_content(
     content: Any,
     flow: FlowState,
@@ -402,5 +549,11 @@ def _emit_content(
         return _emit_usage(content)
     if content_type == "oauth_consent_request":
         return _emit_oauth_consent(content)
+    if content_type == "mcp_server_tool_call":
+        return _emit_mcp_tool_call(content, flow)
+    if content_type == "mcp_server_tool_result":
+        return _emit_mcp_tool_result(content, flow)
+    if content_type == "text_reasoning":
+        return _emit_text_reasoning(content)
     logger.debug("Skipping unsupported content type in AG-UI emitter: %s", content_type)
     return []

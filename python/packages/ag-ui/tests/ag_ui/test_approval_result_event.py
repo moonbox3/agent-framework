@@ -435,9 +435,7 @@ async def test_resolve_approval_responses_returns_only_approved() -> None:
         default_options={"tools": [weather_tool, temperature_tool]},
     )
 
-    results = await _resolve_approval_responses(
-        messages, [weather_tool, temperature_tool], agent, {}
-    )
+    results = await _resolve_approval_responses(messages, [weather_tool, temperature_tool], agent, {})
 
     # Return value should only contain approved results
     assert len(results) == 1
@@ -446,9 +444,6 @@ async def test_resolve_approval_responses_returns_only_approved() -> None:
 
     # Rejection result should be written into messages (by _replace_approval_contents_with_results)
     all_contents = [c for msg in messages for c in msg.contents]
-    rejection_results = [
-        c for c in all_contents
-        if c.type == "function_result" and c.call_id == rejected_call_id
-    ]
+    rejection_results = [c for c in all_contents if c.type == "function_result" and c.call_id == rejected_call_id]
     assert len(rejection_results) == 1
     assert "rejected" in str(rejection_results[0].result).lower()

@@ -410,7 +410,10 @@ async def _resolve_approval_responses(
         thread_id: The conversation thread ID used to scope registry keys.
 
     Returns:
-        List of resolved function_result Content objects (empty if no approvals).
+        List of approved function_result Content objects only (empty if no
+        approvals).  Rejection results are written into the message history
+        but are *not* included in the return value because they should not
+        be emitted as TOOL_CALL_RESULT events.
     """
     fcc_todo = _collect_approval_responses(messages)
     if not fcc_todo:
@@ -497,31 +500,33 @@ async def _resolve_approval_responses(
             logger.exception("Failed to execute approved tool calls; injecting error results: %s", e)
             approved_function_results = []
 
-    # Build normalized results for approved responses
-    normalized_results: list[Content] = []
+    # Build results for approved responses (used for TOOL_CALL_RESULT event emission)
+    approved_results: list[Content] = []
     for idx, approval in enumerate(approved_responses):
         if (
             idx < len(approved_function_results)
             and getattr(approved_function_results[idx], "type", None) == "function_result"
         ):
-            normalized_results.append(approved_function_results[idx])
+            approved_results.append(approved_function_results[idx])
             continue
         # Get call_id from function_call if present, otherwise use approval.id
         func_call = approval.function_call
         call_id = (func_call.call_id if func_call else None) or approval.id or ""
-        normalized_results.append(
+        approved_results.append(
             Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed.")
         )
 
-    # Build rejection results
+    # Build rejection results (included in message history but not emitted as events)
+    rejection_results: list[Content] = []
     for rejection in rejected_responses:
         func_call = rejection.function_call
         call_id = (func_call.call_id if func_call else None) or rejection.id or ""
-        normalized_results.append(
+        rejection_results.append(
             Content.from_function_result(call_id=call_id, result="Error: Tool call invocation was rejected by user.")
         )
 
-    _replace_approval_contents_with_results(messages, fcc_todo, normalized_results)  # type: ignore
+    all_results = approved_results + rejection_results
+    _replace_approval_contents_with_results(messages, fcc_todo, all_results)  # type: ignore
 
     # Post-process: Convert user messages with function_result content to proper tool messages.
     # After _replace_approval_contents_with_results, approved tool calls have their results
@@ -529,7 +534,7 @@ async def _resolve_approval_responses(
     # This transformation ensures the message history is valid for the LLM provider.
     _convert_approval_results_to_tool_messages(messages)
 
-    return normalized_results
+    return approved_results
 
 
 def _convert_approval_results_to_tool_messages(messages: list[Message]) -> None:
@@ -925,7 +930,17 @@ async def run_agent_stream(
         if state_schema and flow.current_state:
             yield StateSnapshotEvent(snapshot=flow.current_state)
 
-    # Process structured output if response_format is set
+        # Emit TOOL_CALL_RESULT events for tools executed during approval resolution
+        for resolved in resolved_approval_results:
+            if resolved.call_id:
+                raw = resolved.result if resolved.result is not None else ""
+                result_str = raw if isinstance(raw, str) else json.dumps(make_json_safe(raw))
+                yield ToolCallResultEvent(
+                    message_id=generate_event_id(),
+                    tool_call_id=resolved.call_id,
+                    content=result_str,
+                    role="tool",
+                )
     if response_format is not None and all_updates:
         from agent_framework import AgentResponse
         from pydantic import BaseModel

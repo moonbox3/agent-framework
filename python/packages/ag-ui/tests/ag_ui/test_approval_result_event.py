@@ -7,11 +7,25 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent_framework import AgentResponseUpdate, Content
+from agent_framework import AgentResponseUpdate, Content, FunctionTool
 from conftest import StubAgent
 
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._agent_run import run_agent_stream
+
+
+def _make_weather_tool() -> FunctionTool:
+    """Create a real executable weather tool with approval_mode='always_require'."""
+
+    def get_weather(city: str) -> str:
+        return f"Sunny in {city}"
+
+    return FunctionTool(
+        name="get_weather",
+        description="Get the weather for a city",
+        func=get_weather,
+        approval_mode="always_require",
+    )
 
 
 async def test_approval_resume_emits_tool_call_result() -> None:
@@ -23,9 +37,11 @@ async def test_approval_resume_emits_tool_call_result() -> None:
     """
     tool_name = "get_weather"
     call_id = "call_abc123"
+    weather_tool = _make_weather_tool()
 
     agent = StubAgent(
-        updates=[AgentResponseUpdate(contents=[Content.from_text(text="The weather is sunny.")], role="assistant")]
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="The weather is sunny.")], role="assistant")],
+        default_options={"tools": [weather_tool]},
     )
     config = AgentConfig()
 
@@ -53,21 +69,10 @@ async def test_approval_resume_emits_tool_call_result() -> None:
         },
     ]
 
-    input_data = {
+    input_data: dict[str, Any] = {
         "thread_id": "thread-approval-result",
         "run_id": "run-resume",
         "messages": resume_messages,
-        "tools": [
-            {
-                "name": tool_name,
-                "description": "Get the weather for a city",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
     }
 
     events: list[Any] = []
@@ -91,14 +96,20 @@ async def test_approval_resume_emits_tool_call_result() -> None:
     assert result_event.tool_call_id == call_id, (
         f"Expected TOOL_CALL_RESULT with tool_call_id={call_id}, got tool_call_id={result_event.tool_call_id}"
     )
+    # Verify the result contains the actual tool execution output
+    assert result_event.content == "Sunny in Seattle"
 
 
 async def test_approval_resume_result_has_content() -> None:
     """TOOL_CALL_RESULT event from an approved tool should contain the execution result."""
     tool_name = "get_weather"
     call_id = "call_content_check"
+    weather_tool = _make_weather_tool()
 
-    agent = StubAgent(updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")])
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")],
+        default_options={"tools": [weather_tool]},
+    )
     config = AgentConfig()
 
     resume_messages: list[dict[str, Any]] = [
@@ -124,21 +135,10 @@ async def test_approval_resume_result_has_content() -> None:
         },
     ]
 
-    input_data = {
+    input_data: dict[str, Any] = {
         "thread_id": "thread-result-content",
         "run_id": "run-resume-2",
         "messages": resume_messages,
-        "tools": [
-            {
-                "name": tool_name,
-                "description": "Get the weather for a city",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
     }
 
     events: list[Any] = []
@@ -151,8 +151,8 @@ async def test_approval_resume_result_has_content() -> None:
     result_event = tool_result_events[0]
     assert result_event.tool_call_id == call_id
     assert result_event.role == "tool"
-    # The result content should be a non-empty string (actual content depends on tool execution)
-    assert isinstance(result_event.content, str)
+    # Verify the result contains the actual tool execution output (string returned directly)
+    assert result_event.content == "Sunny in Portland"
 
 
 async def test_no_approval_no_extra_tool_result() -> None:
@@ -160,7 +160,7 @@ async def test_no_approval_no_extra_tool_result() -> None:
     agent = StubAgent(updates=[AgentResponseUpdate(contents=[Content.from_text(text="Hello.")], role="assistant")])
     config = AgentConfig()
 
-    input_data = {
+    input_data: dict[str, Any] = {
         "thread_id": "thread-no-approval",
         "run_id": "run-normal",
         "messages": [{"role": "user", "content": "Hi"}],
@@ -172,3 +172,54 @@ async def test_no_approval_no_extra_tool_result() -> None:
 
     tool_result_events = [e for e in events if getattr(e, "type", None) == "TOOL_CALL_RESULT"]
     assert len(tool_result_events) == 0, f"Unexpected TOOL_CALL_RESULT events: {tool_result_events}"
+
+
+async def test_rejection_does_not_emit_tool_call_result() -> None:
+    """Rejected tool calls should not produce TOOL_CALL_RESULT events."""
+    tool_name = "get_weather"
+    call_id = "call_rejected"
+    weather_tool = _make_weather_tool()
+
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="OK, I won't check.")], role="assistant")],
+        default_options={"tools": [weather_tool]},
+    )
+    config = AgentConfig()
+
+    resume_messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps({"city": "Denver"}),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": json.dumps({"accepted": False}),
+            "toolCallId": call_id,
+        },
+    ]
+
+    input_data: dict[str, Any] = {
+        "thread_id": "thread-rejection",
+        "run_id": "run-rejected",
+        "messages": resume_messages,
+    }
+
+    events: list[Any] = []
+    async for event in run_agent_stream(input_data, agent, config):
+        events.append(event)
+
+    tool_result_events = [e for e in events if getattr(e, "type", None) == "TOOL_CALL_RESULT"]
+    assert len(tool_result_events) == 0, (
+        f"Expected no TOOL_CALL_RESULT for rejected tool, got {len(tool_result_events)}"
+    )

@@ -1025,7 +1025,7 @@ class TestEmitMcpToolCall:
         assert len(events) == 2
         assert events[0].type == "TOOL_CALL_START"
         assert events[0].tool_call_id == "mcp_call_1"
-        assert events[0].tool_call_name == "brave/search"
+        assert events[0].tool_call_name == "search"
         assert events[1].type == "TOOL_CALL_ARGS"
         assert events[1].tool_call_id == "mcp_call_1"
         assert "weather" in events[1].delta
@@ -1082,6 +1082,17 @@ class TestEmitMcpToolCall:
         assert len(events) >= 1
         assert events[0].tool_call_id is not None
         assert events[0].tool_call_id != ""
+        assert events[0].tool_call_name == "test_tool"
+
+    def test_missing_tool_name_falls_back_to_mcp_tool(self):
+        """When tool_name is None, the fallback 'mcp_tool' is used."""
+        flow = FlowState()
+        content = Content(type="mcp_server_tool_call")
+
+        events = _emit_mcp_tool_call(content, flow)
+
+        assert len(events) >= 1
+        assert events[0].tool_call_name == "mcp_tool"
 
 
 class TestEmitMcpToolResult:
@@ -1141,6 +1152,17 @@ class TestEmitMcpToolResult:
         result_event = events[1]
         assert isinstance(result_event.content, str)
         assert '"key": "value"' in result_event.content
+
+    def test_output_none_falls_back_to_empty_string(self):
+        """When output is None (default), the result content is an empty string."""
+        flow = FlowState()
+        content = Content(type="mcp_server_tool_result", call_id="mcp_call_none")
+
+        events = _emit_mcp_tool_result(content, flow)
+
+        assert len(events) == 2
+        assert events[1].type == "TOOL_CALL_RESULT"
+        assert events[1].content == ""
 
     def test_resets_flow_state_like_emit_tool_result(self):
         """MCP tool result performs same FlowState cleanup as _emit_tool_result."""
@@ -1299,7 +1321,7 @@ class TestEmitContentMcpRouting:
 
         assert len(events) >= 1
         assert events[0].type == "TOOL_CALL_START"
-        assert events[0].tool_call_name == "test_server/test_tool"
+        assert events[0].tool_call_name == "test_tool"
 
     def test_routes_mcp_server_tool_result(self):
         """_emit_content dispatches mcp_server_tool_result to _emit_mcp_tool_result."""

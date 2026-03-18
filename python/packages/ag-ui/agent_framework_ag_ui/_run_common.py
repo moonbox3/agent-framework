@@ -230,27 +230,28 @@ def _emit_tool_call(
     return events
 
 
-def _emit_tool_result(
-    content: Content,
+def _emit_tool_result_common(
+    call_id: str,
+    raw_result: Any,
     flow: FlowState,
     predictive_handler: PredictiveStateHandler | None = None,
 ) -> list[BaseEvent]:
-    """Emit ToolCallResult events for function_result content."""
+    """Shared helper for emitting ToolCallEnd + ToolCallResult events and performing FlowState cleanup.
+
+    Both ``_emit_tool_result`` (standard function results) and ``_emit_mcp_tool_result``
+    (MCP server tool results) delegate to this function.
+    """
     events: list[BaseEvent] = []
 
-    if not content.call_id:
-        return events
+    events.append(ToolCallEndEvent(tool_call_id=call_id))
+    flow.tool_calls_ended.add(call_id)
 
-    events.append(ToolCallEndEvent(tool_call_id=content.call_id))
-    flow.tool_calls_ended.add(content.call_id)
-
-    raw_result = content.result if content.result is not None else ""
     result_content = raw_result if isinstance(raw_result, str) else json.dumps(make_json_safe(raw_result))
     message_id = generate_event_id()
     events.append(
         ToolCallResultEvent(
             message_id=message_id,
-            tool_call_id=content.call_id,
+            tool_call_id=call_id,
             content=result_content,
             role="tool",
         )
@@ -260,7 +261,7 @@ def _emit_tool_result(
         {
             "id": message_id,
             "role": "tool",
-            "toolCallId": content.call_id,
+            "toolCallId": call_id,
             "content": result_content,
         }
     )
@@ -274,12 +275,24 @@ def _emit_tool_result(
     flow.tool_call_name = None
 
     if flow.message_id:
-        logger.debug("Closing text message (issue #3568 fix): message_id=%s", flow.message_id)
+        logger.debug("Closing text message: message_id=%s", flow.message_id)
         events.append(TextMessageEndEvent(message_id=flow.message_id))
     flow.message_id = None
     flow.accumulated_text = ""
 
     return events
+
+
+def _emit_tool_result(
+    content: Content,
+    flow: FlowState,
+    predictive_handler: PredictiveStateHandler | None = None,
+) -> list[BaseEvent]:
+    """Emit ToolCallResult events for function_result content."""
+    if not content.call_id:
+        return []
+    raw_result = content.result if content.result is not None else ""
+    return _emit_tool_result_common(content.call_id, raw_result, flow, predictive_handler)
 
 
 def _emit_approval_request(
@@ -402,8 +415,7 @@ def _emit_mcp_tool_call(content: Content, flow: FlowState) -> list[BaseEvent]:
     tool_call_id = content.call_id or generate_event_id()
     tool_name = content.tool_name or "mcp_tool"
 
-    # Prefix with server name for disambiguation when available
-    display_name = f"{content.server_name}/{tool_name}" if content.server_name else tool_name
+    display_name = tool_name
 
     events.append(
         ToolCallStartEvent(
@@ -438,60 +450,14 @@ def _emit_mcp_tool_result(
 ) -> list[BaseEvent]:
     """Emit ToolCallResult events for MCP server tool result content.
 
-    Maps MCP tool results to the same AG-UI ToolCallEnd + ToolCallResult events
-    used by regular function results.  Uses ``content.output`` (the MCP-specific
-    result field) instead of ``content.result``.
-
-    Mirrors the FlowState cleanup performed by ``_emit_tool_result`` (resetting
-    tool_call_id/tool_call_name, closing any open text message) so MCP results
-    behave consistently with standard tool results.
+    Delegates to the shared _emit_tool_result_common helper using content.output
+    (the MCP-specific result field) instead of content.result.
     """
-    events: list[BaseEvent] = []
-
     if not content.call_id:
         logger.warning("MCP tool result content missing call_id, skipping")
-        return events
-
-    events.append(ToolCallEndEvent(tool_call_id=content.call_id))
-    flow.tool_calls_ended.add(content.call_id)
-
+        return []
     raw_output = content.output if content.output is not None else ""
-    result_content = raw_output if isinstance(raw_output, str) else json.dumps(make_json_safe(raw_output))
-    message_id = generate_event_id()
-    events.append(
-        ToolCallResultEvent(
-            message_id=message_id,
-            tool_call_id=content.call_id,
-            content=result_content,
-            role="tool",
-        )
-    )
-
-    flow.tool_results.append(
-        {
-            "id": message_id,
-            "role": "tool",
-            "toolCallId": content.call_id,
-            "content": result_content,
-        }
-    )
-
-    if predictive_handler:
-        predictive_handler.apply_pending_updates()
-        if flow.current_state:
-            events.append(StateSnapshotEvent(snapshot=flow.current_state))
-
-    # Mirror _emit_tool_result cleanup so MCP results behave consistently
-    flow.tool_call_id = None
-    flow.tool_call_name = None
-
-    if flow.message_id:
-        logger.debug("Closing text message for MCP tool result: message_id=%s", flow.message_id)
-        events.append(TextMessageEndEvent(message_id=flow.message_id))
-    flow.message_id = None
-    flow.accumulated_text = ""
-
-    return events
+    return _emit_tool_result_common(content.call_id, raw_output, flow, predictive_handler)
 
 
 def _emit_text_reasoning(content: Content) -> list[BaseEvent]:

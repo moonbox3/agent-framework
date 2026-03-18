@@ -260,7 +260,7 @@ def test_mcp_tool_call_sse_round_trip() -> None:
 
     # Verify MCP tool call details survive SSE encoding
     start = stream.first("TOOL_CALL_START")
-    assert start.tool_call_name == "brave/search"
+    assert start.tool_call_name == "search"
     assert start.tool_call_id == "mcp-1"
 
     # Verify the result came through

@@ -515,18 +515,31 @@ def test_prepare_content_for_openai_image_url_detail(
     assert result["image_url"]["url"] == "https://example.com/image.png"
     assert "detail" not in result["image_url"]
 
-    # Test image with invalid detail value should not include it
-    image_invalid_detail = Content.from_uri(
+    # Test image with a future/unknown string detail value should pass it through
+    image_future_detail = Content.from_uri(
         uri="https://example.com/image.png",
         media_type="image/png",
-        additional_properties={"detail": "invalid_value"},
+        additional_properties={"detail": "ultra"},
     )
 
-    result = client._prepare_content_for_openai(image_invalid_detail)  # type: ignore
+    result = client._prepare_content_for_openai(image_future_detail)  # type: ignore
 
     assert result["type"] == "image_url"
     assert result["image_url"]["url"] == "https://example.com/image.png"
-    assert "detail" not in result["image_url"]
+    assert result["image_url"]["detail"] == "ultra"
+
+    # Test image with data URI should include detail
+    image_data_uri = Content.from_uri(
+        uri="data:image/png;base64,iVBORw0KGgo",
+        media_type="image/png",
+        additional_properties={"detail": "high"},
+    )
+
+    result = client._prepare_content_for_openai(image_data_uri)  # type: ignore
+
+    assert result["type"] == "image_url"
+    assert result["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgo"
+    assert result["image_url"]["detail"] == "high"
 
     # Test image with non-string detail value should not include it
     image_non_string_detail = Content.from_uri(

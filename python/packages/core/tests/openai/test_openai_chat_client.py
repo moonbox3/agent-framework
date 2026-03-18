@@ -515,6 +515,32 @@ def test_prepare_content_for_openai_image_url_detail(
     assert result["image_url"]["url"] == "https://example.com/image.png"
     assert "detail" not in result["image_url"]
 
+    # Test image with invalid detail value should not include it
+    image_invalid_detail = Content.from_uri(
+        uri="https://example.com/image.png",
+        media_type="image/png",
+        additional_properties={"detail": "invalid_value"},
+    )
+
+    result = client._prepare_content_for_openai(image_invalid_detail)  # type: ignore
+
+    assert result["type"] == "image_url"
+    assert result["image_url"]["url"] == "https://example.com/image.png"
+    assert "detail" not in result["image_url"]
+
+    # Test image with non-string detail value should not include it
+    image_non_string_detail = Content.from_uri(
+        uri="https://example.com/image.png",
+        media_type="image/png",
+        additional_properties={"detail": 123},
+    )
+
+    result = client._prepare_content_for_openai(image_non_string_detail)  # type: ignore
+
+    assert result["type"] == "image_url"
+    assert result["image_url"]["url"] == "https://example.com/image.png"
+    assert "detail" not in result["image_url"]
+
 
 def test_prepare_content_for_openai_document_file_mapping(
     openai_unit_test_env: dict[str, str],

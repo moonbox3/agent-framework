@@ -715,7 +715,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             case "data" | "uri" if content.has_top_level_media_type("image"):
                 image_url_obj: dict[str, Any] = {"url": content.uri}
                 detail = content.additional_properties.get("detail")
-                if detail is not None:
+                if detail in ("low", "high", "auto"):
                     image_url_obj["detail"] = detail
                 return {
                     "type": "image_url",

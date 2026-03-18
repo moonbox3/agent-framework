@@ -89,8 +89,7 @@ async def test_approval_resume_emits_tool_call_result() -> None:
 
     result_event = tool_result_events[0]
     assert result_event.tool_call_id == call_id, (
-        f"Expected TOOL_CALL_RESULT with tool_call_id={call_id}, "
-        f"got tool_call_id={result_event.tool_call_id}"
+        f"Expected TOOL_CALL_RESULT with tool_call_id={call_id}, got tool_call_id={result_event.tool_call_id}"
     )
 
 
@@ -99,9 +98,7 @@ async def test_approval_resume_result_has_content() -> None:
     tool_name = "get_weather"
     call_id = "call_content_check"
 
-    agent = StubAgent(
-        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
-    )
+    agent = StubAgent(updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")])
     config = AgentConfig()
 
     resume_messages: list[dict[str, Any]] = [
@@ -160,9 +157,7 @@ async def test_approval_resume_result_has_content() -> None:
 
 async def test_no_approval_no_extra_tool_result() -> None:
     """When no approval response is present, no extra TOOL_CALL_RESULT events should be emitted."""
-    agent = StubAgent(
-        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Hello.")], role="assistant")]
-    )
+    agent = StubAgent(updates=[AgentResponseUpdate(contents=[Content.from_text(text="Hello.")], role="assistant")])
     config = AgentConfig()
 
     input_data = {

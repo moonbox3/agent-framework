@@ -27,6 +27,7 @@ jobs:
     name: "Ping stale issues and PRs"
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
       pull-requests: write
     steps:
@@ -37,12 +38,12 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: pip install PyGithub
+        run: pip install PyGithub==2.6.0
 
       - name: Run stale issue/PR ping
         run: python .github/scripts/stale_issue_pr_ping.py
         env:
           GITHUB_TOKEN: ${{ secrets.GH_ACTIONS_PR_WRITE }}
-          TEAM_NAME: ${{ secrets.DEVELOPER_TEAM }}
-          DAYS_THRESHOLD: ${{ inputs.days_threshold || '4' }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          TEAM_SLUG: ${{ secrets.DEVELOPER_TEAM }}
+          DAYS_THRESHOLD: ${{ github.event.inputs.days_threshold || '4' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}

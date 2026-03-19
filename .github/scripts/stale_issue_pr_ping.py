@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from github import Auth, Github
+from github import Auth, Github, GithubException
 from github.Issue import Issue
 from github.IssueComment import IssueComment
 
@@ -31,26 +31,36 @@ def get_team_members(g: Github, org: str, team_slug: str) -> set[str]:
         org_obj = g.get_organization(org)
         team = org_obj.get_team_by_slug(team_slug)
         return {m.login for m in team.get_members()}
+    except GithubException as exc:
+        if exc.status in (403, 404):
+            print(
+                f"ERROR: Failed to fetch team members for {org}/{team_slug} "
+                f"(HTTP {exc.status}). Check that the token has the 'read:org' "
+                f"scope and that the team slug '{team_slug}' is correct."
+            )
+        else:
+            print(f"ERROR: Failed to fetch team members for {org}/{team_slug}: {exc}")
+        sys.exit(1)
     except Exception as exc:
         print(f"ERROR: Failed to fetch team members for {org}/{team_slug}: {exc}")
         sys.exit(1)
 
 
 def find_last_team_comment(
-    issue: Issue, team_members: set[str]
+    comments: list[IssueComment], team_members: set[str]
 ) -> IssueComment | None:
     """Return the most recent comment from a team member, or None."""
-    comments = list(issue.get_comments())
     for comment in reversed(comments):
         if comment.user and comment.user.login in team_members:
             return comment
     return None
 
 
-def author_replied_after(issue: Issue, after: datetime) -> bool:
+def author_replied_after(
+    comments: list[IssueComment], author: str, after: datetime
+) -> bool:
     """Check if the issue author commented after the given timestamp."""
-    author = issue.user.login
-    for comment in issue.get_comments():
+    for comment in comments:
         if (
             comment.user
             and comment.user.login == author
@@ -81,17 +91,20 @@ def should_ping(
     if issue.comments == 0:
         return False
 
+    # Fetch comments once for both lookups
+    comments = list(issue.get_comments())
+
     # Find last team member comment
-    last_team_comment = find_last_team_comment(issue, team_members)
+    last_team_comment = find_last_team_comment(comments, team_members)
     if last_team_comment is None:
         return False
 
     # Skip if author replied after the last team comment
-    if author_replied_after(issue, last_team_comment.created_at):
+    if author_replied_after(comments, author, last_team_comment.created_at):
         return False
 
     # Check if enough days have passed
-    days_since = (now - last_team_comment.created_at.replace(tzinfo=timezone.utc)).days
+    days_since = (now - last_team_comment.created_at.astimezone(timezone.utc)).days
     if days_since < days_threshold:
         return False
 
@@ -108,10 +121,16 @@ def ping(issue: Issue, dry_run: bool) -> bool:
         return True
 
     max_retries = 3
+    commented = False
+    labeled = False
     for attempt in range(1, max_retries + 1):
         try:
-            issue.create_comment(PING_COMMENT.format(author=author))
-            issue.add_to_labels(LABEL)
+            if not commented:
+                issue.create_comment(PING_COMMENT.format(author=author))
+                commented = True
+            if not labeled:
+                issue.add_to_labels(LABEL)
+                labeled = True
             print(f"  Pinged {kind} #{issue.number} (@{author})")
             return True
         except Exception as exc:
@@ -135,12 +154,17 @@ def main() -> None:
         print("ERROR: GITHUB_REPOSITORY environment variable is required")
         sys.exit(1)
 
-    team_name = os.environ.get("TEAM_NAME")
-    if not team_name:
-        print("ERROR: TEAM_NAME environment variable is required")
+    team_slug = os.environ.get("TEAM_SLUG")
+    if not team_slug:
+        print("ERROR: TEAM_SLUG environment variable is required")
         sys.exit(1)
 
-    days_threshold = int(os.environ.get("DAYS_THRESHOLD", "4"))
+    days_threshold_raw = os.environ.get("DAYS_THRESHOLD", "4")
+    try:
+        days_threshold = int(days_threshold_raw)
+    except ValueError:
+        print(f"ERROR: DAYS_THRESHOLD must be a numeric value, got '{days_threshold_raw}'")
+        sys.exit(1)
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
 
     org = repository.split("/")[0]
@@ -151,8 +175,8 @@ def main() -> None:
     g = Github(auth=Auth.Token(token))
     repo = g.get_repo(repository)
 
-    print(f"Fetching team members for {org}/{team_name}...")
-    team_members = get_team_members(g, org, team_name)
+    print(f"Fetching team members for {org}/{team_slug}...")
+    team_members = get_team_members(g, org, team_slug)
     print(f"Found {len(team_members)} team members.\n")
 
     now = datetime.now(timezone.utc)

@@ -118,7 +118,7 @@ def should_ping(
 
 
 def ping(issue: Issue, dry_run: bool) -> bool:
-    """Post a reminder comment and add the 'needs-info' label. Returns True on success."""
+    """Post a reminder comment and add the 'requested-info' label. Returns True on success."""
     author = issue.user.login
     kind = "PR" if issue.pull_request else "Issue"
 

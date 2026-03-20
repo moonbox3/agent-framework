@@ -5,7 +5,7 @@
 Team members manually add the 'waiting-for-author' label when they need a
 response from the external author.  If the author hasn't replied within
 DAYS_THRESHOLD days of the last team comment, post a reminder and add the
-'needs-info' label to prevent duplicate pings.
+'requested-info' label to prevent duplicate pings.
 """
 
 from __future__ import annotations

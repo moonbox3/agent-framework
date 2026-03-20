@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent-framework-core**: Aggregate token usage across tool-call loop iterations in `invoke_agent` span ([#4739](https://github.com/microsoft/agent-framework/pull/4739))
 - **agent-framework-core**: Support `detail` field in OpenAI Chat API `image_url` payload ([#4756](https://github.com/microsoft/agent-framework/pull/4756))
 - **agent-framework-anthropic**: [BREAKING] Refactor middleware layering and split Anthropic raw client ([#4746](https://github.com/microsoft/agent-framework/pull/4746))
+- **agent-framework-github-copilot**: Emit tool call events in GitHubCopilotAgent streaming ([4711](https://github.com/microsoft/agent-framework/pull/4711))
 
 ### Fixed
 

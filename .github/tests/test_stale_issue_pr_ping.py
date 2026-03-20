@@ -15,8 +15,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from stale_issue_pr_ping import (
-    LABEL,
+    PINGED_LABEL,
     PING_COMMENT,
+    TRIGGER_LABEL,
     author_replied_after,
     find_last_team_comment,
     get_team_members,
@@ -63,7 +64,10 @@ def _make_issue(
     issue.user = MagicMock()
     issue.user.login = author
     issue.number = number
-    issue.labels = [_make_label(n) for n in (labels or [])]
+    # Default to having the trigger label, since the API query pre-filters.
+    if labels is None:
+        labels = [TRIGGER_LABEL]
+    issue.labels = [_make_label(n) for n in labels]
     issue.comments = comment_count
     issue.pull_request = MagicMock() if pull_request else None
     if comments is not None:
@@ -136,11 +140,11 @@ class TestShouldPing:
         assert should_ping(issue, TEAM, 4, NOW) is True
 
     def test_skip_team_member_author(self):
-        issue = _make_issue(author="alice", comment_count=1)
+        issue = _make_issue(author="alice", labels=[TRIGGER_LABEL], comment_count=1)
         assert should_ping(issue, TEAM, 4, NOW) is False
 
-    def test_skip_already_labeled(self):
-        issue = _make_issue(labels=[LABEL], comment_count=1)
+    def test_skip_already_pinged(self):
+        issue = _make_issue(labels=[TRIGGER_LABEL, PINGED_LABEL], comment_count=1)
         assert should_ping(issue, TEAM, 4, NOW) is False
 
     def test_skip_no_comments(self):
@@ -194,7 +198,7 @@ class TestPing:
         issue = _make_issue()
         assert ping(issue, dry_run=False) is True
         issue.create_comment.assert_called_once()
-        issue.add_to_labels.assert_called_once_with(LABEL)
+        issue.add_to_labels.assert_called_once_with(PINGED_LABEL)
 
     @patch("stale_issue_pr_ping.time.sleep")
     def test_retry_on_failure(self, mock_sleep):

@@ -1,9 +1,11 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Scan open issues and PRs for stale follow-ups from external authors.
+"""Scan open issues and PRs labeled 'waiting-for-author' for stale follow-ups.
 
-If a team member commented and the external author hasn't replied within
-DAYS_THRESHOLD days, post a reminder comment and add the 'needs-info' label.
+Team members manually add the 'waiting-for-author' label when they need a
+response from the external author.  If the author hasn't replied within
+DAYS_THRESHOLD days of the last team comment, post a reminder and add the
+'needs-info' label to prevent duplicate pings.
 """
 
 from __future__ import annotations
@@ -22,7 +24,8 @@ PING_COMMENT = (
     "@{author}, friendly reminder — this issue is waiting on your response. "
     "Please share any updates when you get a chance. (This is an automated message.)"
 )
-LABEL = "needs-info"
+TRIGGER_LABEL = "waiting-for-author"
+PINGED_LABEL = "requested-info"
 
 
 def get_team_members(g: Github, org: str, team_slug: str) -> set[str]:
@@ -76,15 +79,18 @@ def should_ping(
     days_threshold: int,
     now: datetime,
 ) -> bool:
-    """Determine whether this issue/PR should be pinged."""
+    """Determine whether this issue/PR should be pinged.
+
+    Only issues/PRs carrying the 'waiting-for-author' label are candidates.
+    """
     author = issue.user.login
 
     # Skip if author is a team member
     if author in team_members:
         return False
 
-    # Skip if already labeled
-    if any(label.name == LABEL for label in issue.labels):
+    # Skip if already pinged
+    if any(label.name == PINGED_LABEL for label in issue.labels):
         return False
 
     # Skip if no comments at all
@@ -112,7 +118,7 @@ def should_ping(
 
 
 def ping(issue: Issue, dry_run: bool) -> bool:
-    """Post a reminder comment and add the needs-info label. Returns True on success."""
+    """Post a reminder comment and add the 'needs-info' label. Returns True on success."""
     author = issue.user.login
     kind = "PR" if issue.pull_request else "Issue"
 
@@ -129,7 +135,7 @@ def ping(issue: Issue, dry_run: bool) -> bool:
                 issue.create_comment(PING_COMMENT.format(author=author))
                 commented = True
             if not labeled:
-                issue.add_to_labels(LABEL)
+                issue.add_to_labels(PINGED_LABEL)
                 labeled = True
             print(f"  Pinged {kind} #{issue.number} (@{author})")
             return True
@@ -184,9 +190,9 @@ def main() -> None:
     failed = []
     scanned = 0
 
-    print(f"Scanning open issues and PRs (threshold: {days_threshold} days)...\n")
+    print(f"Scanning open issues and PRs labeled '{TRIGGER_LABEL}' (threshold: {days_threshold} days)...\n")
 
-    for issue in repo.get_issues(state="open"):
+    for issue in repo.get_issues(state="open", labels=[TRIGGER_LABEL]):
         scanned += 1
 
         if should_ping(issue, team_members, days_threshold, now):

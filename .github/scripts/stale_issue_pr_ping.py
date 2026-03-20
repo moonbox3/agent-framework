@@ -5,7 +5,7 @@
 Team members manually add the 'waiting-for-author' label when they need a
 response from the external author.  If the author hasn't replied within
 DAYS_THRESHOLD days of the last team comment, post a reminder and add the
-'needs-info' label to prevent duplicate pings.
+'requested-info' label to prevent duplicate pings.
 """
 
 from __future__ import annotations
@@ -85,6 +85,9 @@ def should_ping(
     """
     author = issue.user.login
 
+    # Skip if the trigger label is not present
+    if not any(label.name == TRIGGER_LABEL for label in issue.labels):
+        return False
     # Skip if author is a team member
     if author in team_members:
         return False

@@ -1493,9 +1493,7 @@ class TestReasoningInSnapshot:
         """encryptedValue is set even when it arrives with a later delta."""
         flow = FlowState()
         content1 = Content.from_text_reasoning(id="enc_late", text="part1 ")
-        content2 = Content.from_text_reasoning(
-            id="enc_late", text="part2", protected_data="encrypted-payload"
-        )
+        content2 = Content.from_text_reasoning(id="enc_late", text="part2", protected_data="encrypted-payload")
 
         _emit_text_reasoning(content1, flow)
         _emit_text_reasoning(content2, flow)

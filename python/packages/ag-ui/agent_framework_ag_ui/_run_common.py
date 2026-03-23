@@ -127,6 +127,7 @@ class FlowState:
     tool_calls_ended: set[str] = field(default_factory=set)  # pyright: ignore[reportUnknownVariableType]
     interrupts: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     reasoning_messages: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    accumulated_reasoning: dict[str, str] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
 
     def get_tool_name(self, call_id: str | None) -> str | None:
         """Get tool name by call ID."""
@@ -503,16 +504,35 @@ def _emit_text_reasoning(content: Content, flow: FlowState | None = None) -> lis
 
     events.append(ReasoningEndEvent(message_id=message_id))
 
-    # Persist reasoning into flow state for MESSAGES_SNAPSHOT
+    # Persist reasoning into flow state for MESSAGES_SNAPSHOT.
+    # Accumulate reasoning text per message_id, similar to flow.accumulated_text,
+    # so that incremental deltas build the full reasoning string.
     if flow is not None:
-        reasoning_entry: dict[str, Any] = {
-            "id": message_id,
-            "role": "reasoning",
-            "content": text,
-        }
-        if content.protected_data is not None:
-            reasoning_entry["encrypted_value"] = content.protected_data
-        flow.reasoning_messages.append(reasoning_entry)
+        if text:
+            previous_text = flow.accumulated_reasoning.get(message_id, "")
+            flow.accumulated_reasoning[message_id] = previous_text + text
+        full_text = flow.accumulated_reasoning.get(message_id, text or "")
+
+        # Update existing reasoning entry for this message_id if present; otherwise append a new one.
+        existing_entry: dict[str, Any] | None = None
+        for entry in flow.reasoning_messages:
+            if isinstance(entry, dict) and entry.get("id") == message_id:
+                existing_entry = entry
+                break
+
+        if existing_entry is None:
+            reasoning_entry: dict[str, Any] = {
+                "id": message_id,
+                "role": "reasoning",
+                "content": full_text,
+            }
+            if content.protected_data is not None:
+                reasoning_entry["encryptedValue"] = content.protected_data
+            flow.reasoning_messages.append(reasoning_entry)
+        else:
+            existing_entry["content"] = full_text
+            if content.protected_data is not None:
+                existing_entry["encryptedValue"] = content.protected_data
 
     return events
 

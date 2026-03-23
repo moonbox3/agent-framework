@@ -82,7 +82,7 @@ def normalize_agui_role(raw_role: Any) -> str:
         raw_role: Raw role value from AG-UI message
 
     Returns:
-        Normalized role string (user, assistant, system, or tool)
+        Normalized role string (user, assistant, system, tool, or reasoning)
     """
     if not isinstance(raw_role, str):
         return "user"

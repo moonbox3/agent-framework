@@ -1365,10 +1365,10 @@ class TestReasoningInSnapshot:
         assert flow.reasoning_messages[0]["id"] == "reason_persist"
         assert flow.reasoning_messages[0]["role"] == "reasoning"
         assert flow.reasoning_messages[0]["content"] == "Let me think step by step."
-        assert "encrypted_value" not in flow.reasoning_messages[0]
+        assert "encryptedValue" not in flow.reasoning_messages[0]
 
     def test_reasoning_with_encrypted_value_persisted(self):
-        """Reasoning with protected_data preserves encrypted_value in flow state."""
+        """Reasoning with protected_data preserves encryptedValue in flow state."""
         flow = FlowState()
         content = Content.from_text_reasoning(
             id="reason_enc",
@@ -1379,7 +1379,7 @@ class TestReasoningInSnapshot:
         _emit_text_reasoning(content, flow)
 
         assert len(flow.reasoning_messages) == 1
-        assert flow.reasoning_messages[0]["encrypted_value"] == "encrypted-data-123"
+        assert flow.reasoning_messages[0]["encryptedValue"] == "encrypted-data-123"
 
     def test_snapshot_includes_reasoning(self):
         """_build_messages_snapshot includes reasoning messages from flow state."""
@@ -1397,7 +1397,7 @@ class TestReasoningInSnapshot:
         assert "reasoning" in roles
 
     def test_snapshot_preserves_reasoning_encrypted_value(self):
-        """Snapshot reasoning with encrypted_value is preserved end-to-end."""
+        """Snapshot reasoning with encryptedValue is preserved end-to-end."""
         from agent_framework_ag_ui._agent_run import _build_messages_snapshot
 
         flow = FlowState()
@@ -1422,7 +1422,7 @@ class TestReasoningInSnapshot:
         msg = reasoning_msgs[0]
         if isinstance(msg, dict):
             assert msg["content"] == "visible"
-            assert msg["encrypted_value"] == "secret-data"
+            assert msg["encryptedValue"] == "secret-data"
 
     def test_emit_content_routes_reasoning_with_flow(self):
         """_emit_content passes flow to _emit_text_reasoning for persistence."""
@@ -1460,3 +1460,46 @@ class TestReasoningInSnapshot:
         assert len(snapshot.messages) == 3
         roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in snapshot.messages]
         assert roles == ["user", "assistant", "reasoning"]
+
+    def test_reasoning_accumulates_incremental_deltas(self):
+        """Multiple reasoning deltas with the same id accumulate into one entry."""
+        flow = FlowState()
+        content1 = Content.from_text_reasoning(id="reason_inc", text="First ")
+        content2 = Content.from_text_reasoning(id="reason_inc", text="second ")
+        content3 = Content.from_text_reasoning(id="reason_inc", text="third.")
+
+        _emit_text_reasoning(content1, flow)
+        _emit_text_reasoning(content2, flow)
+        _emit_text_reasoning(content3, flow)
+
+        assert len(flow.reasoning_messages) == 1
+        assert flow.reasoning_messages[0]["id"] == "reason_inc"
+        assert flow.reasoning_messages[0]["content"] == "First second third."
+
+    def test_reasoning_accumulates_distinct_message_ids(self):
+        """Reasoning entries with different ids are stored separately."""
+        flow = FlowState()
+        content_a = Content.from_text_reasoning(id="a", text="alpha")
+        content_b = Content.from_text_reasoning(id="b", text="beta")
+
+        _emit_text_reasoning(content_a, flow)
+        _emit_text_reasoning(content_b, flow)
+
+        assert len(flow.reasoning_messages) == 2
+        assert flow.reasoning_messages[0]["content"] == "alpha"
+        assert flow.reasoning_messages[1]["content"] == "beta"
+
+    def test_reasoning_encrypted_value_updated_on_later_delta(self):
+        """encryptedValue is set even when it arrives with a later delta."""
+        flow = FlowState()
+        content1 = Content.from_text_reasoning(id="enc_late", text="part1 ")
+        content2 = Content.from_text_reasoning(
+            id="enc_late", text="part2", protected_data="encrypted-payload"
+        )
+
+        _emit_text_reasoning(content1, flow)
+        _emit_text_reasoning(content2, flow)
+
+        assert len(flow.reasoning_messages) == 1
+        assert flow.reasoning_messages[0]["content"] == "part1 part2"
+        assert flow.reasoning_messages[0]["encryptedValue"] == "encrypted-payload"

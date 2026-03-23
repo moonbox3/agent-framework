@@ -1024,6 +1024,11 @@ def agui_messages_to_snapshot_format(messages: list[dict[str, Any]]) -> list[dic
             elif "toolCallId" not in normalized_msg:
                 normalized_msg["toolCallId"] = ""
 
+        # Normalize encrypted_value to encryptedValue for reasoning messages
+        if normalized_msg.get("role") == "reasoning" and "encrypted_value" in normalized_msg:
+            normalized_msg["encryptedValue"] = normalized_msg["encrypted_value"]
+            del normalized_msg["encrypted_value"]
+
         result.append(normalized_msg)
 
     return result

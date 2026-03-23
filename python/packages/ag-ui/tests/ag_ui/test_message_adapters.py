@@ -1703,13 +1703,13 @@ class TestReasoningRoundTrip:
         assert reasoning_msgs[0]["content"] == "Thinking about this..."
 
     def test_reasoning_with_encrypted_value_in_snapshot_format(self):
-        """Reasoning with encrypted_value passes through snapshot normalization."""
+        """Reasoning with encryptedValue passes through snapshot normalization."""
         messages_input = [
             {
                 "id": "r1",
                 "role": "reasoning",
                 "content": "visible",
-                "encrypted_value": "secret-data",
+                "encryptedValue": "secret-data",
             },
         ]
 
@@ -1717,7 +1717,24 @@ class TestReasoningRoundTrip:
 
         assert len(result) == 1
         assert result[0]["role"] == "reasoning"
-        assert result[0]["encrypted_value"] == "secret-data"
+        assert result[0]["encryptedValue"] == "secret-data"
+
+    def test_reasoning_encrypted_value_snake_case_normalized(self):
+        """Snake-case encrypted_value is normalized to encryptedValue in snapshot format."""
+        messages_input = [
+            {
+                "id": "r1",
+                "role": "reasoning",
+                "content": "visible",
+                "encrypted_value": "snake-case-data",
+            },
+        ]
+
+        result = agui_messages_to_snapshot_format(messages_input)
+
+        assert len(result) == 1
+        assert result[0]["encryptedValue"] == "snake-case-data"
+        assert "encrypted_value" not in result[0]
 
     def test_multi_turn_with_reasoning_in_prior_snapshot(self):
         """Second turn with reasoning from prior snapshot does not corrupt messages."""

@@ -1065,7 +1065,9 @@ async def run_agent_stream(
 
     # Emit MessagesSnapshotEvent if we have tool calls or results
     # Feature #5: Suppress intermediate snapshots for predictive tools without confirmation
-    should_emit_snapshot = flow.pending_tool_calls or flow.tool_results or flow.accumulated_text or flow.reasoning_messages
+    should_emit_snapshot = (
+        flow.pending_tool_calls or flow.tool_results or flow.accumulated_text or flow.reasoning_messages
+    )
     if should_emit_snapshot:
         # Check if we should suppress for predictive tool
         last_tool_name = None

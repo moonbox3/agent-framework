@@ -1393,10 +1393,7 @@ class TestReasoningInSnapshot:
 
         snapshot = _build_messages_snapshot(flow, [])
 
-        roles = [
-            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-            for m in snapshot.messages
-        ]
+        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in snapshot.messages]
         assert "reasoning" in roles
 
     def test_snapshot_preserves_reasoning_encrypted_value(self):
@@ -1417,7 +1414,8 @@ class TestReasoningInSnapshot:
         snapshot = _build_messages_snapshot(flow, [])
 
         reasoning_msgs = [
-            m for m in snapshot.messages
+            m
+            for m in snapshot.messages
             if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "reasoning"
         ]
         assert len(reasoning_msgs) == 1
@@ -1460,8 +1458,5 @@ class TestReasoningInSnapshot:
 
         # user -> assistant text -> reasoning
         assert len(snapshot.messages) == 3
-        roles = [
-            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-            for m in snapshot.messages
-        ]
+        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in snapshot.messages]
         assert roles == ["user", "assistant", "reasoning"]

@@ -27,7 +27,7 @@ FRAMEWORK_TO_AGUI_ROLE: dict[str, str] = {
     "system": "system",
 }
 
-ALLOWED_AGUI_ROLES: set[str] = {"user", "assistant", "system", "tool"}
+ALLOWED_AGUI_ROLES: set[str] = {"user", "assistant", "system", "tool", "reasoning"}
 
 
 def generate_event_id() -> str:

@@ -126,6 +126,7 @@ class FlowState:
     tool_results: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     tool_calls_ended: set[str] = field(default_factory=set)  # pyright: ignore[reportUnknownVariableType]
     interrupts: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    reasoning_messages: list[dict[str, Any]] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
     def get_tool_name(self, call_id: str | None) -> str | None:
         """Get tool name by call ID."""
@@ -460,7 +461,7 @@ def _emit_mcp_tool_result(
     return _emit_tool_result_common(content.call_id, raw_output, flow, predictive_handler)
 
 
-def _emit_text_reasoning(content: Content) -> list[BaseEvent]:
+def _emit_text_reasoning(content: Content, flow: FlowState | None = None) -> list[BaseEvent]:
     """Emit AG-UI reasoning events for text_reasoning content.
 
     Uses the protocol-defined reasoning event types so that AG-UI consumers
@@ -470,6 +471,10 @@ def _emit_text_reasoning(content: Content) -> list[BaseEvent]:
     ``content.protected_data`` is present it is emitted as a
     ``ReasoningEncryptedValueEvent`` so that consumers can persist encrypted
     reasoning for state continuity without conflating it with display text.
+
+    When *flow* is provided the reasoning message is persisted into
+    ``flow.reasoning_messages`` so that ``_build_messages_snapshot`` can
+    include it in the final ``MESSAGES_SNAPSHOT``.
     """
     text = content.text or ""
     if not text and content.protected_data is None:
@@ -497,6 +502,17 @@ def _emit_text_reasoning(content: Content) -> list[BaseEvent]:
         )
 
     events.append(ReasoningEndEvent(message_id=message_id))
+
+    # Persist reasoning into flow state for MESSAGES_SNAPSHOT
+    if flow is not None:
+        reasoning_entry: dict[str, Any] = {
+            "id": message_id,
+            "role": "reasoning",
+            "content": text,
+        }
+        if content.protected_data is not None:
+            reasoning_entry["encrypted_value"] = content.protected_data
+        flow.reasoning_messages.append(reasoning_entry)
 
     return events
 
@@ -527,6 +543,6 @@ def _emit_content(
     if content_type == "mcp_server_tool_result":
         return _emit_mcp_tool_result(content, flow, predictive_handler)
     if content_type == "text_reasoning":
-        return _emit_text_reasoning(content)
+        return _emit_text_reasoning(content, flow)
     logger.debug("Skipping unsupported content type in AG-UI emitter: %s", content_type)
     return []

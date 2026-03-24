@@ -126,17 +126,17 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
         if event.type == "request_info" and isinstance(event.data, Content):
             # We are only expecting tool approval requests in this sample
             requests[event.request_id] = event.data
-            if event.data.type == "function_approval_request":
-                print(f"\nApproval requested for tool: {event.data.function_call.name}")  # type: ignore
-                print(f"Arguments: {event.data.function_call.arguments}")  # type: ignore
+            if event.data.type == "function_approval_request" and event.data.function_call is not None:
+                print(f"\nApproval requested for tool: {event.data.function_call.name}")
+                print(f"Arguments: {event.data.function_call.arguments}")
         elif event.type == "output":
             _print_output(event)
 
     responses: dict[str, Content] = {}
     if requests:
         for request_id, request in requests.items():
-            if request.type == "function_approval_request":
-                print(f"\nSimulating human approval for: {request.function_call.name}")  # type: ignore
+            if request.type == "function_approval_request" and request.function_call is not None:
+                print(f"\nSimulating human approval for: {request.function_call.name}")
                 # Create approval response
                 responses[request_id] = request.to_function_approval_response(approved=True)
 

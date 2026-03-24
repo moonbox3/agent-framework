@@ -218,6 +218,7 @@ from ._workflows._functional import (
     FunctionalWorkflowAgent,
     RunContext,
     StepWrapper,
+    get_run_context,
     step,
     workflow,
 )
@@ -436,6 +437,7 @@ __all__ = [
     "evaluator",
     "executor",
     "function_middleware",
+    "get_run_context",
     "handler",
     "included_messages",
     "included_token_count",

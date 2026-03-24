@@ -11,13 +11,17 @@ positional argument.  If the function needs HITL (``request_info``), custom
 events, or key/value state, add a :class:`RunContext` parameter — otherwise it
 can be omitted.  Inside the workflow, plain ``async`` calls run normally.
 Optionally, ``@step``-decorated functions gain caching, per-step checkpointing,
-and event emission.
+and event emission.  ``@step`` functions may also declare a ``RunContext``
+parameter to access HITL and state APIs directly.
 
 Key public symbols:
 
 * :func:`workflow` / :class:`FunctionalWorkflow` — decorator and runtime.
 * :func:`step` / :class:`StepWrapper` — optional step decorator.
-* :class:`RunContext` — execution context injected into workflow functions.
+* :class:`RunContext` — execution context injected into workflow and step
+  functions.
+* :func:`get_run_context` — retrieve the active ``RunContext`` from anywhere
+  inside a running workflow.
 * :class:`FunctionalWorkflowAgent` — agent adapter returned by
   :meth:`FunctionalWorkflow.as_agent`.
 """
@@ -56,6 +60,16 @@ R = TypeVar("R")
 # ContextVar holding the active RunContext during workflow execution.
 # ContextVar is per-asyncio-Task, so concurrent workflows each get their own context.
 _active_run_ctx: ContextVar[RunContext | None] = ContextVar("_active_run_ctx", default=None)
+
+
+def get_run_context() -> RunContext | None:
+    """Return the active :class:`RunContext`, or ``None`` if not inside a ``@workflow``.
+
+    This is useful inside ``@step`` functions (or any code called from a
+    workflow) that need access to HITL, state, or event APIs without
+    requiring a ``RunContext`` parameter.
+    """
+    return _active_run_ctx.get()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +128,13 @@ class RunContext:
             @workflow
             async def hitl_pipeline(data: str, ctx: RunContext) -> str:
                 feedback = await ctx.request_info({"draft": data}, response_type=str)
+                return feedback
+
+
+            # RunContext is also available inside @step functions:
+            @step
+            async def review_step(doc: str, ctx: RunContext) -> str:
+                feedback = await ctx.request_info({"draft": doc}, response_type=str)
                 return feedback
     """
 
@@ -177,7 +198,9 @@ class RunContext:
                 omitted a random UUID is generated.
 
         Returns:
-            The response value supplied during replay.
+            The response value supplied during replay.  ``None`` is allowed
+            but triggers a warning — prefer a sentinel value when the
+            absence of data is meaningful.
 
         Raises:
             WorkflowInterrupted: Raised internally on initial execution
@@ -266,6 +289,13 @@ class RunContext:
         self._step_cache[key] = value
 
     def _set_responses(self, responses: dict[str, Any]) -> None:
+        for rid, value in responses.items():
+            if value is None:
+                logger.warning(
+                    "Response for request_id=%r is None. If this is intentional, "
+                    "consider using a sentinel value instead.",
+                    rid,
+                )
         self._responses = dict(responses)
 
     def _get_response(self, request_id: str) -> tuple[bool, Any]:
@@ -308,8 +338,14 @@ class StepWrapper(Generic[R]):
 
     * **Caching** — results are cached by ``(step_name, call_index)`` so
       that HITL replay and checkpoint restore skip already-completed work.
+      On cache hit a single ``executor_bypassed`` event is emitted instead
+      of the normal ``executor_invoked`` / ``executor_completed`` pair.
     * **Event emission** — ``executor_invoked`` / ``executor_completed`` /
       ``executor_failed`` events are emitted for observability.
+    * **RunContext injection** — if the step function declares a parameter
+      annotated as :class:`RunContext` (or named ``ctx``), the active
+      context is automatically injected, giving step functions access to
+      HITL, state, and event APIs.
     * **Per-step checkpointing** — a checkpoint is saved after each live
       execution when checkpoint storage is configured.
 
@@ -334,6 +370,18 @@ class StepWrapper(Generic[R]):
         self.name: str = name or func.__name__
         functools.update_wrapper(self, func)
 
+        # Detect RunContext parameter for auto-injection inside workflows
+        self._ctx_param_name: str | None = None
+        try:
+            hints = typing.get_type_hints(func)
+        except Exception:
+            hints = {}
+        for param_name, param in inspect.signature(func).parameters.items():
+            resolved = hints.get(param_name, param.annotation)
+            if resolved is RunContext or param_name == "ctx":
+                self._ctx_param_name = param_name
+                break
+
     async def __call__(self, *args: Any, **kwargs: Any) -> R:
         ctx = _active_run_ctx.get()
         if ctx is None:
@@ -344,15 +392,19 @@ class StepWrapper(Generic[R]):
         found, cached = ctx._get_cached_result(cache_key)
         invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
-            # Replay path: emit events and return cached result
-            await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
-            await ctx.add_event(WorkflowEvent.executor_completed(self.name, cached))
+            # Replay path: emit a single bypass event and return cached result
+            await ctx.add_event(WorkflowEvent.executor_bypassed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
+
+        # Inject RunContext if the step function declares it
+        call_kwargs = dict(kwargs)
+        if self._ctx_param_name is not None and self._ctx_param_name not in call_kwargs:
+            call_kwargs[self._ctx_param_name] = ctx
 
         # Live execution path
         await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
         try:
-            result = await self._func(*args, **kwargs)
+            result = await self._func(*args, **call_kwargs)
         except Exception as exc:
             await ctx.add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
             raise
@@ -386,8 +438,12 @@ def step(
     Supports both bare ``@step`` and parameterized ``@step(name="custom")``
     forms.  Inside a running ``@workflow`` function, calls to a step are
     intercepted for result caching, event emission, and per-step
-    checkpointing.  Outside a workflow the decorated function behaves
-    identically to the original, making it fully testable in isolation.
+    checkpointing.  If the step function declares a :class:`RunContext`
+    parameter (by type annotation or the name ``ctx``), the active context
+    is automatically injected, giving the step access to
+    :meth:`~RunContext.request_info`, state, and event APIs.  Outside a
+    workflow the decorated function behaves identically to the original,
+    making it fully testable in isolation.
 
     The ``@step`` decorator is **optional**.  Plain async functions work
     inside ``@workflow`` without it; use ``@step`` only when you need
@@ -418,6 +474,12 @@ def step(
             @step(name="transform")
             async def transform_data(raw: dict) -> str:
                 return json.dumps(raw)
+
+
+            # Step with HITL — RunContext is auto-injected inside a workflow:
+            @step
+            async def review(doc: str, ctx: RunContext) -> str:
+                return await ctx.request_info({"draft": doc}, response_type=str)
     """
     if func is not None:
         return StepWrapper(func, name=name)

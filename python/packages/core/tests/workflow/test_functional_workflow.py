@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import pytest
@@ -1045,3 +1048,194 @@ class TestCheckpointValidation:
         ctx = _RunContext("test")
         with pytest.raises(ValueError, match="Corrupted step cache"):
             ctx._import_step_cache({"step_name::abc": 42})  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# executor_bypassed event on replay (review comment #3)
+# ---------------------------------------------------------------------------
+
+
+class TestExecutorBypassed:
+    async def test_cached_step_emits_bypassed_event(self):
+        """When a step replays from cache, it should emit executor_bypassed."""
+        storage = InMemoryCheckpointStorage()
+        call_count = 0
+
+        @step
+        async def tracked(x: int) -> int:
+            nonlocal call_count
+            call_count += 1
+            return x + 1
+
+        @workflow(checkpoint_storage=storage)
+        async def wf(x: int) -> int:
+            return await tracked(x)
+
+        # First run — live execution
+        result1 = await wf.run(5)
+        assert result1.get_outputs() == [6]
+        assert call_count == 1
+
+        event_types1 = [e.type for e in result1]
+        assert "executor_invoked" in event_types1
+        assert "executor_completed" in event_types1
+        assert "executor_bypassed" not in event_types1
+
+        # Restore from checkpoint — cached replay
+        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[0].checkpoint_id
+        result2 = await wf.run(checkpoint_id=ckpt_id)
+        assert result2.get_outputs() == [6]
+        assert call_count == 1  # not called again
+
+        event_types2 = [e.type for e in result2]
+        assert "executor_bypassed" in event_types2
+        # Should NOT have the live-execution pair
+        assert "executor_invoked" not in event_types2
+        assert "executor_completed" not in event_types2
+
+    async def test_bypassed_event_carries_cached_data(self):
+        storage = InMemoryCheckpointStorage()
+
+        @step
+        async def compute(x: int) -> int:
+            return x * 10
+
+        @workflow(checkpoint_storage=storage)
+        async def wf(x: int) -> int:
+            return await compute(x)
+
+        await wf.run(3)
+        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[0].checkpoint_id
+
+        result = await wf.run(checkpoint_id=ckpt_id)
+        bypassed = [e for e in result if e.type == "executor_bypassed"]
+        assert len(bypassed) == 1
+        assert bypassed[0].executor_id == "compute"
+        assert bypassed[0].data == 30
+
+
+# ---------------------------------------------------------------------------
+# request_info inside @step (review comment #1)
+# ---------------------------------------------------------------------------
+
+
+class TestRequestInfoInStep:
+    async def test_step_with_run_context_injection(self):
+        """A @step function with a RunContext parameter gets it auto-injected."""
+
+        @step
+        async def review_step(doc: str, ctx: RunContext) -> str:
+            feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="s1")
+            return f"reviewed: {feedback}"
+
+        @workflow
+        async def wf(doc: str) -> str:
+            return await review_step(doc)
+
+        # Phase 1: should interrupt
+        result1 = await wf.run("my doc")
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        assert len(result1.get_request_info_events()) == 1
+        assert result1.get_request_info_events()[0].request_id == "s1"
+
+        # Phase 2: resume
+        result2 = await wf.run(responses={"s1": "LGTM"})
+        assert result2.get_outputs() == ["reviewed: LGTM"]
+
+    async def test_step_works_outside_workflow_with_explicit_ctx(self):
+        """Outside a workflow, the step is transparent — caller provides ctx."""
+
+        @step
+        async def needs_ctx(data: str, ctx: RunContext) -> str:
+            val = ctx.get_state("key", "default")
+            return f"{data}:{val}"
+
+        # Outside a workflow, pass through directly — caller supplies ctx
+        ctx = RunContext("test")
+        ctx.set_state("key", "hello")
+        result = await needs_ctx("data", ctx)
+        assert result == "data:hello"
+
+    async def test_get_run_context_inside_workflow(self):
+        """get_run_context() returns the active RunContext inside a workflow."""
+        from agent_framework import get_run_context
+
+        captured_ctx = None
+
+        @step
+        async def capture_ctx(x: int) -> int:
+            nonlocal captured_ctx
+            captured_ctx = get_run_context()
+            return x
+
+        @workflow
+        async def wf(x: int) -> int:
+            return await capture_ctx(x)
+
+        await wf.run(1)
+        assert captured_ctx is not None
+        assert isinstance(captured_ctx, RunContext)
+
+    async def test_get_run_context_outside_workflow(self):
+        """get_run_context() returns None outside a workflow."""
+        from agent_framework import get_run_context
+
+        assert get_run_context() is None
+
+
+# ---------------------------------------------------------------------------
+# None response handling (review comment #2)
+# ---------------------------------------------------------------------------
+
+
+class TestNoneResponseHandling:
+    async def test_none_response_logs_warning(self):
+        """Providing None as a response value should log a warning."""
+
+        @workflow
+        async def wf(doc: str, ctx: RunContext) -> str:
+            val = await ctx.request_info("need input", response_type=str, request_id="r1")
+            return f"got: {val}"
+
+        # Phase 1
+        await wf.run("start")
+
+        # Phase 2: resume with None response — should warn but still work
+        with caplog_context(logging.getLogger("agent_framework._workflows._functional")) as logs:
+            result = await wf.run(responses={"r1": None})
+
+        assert result.get_outputs() == ["got: None"]
+        assert any("None" in msg and "r1" in msg for msg in logs)
+
+    async def test_none_response_is_returned(self):
+        """None is a valid (if discouraged) response value."""
+
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> str:
+            val = await ctx.request_info("need data", response_type=str, request_id="r1")
+            return f"value={val}"
+
+        await wf.run(1)
+        result = await wf.run(responses={"r1": None})
+        assert result.get_outputs() == ["value=None"]
+
+
+# Helper for capturing log messages
+
+
+@contextmanager
+def caplog_context(target_logger: logging.Logger) -> Iterator[list[str]]:
+    """Capture log messages from a specific logger."""
+    messages: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(self.format(record))
+
+    handler = _Handler()
+    handler.setLevel(logging.WARNING)
+    target_logger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        target_logger.removeHandler(handler)

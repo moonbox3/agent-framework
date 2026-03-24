@@ -126,6 +126,9 @@ async def process_event_stream(stream: AsyncIterable[WorkflowEvent]) -> dict[str
         if event.type == "request_info" and isinstance(event.data, Content):
             # We are only expecting tool approval requests in this sample
             requests[event.request_id] = event.data
+            if event.data.type == "function_approval_request":
+                print(f"\nApproval requested for tool: {event.data.function_call.name}")  # type: ignore
+                print(f"Arguments: {event.data.function_call.arguments}")  # type: ignore
         elif event.type == "output":
             _print_output(event)
 

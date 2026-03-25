@@ -16,7 +16,7 @@ import copy
 import uuid
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ._types import AgentResponse, Message
 
@@ -24,29 +24,54 @@ if TYPE_CHECKING:
     from ._agents import SupportsAgentRun
 
 
-__all__ = [
-    "AgentSession",
-    "BaseContextProvider",
-    "BaseHistoryProvider",
-    "InMemoryHistoryProvider",
-    "SessionContext",
-]
-
-
 # Registry of known types for state deserialization
 _STATE_TYPE_REGISTRY: dict[str, type] = {}
 
 
-def _register_state_type(cls: type) -> None:
-    """Register a type for automatic deserialization in session state."""
+def register_state_type(cls: type) -> None:
+    """Register a type for automatic deserialization in session state.
+
+    Call this for any custom type (including Pydantic models) that you store
+    in ``session.state`` and want to survive ``to_dict()`` / ``from_dict()``
+    round-trips. Types with ``to_dict``/``from_dict`` methods or Pydantic
+    ``BaseModel`` subclasses are handled automatically.
+
+    The type identifier defaults to ``cls.__name__.lower()`` but can be
+    overridden by defining a ``_get_type_identifier`` classmethod.
+
+    Note:
+        Pydantic models are auto-registered on first serialization, but
+        pre-registering ensures deserialization works even if the model
+        hasn't been serialized in this process yet (e.g. cold-start restore).
+
+    Args:
+        cls: The type to register.
+    """
     type_id: str = getattr(cls, "_get_type_identifier", lambda: cls.__name__.lower())()
     _STATE_TYPE_REGISTRY[type_id] = cls
 
 
+# Keep internal alias for framework use
+_register_state_type = register_state_type
+
+
 def _serialize_value(value: Any) -> Any:
-    """Serialize a single value, handling objects with to_dict()."""
+    """Serialize a single value, handling objects with to_dict() and Pydantic models."""
     if hasattr(value, "to_dict") and callable(value.to_dict):
         return value.to_dict()  # pyright: ignore[reportUnknownMemberType]
+    # Pydantic BaseModel support — import lazily to avoid hard dep at module level
+    try:
+        from pydantic import BaseModel
+
+        if isinstance(value, BaseModel):
+            data = value.model_dump()
+            type_id: str = getattr(value.__class__, "_get_type_identifier", lambda: value.__class__.__name__.lower())()
+            data["type"] = type_id
+            # Auto-register for round-trip deserialization
+            _STATE_TYPE_REGISTRY.setdefault(type_id, value.__class__)
+            return data
+    except ImportError:
+        pass
     if isinstance(value, list):
         return [_serialize_value(item) for item in value]  # pyright: ignore[reportUnknownVariableType]
     if isinstance(value, dict):
@@ -59,8 +84,18 @@ def _deserialize_value(value: Any) -> Any:
     if isinstance(value, dict) and "type" in value:
         type_id = str(value["type"])  # pyright: ignore[reportUnknownArgumentType]
         cls = _STATE_TYPE_REGISTRY.get(type_id)
-        if cls is not None and hasattr(cls, "from_dict"):
-            return cls.from_dict(value)  # type: ignore[union-attr]
+        if cls is not None:
+            if hasattr(cls, "from_dict"):
+                return cls.from_dict(value)  # type: ignore[union-attr]
+            # Pydantic BaseModel support
+            try:
+                from pydantic import BaseModel
+
+                if issubclass(cls, BaseModel):
+                    data: dict[str, Any] = {str(k): v for k, v in value.items() if k != "type"}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+                    return cls.model_validate(data)
+            except ImportError:
+                pass
     if isinstance(value, list):
         return [_deserialize_value(item) for item in value]  # pyright: ignore[reportUnknownVariableType]
     if isinstance(value, dict):
@@ -194,8 +229,11 @@ class SessionContext:
             tools: The tools to add.
         """
         for tool in tools:
-            if hasattr(tool, "additional_properties") and isinstance(tool.additional_properties, dict):
-                tool.additional_properties["context_source"] = source_id
+            if hasattr(tool, "additional_properties"):
+                additional_properties_obj = tool.additional_properties
+                if isinstance(additional_properties_obj, dict):
+                    additional_properties = cast(dict[str, Any], additional_properties_obj)
+                    additional_properties["context_source"] = source_id
         self.tools.extend(tools)
 
     def get_messages(
@@ -275,7 +313,8 @@ class BaseContextProvider:
             agent: The agent running this invocation.
             session: The current session.
             context: The invocation context - add messages/instructions/tools here.
-            state: The session's mutable state dict.
+            state: The provider-scoped mutable state dict for this provider.
+                Full cross-provider state remains available at ``session.state``.
         """
 
     async def after_run(
@@ -295,7 +334,8 @@ class BaseContextProvider:
             agent: The agent that ran this invocation.
             session: The current session.
             context: The invocation context with response populated.
-            state: The session's mutable state dict.
+            state: The provider-scoped mutable state dict for this provider.
+                Full cross-provider state remains available at ``session.state``.
         """
 
 
@@ -352,12 +392,16 @@ class BaseHistoryProvider(BaseContextProvider):
         self.store_outputs = store_outputs
 
     @abstractmethod
-    async def get_messages(self, session_id: str | None, **kwargs: Any) -> list[Message]:
+    async def get_messages(
+        self, session_id: str | None, *, state: dict[str, Any] | None = None, **kwargs: Any
+    ) -> list[Message]:
         """Retrieve stored messages for this session.
 
         Args:
             session_id: The session ID to retrieve messages for.
-            **kwargs: Additional arguments (e.g., ``state`` for in-memory providers).
+            state: Optional session state for providers that persist in session state.
+                Not used by all providers.
+            **kwargs: Additional subclass-specific extensibility arguments.
 
         Returns:
             List of stored messages.
@@ -365,13 +409,22 @@ class BaseHistoryProvider(BaseContextProvider):
         ...
 
     @abstractmethod
-    async def save_messages(self, session_id: str | None, messages: Sequence[Message], **kwargs: Any) -> None:
+    async def save_messages(
+        self,
+        session_id: str | None,
+        messages: Sequence[Message],
+        *,
+        state: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Persist messages for this session.
 
         Args:
             session_id: The session ID to store messages for.
             messages: The messages to persist.
-            **kwargs: Additional arguments (e.g., ``state`` for in-memory providers).
+            state: Optional session state for providers that persist in session state.
+                Not used by all providers.
+            **kwargs: Additional subclass-specific extensibility arguments.
         """
         ...
 
@@ -485,16 +538,55 @@ class AgentSession:
 class InMemoryHistoryProvider(BaseHistoryProvider):
     """Built-in history provider that stores messages in session.state.
 
-    Messages are stored in ``state[source_id]["messages"]`` as a list of
+    Messages are stored in ``state["messages"]`` as a list of
     ``Message`` objects. Serialization to/from dicts is handled by
     ``AgentSession.to_dict()``/``from_dict()`` using ``SerializationProtocol``.
 
     This provider holds no instance state — all data lives in the session's
     state dict, passed as a named ``state`` parameter to ``get_messages``/``save_messages``.
 
-    This is the default provider auto-added by the agent when no providers
-    are configured and ``conversation_id`` or ``store=True`` is set.
+    This is the default provider auto-added by the agent for local sessions
+    when no providers are configured and service-side storage is not requested.
     """
+
+    DEFAULT_SOURCE_ID: ClassVar[str] = "in_memory"
+
+    def __init__(
+        self,
+        source_id: str | None = None,
+        *,
+        load_messages: bool = True,
+        store_inputs: bool = True,
+        store_context_messages: bool = False,
+        store_context_from: set[str] | None = None,
+        store_outputs: bool = True,
+        skip_excluded: bool = False,
+    ) -> None:
+        """Initialize the in-memory history provider.
+
+        Args:
+            source_id: Unique identifier for this provider instance.
+                Defaults to DEFAULT_SOURCE_ID when not provided.
+            load_messages: Whether to load messages before invocation.
+            store_inputs: Whether to store input messages.
+            store_context_messages: Whether to store context from other providers.
+            store_context_from: If set, only store context from these source_ids.
+            store_outputs: Whether to store response messages.
+            skip_excluded: When True, ``get_messages`` omits messages whose
+                ``additional_properties["_excluded"]`` is truthy. This is
+                useful when a ``CompactionProvider`` marks messages as excluded
+                in stored history and you want the loaded context to reflect
+                those exclusions. Defaults to False (load all messages).
+        """
+        super().__init__(
+            source_id=source_id or self.DEFAULT_SOURCE_ID,
+            load_messages=load_messages,
+            store_inputs=store_inputs,
+            store_context_messages=store_context_messages,
+            store_context_from=store_context_from,
+            store_outputs=store_outputs,
+        )
+        self.skip_excluded = skip_excluded
 
     async def get_messages(
         self, session_id: str | None, *, state: dict[str, Any] | None = None, **kwargs: Any
@@ -502,8 +594,10 @@ class InMemoryHistoryProvider(BaseHistoryProvider):
         """Retrieve messages from session state."""
         if state is None:
             return []
-        my_state = state.get(self.source_id, {})
-        return list(my_state.get("messages", []))
+        messages = list(state.get("messages", []))
+        if self.skip_excluded:
+            messages = [m for m in messages if not m.additional_properties.get("_excluded", False)]
+        return messages
 
     async def save_messages(
         self,
@@ -516,6 +610,5 @@ class InMemoryHistoryProvider(BaseHistoryProvider):
         """Persist messages to session state."""
         if state is None:
             return
-        my_state = state.setdefault(self.source_id, {})
-        existing = my_state.get("messages", [])
-        my_state["messages"] = [*existing, *messages]
+        existing = state.get("messages", [])
+        state["messages"] = [*existing, *messages]

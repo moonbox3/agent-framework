@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from agent_framework import SupportsAgentRun
 
-from agent_framework_durabletask import DurableAgentThread, DurableAIAgentClient
+from agent_framework_durabletask import DurableAgentSession, DurableAIAgentClient
 from agent_framework_durabletask._constants import DEFAULT_MAX_POLL_RETRIES, DEFAULT_POLL_INTERVAL_SECONDS
 from agent_framework_durabletask._shim import DurableAIAgent
 
@@ -80,22 +80,13 @@ class TestDurableAIAgentClientIntegration:
         assert hasattr(agent, "run")
         assert callable(agent.run)
 
-    def test_client_agent_can_create_threads(self, agent_client: DurableAIAgentClient) -> None:
-        """Verify agent from client can create DurableAgentThread instances."""
+    def test_client_agent_can_create_sessions(self, agent_client: DurableAIAgentClient) -> None:
+        """Verify agent from client can create DurableAgentSession instances."""
         agent = agent_client.get_agent("assistant")
 
-        thread = agent.get_new_thread()
+        session = agent.create_session()
 
-        assert isinstance(thread, DurableAgentThread)
-
-    def test_client_agent_thread_with_parameters(self, agent_client: DurableAIAgentClient) -> None:
-        """Verify agent can create threads with custom parameters."""
-        agent = agent_client.get_agent("assistant")
-
-        thread = agent.get_new_thread(service_thread_id="client-session-123")
-
-        assert isinstance(thread, DurableAgentThread)
-        assert thread.service_thread_id == "client-session-123"
+        assert isinstance(session, DurableAgentSession)
 
 
 class TestDurableAIAgentClientPollingConfiguration:

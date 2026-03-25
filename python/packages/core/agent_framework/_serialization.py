@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import re
 from collections.abc import Mapping, MutableMapping
 from typing import Any, ClassVar, Protocol, TypeVar, runtime_checkable
 
-from ._logging import get_logger
-
-logger = get_logger()
+logger = logging.getLogger("agent_framework")
 
 ClassT = TypeVar("ClassT", bound="SerializationMixin")
 ProtocolT = TypeVar("ProtocolT", bound="SerializationProtocol")
@@ -166,45 +166,22 @@ class SerializationMixin:
     during deserialization via the ``dependencies`` parameter.
 
     Examples:
-        **Nested object serialization with agent thread management:**
+        **Nested object serialization:**
 
         .. code-block:: python
 
             from agent_framework import Message
-            from agent_framework._threads import AgentThreadState, ChatMessageStoreState
+            from agent_framework._sessions import AgentSession
 
 
-            # ChatMessageStoreState handles nested Message serialization
-            store_state = ChatMessageStoreState(
-                messages=[
-                    Message(role="user", text="Hello agent"),
-                    Message(role="assistant", text="Hi! How can I help?"),
-                ]
-            )
+            # AgentSession uses SerializationMixin for state serialization
+            session = AgentSession(session_id="test")
 
-            # Nested serialization: messages are automatically converted to dicts
-            store_dict = store_state.to_dict()
-            # Result: {
-            #     "type": "chat_message_store_state",
-            #     "messages": [
-            #         {"type": "chat_message", "role": {...}, "contents": [...]},
-            #         {"type": "chat_message", "role": {...}, "contents": [...]}
-            #     ]
-            # }
+            # Serialization produces a clean dict representation
+            session_dict = session.to_dict()
 
-            # AgentThreadState contains nested ChatMessageStoreState
-            thread_state = AgentThreadState(chat_message_store_state=store_state)
-
-            # Deep serialization: nested SerializationMixin objects are handled automatically
-            thread_dict = thread_state.to_dict()
-            # The chat_message_store_state and its nested messages are all serialized
-
-            # Reconstruction from nested dictionaries with automatic type conversion
-            # The __init__ method handles MutableMapping -> object conversion:
-            reconstructed = AgentThreadState.from_dict({
-                "chat_message_store_state": {"messages": [{"role": "user", "text": "Hello again"}]}
-            })
-            # chat_message_store_state becomes ChatMessageStoreState instance automatically
+            # Reconstruction from dictionaries
+            restored = AgentSession.from_dict(session_dict)
 
         **Framework tools with exclusion patterns:**
 
@@ -287,6 +264,25 @@ class SerializationMixin:
 
     DEFAULT_EXCLUDE: ClassVar[set[str]] = set()
     INJECTABLE: ClassVar[set[str]] = set()
+    _SHALLOW_COPY_FIELDS: ClassVar[set[str]] = {"raw_representation"}
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> SerializationMixin:
+        """Create a deep copy, preserving ``_SHALLOW_COPY_FIELDS`` by reference.
+
+        Fields listed in ``_SHALLOW_COPY_FIELDS`` may contain LLM SDK objects
+        (e.g., proto/gRPC responses) that are not safe to deep-copy.  They are
+        kept as shallow references in the copy; all other attributes are
+        deep-copied normally.
+        """
+        cls = type(self)
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            if k in cls._SHALLOW_COPY_FIELDS:
+                object.__setattr__(result, k, v)
+            else:
+                object.__setattr__(result, k, copy.deepcopy(v, memo))
+        return result
 
     def to_dict(self, *, exclude: set[str] | None = None, exclude_none: bool = True) -> dict[str, Any]:
         """Convert the instance and any nested objects to a dictionary.
@@ -327,7 +323,7 @@ class SerializationMixin:
                 # Handle lists containing SerializationProtocol objects
                 if isinstance(value, list):
                     value_as_list: list[Any] = []
-                    for item in value:
+                    for item in value:  # pyright: ignore[reportUnknownVariableType]
                         if isinstance(item, SerializationProtocol):
                             value_as_list.append(item.to_dict(exclude=exclude, exclude_none=exclude_none))
                             continue
@@ -335,7 +331,7 @@ class SerializationMixin:
                             value_as_list.append(item)
                             continue
                         logger.debug(
-                            f"Skipping non-serializable item in list attribute '{key}' of type {type(item).__name__}"
+                            f"Skipping non-serializable item in list attribute '{key}' of type {type(item).__name__}"  # pyright: ignore[reportUnknownArgumentType]
                         )
                     result[key] = value_as_list
                     continue
@@ -344,21 +340,22 @@ class SerializationMixin:
                     from datetime import date, datetime, time
 
                     serialized_dict: dict[str, Any] = {}
-                    for k, v in value.items():
+                    for raw_key, v in value.items():  # pyright: ignore[reportUnknownVariableType]
+                        dict_key = str(raw_key)  # pyright: ignore[reportUnknownArgumentType]
                         if isinstance(v, SerializationProtocol):
-                            serialized_dict[k] = v.to_dict(exclude=exclude, exclude_none=exclude_none)
+                            serialized_dict[dict_key] = v.to_dict(exclude=exclude, exclude_none=exclude_none)
                             continue
                         # Convert datetime objects to strings
                         if isinstance(v, (datetime, date, time)):
-                            serialized_dict[k] = str(v)
+                            serialized_dict[dict_key] = str(v)
                             continue
                         # Check if the value is JSON serializable
                         if is_serializable(v):
-                            serialized_dict[k] = v
+                            serialized_dict[dict_key] = v
                             continue
                         logger.debug(
-                            f"Skipping non-serializable value for key '{k}' in dict attribute '{key}' "
-                            f"of type {type(v).__name__}"
+                            f"Skipping non-serializable value for key '{dict_key}' in dict attribute '{key}' "
+                            f"of type {type(v).__name__}"  # pyright: ignore[reportUnknownArgumentType]
                         )
                     result[key] = serialized_dict
                     continue
@@ -529,7 +526,8 @@ class SerializationMixin:
                 # Only apply if the instance matches
                 if kwargs.get(field) == name and isinstance(dep_value, dict):
                     # Apply instance-specific dependencies
-                    for param_name, param_value in dep_value.items():
+                    for raw_param_name, param_value in dep_value.items():  # pyright: ignore[reportUnknownVariableType]
+                        param_name = str(raw_param_name)  # pyright: ignore[reportUnknownArgumentType]
                         if param_name not in cls.INJECTABLE:
                             logger.debug(
                                 f"Dependency '{param_name}' for type '{type_id}' is not in INJECTABLE set. "

@@ -7,17 +7,18 @@ from unittest.mock import Mock
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.semconv_ai import SpanAttributes
 from opentelemetry.trace import StatusCode
 
 from agent_framework import (
     AGENT_FRAMEWORK_USER_AGENT,
+    Agent,
     AgentResponse,
     BaseChatClient,
     ChatResponse,
     ChatResponseUpdate,
     Content,
     Message,
+    RawAgent,
     ResponseStream,
     SupportsAgentRun,
     UsageDetails,
@@ -30,6 +31,7 @@ from agent_framework.observability import (
     ChatTelemetryLayer,
     MessageListTimestampFilter,
     OtelAttr,
+    _capture_messages,
     get_function_span,
 )
 
@@ -47,8 +49,8 @@ def test_role_event_map():
 def test_enum_values():
     """Test that OtelAttr enum has expected values."""
     assert OtelAttr.OPERATION == "gen_ai.operation.name"
-    assert SpanAttributes.LLM_SYSTEM == "gen_ai.system"
-    assert SpanAttributes.LLM_REQUEST_MODEL == "gen_ai.request.model"
+    assert OtelAttr.SYSTEM == "gen_ai.system"
+    assert OtelAttr.REQUEST_MODEL == "gen_ai.request.model"
     assert OtelAttr.CHAT_COMPLETION_OPERATION == "chat"
     assert OtelAttr.TOOL_EXECUTION_OPERATION == "execute_tool"
     assert OtelAttr.AGENT_INVOKE_OPERATION == "invoke_agent"
@@ -212,7 +214,7 @@ async def test_chat_client_observability(mock_chat_client, span_exporter: InMemo
     span = spans[0]
     assert span.name == "chat Test"
     assert span.attributes[OtelAttr.OPERATION.value] == OtelAttr.CHAT_COMPLETION_OPERATION
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "Test"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "Test"
     assert span.attributes[OtelAttr.INPUT_TOKENS] == 10
     assert span.attributes[OtelAttr.OUTPUT_TOKENS] == 20
     if enable_sensitive_data:
@@ -242,7 +244,7 @@ async def test_chat_client_streaming_observability(
     span = spans[0]
     assert span.name == "chat Test"
     assert span.attributes[OtelAttr.OPERATION.value] == OtelAttr.CHAT_COMPLETION_OPERATION
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "Test"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "Test"
     if enable_sensitive_data:
         assert span.attributes[OtelAttr.INPUT_MESSAGES] is not None
         assert span.attributes[OtelAttr.OUTPUT_MESSAGES] is not None
@@ -391,7 +393,7 @@ async def test_chat_client_without_model_id_observability(mock_chat_client, span
 
     assert span.name == "chat unknown"
     assert span.attributes[OtelAttr.OPERATION.value] == OtelAttr.CHAT_COMPLETION_OPERATION
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "unknown"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "unknown"
 
 
 async def test_chat_client_streaming_without_model_id_observability(
@@ -415,7 +417,7 @@ async def test_chat_client_streaming_without_model_id_observability(
     span = spans[0]
     assert span.name == "chat unknown"
     assert span.attributes[OtelAttr.OPERATION.value] == OtelAttr.CHAT_COMPLETION_OPERATION
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "unknown"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "unknown"
 
 
 def test_prepend_user_agent_with_none_value():
@@ -441,19 +443,19 @@ def mock_chat_agent():
             self.description = "Test agent description"
             self.default_options: dict[str, Any] = {"model_id": "TestModel"}
 
-        def run(self, messages=None, *, thread=None, stream=False, **kwargs):
+        def run(self, messages=None, *, session=None, stream=False, **kwargs):
             if stream:
                 return self._run_stream_impl(messages=messages, **kwargs)
             return self._run_impl(messages=messages, **kwargs)
 
-        async def _run_impl(self, messages=None, *, thread=None, **kwargs):
+        async def _run_impl(self, messages=None, *, session=None, **kwargs):
             return AgentResponse(
                 messages=[Message("assistant", ["Agent response"])],
                 usage_details=UsageDetails(input_token_count=15, output_token_count=25),
                 response_id="test_response_id",
             )
 
-        async def _run_stream_impl(self, messages=None, *, thread=None, **kwargs):
+        async def _run_stream_impl(self, messages=None, *, session=None, **kwargs):
             from agent_framework import AgentResponse, AgentResponseUpdate, ResponseStream
 
             async def _stream():
@@ -472,10 +474,10 @@ def mock_chat_agent():
 
 
 @pytest.mark.parametrize("enable_sensitive_data", [True, False], indirect=True)
-async def test_agent_instrumentation_enabled(
+async def test_agent_span_captures_response_telemetry_without_inner_chat_span(
     mock_chat_agent: SupportsAgentRun, span_exporter: InMemorySpanExporter, enable_sensitive_data
 ):
-    """Test that when agent diagnostics are enabled, telemetry is applied."""
+    """Agent spans should retain response telemetry when no inner chat span owns it."""
 
     agent = mock_chat_agent()
 
@@ -490,7 +492,8 @@ async def test_agent_instrumentation_enabled(
     assert span.attributes[OtelAttr.AGENT_ID] == "test_agent_id"
     assert span.attributes[OtelAttr.AGENT_NAME] == "test_agent"
     assert span.attributes[OtelAttr.AGENT_DESCRIPTION] == "Test agent description"
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "TestModel"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "TestModel"
+    assert span.attributes[OtelAttr.RESPONSE_ID] == "test_response_id"
     assert span.attributes[OtelAttr.INPUT_TOKENS] == 15
     assert span.attributes[OtelAttr.OUTPUT_TOKENS] == 25
     if enable_sensitive_data:
@@ -520,7 +523,7 @@ async def test_agent_streaming_response_with_diagnostics_enabled(
     assert span.attributes[OtelAttr.AGENT_ID] == "test_agent_id"
     assert span.attributes[OtelAttr.AGENT_NAME] == "test_agent"
     assert span.attributes[OtelAttr.AGENT_DESCRIPTION] == "Test agent description"
-    assert span.attributes[SpanAttributes.LLM_REQUEST_MODEL] == "TestModel"
+    assert span.attributes[OtelAttr.REQUEST_MODEL] == "TestModel"
     if enable_sensitive_data:
         assert span.attributes.get(OtelAttr.OUTPUT_MESSAGES) is not None  # Streaming, so no usage yet
 
@@ -900,7 +903,7 @@ def test_console_exporters_opt_in_false(monkeypatch):
     monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "false")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
 
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
     assert settings.enable_console_exporters is False
 
 
@@ -910,7 +913,7 @@ def test_console_exporters_opt_in_true(monkeypatch):
 
     monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "true")
 
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
     assert settings.enable_console_exporters is True
 
 
@@ -920,7 +923,7 @@ def test_console_exporters_default_false(monkeypatch):
 
     monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
 
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
     assert settings.enable_console_exporters is False
 
 
@@ -995,7 +998,7 @@ def test_observability_settings_is_setup_initial(monkeypatch):
     from agent_framework.observability import ObservabilitySettings
 
     monkeypatch.delenv("ENABLE_INSTRUMENTATION", raising=False)
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
     assert settings.is_setup is False
 
 
@@ -1031,6 +1034,272 @@ def test_enable_instrumentation_with_sensitive_data(monkeypatch):
     observability.enable_instrumentation(enable_sensitive_data=True)
     assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
     assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is True
+
+
+def test_enable_instrumentation_reads_env_sensitive_data(monkeypatch):
+    """Test enable_instrumentation re-reads ENABLE_SENSITIVE_DATA from os.environ when not explicitly passed."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "false")
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is False
+
+    # Simulate load_dotenv() setting env var after import
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "true")
+
+    observability.enable_instrumentation()
+    assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is True
+
+
+def test_configure_otel_providers_reads_env_sensitive_data(monkeypatch):
+    """Test configure_otel_providers re-reads ENABLE_SENSITIVE_DATA from os.environ when not explicitly passed."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "false")
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is False
+
+    # Simulate load_dotenv() setting env var after import
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "true")
+
+    observability.configure_otel_providers()
+    assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is True
+
+
+def test_configure_otel_providers_reads_env_vs_code_port(monkeypatch):
+    """Test configure_otel_providers re-reads VS_CODE_EXTENSION_PORT from os.environ when not explicitly passed."""
+    import importlib
+    from unittest.mock import patch as mock_patch
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.vs_code_extension_port is None
+
+    # Simulate load_dotenv() setting env var after import
+    monkeypatch.setenv("VS_CODE_EXTENSION_PORT", "4317")
+
+    # Mock _configure to avoid needing optional OTLP gRPC exporter dependency
+    with mock_patch.object(observability.OBSERVABILITY_SETTINGS, "_configure"):
+        observability.configure_otel_providers()
+    assert observability.OBSERVABILITY_SETTINGS.vs_code_extension_port == 4317
+
+
+def test_configure_otel_providers_explicit_param_overrides_env(monkeypatch):
+    """Test that explicit parameters to configure_otel_providers override env vars."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "true")
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    # Explicit False should override the env var True
+    observability.configure_otel_providers(enable_sensitive_data=False)
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is False
+
+
+def test_enable_instrumentation_explicit_param_overrides_env(monkeypatch):
+    """Test that explicit enable_sensitive_data parameter to enable_instrumentation overrides env var."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_SENSITIVE_DATA", "true")
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    # Explicit False should override the env var True
+    observability.enable_instrumentation(enable_sensitive_data=False)
+    assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is False
+
+
+def test_enable_instrumentation_does_not_touch_console_exporters(monkeypatch):
+    """Test enable_instrumentation does not modify enable_console_exporters (it is an exporter concern)."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is False
+
+    # Simulate load_dotenv() setting env var after import
+    monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "true")
+
+    observability.enable_instrumentation()
+    # enable_console_exporters is not managed by enable_instrumentation;
+    # it is only read by configure_otel_providers.
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is False
+
+
+def test_enable_instrumentation_does_not_clobber_console_exporters(monkeypatch):
+    """Test enable_instrumentation does not reset enable_console_exporters set by prior configure call."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    monkeypatch.delenv("ENABLE_SENSITIVE_DATA", raising=False)
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    # Set console exporters via configure_otel_providers
+    observability.configure_otel_providers(enable_console_exporters=True)
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+    # Calling enable_instrumentation should not clobber the value
+    observability.enable_instrumentation()
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+
+def test_enable_instrumentation_with_sensitive_data_does_not_touch_console_exporters(monkeypatch):
+    """Test enable_console_exporters is untouched even when enable_sensitive_data is explicitly passed."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    monkeypatch.delenv("ENABLE_SENSITIVE_DATA", raising=False)
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    # Set console exporters via configure_otel_providers
+    observability.configure_otel_providers(enable_console_exporters=True)
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+    # Calling enable_instrumentation with explicit sensitive_data should not clobber console exporters
+    observability.enable_instrumentation(enable_sensitive_data=True)
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+
+def test_enable_instrumentation_preserves_console_exporters_after_env_removed(monkeypatch):
+    """Test enable_instrumentation preserves enable_console_exporters when env var is removed after reload."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "true")
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+    # Remove the env var after reload
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+
+    # enable_instrumentation should not reset the value
+    observability.enable_instrumentation()
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+
+def test_configure_otel_providers_reads_env_console_exporters(monkeypatch):
+    """Test configure_otel_providers re-reads ENABLE_CONSOLE_EXPORTERS from os.environ when not explicitly passed."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    monkeypatch.delenv("ENABLE_CONSOLE_EXPORTERS", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is False
+
+    # Simulate load_dotenv() setting env var after import
+    monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "true")
+
+    observability.configure_otel_providers()
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is True
+
+
+def test_configure_otel_providers_explicit_console_exporters_overrides_env(monkeypatch):
+    """Test that explicit enable_console_exporters parameter overrides the environment variable."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    monkeypatch.setenv("ENABLE_CONSOLE_EXPORTERS", "true")
+    monkeypatch.delenv("VS_CODE_EXTENSION_PORT", raising=False)
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    # Explicit False should override the env var True
+    observability.configure_otel_providers(enable_console_exporters=False)
+    assert observability.OBSERVABILITY_SETTINGS.enable_console_exporters is False
 
 
 # region Test _to_otel_part content types
@@ -1380,8 +1649,6 @@ def test_get_response_attributes_with_model_id():
     """Test _get_response_attributes includes model_id."""
     from unittest.mock import Mock
 
-    from opentelemetry.semconv_ai import SpanAttributes
-
     from agent_framework.observability import _get_response_attributes
 
     response = Mock()
@@ -1394,7 +1661,7 @@ def test_get_response_attributes_with_model_id():
     attrs = {}
     result = _get_response_attributes(attrs, response)
 
-    assert result[SpanAttributes.LLM_RESPONSE_MODEL] == "gpt-4"
+    assert result[OtelAttr.RESPONSE_MODEL] == "gpt-4"
 
 
 def test_get_response_attributes_with_usage():
@@ -1435,6 +1702,24 @@ def test_get_response_attributes_capture_usage_false():
     assert OtelAttr.OUTPUT_TOKENS not in result
 
 
+def test_get_response_attributes_capture_response_id_false():
+    """Test _get_response_attributes skips response_id when capture_response_id is False."""
+    from unittest.mock import Mock
+
+    from agent_framework.observability import OtelAttr, _get_response_attributes
+
+    response = Mock()
+    response.response_id = "resp_123"
+    response.finish_reason = None
+    response.raw_representation = None
+    response.usage_details = None
+
+    attrs = {}
+    result = _get_response_attributes(attrs, response, capture_response_id=False)
+
+    assert OtelAttr.RESPONSE_ID not in result
+
+
 # region Test _get_exporters_from_env
 
 
@@ -1463,7 +1748,7 @@ def test_observability_settings_configure_not_enabled(monkeypatch):
     from agent_framework.observability import ObservabilitySettings
 
     monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
 
     # Should not raise, should just return early
     settings._configure()
@@ -1484,7 +1769,7 @@ def test_observability_settings_configure_already_setup(monkeypatch):
     ]:
         monkeypatch.delenv(key, raising=False)
 
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
 
     # Manually mark as set up
     settings._executed_setup = True
@@ -1572,12 +1857,12 @@ async def test_agent_observability(span_exporter: InMemorySpanExporter, enable_s
             messages=None,
             *,
             stream: bool = False,
-            thread=None,
+            session=None,
             **kwargs,
         ):
             if stream:
                 return ResponseStream(
-                    self._run_stream(messages=messages, thread=thread),
+                    self._run_stream(messages=messages, session=session),
                     finalizer=lambda x: AgentResponse.from_updates(x),
                 )
             return AgentResponse(messages=[Message("assistant", ["Test response"])])
@@ -1586,7 +1871,7 @@ async def test_agent_observability(span_exporter: InMemorySpanExporter, enable_s
             self,
             messages=None,
             *,
-            thread=None,
+            session=None,
             **kwargs,
         ):
             from agent_framework import AgentResponseUpdate
@@ -1635,7 +1920,7 @@ async def test_agent_observability_with_exception(span_exporter: InMemorySpanExp
         def default_options(self):
             return self._default_options
 
-        async def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):
+        async def run(self, messages=None, *, stream: bool = False, session=None, **kwargs):
             raise RuntimeError("Agent failed")
 
     class FailingAgent(AgentTelemetryLayer, _FailingAgent):
@@ -1685,15 +1970,15 @@ async def test_agent_streaming_observability(span_exporter: InMemorySpanExporter
         def default_options(self):
             return self._default_options
 
-        def run(self, messages=None, *, stream=False, thread=None, **kwargs):
+        def run(self, messages=None, *, stream=False, session=None, **kwargs):
             if stream:
                 return self._run_stream_impl(messages=messages, **kwargs)
             return self._run_impl(messages=messages, **kwargs)
 
-        async def _run_impl(self, messages=None, *, thread=None, **kwargs):
+        async def _run_impl(self, messages=None, *, session=None, **kwargs):
             return AgentResponse(messages=[Message("assistant", ["Test"])])
 
-        def _run_stream_impl(self, messages=None, *, thread=None, **kwargs):
+        def _run_stream_impl(self, messages=None, *, session=None, **kwargs):
             async def _stream():
                 yield AgentResponseUpdate(contents=[Content.from_text("Hello ")], role="assistant")
                 yield AgentResponseUpdate(contents=[Content.from_text("World")], role="assistant")
@@ -1822,15 +2107,15 @@ async def test_agent_streaming_exception(span_exporter: InMemorySpanExporter, en
         def default_options(self):
             return self._default_options
 
-        def run(self, messages=None, *, stream=False, thread=None, **kwargs):
+        def run(self, messages=None, *, stream=False, session=None, **kwargs):
             if stream:
                 return self._run_stream_impl(messages=messages, **kwargs)
             return self._run_impl(messages=messages, **kwargs)
 
-        async def _run_impl(self, messages=None, *, thread=None, **kwargs):
+        async def _run_impl(self, messages=None, *, session=None, **kwargs):
             return AgentResponse(messages=[])
 
-        def _run_stream_impl(self, messages=None, *, thread=None, **kwargs):
+        def _run_stream_impl(self, messages=None, *, session=None, **kwargs):
             async def _stream():
                 yield AgentResponseUpdate(contents=[Content.from_text("Starting")], role="assistant")
                 raise RuntimeError("Stream failed")
@@ -1919,7 +2204,7 @@ async def test_agent_when_disabled(span_exporter: InMemorySpanExporter):
         def default_options(self):
             return self._default_options
 
-        async def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):
+        async def run(self, messages=None, *, stream: bool = False, session=None, **kwargs):
             if stream:
                 return ResponseStream(
                     self._run_stream(messages=messages, **kwargs),
@@ -1927,7 +2212,7 @@ async def test_agent_when_disabled(span_exporter: InMemorySpanExporter):
                 )
             return AgentResponse(messages=[])
 
-        async def _run_stream(self, messages=None, *, thread=None, **kwargs):
+        async def _run_stream(self, messages=None, *, session=None, **kwargs):
             from agent_framework import AgentResponseUpdate
 
             yield AgentResponseUpdate(contents=[Content.from_text("test")], role="assistant")
@@ -1974,15 +2259,15 @@ async def test_agent_streaming_when_disabled(span_exporter: InMemorySpanExporter
         def default_options(self):
             return self._default_options
 
-        def run(self, messages=None, *, stream=False, thread=None, **kwargs):
+        def run(self, messages=None, *, stream=False, session=None, **kwargs):
             if stream:
                 return self._run_stream(messages=messages, **kwargs)
             return self._run(messages=messages, **kwargs)
 
-        async def _run(self, messages=None, *, thread=None, **kwargs):
+        async def _run(self, messages=None, *, session=None, **kwargs):
             return AgentResponse(messages=[])
 
-        async def _run_stream(self, messages=None, *, thread=None, **kwargs):
+        async def _run_stream(self, messages=None, *, session=None, **kwargs):
             yield AgentResponseUpdate(contents=[Content.from_text("test")], role="assistant")
 
     class TestAgent(AgentTelemetryLayer, _TestAgent):
@@ -2020,7 +2305,7 @@ def test_configure_providers_with_span_exporters(monkeypatch):
     ]:
         monkeypatch.delenv(key, raising=False)
 
-    settings = ObservabilitySettings(env_file_path="test.env")
+    settings = ObservabilitySettings()
 
     # Create mock span exporter
     mock_span_exporter = Mock(spec=SpanExporter)
@@ -2172,7 +2457,7 @@ def test_capture_response(span_exporter: InMemorySpanExporter):
 async def test_layer_ordering_span_sequence_with_function_calling(span_exporter: InMemorySpanExporter):
     """Test that with correct layer ordering, spans appear in the expected sequence.
 
-    When using the correct layer ordering (ChatMiddlewareLayer, FunctionInvocationLayer,
+    When using the correct layer ordering (FunctionInvocationLayer, ChatMiddlewareLayer,
     ChatTelemetryLayer, BaseChatClient), the spans should appear in this order:
     1. First 'chat' span (initial LLM call that returns function call)
     2. 'execute_tool' span (function invocation)
@@ -2189,11 +2474,11 @@ async def test_layer_ordering_span_sequence_with_function_calling(span_exporter:
     def get_weather(location: str) -> str:
         return f"The weather in {location} is sunny."
 
-    # Correct layer ordering: FunctionInvocationLayer BEFORE ChatTelemetryLayer
-    # This ensures each inner LLM call gets its own telemetry span
+    # Correct layer ordering: FunctionInvocationLayer BEFORE ChatMiddlewareLayer BEFORE ChatTelemetryLayer
+    # This ensures each inner LLM call traverses chat middleware and still gets its own telemetry span
     class MockChatClientWithLayers(
-        ChatMiddlewareLayer,
         FunctionInvocationLayer,
+        ChatMiddlewareLayer,
         ChatTelemetryLayer,
         BaseChatClient,
     ):
@@ -2263,3 +2548,739 @@ async def test_layer_ordering_span_sequence_with_function_calling(span_exporter:
 
     # Third span: second chat (LLM call with function result)
     assert sorted_spans[2].name.startswith("chat"), f"Third span should be 'chat', got '{sorted_spans[2].name}'"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_agent_and_chat_spans_do_not_duplicate_response_telemetry(
+    span_exporter: InMemorySpanExporter, stream: bool
+):
+    """The inner chat span owns response-id; usage is aggregated on the agent span."""
+
+    class NestedTelemetryChatClient(ChatTelemetryLayer, BaseChatClient[Any]):
+        def service_url(self):
+            return "https://test.example.com"
+
+        def _inner_get_response(
+            self, *, messages: MutableSequence[Message], stream: bool, options: dict[str, Any], **kwargs: Any
+        ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+            if stream:
+
+                async def _stream() -> AsyncIterable[ChatResponseUpdate]:
+                    yield ChatResponseUpdate(contents=[Content.from_text("Nested")], role="assistant")
+                    yield ChatResponseUpdate(contents=[Content.from_text(" response")], role="assistant")
+
+                def _finalize(updates: Sequence[ChatResponseUpdate]) -> ChatResponse:
+                    return ChatResponse(
+                        messages=[Message(role="assistant", text="Nested response")],
+                        response_id="nested_resp_123",
+                        usage_details=UsageDetails(input_token_count=11, output_token_count=22),
+                        finish_reason="stop",
+                    )
+
+                return ResponseStream(_stream(), finalizer=_finalize)
+
+            async def _get() -> ChatResponse:
+                return ChatResponse(
+                    messages=[Message(role="assistant", text="Nested response")],
+                    response_id="nested_resp_123",
+                    usage_details=UsageDetails(input_token_count=11, output_token_count=22),
+                    finish_reason="stop",
+                )
+
+            return _get()
+
+    agent = Agent(
+        client=NestedTelemetryChatClient(),
+        id="nested_agent_id",
+        name="nested_agent",
+        description="Nested telemetry agent",
+        default_options={"model_id": "NestedModel"},
+    )
+
+    span_exporter.clear()
+
+    if stream:
+        result_stream = agent.run("Test message", stream=True)
+        async for _ in result_stream:
+            pass
+        response = await result_stream.get_final_response()
+    else:
+        response = await agent.run("Test message")
+
+    assert response is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    span_by_operation = {span.attributes[OtelAttr.OPERATION.value]: span for span in spans}
+    agent_span = span_by_operation[OtelAttr.AGENT_INVOKE_OPERATION]
+    chat_span = span_by_operation[OtelAttr.CHAT_COMPLETION_OPERATION]
+
+    assert chat_span.attributes[OtelAttr.RESPONSE_ID] == "nested_resp_123"
+    assert chat_span.attributes[OtelAttr.INPUT_TOKENS] == 11
+    assert chat_span.attributes[OtelAttr.OUTPUT_TOKENS] == 22
+
+    assert OtelAttr.RESPONSE_ID not in agent_span.attributes
+    # The agent span carries the aggregated usage from all inner chat completions
+    assert agent_span.attributes[OtelAttr.INPUT_TOKENS] == 11
+    assert agent_span.attributes[OtelAttr.OUTPUT_TOKENS] == 22
+
+
+# region Test non-ASCII character handling in JSON serialization
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_capture_messages_preserves_non_ascii_characters(mock_chat_client, span_exporter: InMemorySpanExporter):
+    """Test that non-ASCII characters (e.g., Japanese) are preserved in span attributes."""
+    import json
+
+    japanese_text = "こんにちは世界"  # "Hello World" in Japanese
+
+    class ClientWithJapanese(mock_chat_client):
+        async def _inner_get_response(self, *, messages, options, **kwargs):
+            return ChatResponse(
+                messages=[Message(role="assistant", text=japanese_text)],
+                usage_details=UsageDetails(input_token_count=5, output_token_count=10),
+            )
+
+    client = ClientWithJapanese()
+    messages = [Message(role="user", text=japanese_text)]
+
+    span_exporter.clear()
+    response = await client.get_response(messages=messages, model_id="Test")
+
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Verify input messages preserve Japanese characters
+    input_messages_json = span.attributes[OtelAttr.INPUT_MESSAGES]
+    assert japanese_text in input_messages_json
+    # Ensure it's not escaped to Unicode
+    assert "\\u" not in input_messages_json
+
+    # Verify output messages preserve Japanese characters
+    output_messages_json = span.attributes[OtelAttr.OUTPUT_MESSAGES]
+    assert japanese_text in output_messages_json
+    assert "\\u" not in output_messages_json
+
+    # Verify JSON is valid and contains the text
+    input_messages = json.loads(input_messages_json)
+    assert input_messages[0]["parts"][0]["content"] == japanese_text
+    output_messages = json.loads(output_messages_json)
+    assert output_messages[0]["parts"][0]["content"] == japanese_text
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_system_instructions_preserves_non_ascii_characters(span_exporter: InMemorySpanExporter):
+    """Test that non-ASCII characters are preserved in system instructions span attribute."""
+    import json
+
+    from opentelemetry import trace
+
+    chinese_text = "你好世界"  # "Hello World" in Chinese
+
+    tracer = trace.get_tracer("test")
+    span_exporter.clear()
+
+    with tracer.start_as_current_span("test_span") as span:
+        _capture_messages(
+            span=span,
+            provider_name="test_provider",
+            messages=[Message(role="user", text="Test")],
+            system_instructions=chinese_text,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Verify system instructions preserve Chinese characters
+    system_instructions_json = span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS]
+    assert chinese_text in system_instructions_json
+    assert "\\u" not in system_instructions_json
+
+    # Verify JSON is valid and contains the text
+    system_instructions = json.loads(system_instructions_json)
+    assert system_instructions[0]["content"] == chinese_text
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_tool_arguments_preserves_non_ascii_characters(span_exporter: InMemorySpanExporter):
+    """Test that non-ASCII characters are preserved in tool arguments span attribute."""
+    import json
+
+    korean_text = "안녕하세요"  # "Hello" in Korean
+
+    @tool
+    def greet(message: str) -> str:
+        """Greet with a message."""
+        return f"Greeted: {message}"
+
+    span_exporter.clear()
+    await greet.invoke(message=korean_text)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Verify tool arguments preserve Korean characters
+    tool_arguments_json = span.attributes[OtelAttr.TOOL_ARGUMENTS]
+    assert korean_text in tool_arguments_json
+    assert "\\u" not in tool_arguments_json
+
+    # Verify JSON is valid and contains the text
+    tool_arguments = json.loads(tool_arguments_json)
+    assert tool_arguments["message"] == korean_text
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_tool_result_preserves_non_ascii_characters(span_exporter: InMemorySpanExporter):
+    """Test that non-ASCII characters are preserved in tool result span attribute."""
+    arabic_text = "مرحبا بالعالم"  # "Hello World" in Arabic
+
+    @tool
+    def echo(text: str) -> str:
+        """Echo the text back."""
+        return text
+
+    span_exporter.clear()
+    result = await echo.invoke(text=arabic_text)
+
+    assert isinstance(result, list)
+    assert result[0].text == arabic_text
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Verify tool result preserves Arabic characters
+    tool_result = span.attributes[OtelAttr.TOOL_RESULT]
+    assert arabic_text in tool_result
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_tool_arguments_pydantic_preserves_non_ascii_characters(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """Test that non-ASCII characters are preserved in tool arguments when using a Pydantic model."""
+    import json
+
+    from pydantic import BaseModel
+
+    japanese_text = "こんにちは"  # "Hello" in Japanese
+
+    class Greeting(BaseModel):
+        message: str
+
+    @tool
+    def greet_with_model(greeting: Greeting) -> str:
+        """Greet with a message contained in a Pydantic model."""
+        # When invoked via the tool's input_model, greeting is passed as a dict
+        if isinstance(greeting, dict):
+            return f"Greeted: {greeting['message']}"
+        return f"Greeted: {greeting.message}"
+
+    span_exporter.clear()
+    # Use the tool's input_model to properly pass the Pydantic model argument
+    input_model = greet_with_model.input_model
+    await greet_with_model.invoke(arguments=input_model(greeting=Greeting(message=japanese_text)))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Verify tool arguments preserve Japanese characters
+    tool_arguments_json = span.attributes[OtelAttr.TOOL_ARGUMENTS]
+    assert japanese_text in tool_arguments_json
+    assert "\\u" not in tool_arguments_json
+
+    # Verify JSON is valid and contains the text
+    tool_arguments = json.loads(tool_arguments_json)
+    assert tool_arguments["greeting"]["message"] == japanese_text
+
+
+# region Test merged options for instructions
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_instructions_from_default_options(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that instructions from default_options are captured in agent telemetry."""
+    import json
+
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel", "instructions": "Default system instructions."}
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    response = await agent.run(messages)
+
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Instructions from default_options should be captured
+    assert OtelAttr.SYSTEM_INSTRUCTIONS in span.attributes
+    system_instructions = json.loads(span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS])
+    assert len(system_instructions) == 1
+    assert system_instructions[0]["content"] == "Default system instructions."
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_instructions_from_options_override(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that instructions from options are captured when no default_options instructions exist."""
+    import json
+
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel"}  # No default instructions
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    response = await agent.run(messages, options={"instructions": "Override instructions."})
+
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert OtelAttr.SYSTEM_INSTRUCTIONS in span.attributes
+    system_instructions = json.loads(span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS])
+    assert len(system_instructions) == 1
+    assert system_instructions[0]["content"] == "Override instructions."
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_instructions_merged_from_default_and_options(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that instructions from both default_options and options are merged (concatenated)."""
+    import json
+
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel", "instructions": "Default instructions."}
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    response = await agent.run(messages, options={"instructions": "Additional instructions."})
+
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    # Merged instructions should contain both default and override, concatenated with newline
+    assert OtelAttr.SYSTEM_INSTRUCTIONS in span.attributes
+    system_instructions = json.loads(span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS])
+    assert len(system_instructions) == 1
+    assert "Default instructions." in system_instructions[0]["content"]
+    assert "Additional instructions." in system_instructions[0]["content"]
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_streaming_instructions_from_default_options(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that streaming agent telemetry captures instructions from default_options."""
+    import json
+
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel", "instructions": "Default streaming instructions."}
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    updates = []
+    stream = agent.run(messages, stream=True)
+    async for update in stream:
+        updates.append(update)
+    await stream.get_final_response()
+
+    assert len(updates) == 2
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert OtelAttr.SYSTEM_INSTRUCTIONS in span.attributes
+    system_instructions = json.loads(span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS])
+    assert len(system_instructions) == 1
+    assert system_instructions[0]["content"] == "Default streaming instructions."
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_streaming_instructions_merged_from_default_and_options(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that streaming agent telemetry captures merged instructions from default_options and options."""
+    import json
+
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel", "instructions": "Default instructions."}
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    updates = []
+    stream = agent.run(messages, stream=True, options={"instructions": "Stream override."})
+    async for update in stream:
+        updates.append(update)
+    await stream.get_final_response()
+
+    assert len(updates) == 2
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert OtelAttr.SYSTEM_INSTRUCTIONS in span.attributes
+    system_instructions = json.loads(span.attributes[OtelAttr.SYSTEM_INSTRUCTIONS])
+    assert len(system_instructions) == 1
+    assert "Default instructions." in system_instructions[0]["content"]
+    assert "Stream override." in system_instructions[0]["content"]
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
+async def test_agent_no_instructions_in_default_or_options(
+    mock_chat_agent, span_exporter: InMemorySpanExporter, enable_sensitive_data
+):
+    """Test that system_instructions is not set when neither default_options nor options have instructions."""
+    agent = mock_chat_agent()
+    agent.default_options = {"model_id": "TestModel"}  # No instructions
+
+    messages = [Message(role="user", text="Test message")]
+    span_exporter.clear()
+    response = await agent.run(messages)
+
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert OtelAttr.SYSTEM_INSTRUCTIONS not in span.attributes
+
+
+# region Additional coverage tests
+
+
+def test_get_instructions_from_options_none():
+    """Test _get_instructions_from_options returns None for None input."""
+    from agent_framework.observability import _get_instructions_from_options
+
+    assert _get_instructions_from_options(None) is None
+
+
+def test_get_instructions_from_options_non_dict():
+    """Test _get_instructions_from_options returns None for non-dict input."""
+    from agent_framework.observability import _get_instructions_from_options
+
+    assert _get_instructions_from_options("not a dict") is None
+    assert _get_instructions_from_options(42) is None
+
+
+def test_get_instructions_from_options_dict_with_instructions():
+    """Test _get_instructions_from_options extracts instructions from dict."""
+    from agent_framework.observability import _get_instructions_from_options
+
+    assert _get_instructions_from_options({"instructions": "do stuff"}) == "do stuff"
+    assert _get_instructions_from_options({"other_key": "value"}) is None
+
+
+def test_get_span_attributes_with_non_dict_options():
+    """Test _get_span_attributes handles non-dict options gracefully."""
+    from agent_framework.observability import _get_span_attributes
+
+    # Pass options as a non-dict value; should not crash
+    attrs = _get_span_attributes(
+        operation_name="chat",
+        provider_name="test",
+        all_options="not_a_dict",
+    )
+    assert attrs[OtelAttr.OPERATION] == "chat"
+
+
+def test_capture_response_with_error_type(span_exporter: InMemorySpanExporter):
+    """Test _capture_response includes error_type in duration histogram attributes."""
+    from agent_framework.observability import OtelAttr, _capture_response, get_tracer
+
+    span_exporter.clear()
+    tracer = get_tracer()
+
+    from agent_framework.observability import _get_duration_histogram, _get_token_usage_histogram
+
+    token_histogram = _get_token_usage_histogram()
+    duration_histogram = _get_duration_histogram()
+
+    attrs = {
+        "gen_ai.request.model": "test-model",
+        OtelAttr.ERROR_TYPE: "ValueError",
+    }
+
+    with tracer.start_as_current_span("test_span") as span:
+        _capture_response(
+            span=span,
+            attributes=attrs,
+            token_usage_histogram=token_histogram,
+            operation_duration_histogram=duration_histogram,
+            duration=0.5,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes.get(OtelAttr.ERROR_TYPE) == "ValueError"
+
+
+def test_configure_otel_providers_with_env_file_path(monkeypatch, tmp_path):
+    """Test configure_otel_providers with env_file_path creates new settings."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("ENABLE_INSTRUMENTATION=true\n")
+
+    observability.configure_otel_providers(
+        env_file_path=str(env_file),
+        enable_sensitive_data=True,
+        vs_code_extension_port=None,
+    )
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
+    assert observability.OBSERVABILITY_SETTINGS.enable_sensitive_data is True
+
+
+def test_configure_otel_providers_with_env_file_and_vs_code_port(monkeypatch, tmp_path):
+    """Test configure_otel_providers with env_file_path and vs_code_extension_port."""
+    import importlib
+
+    monkeypatch.setenv("ENABLE_INSTRUMENTATION", "false")
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    observability = importlib.import_module("agent_framework.observability")
+    importlib.reload(observability)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("ENABLE_INSTRUMENTATION=true\n")
+
+    observability.configure_otel_providers(
+        env_file_path=str(env_file),
+        env_file_encoding="utf-8",
+        vs_code_extension_port=4317,
+    )
+
+    assert observability.OBSERVABILITY_SETTINGS.enable_instrumentation is True
+    assert observability.OBSERVABILITY_SETTINGS.vs_code_extension_port == 4317
+
+
+def test_get_exporters_from_env_with_env_file_path(monkeypatch, tmp_path):
+    """Test _get_exporters_from_env loads dotenv when env_file_path is provided."""
+    from agent_framework.observability import _get_exporters_from_env
+
+    for key in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    # Create a .env file with no OTEL endpoints so it returns empty
+    env_file = tmp_path / ".env"
+    env_file.write_text("SOME_VAR=value\n")
+
+    exporters = _get_exporters_from_env(env_file_path=str(env_file))
+    assert exporters == []
+
+
+def test_create_resource_with_env_file_path(monkeypatch, tmp_path):
+    """Test create_resource loads dotenv when env_file_path is provided."""
+    from agent_framework.observability import create_resource
+
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+    monkeypatch.delenv("OTEL_SERVICE_VERSION", raising=False)
+    monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTEL_SERVICE_NAME=my_test_service\n")
+
+    resource = create_resource(env_file_path=str(env_file))
+    assert resource.attributes.get("service.name") == "my_test_service"
+
+
+def test_get_meter_typeerror_fallback():
+    """Test get_meter falls back when TypeError is raised (old OTel versions)."""
+    from unittest.mock import patch as mock_patch
+
+    from agent_framework.observability import get_meter
+
+    call_count = 0
+
+    def mock_get_meter(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if "attributes" in kwargs:
+            raise TypeError("unexpected keyword argument 'attributes'")
+        from opentelemetry import metrics
+
+        return metrics.get_meter_provider().get_meter(*args, **{k: v for k, v in kwargs.items() if k != "attributes"})
+
+    with mock_patch("agent_framework.observability.metrics.get_meter", side_effect=mock_get_meter):
+        meter = get_meter(name="test", attributes={"key": "val"})
+        assert meter is not None
+        assert call_count == 2
+
+
+# region Agent token usage aggregation
+
+
+@tool(name="get_weather", description="Get weather for a city", approval_mode="never_require")
+def _get_weather(city: str) -> str:
+    """Get weather for a city."""
+    return "Sunny, 72°F"
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [False], indirect=True)
+async def test_agent_invoke_span_aggregates_usage_across_tool_calls(span_exporter: InMemorySpanExporter):
+    """The invoke_agent span should sum token usage from all chat completions in the function invocation loop."""
+    from tests.core.conftest import MockBaseChatClient
+
+    class _InstrumentedAgent(AgentTelemetryLayer, RawAgent):
+        pass
+
+    client = MockBaseChatClient()
+    client.run_responses = [
+        ChatResponse(
+            messages=Message(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(call_id="call_1", name="get_weather", arguments='{"city": "Seattle"}')
+                ],
+            ),
+            usage_details=UsageDetails(input_token_count=2239, output_token_count=192),
+        ),
+        ChatResponse(
+            messages=Message(role="assistant", text="The weather in Seattle is sunny."),
+            usage_details=UsageDetails(input_token_count=2569, output_token_count=99),
+        ),
+    ]
+
+    agent = _InstrumentedAgent(client=client, name="test_agent", id="test_agent_id")
+
+    span_exporter.clear()
+    await agent.run(
+        messages="What is the weather in Seattle?",
+        options={"tools": [_get_weather], "tool_choice": "auto"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+
+    invoke_spans = [s for s in spans if s.attributes.get(OtelAttr.OPERATION.value) == OtelAttr.AGENT_INVOKE_OPERATION]
+    assert len(invoke_spans) == 1
+    agent_span = invoke_spans[0]
+
+    chat_spans = [s for s in spans if s.attributes.get(OtelAttr.OPERATION.value) == OtelAttr.CHAT_COMPLETION_OPERATION]
+    assert len(chat_spans) == 2
+
+    # Individual chat spans retain their own usage
+    assert chat_spans[0].attributes.get(OtelAttr.INPUT_TOKENS) == 2239
+    assert chat_spans[0].attributes.get(OtelAttr.OUTPUT_TOKENS) == 192
+    assert chat_spans[1].attributes.get(OtelAttr.INPUT_TOKENS) == 2569
+    assert chat_spans[1].attributes.get(OtelAttr.OUTPUT_TOKENS) == 99
+
+    # The invoke_agent span must report the aggregate across all LLM round-trips
+    assert agent_span.attributes.get(OtelAttr.INPUT_TOKENS) == 2239 + 2569
+    assert agent_span.attributes.get(OtelAttr.OUTPUT_TOKENS) == 192 + 99
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [False], indirect=True)
+async def test_agent_invoke_span_usage_single_call(span_exporter: InMemorySpanExporter):
+    """When only one chat completion occurs, the invoke_agent span usage equals that single call."""
+    from tests.core.conftest import MockBaseChatClient
+
+    class _InstrumentedAgent(AgentTelemetryLayer, RawAgent):
+        pass
+
+    client = MockBaseChatClient()
+    client.run_responses = [
+        ChatResponse(
+            messages=Message(role="assistant", text="Hello!"),
+            usage_details=UsageDetails(input_token_count=100, output_token_count=50),
+        ),
+    ]
+
+    agent = _InstrumentedAgent(client=client, name="test_agent", id="test_agent_id")
+
+    span_exporter.clear()
+    await agent.run(messages="Hi")
+
+    spans = span_exporter.get_finished_spans()
+    invoke_spans = [s for s in spans if s.attributes.get(OtelAttr.OPERATION.value) == OtelAttr.AGENT_INVOKE_OPERATION]
+    assert len(invoke_spans) == 1
+
+    assert invoke_spans[0].attributes.get(OtelAttr.INPUT_TOKENS) == 100
+    assert invoke_spans[0].attributes.get(OtelAttr.OUTPUT_TOKENS) == 50
+
+
+@pytest.mark.parametrize("enable_sensitive_data", [False], indirect=True)
+async def test_agent_invoke_span_aggregates_usage_on_max_iterations_exhaustion(span_exporter: InMemorySpanExporter):
+    """When the function invocation loop exhausts max_iterations, the final response aggregates usage
+    from all rounds."""
+    from tests.core.conftest import MockBaseChatClient
+
+    class _InstrumentedAgent(AgentTelemetryLayer, RawAgent):
+        pass
+
+    client = MockBaseChatClient(
+        function_invocation_configuration={"max_iterations": 1},
+    )
+    client.run_responses = [
+        # Iteration 0: model returns a tool call
+        ChatResponse(
+            messages=Message(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(call_id="call_1", name="get_weather", arguments='{"city": "Seattle"}')
+                ],
+            ),
+            usage_details=UsageDetails(input_token_count=500, output_token_count=100),
+        ),
+        # Exhaustion path: consumed by tool_choice="none" final call (mock ignores usage)
+        ChatResponse(
+            messages=Message(role="assistant", text="placeholder"),
+            usage_details=UsageDetails(input_token_count=300, output_token_count=60),
+        ),
+    ]
+
+    agent = _InstrumentedAgent(client=client, name="test_agent", id="test_agent_id")
+
+    span_exporter.clear()
+    await agent.run(
+        messages="What is the weather in Seattle?",
+        options={"tools": [_get_weather], "tool_choice": "auto"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+
+    invoke_spans = [s for s in spans if s.attributes.get(OtelAttr.OPERATION.value) == OtelAttr.AGENT_INVOKE_OPERATION]
+    assert len(invoke_spans) == 1
+    agent_span = invoke_spans[0]
+
+    # The invoke_agent span must aggregate usage from the in-loop call and the final exhaustion call
+    assert agent_span.attributes.get(OtelAttr.INPUT_TOKENS) == 500
+    assert agent_span.attributes.get(OtelAttr.OUTPUT_TOKENS) == 100

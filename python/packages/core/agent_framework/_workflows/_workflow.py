@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+# ruff: noqa: RUF070, RUF100
 from __future__ import annotations
 
 import asyncio
@@ -349,9 +350,14 @@ class Workflow(DictConvertible):
                     self._runner.context.reset_for_new_run()
                     self._state.clear()
 
-                # Store run kwargs in State so executors can access them
-                # Always store (even empty dict) so retrieval is deterministic
-                self._state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs or {})
+                # Store run kwargs in State so executors can access them.
+                # Only overwrite when new kwargs are explicitly provided or state was
+                # just cleared (fresh run). On continuation (reset_context=False) with
+                # no new kwargs, preserve the kwargs from the original run.
+                if run_kwargs is not None:
+                    self._state.set(WORKFLOW_RUN_KWARGS_KEY, run_kwargs)
+                elif reset_context:
+                    self._state.set(WORKFLOW_RUN_KWARGS_KEY, {})
                 self._state.commit()  # Commit immediately so kwargs are available
 
                 # Set streaming mode after reset
@@ -372,7 +378,6 @@ class Workflow(DictConvertible):
                         with _framework_event_origin():
                             pending_status = WorkflowEvent.status(WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS)
                         yield pending_status
-
                 # Workflow runs until idle - emit final status based on whether requests are pending
                 pending = await self._runner_context.get_pending_request_info_events()
                 if pending:
@@ -595,6 +600,10 @@ class Workflow(DictConvertible):
             initial_executor_fn=initial_executor_fn,
             reset_context=reset_context,
             streaming=streaming,
+            # Empty **kwargs (no caller-provided kwargs) is collapsed to None so that
+            # continuation calls without explicit kwargs preserve the original run's kwargs.
+            # A non-empty kwargs dict (even one with empty values like {"key": {}})
+            # is passed through and will overwrite stored kwargs.
             run_kwargs=kwargs if kwargs else None,
             request_handlers=request_handlers,
         ):

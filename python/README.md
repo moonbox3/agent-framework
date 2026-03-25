@@ -24,14 +24,14 @@ If you only need specific integrations, you can install at a more granular level
 # also includes workflows and orchestrations
 pip install agent-framework-core --pre
 
-# Core + Azure AI integration
-pip install agent-framework-azure-ai --pre
+# Core + Azure AI Foundry integration
+pip install agent-framework-foundry --pre
 
 # Core + Microsoft Copilot Studio integration
 pip install agent-framework-copilotstudio --pre
 
-# Core + both Microsoft Copilot Studio and Azure AI integration
-pip install agent-framework-microsoft agent-framework-azure-ai --pre
+# Core + both Microsoft Copilot Studio and Azure AI Foundry integration
+pip install agent-framework-microsoft agent-framework-foundry --pre
 ```
 
 This selective approach is useful when you know which integrations you need, and it is the recommended way to set up lightweight environments.
@@ -53,8 +53,8 @@ AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_ENDPOINT=...
 AZURE_OPENAI_CHAT_DEPLOYMENT_NAME=...
 ...
-AZURE_AI_PROJECT_ENDPOINT=...
-AZURE_AI_MODEL_DEPLOYMENT_NAME=...
+FOUNDRY_PROJECT_ENDPOINT=...
+FOUNDRY_MODEL=...
 ```
 
 You can also override environment variables by explicitly passing configuration parameters to the chat client constructor:
@@ -70,7 +70,7 @@ client = AzureOpenAIChatClient(
 )
 ```
 
-See the following [setup guide](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started) for more information.
+See the following [setup guide](samples/01-get-started) for more information.
 
 ## 2. Create a Simple Agent
 
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-You can explore additional agent samples [here](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started/agents).
+You can explore additional agent samples [here](samples/02-agents).
 
 ## 5. Multi-Agent Orchestration
 
@@ -233,14 +233,14 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-For more advanced orchestration patterns including Sequential, Concurrent, Group Chat, Handoff, and Magentic orchestrations, see the [orchestration samples](samples/getting_started/orchestrations).
+For more advanced orchestration patterns including Sequential, Concurrent, Group Chat, Handoff, and Magentic orchestrations, see the [orchestration samples](samples/03-workflows/orchestrations).
 
 ## More Examples & Samples
 
-- [Getting Started with Agents](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started/agents): Basic agent creation and tool usage
-- [Chat Client Examples](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started/chat_client): Direct chat client usage patterns
+- [Getting Started with Agents](samples/02-agents): Basic agent creation and tool usage
+- [Chat Client Examples](samples/02-agents/chat_client): Direct chat client usage patterns
 - [Azure AI Integration](https://github.com/microsoft/agent-framework/tree/main/python/packages/azure-ai): Azure AI integration
-- [Workflow Samples](https://github.com/microsoft/agent-framework/tree/main/python/samples/getting_started/workflows): Advanced multi-agent patterns
+- [Workflow Samples](samples/03-workflows): Advanced multi-agent patterns
 
 ## Agent Framework Documentation
 

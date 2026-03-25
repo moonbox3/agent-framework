@@ -9,7 +9,7 @@ import pytest
 from agent_framework import (
     AgentResponse,
     AgentResponseUpdate,
-    AgentThread,
+    AgentSession,
     BaseAgent,
     Content,
     Executor,
@@ -150,10 +150,10 @@ class StubAgent(BaseAgent):
 
     def run(  # type: ignore[override]
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: str | Content | Message | Sequence[str | Content | Message] | None = None,
         *,
         stream: bool = False,
-        thread: AgentThread | None = None,
+        session: AgentSession | None = None,
         **kwargs: Any,
     ) -> Awaitable[AgentResponse] | AsyncIterable[AgentResponseUpdate]:
         if stream:
@@ -366,6 +366,11 @@ async def test_magentic_checkpoint_resume_round_trip():
     assert checkpoints
     checkpoints.sort(key=lambda cp: cp.timestamp)
     resume_checkpoint = checkpoints[-1]
+    loaded_checkpoint = await storage.load(resume_checkpoint.checkpoint_id)
+    assert loaded_checkpoint is not None
+    # Regression check: checkpoints with pending request_info must include executor state.
+    assert "_executor_state" in loaded_checkpoint.state
+    assert "magentic_orchestrator" in loaded_checkpoint.state["_executor_state"]
 
     manager2 = FakeManager()
     wf_resume = MagenticBuilder(
@@ -378,7 +383,7 @@ async def test_magentic_checkpoint_resume_round_trip():
     completed: WorkflowEvent | None = None
     req_event = None
     async for event in wf_resume.run(
-        resume_checkpoint.checkpoint_id,
+        checkpoint_id=resume_checkpoint.checkpoint_id,
         stream=True,
     ):
         if event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
@@ -406,10 +411,10 @@ class StubManagerAgent(BaseAgent):
 
     def run(
         self,
-        messages: str | Message | Sequence[str | Message] | None = None,
+        messages: str | Content | Message | Sequence[str | Content | Message] | None = None,
         *,
         stream: bool = False,
-        thread: Any = None,
+        session: Any = None,
         **kwargs: Any,
     ) -> Awaitable[AgentResponse] | AsyncIterable[AgentResponseUpdate]:
         if stream:
@@ -521,7 +526,7 @@ class StubThreadAgent(BaseAgent):
     def __init__(self, name: str | None = None) -> None:
         super().__init__(name=name or "agentA")
 
-    def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):  # type: ignore[override]
+    def run(self, messages=None, *, stream: bool = False, session=None, **kwargs):  # type: ignore[override]
         if stream:
             return self._run_stream()
 
@@ -549,7 +554,7 @@ class StubAssistantsAgent(BaseAgent):
         super().__init__(name="agentA")
         self.client = StubAssistantsClient()  # type name contains 'AssistantsClient'
 
-    def run(self, messages=None, *, stream: bool = False, thread=None, **kwargs):  # type: ignore[override]
+    def run(self, messages=None, *, stream: bool = False, session=None, **kwargs):  # type: ignore[override]
         if stream:
             return self._run_stream()
 
@@ -1067,6 +1072,73 @@ def test_magentic_agent_factory_with_standard_manager_options():
     assert manager.task_ledger_plan_update_prompt == custom_plan_update_prompt
     assert manager.progress_ledger_prompt == custom_progress_prompt
     assert manager.final_answer_prompt == custom_final_prompt
+
+
+async def test_standard_manager_propagates_session_to_agent():
+    """Verify StandardMagenticManager passes a consistent session to the underlying agent.
+
+    Regression test for #4371: context providers (e.g. RedisHistoryProvider) configured on
+    the manager agent silently failed because no session was propagated.
+    """
+    captured_sessions: list[AgentSession | None] = []
+
+    class SessionCapturingAgent(BaseAgent):
+        """Agent that records the session passed to each run() call."""
+
+        def run(
+            self,
+            messages: str | Content | Message | Sequence[str | Content | Message] | None = None,
+            *,
+            stream: bool = False,
+            session: Any = None,
+            **kwargs: Any,
+        ) -> Awaitable[AgentResponse] | AsyncIterable[AgentResponseUpdate]:
+            captured_sessions.append(session)
+
+            async def _run() -> AgentResponse:
+                return AgentResponse(messages=[Message("assistant", ["ok"])])
+
+            return _run()
+
+    agent = SessionCapturingAgent()
+    mgr = StandardMagenticManager(agent=agent)
+    ctx = MagenticContext(task="task", participant_descriptions={"a": "desc"})
+
+    await mgr.plan(ctx.clone())
+
+    # plan() calls _complete twice (facts + plan), both should receive the same session
+    assert len(captured_sessions) == 2
+    assert all(s is not None for s in captured_sessions), "session must be passed to agent.run()"
+    assert captured_sessions[0] is captured_sessions[1], "same session instance must be reused across calls"
+    assert captured_sessions[0] is mgr._session
+
+
+def test_standard_manager_checkpoint_preserves_session():
+    """Verify that checkpoint save/restore preserves the manager's session identity."""
+    agent = StubManagerAgent()
+    mgr = StandardMagenticManager(agent=agent)
+    original_session_id = mgr._session.session_id
+
+    state = mgr.on_checkpoint_save()
+    assert "agent_session" in state
+
+    # Restore into a fresh manager and verify session_id is preserved
+    mgr2 = StandardMagenticManager(agent=agent)
+    assert mgr2._session.session_id != original_session_id
+    mgr2.on_checkpoint_restore(state)
+    assert mgr2._session.session_id == original_session_id
+
+
+def test_standard_manager_checkpoint_restore_empty_state():
+    """Verify that restoring from a state without agent_session leaves the session intact."""
+    agent = StubManagerAgent()
+    mgr = StandardMagenticManager(agent=agent)
+    original_session = mgr._session
+    original_session_id = original_session.session_id
+
+    mgr.on_checkpoint_restore({})
+    assert mgr._session is original_session
+    assert mgr._session.session_id == original_session_id
 
 
 # endregion

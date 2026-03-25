@@ -10,7 +10,7 @@ import pytest
 from agent_framework import (
     AgentResponse,
     AgentResponseUpdate,
-    AgentThread,
+    AgentSession,
     Message,
     SupportsAgentRun,
 )
@@ -117,6 +117,7 @@ class TestAgentRequestInfoExecutor:
         agent_response = AgentExecutorResponse(
             executor_id="test_agent",
             agent_response=agent_response,
+            full_conversation=agent_response.messages,
         )
 
         ctx = MagicMock(spec=WorkflowContext)
@@ -135,6 +136,7 @@ class TestAgentRequestInfoExecutor:
         original_request = AgentExecutorResponse(
             executor_id="test_agent",
             agent_response=agent_response,
+            full_conversation=agent_response.messages,
         )
 
         response = AgentRequestInfoResponse.from_strings(["Additional input"])
@@ -161,6 +163,7 @@ class TestAgentRequestInfoExecutor:
         original_request = AgentExecutorResponse(
             executor_id="test_agent",
             agent_response=agent_response,
+            full_conversation=agent_response.messages,
         )
 
         response = AgentRequestInfoResponse.approve()
@@ -203,7 +206,7 @@ class _TestAgent:
         messages: str | Message | list[str] | list[Message] | None = None,
         *,
         stream: bool = False,
-        thread: AgentThread | None = None,
+        thread: AgentSession | None = None,
         **kwargs: Any,
     ) -> AgentResponse | AsyncIterable[AgentResponseUpdate]:
         """Dummy run method."""
@@ -214,9 +217,9 @@ class _TestAgent:
     async def _run_stream_impl(self) -> AsyncIterable[AgentResponseUpdate]:
         yield AgentResponseUpdate(messages=[Message(role="assistant", text="Test response stream")])
 
-    def get_new_thread(self, **kwargs: Any) -> AgentThread:
-        """Creates a new conversation thread for the agent."""
-        return AgentThread(**kwargs)
+    def create_session(self, **kwargs: Any) -> AgentSession:
+        """Creates a new conversation session for the agent."""
+        return AgentSession(**kwargs)
 
 
 class TestAgentApprovalExecutor:

@@ -15,14 +15,18 @@ import asyncio
 from collections.abc import Sequence
 from typing import cast
 
-from agent_framework import Message
+from agent_framework import Agent, Message
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework.orchestrations import ConcurrentBuilder
 from azure.identity import AzureCliCredential
+from dotenv import load_dotenv
 from semantic_kernel.agents import ChatCompletionAgent, ConcurrentOrchestration
 from semantic_kernel.agents.runtime import InProcessRuntime
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.contents import ChatMessageContent
+
+# Load environment variables from .env file
+load_dotenv()
 
 PROMPT = "Explain the concept of temperature from multiple scientific perspectives."
 
@@ -32,7 +36,7 @@ PROMPT = "Explain the concept of temperature from multiple scientific perspectiv
 ######################################################################
 
 
-def build_semantic_kernel_agents() -> list[Agent]:
+def build_semantic_kernel_agents() -> list[ChatCompletionAgent]:
     credential = AzureCliCredential()
 
     physics_agent = ChatCompletionAgent(
@@ -87,12 +91,12 @@ def _print_semantic_kernel_outputs(outputs: Sequence[ChatMessageContent]) -> Non
 async def run_agent_framework_example(prompt: str) -> Sequence[list[Message]]:
     client = AzureOpenAIChatClient(credential=AzureCliCredential())
 
-    physics = client.as_agent(
+    physics = Agent(client=client,
         instructions=("You are an expert in physics. Answer questions from a physics perspective."),
         name="physics",
     )
 
-    chemistry = client.as_agent(
+    chemistry = Agent(client=client,
         instructions=("You are an expert in chemistry. Answer questions from a chemistry perspective."),
         name="chemistry",
     )

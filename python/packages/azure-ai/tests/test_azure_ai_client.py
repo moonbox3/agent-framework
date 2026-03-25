@@ -11,47 +11,38 @@ from uuid import uuid4
 
 import pytest
 from agent_framework import (
-    Agent,
-    AgentResponse,
+    Annotation,
     ChatOptions,
     ChatResponse,
+    ChatResponseUpdate,
     Content,
     Message,
+    ResponseStream,
     SupportsChatGetResponse,
     tool,
 )
-from agent_framework.exceptions import ServiceInitializationError
+from agent_framework._settings import load_settings
+from agent_framework_openai._chat_client import RawOpenAIChatClient
 from azure.ai.projects.aio import AIProjectClient
 from azure.ai.projects.models import (
     ApproximateLocation,
+    AutoCodeInterpreterToolParam,
     CodeInterpreterTool,
-    CodeInterpreterToolAuto,
     FileSearchTool,
     ImageGenTool,
     MCPTool,
-    ResponseTextFormatConfigurationJsonSchema,
+    TextResponseFormatJsonSchema,
     WebSearchPreviewTool,
 )
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity.aio import AzureCliCredential
 from openai.types.responses.parsed_response import ParsedResponse
 from openai.types.responses.response import Response as OpenAIResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from pytest import fixture, param
+from pydantic import BaseModel, ConfigDict, Field
+from pytest import fixture
 
 from agent_framework_azure_ai import AzureAIClient, AzureAISettings
 from agent_framework_azure_ai._shared import from_azure_ai_tools
-
-skip_if_azure_ai_integration_tests_disabled = pytest.mark.skipif(
-    os.getenv("RUN_INTEGRATION_TESTS", "false").lower() != "true"
-    or os.getenv("AZURE_AI_PROJECT_ENDPOINT", "") in ("", "https://test-project.cognitiveservices.azure.com/")
-    or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "") == "",
-    reason=(
-        "No real AZURE_AI_PROJECT_ENDPOINT or AZURE_AI_MODEL_DEPLOYMENT_NAME provided; skipping integration tests."
-        if os.getenv("RUN_INTEGRATION_TESTS", "false").lower() == "true"
-        else "Integration tests are disabled."
-    ),
-)
 
 
 @pytest.fixture
@@ -113,7 +104,7 @@ def create_test_azure_ai_client(
 ) -> AzureAIClient:
     """Helper function to create AzureAIClient instances for testing, bypassing normal validation."""
     if azure_ai_settings is None:
-        azure_ai_settings = AzureAISettings(env_file_path="test.env")
+        azure_ai_settings = load_settings(AzureAISettings, env_prefix="AZURE_AI_")
 
     # Create client instance directly
     client = object.__new__(AzureAIClient)
@@ -125,12 +116,15 @@ def create_test_azure_ai_client(
     client.agent_version = agent_version
     client.agent_description = None
     client.use_latest_version = use_latest_version
-    client.model_id = azure_ai_settings.model_deployment_name
+    client.model_id = azure_ai_settings.get("model_deployment_name")
     client.conversation_id = conversation_id
     client._is_application_endpoint = False  # type: ignore
     client._should_close_client = should_close_client  # type: ignore
+    client.warn_runtime_tools_and_structure_changed = False  # type: ignore
+    client._created_agent_tool_names = set()  # type: ignore
+    client._created_agent_structured_output_signature = None  # type: ignore
     client.additional_properties = {}
-    client.middleware = None
+    client.chat_middleware = []
 
     # Mock the OpenAI client attribute
     mock_openai_client = MagicMock()
@@ -143,28 +137,29 @@ def create_test_azure_ai_client(
 
 def test_azure_ai_settings_init(azure_ai_unit_test_env: dict[str, str]) -> None:
     """Test AzureAISettings initialization."""
-    settings = AzureAISettings()
+    settings = load_settings(AzureAISettings, env_prefix="AZURE_AI_")
 
-    assert settings.project_endpoint == azure_ai_unit_test_env["AZURE_AI_PROJECT_ENDPOINT"]
-    assert settings.model_deployment_name == azure_ai_unit_test_env["AZURE_AI_MODEL_DEPLOYMENT_NAME"]
+    assert settings["project_endpoint"] == azure_ai_unit_test_env["AZURE_AI_PROJECT_ENDPOINT"]
+    assert settings["model_deployment_name"] == azure_ai_unit_test_env["AZURE_AI_MODEL_DEPLOYMENT_NAME"]
 
 
 def test_azure_ai_settings_init_with_explicit_values() -> None:
     """Test AzureAISettings initialization with explicit values."""
-    settings = AzureAISettings(
+    settings = load_settings(
+        AzureAISettings,
+        env_prefix="AZURE_AI_",
         project_endpoint="https://custom-endpoint.com/",
         model_deployment_name="custom-model",
     )
 
-    assert settings.project_endpoint == "https://custom-endpoint.com/"
-    assert settings.model_deployment_name == "custom-model"
+    assert settings["project_endpoint"] == "https://custom-endpoint.com/"
+    assert settings["model_deployment_name"] == "custom-model"
 
 
 def test_init_with_project_client(mock_project_client: MagicMock) -> None:
     """Test AzureAIClient initialization with existing project_client."""
-    with patch("agent_framework_azure_ai._client.AzureAISettings") as mock_settings:
-        mock_settings.return_value.project_endpoint = None
-        mock_settings.return_value.model_deployment_name = "test-model"
+    with patch("agent_framework_azure_ai._client.load_settings") as mock_load_settings:
+        mock_load_settings.return_value = {"project_endpoint": None, "model_deployment_name": "test-model"}
 
         client = AzureAIClient(
             project_client=mock_project_client,
@@ -205,32 +200,20 @@ def test_init_auto_create_client(
 
 def test_init_missing_project_endpoint() -> None:
     """Test AzureAIClient initialization when project_endpoint is missing and no project_client provided."""
-    with patch("agent_framework_azure_ai._client.AzureAISettings") as mock_settings:
-        mock_settings.return_value.project_endpoint = None
-        mock_settings.return_value.model_deployment_name = "test-model"
+    with patch("agent_framework_azure_ai._client.load_settings") as mock_load_settings:
+        mock_load_settings.return_value = {"project_endpoint": None, "model_deployment_name": "test-model"}
 
-        with pytest.raises(ServiceInitializationError, match="Azure AI project endpoint is required"):
+        with pytest.raises(ValueError, match="Azure AI project endpoint is required"):
             AzureAIClient(credential=MagicMock())
 
 
 def test_init_missing_credential(azure_ai_unit_test_env: dict[str, str]) -> None:
     """Test AzureAIClient.__init__ when credential is missing and no project_client provided."""
-    with pytest.raises(
-        ServiceInitializationError, match="Azure credential is required when project_client is not provided"
-    ):
+    with pytest.raises(ValueError, match="Azure credential is required when project_client is not provided"):
         AzureAIClient(
             project_endpoint=azure_ai_unit_test_env["AZURE_AI_PROJECT_ENDPOINT"],
             model_deployment_name=azure_ai_unit_test_env["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
         )
-
-
-def test_init_validation_error(mock_azure_credential: MagicMock) -> None:
-    """Test that ValidationError in AzureAISettings is properly handled."""
-    with patch("agent_framework_azure_ai._client.AzureAISettings") as mock_settings:
-        mock_settings.side_effect = ValidationError.from_exception_data("test", [])
-
-        with pytest.raises(ServiceInitializationError, match="Failed to create Azure AI settings"):
-            AzureAIClient(credential=mock_azure_credential)
 
 
 async def test_get_agent_reference_or_create_existing_version(
@@ -250,7 +233,7 @@ async def test_get_agent_reference_or_create_missing_agent_name(
     """Test _get_agent_reference_or_create raises when agent_name is missing."""
     client = create_test_azure_ai_client(mock_project_client, agent_name=None)
 
-    with pytest.raises(ServiceInitializationError, match="Agent name is required"):
+    with pytest.raises(ValueError, match="Agent name is required"):
         await client._get_agent_reference_or_create({}, None)  # type: ignore
 
 
@@ -259,7 +242,11 @@ async def test_get_agent_reference_or_create_new_agent(
     azure_ai_unit_test_env: dict[str, str],
 ) -> None:
     """Test _get_agent_reference_or_create when creating a new agent."""
-    azure_ai_settings = AzureAISettings(model_deployment_name=azure_ai_unit_test_env["AZURE_AI_MODEL_DEPLOYMENT_NAME"])
+    azure_ai_settings = load_settings(
+        AzureAISettings,
+        env_prefix="AZURE_AI_",
+        model_deployment_name=azure_ai_unit_test_env["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
+    )
     client = create_test_azure_ai_client(
         mock_project_client, agent_name="new-agent", azure_ai_settings=azure_ai_settings
     )
@@ -270,7 +257,7 @@ async def test_get_agent_reference_or_create_new_agent(
     mock_agent.version = "1.0"
     mock_project_client.agents.create_version = AsyncMock(return_value=mock_agent)
 
-    run_options = {"model": azure_ai_settings.model_deployment_name}
+    run_options = {"model": azure_ai_settings.get("model_deployment_name")}
     agent_ref = await client._get_agent_reference_or_create(run_options, None)  # type: ignore
 
     assert agent_ref == {"name": "new-agent", "version": "1.0", "type": "agent_reference"}
@@ -284,7 +271,7 @@ async def test_get_agent_reference_missing_model(
     """Test _get_agent_reference_or_create when model is missing for agent creation."""
     client = create_test_azure_ai_client(mock_project_client, agent_name="test-agent")
 
-    with pytest.raises(ServiceInitializationError, match="Model deployment name is required for agent creation"):
+    with pytest.raises(ValueError, match="Model deployment name is required for agent creation"):
         await client._get_agent_reference_or_create({}, None)  # type: ignore
 
 
@@ -420,7 +407,7 @@ async def test_prepare_options_basic(mock_project_client: MagicMock) -> None:
 
     with (
         patch(
-            "agent_framework.openai._responses_client.RawOpenAIResponsesClient._prepare_options",
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
             return_value={"model": "test-model"},
         ),
         patch.object(
@@ -432,7 +419,7 @@ async def test_prepare_options_basic(mock_project_client: MagicMock) -> None:
         run_options = await client._prepare_options(messages, {})
 
         assert "extra_body" in run_options
-        assert run_options["extra_body"]["agent"]["name"] == "test-agent"
+        assert run_options["extra_body"]["agent_reference"]["name"] == "test-agent"
 
 
 @pytest.mark.parametrize(
@@ -457,7 +444,7 @@ async def test_prepare_options_with_application_endpoint(
 
     with (
         patch(
-            "agent_framework.openai._responses_client.RawOpenAIResponsesClient._prepare_options",
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
             return_value={"model": "test-model"},
         ),
         patch.object(
@@ -470,7 +457,7 @@ async def test_prepare_options_with_application_endpoint(
 
     if expects_agent:
         assert "extra_body" in run_options
-        assert run_options["extra_body"]["agent"]["name"] == "test-agent"
+        assert run_options["extra_body"]["agent_reference"]["name"] == "test-agent"
     else:
         assert "extra_body" not in run_options
 
@@ -499,7 +486,7 @@ async def test_prepare_options_with_application_project_client(
 
     with (
         patch(
-            "agent_framework.openai._responses_client.RawOpenAIResponsesClient._prepare_options",
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
             return_value={"model": "test-model"},
         ),
         patch.object(
@@ -512,22 +499,9 @@ async def test_prepare_options_with_application_project_client(
 
     if expects_agent:
         assert "extra_body" in run_options
-        assert run_options["extra_body"]["agent"]["name"] == "test-agent"
+        assert run_options["extra_body"]["agent_reference"]["name"] == "test-agent"
     else:
         assert "extra_body" not in run_options
-
-
-async def test_initialize_client(mock_project_client: MagicMock) -> None:
-    """Test _initialize_client method."""
-    client = create_test_azure_ai_client(mock_project_client)
-
-    mock_openai_client = MagicMock()
-    mock_project_client.get_openai_client = MagicMock(return_value=mock_openai_client)
-
-    await client._initialize_client()
-
-    assert client.client is mock_openai_client
-    mock_project_client.get_openai_client.assert_called_once()
 
 
 def test_update_agent_name_and_description(mock_project_client: MagicMock) -> None:
@@ -549,6 +523,48 @@ def test_update_agent_name_and_description(mock_project_client: MagicMock) -> No
         mock_update.return_value = None
         client._update_agent_name_and_description(None)  # type: ignore
         mock_update.assert_called_once_with(None)
+
+
+def test_as_agent_uses_client_agent_name_as_default(mock_project_client: MagicMock) -> None:
+    """Test that as_agent() defaults Agent.name to client.agent_name when name is not provided."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="my_agent")
+    client.agent_description = "my description"
+
+    agent = client.as_agent(instructions="You are helpful.")
+
+    assert agent.name == "my_agent"
+    assert agent.description == "my description"
+
+
+def test_as_agent_explicit_name_overrides_client_agent_name(mock_project_client: MagicMock) -> None:
+    """Test that an explicit name passed to as_agent() takes precedence over client.agent_name."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="client_name")
+    client.agent_description = "client description"
+
+    agent = client.as_agent(name="explicit_name", description="explicit description", instructions="You are helpful.")
+
+    assert agent.name == "explicit_name"
+    assert agent.description == "explicit description"
+
+
+def test_as_agent_no_name_anywhere(mock_project_client: MagicMock) -> None:
+    """Test that Agent.name is None when neither as_agent name nor client.agent_name is provided."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    agent = client.as_agent(instructions="You are helpful.")
+
+    assert agent.name is None
+
+
+def test_as_agent_empty_string_preserves_explicit_value(mock_project_client: MagicMock) -> None:
+    """Test that empty-string name/description are preserved and do not fall back to client defaults."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="client_name")
+    client.agent_description = "client description"
+
+    agent = client.as_agent(name="", description="", instructions="You are helpful.")
+
+    assert agent.name == ""
+    assert agent.description == ""
 
 
 async def test_async_context_manager(mock_project_client: MagicMock) -> None:
@@ -777,6 +793,82 @@ async def test_agent_creation_with_tools(
     assert call_args[1]["definition"].tools == test_tools
 
 
+async def test_runtime_tools_override_logs_warning(
+    mock_project_client: MagicMock,
+) -> None:
+    """Test warning is logged when runtime tools differ from creation-time tools."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="test-agent")
+
+    mock_agent = MagicMock()
+    mock_agent.name = "test-agent"
+    mock_agent.version = "1.0"
+    mock_project_client.agents.create_version = AsyncMock(return_value=mock_agent)
+    messages = [Message(role="user", contents=[Content.from_text(text="Hello")])]
+
+    with patch(
+        "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+        return_value={"model": "test-model", "tools": [{"type": "function", "name": "tool_one"}]},
+    ):
+        await client._prepare_options(messages, {})
+
+    with (
+        patch(
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+            return_value={"model": "test-model", "tools": [{"type": "function", "name": "tool_two"}]},
+        ),
+        patch("agent_framework_azure_ai._client.logger.warning") as mock_warning,
+    ):
+        await client._prepare_options(messages, {})
+    mock_warning.assert_called_once()
+    assert "Use AzureOpenAIResponsesClient instead." in mock_warning.call_args[0][0]
+
+
+async def test_prepare_options_logs_warning_for_tools_with_existing_agent_version(
+    mock_project_client: MagicMock,
+) -> None:
+    """Test warning is logged when tools are supplied against an existing agent version."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="test-agent", agent_version="1.0")
+    messages = [Message(role="user", contents=[Content.from_text(text="Hello")])]
+
+    with (
+        patch(
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+            return_value={"model": "test-model", "tools": [{"type": "function", "name": "tool_one"}]},
+        ),
+        patch("agent_framework_azure_ai._client.logger.warning") as mock_warning,
+    ):
+        run_options = await client._prepare_options(messages, {})
+
+    mock_warning.assert_called_once()
+    assert "Use AzureOpenAIResponsesClient instead." in mock_warning.call_args[0][0]
+    assert "tools" not in run_options
+
+
+async def test_prepare_options_logs_warning_for_tools_on_application_endpoint(
+    mock_project_client: MagicMock,
+) -> None:
+    """Test warning is logged when runtime tools are removed for application endpoints."""
+    client = create_test_azure_ai_client(mock_project_client)
+    client._is_application_endpoint = True  # type: ignore
+    messages = [Message(role="user", contents=[Content.from_text(text="Hello")])]
+
+    with (
+        patch(
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+            return_value={"model": "test-model", "tools": [{"type": "function", "name": "tool_one"}]},
+        ),
+        patch.object(client, "_get_agent_reference_or_create", new_callable=AsyncMock) as mock_get_agent_reference,
+        patch("agent_framework_azure_ai._client.logger.warning") as mock_warning,
+    ):
+        run_options = await client._prepare_options(messages, {})
+
+    mock_get_agent_reference.assert_not_called()
+    mock_warning.assert_called_once()
+    assert "Use AzureOpenAIResponsesClient instead." in mock_warning.call_args[0][0]
+    assert "tools" not in run_options
+    assert "extra_body" not in run_options
+
+
 async def test_use_latest_version_existing_agent(
     mock_project_client: MagicMock,
 ) -> None:
@@ -876,6 +968,13 @@ class ResponseFormatModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AlternateResponseFormatModel(BaseModel):
+    """Alternate model for structured output warning checks."""
+
+    summary: str
+    confidence: float
+
+
 async def test_agent_creation_with_response_format(
     mock_project_client: MagicMock,
 ) -> None:
@@ -901,10 +1000,10 @@ async def test_agent_creation_with_response_format(
     assert hasattr(created_definition, "text")
     assert created_definition.text is not None
 
-    # Check that the format is a ResponseTextFormatConfigurationJsonSchema
+    # Check that the format is a TextResponseFormatJsonSchema
     assert hasattr(created_definition.text, "format")
     format_config = created_definition.text.format
-    assert isinstance(format_config, ResponseTextFormatConfigurationJsonSchema)
+    assert isinstance(format_config, TextResponseFormatJsonSchema)
 
     # Check the schema name matches the model class name
     assert format_config.name == "ResponseFormatModel"
@@ -962,10 +1061,40 @@ async def test_agent_creation_with_mapping_response_format(
     assert hasattr(created_definition, "text")
     assert created_definition.text is not None
     format_config = created_definition.text.format
-    assert isinstance(format_config, ResponseTextFormatConfigurationJsonSchema)
+    assert isinstance(format_config, TextResponseFormatJsonSchema)
     assert format_config.name == runtime_schema["title"]
     assert format_config.schema == runtime_schema
     assert format_config.strict is True
+
+
+async def test_runtime_structured_output_override_logs_warning(
+    mock_project_client: MagicMock,
+) -> None:
+    """Test warning is logged when runtime structured_output differs from creation-time configuration."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="test-agent")
+
+    mock_agent = MagicMock()
+    mock_agent.name = "test-agent"
+    mock_agent.version = "1.0"
+    mock_project_client.agents.create_version = AsyncMock(return_value=mock_agent)
+    messages = [Message(role="user", contents=[Content.from_text(text="Hello")])]
+
+    with patch(
+        "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+        return_value={"model": "test-model"},
+    ):
+        await client._prepare_options(messages, {"response_format": ResponseFormatModel})
+
+    with (
+        patch(
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+            return_value={"model": "test-model"},
+        ),
+        patch("agent_framework_azure_ai._client.logger.warning") as mock_warning,
+    ):
+        await client._prepare_options(messages, {"response_format": AlternateResponseFormatModel})
+    mock_warning.assert_called_once()
+    assert "Use AzureOpenAIResponsesClient instead." in mock_warning.call_args[0][0]
 
 
 async def test_prepare_options_excludes_response_format(
@@ -979,7 +1108,7 @@ async def test_prepare_options_excludes_response_format(
 
     with (
         patch(
-            "agent_framework.openai._responses_client.RawOpenAIResponsesClient._prepare_options",
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
             return_value={
                 "model": "test-model",
                 "response_format": ResponseFormatModel,
@@ -1002,7 +1131,40 @@ async def test_prepare_options_excludes_response_format(
         assert "text_format" not in run_options
         # But extra_body should contain agent reference
         assert "extra_body" in run_options
-        assert run_options["extra_body"]["agent"]["name"] == "test-agent"
+        assert run_options["extra_body"]["agent_reference"]["name"] == "test-agent"
+
+
+async def test_prepare_options_keeps_values_for_unsupported_option_keys(
+    mock_project_client: MagicMock,
+) -> None:
+    """Test that run_options removal only applies to known AzureAI agent-level option mappings."""
+    client = create_test_azure_ai_client(mock_project_client, agent_name="test-agent", agent_version="1.0")
+    messages = [Message(role="user", contents=[Content.from_text(text="Hello")])]
+
+    with (
+        patch(
+            "agent_framework_openai._chat_client.RawOpenAIChatClient._prepare_options",
+            return_value={
+                "model": "test-model",
+                "tools": [{"type": "function", "name": "weather"}],
+                "text": {"format": {"type": "json_schema", "name": "schema"}},
+                "text_format": ResponseFormatModel,
+                "custom_option": "keep-me",
+            },
+        ),
+        patch.object(
+            client,
+            "_get_agent_reference_or_create",
+            return_value={"name": "test-agent", "version": "1.0", "type": "agent_reference"},
+        ),
+    ):
+        run_options = await client._prepare_options(messages, {})
+
+        assert "model" not in run_options
+        assert "tools" not in run_options
+        assert "text" not in run_options
+        assert "text_format" not in run_options
+        assert run_options["custom_option"] == "keep-me"
 
 
 def test_get_conversation_id_with_store_true_and_conversation_id() -> None:
@@ -1113,7 +1275,7 @@ def test_from_azure_ai_tools_mcp() -> None:
 
 def test_from_azure_ai_tools_code_interpreter() -> None:
     """Test from_azure_ai_tools with Code Interpreter tool."""
-    ci_tool = CodeInterpreterTool(container=CodeInterpreterToolAuto(file_ids=["file-1"]))
+    ci_tool = CodeInterpreterTool(container=AutoCodeInterpreterToolParam(file_ids=["file-1"]))
     parsed_tools = from_azure_ai_tools([ci_tool])
     assert len(parsed_tools) == 1
     assert parsed_tools[0]["type"] == "code_interpreter"
@@ -1141,7 +1303,6 @@ def test_from_azure_ai_tools_web_search() -> None:
 
 
 # endregion
-
 
 # region Integration Tests
 
@@ -1183,339 +1344,6 @@ async def client() -> AsyncGenerator[AzureAIClient, None]:
             await project_client.agents.delete(agent_name=agent_name)
 
 
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-@pytest.mark.parametrize(
-    "option_name,option_value,needs_validation",
-    [
-        # Simple ChatOptions - just verify they don't fail
-        param("top_p", 0.9, False, id="top_p"),
-        param("max_tokens", 500, False, id="max_tokens"),
-        param("seed", 123, False, id="seed"),
-        param("user", "test-user-id", False, id="user"),
-        param("metadata", {"test_key": "test_value"}, False, id="metadata"),
-        param("frequency_penalty", 0.5, False, id="frequency_penalty"),
-        param("presence_penalty", 0.3, False, id="presence_penalty"),
-        param("stop", ["END"], False, id="stop"),
-        param("allow_multiple_tool_calls", True, False, id="allow_multiple_tool_calls"),
-        param("tool_choice", "none", True, id="tool_choice_none"),
-        param("tool_choice", "auto", True, id="tool_choice_auto"),
-        param("tool_choice", "required", True, id="tool_choice_required_any"),
-        param(
-            "tool_choice",
-            {"mode": "required", "required_function_name": "get_weather"},
-            True,
-            id="tool_choice_required",
-        ),
-        # OpenAIResponsesOptions - just verify they don't fail
-        param("safety_identifier", "user-hash-abc123", False, id="safety_identifier"),
-        param("truncation", "auto", False, id="truncation"),
-        param("top_logprobs", 5, False, id="top_logprobs"),
-        param("prompt_cache_key", "test-cache-key", False, id="prompt_cache_key"),
-        param("max_tool_calls", 3, False, id="max_tool_calls"),
-    ],
-)
-async def test_integration_options(
-    option_name: str,
-    option_value: Any,
-    needs_validation: bool,
-    client: AzureAIClient,
-) -> None:
-    """Parametrized test covering options that can be set at runtime for a Foundry Agent.
-
-    Tests both streaming and non-streaming modes for each option to ensure
-    they don't cause failures. Options marked with needs_validation also
-    check that the feature actually works correctly.
-
-    This test reuses a single agent.
-    """
-    # Prepare test message
-    if option_name.startswith("tool_choice"):
-        # Use weather-related prompt for tool tests
-        messages = [Message(role="user", text="What is the weather in Seattle?")]
-    else:
-        # Generic prompt for simple options
-        messages = [Message(role="user", text="Say 'Hello World' briefly.")]
-
-    # Build options dict
-    options: dict[str, Any] = {option_name: option_value, "tools": [get_weather]}
-
-    for streaming in [False, True]:
-        if streaming:
-            # Test streaming mode
-            response_stream = client.get_response(
-                messages=messages,
-                stream=True,
-                options=options,
-            )
-
-            response = await response_stream.get_final_response()
-        else:
-            # Test non-streaming mode
-            response = await client.get_response(
-                messages=messages,
-                options=options,
-            )
-
-        assert response is not None
-        assert isinstance(response, ChatResponse)
-
-        # For tool_choice="required", we return after tool execution without a model text response
-        is_required_tool_choice = option_name == "tool_choice" and (
-            option_value == "required" or (isinstance(option_value, dict) and option_value.get("mode") == "required")
-        )
-
-        if is_required_tool_choice:
-            # Response should have function call and function result, but no text from model
-            assert len(response.messages) >= 2, f"Expected function call + result for {option_name}"
-            has_function_call = any(c.type == "function_call" for msg in response.messages for c in msg.contents)
-            has_function_result = any(c.type == "function_result" for msg in response.messages for c in msg.contents)
-            assert has_function_call, f"No function call in response for {option_name}"
-            assert has_function_result, f"No function result in response for {option_name}"
-        else:
-            assert response.text is not None, f"No text in response for option '{option_name}'"
-            assert len(response.text) > 0, f"Empty response for option '{option_name}'"
-
-        # Validate based on option type
-        if needs_validation:
-            if option_name.startswith("tool_choice") and not is_required_tool_choice:
-                # Should have called the weather function
-                text = response.text.lower()
-                assert "sunny" in text or "seattle" in text, f"Tool not invoked for {option_name}"
-            elif option_name == "response_format":
-                if option_value == OutputStruct:
-                    # Should have structured output
-                    assert response.value is not None, "No structured output"
-                    assert isinstance(response.value, OutputStruct)
-                    assert "seattle" in response.value.location.lower()
-                else:
-                    # Runtime JSON schema
-                    assert response.value is None, "No structured output, can't parse any json."
-                    response_value = json.loads(response.text)
-                    assert isinstance(response_value, dict)
-                    assert "location" in response_value
-                    assert "seattle" in response_value["location"].lower()
-
-
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-@pytest.mark.parametrize(
-    "option_name,option_value,needs_validation",
-    [
-        param("temperature", 0.7, False, id="temperature"),
-        # Complex options requiring output validation
-        param("response_format", OutputStruct, True, id="response_format_pydantic"),
-        param(
-            "response_format",
-            {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "WeatherDigest",
-                    "strict": True,
-                    "schema": {
-                        "title": "WeatherDigest",
-                        "type": "object",
-                        "properties": {
-                            "location": {"type": "string"},
-                            "conditions": {"type": "string"},
-                            "temperature_c": {"type": "number"},
-                            "advisory": {"type": "string"},
-                        },
-                        "required": ["location", "conditions", "temperature_c", "advisory"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            True,
-            id="response_format_runtime_json_schema",
-        ),
-    ],
-)
-async def test_integration_agent_options(
-    option_name: str,
-    option_value: Any,
-    needs_validation: bool,
-) -> None:
-    """Test Foundry agent level options in both streaming and non-streaming modes.
-
-    Tests both streaming and non-streaming modes for each option to ensure
-    they don't cause failures. Options marked with needs_validation also
-    check that the feature actually works correctly.
-
-    This test create a new client and uses it for both streaming and non-streaming tests.
-    """
-    async with temporary_chat_client(agent_name=f"test-agent-{option_name.replace('_', '-')}-{uuid4()}") as client:
-        for streaming in [False, True]:
-            # Prepare test message
-            if option_name.startswith("response_format"):
-                # Use prompt that works well with structured output
-                messages = [Message(role="user", text="The weather in Seattle is sunny")]
-                messages.append(Message(role="user", text="What is the weather in Seattle?"))
-            else:
-                # Generic prompt for simple options
-                messages = [Message(role="user", text="Say 'Hello World' briefly.")]
-
-            # Build options dict
-            options = {option_name: option_value}
-
-            if streaming:
-                # Test streaming mode
-                response_stream = client.get_response(
-                    messages=messages,
-                    stream=True,
-                    options=options,
-                )
-
-                response = await response_stream.get_final_response()
-            else:
-                # Test non-streaming mode
-                response = await client.get_response(
-                    messages=messages,
-                    options=options,
-                )
-
-            assert response is not None
-            assert isinstance(response, ChatResponse)
-            assert response.text is not None, f"No text in response for option '{option_name}'"
-            assert len(response.text) > 0, f"Empty response for option '{option_name}'"
-
-            # Validate based on option type
-            if needs_validation and option_name.startswith("response_format"):
-                if option_value == OutputStruct:
-                    # Should have structured output
-                    assert response.value is not None, "No structured output"
-                    assert isinstance(response.value, OutputStruct)
-                    assert "seattle" in response.value.location.lower()
-                else:
-                    # Runtime JSON schema
-                    assert response.value is None, "No structured output, can't parse any json."
-                    response_value = json.loads(response.text)
-                    assert isinstance(response_value, dict)
-                    assert "location" in response_value
-                    assert "seattle" in response_value["location"].lower()
-
-
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_web_search() -> None:
-    async with temporary_chat_client(agent_name="af-int-test-web-search") as client:
-        for streaming in [False, True]:
-            content = {
-                "messages": "Who are the main characters of Kpop Demon Hunters? Do a web search to find the answer.",
-                "options": {
-                    "tool_choice": "auto",
-                    "tools": [client.get_web_search_tool()],
-                },
-            }
-            if streaming:
-                response = await client.get_response(stream=True, **content).get_final_response()
-            else:
-                response = await client.get_response(**content)
-
-            assert response is not None
-            assert isinstance(response, ChatResponse)
-            assert "Rumi" in response.text
-            assert "Mira" in response.text
-            assert "Zoey" in response.text
-
-            # Test that the client will use the web search tool with location
-            content = {
-                "messages": "What is the current weather? Do not ask for my current location.",
-                "options": {
-                    "tool_choice": "auto",
-                    "tools": [client.get_web_search_tool(user_location={"country": "US", "city": "Seattle"})],
-                },
-            }
-            if streaming:
-                response = await client.get_response(stream=True, **content).get_final_response()
-            else:
-                response = await client.get_response(**content)
-            assert response.text is not None
-
-
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_agent_hosted_mcp_tool() -> None:
-    """Integration test for MCP tool with Azure Response Agent using Microsoft Learn MCP."""
-    async with temporary_chat_client(agent_name="af-int-test-mcp") as client:
-        response = await client.get_response(
-            "How to create an Azure storage account using az cli?",
-            options={
-                # this needs to be high enough to handle the full MCP tool response.
-                "max_tokens": 5000,
-                "tools": client.get_mcp_tool(
-                    name="Microsoft Learn MCP",
-                    url="https://learn.microsoft.com/api/mcp",
-                    description="A Microsoft Learn MCP server for documentation questions",
-                    approval_mode="never_require",
-                ),
-            },
-        )
-        assert isinstance(response, ChatResponse)
-        assert response.text
-        # Should contain Azure-related content since it's asking about Azure CLI
-        assert any(term in response.text.lower() for term in ["azure", "storage", "account", "cli"])
-
-
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_agent_hosted_code_interpreter_tool():
-    """Test Azure Responses Client agent with code interpreter tool through AzureAIClient."""
-    async with temporary_chat_client(agent_name="af-int-test-code-interpreter") as client:
-        response = await client.get_response(
-            "Calculate the sum of numbers from 1 to 10 using Python code.",
-            options={
-                "tools": [client.get_code_interpreter_tool()],
-            },
-        )
-        # Should contain calculation result (sum of 1-10 = 55) or code execution content
-        contains_relevant_content = any(
-            term in response.text.lower() for term in ["55", "sum", "code", "python", "calculate", "10"]
-        )
-        assert contains_relevant_content or len(response.text.strip()) > 10
-
-
-@pytest.mark.flaky
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_agent_existing_thread():
-    """Test Azure Responses Client agent with existing thread to continue conversations across agent instances."""
-    # First conversation - capture the thread
-    preserved_thread = None
-
-    async with (
-        temporary_chat_client(agent_name="af-int-test-existing-thread") as client,
-        Agent(
-            client=client,
-            instructions="You are a helpful assistant with good memory.",
-        ) as first_agent,
-    ):
-        # Start a conversation and capture the thread
-        thread = first_agent.get_new_thread()
-        first_response = await first_agent.run("My hobby is photography. Remember this.", thread=thread, store=True)
-
-        assert isinstance(first_response, AgentResponse)
-        assert first_response.text is not None
-
-        # Preserve the thread for reuse
-        preserved_thread = thread
-
-    # Second conversation - reuse the thread in a new agent instance
-    if preserved_thread:
-        async with (
-            temporary_chat_client(agent_name="af-int-test-existing-thread-2") as client,
-            Agent(
-                client=client,
-                instructions="You are a helpful assistant with good memory.",
-            ) as second_agent,
-        ):
-            # Reuse the preserved thread
-            second_response = await second_agent.run("What is my hobby?", thread=preserved_thread)
-
-            assert isinstance(second_response, AgentResponse)
-            assert second_response.text is not None
-            assert "photography" in second_response.text.lower()
-
-
 # region Factory Method Tests
 
 
@@ -1530,6 +1358,35 @@ def test_get_code_interpreter_tool_with_file_ids() -> None:
     tool = AzureAIClient.get_code_interpreter_tool(file_ids=["file-123", "file-456"])
     assert isinstance(tool, CodeInterpreterTool)
     assert tool["container"]["file_ids"] == ["file-123", "file-456"]
+
+
+def test_get_code_interpreter_tool_with_content() -> None:
+    """Test get_code_interpreter_tool accepts Content.from_hosted_file in file_ids."""
+    from agent_framework import Content
+
+    content = Content.from_hosted_file("file-content-123")
+    tool = AzureAIClient.get_code_interpreter_tool(file_ids=[content])
+    assert isinstance(tool, CodeInterpreterTool)
+    assert tool["container"]["file_ids"] == ["file-content-123"]
+
+
+def test_get_code_interpreter_tool_with_mixed_file_ids() -> None:
+    """Test get_code_interpreter_tool accepts a mix of strings and Content objects."""
+    from agent_framework import Content
+
+    content = Content.from_hosted_file("file-from-content")
+    tool = AzureAIClient.get_code_interpreter_tool(file_ids=["file-plain", content])
+    assert isinstance(tool, CodeInterpreterTool)
+    assert sorted(tool["container"]["file_ids"]) == ["file-from-content", "file-plain"]
+
+
+def test_get_code_interpreter_tool_content_unsupported_type() -> None:
+    """Test get_code_interpreter_tool raises ValueError for unsupported Content types."""
+    from agent_framework import Content
+
+    content = Content.from_hosted_vector_store("vs-123")
+    with pytest.raises(ValueError, match="Unsupported Content type"):
+        AzureAIClient.get_code_interpreter_tool(file_ids=[content])
 
 
 def test_get_file_search_tool_basic() -> None:
@@ -1623,6 +1480,472 @@ def test_get_image_generation_tool_with_options() -> None:
     assert tool["size"] == "1024x1024"
     assert tool["quality"] == "high"
     assert tool["output_format"] == "png"
+
+
+# endregion
+
+
+# region Azure AI Search Citation Enhancement Tests
+
+
+def test_extract_azure_search_urls_with_dict_items(mock_project_client: MagicMock) -> None:
+    """Test _extract_azure_search_urls with dict-style output (after JSON parsing)."""
+    client = create_test_azure_ai_client(mock_project_client)
+    mock_output = {
+        "documents": [{"id": "1", "url": "https://search.example.com/"}],
+        "get_urls": [
+            "https://search.example.com/indexes/idx/docs/1?api-version=2024-07-01",
+            "https://search.example.com/indexes/idx/docs/2?api-version=2024-07-01",
+        ],
+    }
+    mock_search_item = MagicMock()
+    mock_search_item.type = "azure_ai_search_call_output"
+    mock_search_item.output = mock_output
+
+    mock_call_item = MagicMock()
+    mock_call_item.type = "azure_ai_search_call"
+
+    mock_msg_item = MagicMock()
+    mock_msg_item.type = "message"
+
+    urls = client._extract_azure_search_urls([mock_call_item, mock_search_item, mock_msg_item])
+    assert len(urls) == 2
+    assert urls[0] == "https://search.example.com/indexes/idx/docs/1?api-version=2024-07-01"
+    assert urls[1] == "https://search.example.com/indexes/idx/docs/2?api-version=2024-07-01"
+
+
+def test_extract_azure_search_urls_with_object_items(mock_project_client: MagicMock) -> None:
+    """Test _extract_azure_search_urls with object-style output items."""
+    client = create_test_azure_ai_client(mock_project_client)
+    mock_output = MagicMock()
+    mock_output.get_urls = ["https://example.com/doc/1", "https://example.com/doc/2"]
+    mock_item = MagicMock()
+    mock_item.type = "azure_ai_search_call_output"
+    mock_item.output = mock_output
+
+    urls = client._extract_azure_search_urls([mock_item])
+    assert urls == ["https://example.com/doc/1", "https://example.com/doc/2"]
+
+
+def test_extract_azure_search_urls_no_search_items(mock_project_client: MagicMock) -> None:
+    """Test _extract_azure_search_urls with no search output items."""
+    client = create_test_azure_ai_client(mock_project_client)
+    mock_item = MagicMock()
+    mock_item.type = "message"
+    urls = client._extract_azure_search_urls([mock_item])
+    assert urls == []
+
+
+def test_extract_azure_search_urls_with_json_string_output(mock_project_client: MagicMock) -> None:
+    """Test _extract_azure_search_urls with JSON string output (non-streaming pydantic extra field)."""
+    client = create_test_azure_ai_client(mock_project_client)
+    json_output = json.dumps({
+        "documents": [{"id": "1"}],
+        "get_urls": [
+            "https://search.example.com/indexes/idx/docs/1?api-version=2024-07-01",
+        ],
+    })
+    mock_item = MagicMock()
+    mock_item.type = "azure_ai_search_call_output"
+    mock_item.output = json_output
+
+    urls = client._extract_azure_search_urls([mock_item])
+    assert len(urls) == 1
+    assert urls[0] == "https://search.example.com/indexes/idx/docs/1?api-version=2024-07-01"
+
+
+def test_get_search_doc_url_valid(mock_project_client: MagicMock) -> None:
+    """Test _get_search_doc_url with valid doc_N title."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://example.com/doc/0", "https://example.com/doc/1", "https://example.com/doc/2"]
+
+    assert client._get_search_doc_url("doc_0", get_urls) == "https://example.com/doc/0"
+    assert client._get_search_doc_url("doc_1", get_urls) == "https://example.com/doc/1"
+    assert client._get_search_doc_url("doc_2", get_urls) == "https://example.com/doc/2"
+
+
+def test_get_search_doc_url_out_of_range(mock_project_client: MagicMock) -> None:
+    """Test _get_search_doc_url with out-of-range index."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://example.com/doc/0"]
+    assert client._get_search_doc_url("doc_5", get_urls) is None
+
+
+def test_get_search_doc_url_no_match(mock_project_client: MagicMock) -> None:
+    """Test _get_search_doc_url with non-matching title."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://example.com/doc/0"]
+    assert client._get_search_doc_url("some_title", get_urls) is None
+    assert client._get_search_doc_url(None, get_urls) is None
+    assert client._get_search_doc_url("doc_0", []) is None
+
+
+def test_enrich_annotations_with_search_urls(mock_project_client: MagicMock) -> None:
+    """Test _enrich_annotations_with_search_urls enriches citation annotations."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = [
+        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01",
+        "https://search.example.com/indexes/idx/docs/41?api-version=2024-07-01",
+    ]
+
+    content = Content.from_text(text="test response")
+    content.annotations = [
+        {
+            "type": "citation",
+            "title": "doc_0",
+            "url": "https://search.example.com/",
+        },
+        {
+            "type": "citation",
+            "title": "doc_1",
+            "url": "https://search.example.com/",
+        },
+    ]
+
+    client._enrich_annotations_with_search_urls([content], get_urls)
+
+    assert content.annotations[0]["additional_properties"]["get_url"] == get_urls[0]
+    assert content.annotations[1]["additional_properties"]["get_url"] == get_urls[1]
+
+
+def test_enrich_annotations_no_match(mock_project_client: MagicMock) -> None:
+    """Test _enrich_annotations_with_search_urls with non-matching titles."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01"]
+
+    content = Content.from_text(text="test response")
+    content.annotations = [
+        {
+            "type": "citation",
+            "title": "some_title",
+            "url": "https://search.example.com/",
+        },
+    ]
+
+    client._enrich_annotations_with_search_urls([content], get_urls)
+    assert "additional_properties" not in content.annotations[0] or "get_url" not in content.annotations[0].get(
+        "additional_properties", {}
+    )
+
+
+def test_enrich_annotations_empty_get_urls(mock_project_client: MagicMock) -> None:
+    """Test _enrich_annotations_with_search_urls with empty get_urls."""
+    client = create_test_azure_ai_client(mock_project_client)
+    content = Content.from_text(text="test")
+    content.annotations = [{"type": "citation", "title": "doc_0", "url": "https://example.com/"}]
+
+    # Should not raise or modify
+    client._enrich_annotations_with_search_urls([content], [])
+    assert "additional_properties" not in content.annotations[0]
+
+
+async def test_inner_get_response_enriches_non_streaming(mock_project_client: MagicMock) -> None:
+    """Test _inner_get_response enriches url_citation annotations for non-streaming responses."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    # Build a ChatResponse with citation annotations and a raw_representation carrying search output
+    content = Content.from_text(text="Here is the result【5:0†source】.")
+    content.annotations = [
+        Annotation(type="citation", title="doc_0", url="https://search.example.com/"),
+    ]
+    msg = Message(role="assistant", contents=[content])
+    mock_raw = MagicMock()
+    mock_search_output = MagicMock()
+    mock_search_output.type = "azure_ai_search_call_output"
+    mock_search_output_data = MagicMock()
+    mock_search_output_data.get_urls = [
+        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01",
+    ]
+    mock_search_output.output = mock_search_output_data
+    mock_raw.output = [mock_search_output]
+
+    base_response = ChatResponse(messages=[msg], raw_representation=mock_raw)
+
+    async def _fake_awaitable() -> ChatResponse:
+        return base_response
+
+    with patch.object(RawOpenAIChatClient, "_inner_get_response", return_value=_fake_awaitable()):
+        result_awaitable = client._inner_get_response(messages=[], options={}, stream=False)
+        result = await result_awaitable  # type: ignore[misc]
+
+    ann = result.messages[0].contents[0].annotations[0]
+    assert ann["additional_properties"]["get_url"] == (
+        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01"
+    )
+
+
+async def test_inner_get_response_no_search_output_non_streaming(mock_project_client: MagicMock) -> None:
+    """Test _inner_get_response passes through when no search output exists."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    content = Content.from_text(text="Hello world")
+    msg = Message(role="assistant", contents=[content])
+    mock_raw = MagicMock()
+    mock_raw.output = []
+    base_response = ChatResponse(messages=[msg], raw_representation=mock_raw)
+
+    async def _fake_awaitable() -> ChatResponse:
+        return base_response
+
+    with patch.object(RawOpenAIChatClient, "_inner_get_response", return_value=_fake_awaitable()):
+        result_awaitable = client._inner_get_response(messages=[], options={}, stream=False)
+        result = await result_awaitable  # type: ignore[misc]
+
+    assert result.messages[0].contents[0].text == "Hello world"
+
+
+def _create_mock_stream() -> MagicMock:
+    """Create a mock ResponseStream with working with_transform_hook."""
+    mock_stream = MagicMock(spec=ResponseStream)
+    mock_stream._transform_hooks = []
+    mock_stream.with_transform_hook.side_effect = lambda hook: mock_stream._transform_hooks.append(hook) or mock_stream
+    return mock_stream
+
+
+def test_inner_get_response_streaming_registers_hook(mock_project_client: MagicMock) -> None:
+    """Test _inner_get_response appends a transform hook to the stream for streaming responses."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    mock_stream = _create_mock_stream()
+
+    with patch.object(RawOpenAIChatClient, "_inner_get_response", return_value=mock_stream):
+        result = client._inner_get_response(messages=[], options={}, stream=True)
+
+    assert result is mock_stream
+    assert len(mock_stream._transform_hooks) == 1
+
+
+def test_streaming_hook_captures_search_urls(mock_project_client: MagicMock) -> None:
+    """Test the streaming transform hook captures get_urls from search output events."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    mock_stream = _create_mock_stream()
+
+    with patch.object(RawOpenAIChatClient, "_inner_get_response", return_value=mock_stream):
+        client._inner_get_response(messages=[], options={}, stream=True)
+
+    hook = mock_stream._transform_hooks[0]
+
+    # Simulate azure_ai_search_call_output event
+    mock_item = MagicMock()
+    mock_item.type = "azure_ai_search_call_output"
+    mock_item.output = MagicMock()
+    mock_item.output.get_urls = [
+        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01",
+    ]
+
+    raw_event = MagicMock()
+    raw_event.type = "response.output_item.added"
+    raw_event.item = mock_item
+
+    update = ChatResponseUpdate(raw_representation=raw_event)
+    result = hook(update)
+    assert result is update  # passes through (no annotations to enrich)
+
+
+def test_streaming_hook_enriches_url_citation(mock_project_client: MagicMock) -> None:
+    """Test the streaming transform hook enriches url_citation annotations with get_urls."""
+    client = create_test_azure_ai_client(mock_project_client)
+
+    mock_stream = _create_mock_stream()
+
+    with patch.object(RawOpenAIChatClient, "_inner_get_response", return_value=mock_stream):
+        client._inner_get_response(messages=[], options={}, stream=True)
+
+    hook = mock_stream._transform_hooks[0]
+
+    # Step 1: Feed search output event to capture URLs
+    mock_item = MagicMock()
+    mock_item.type = "azure_ai_search_call_output"
+    mock_item.output = MagicMock()
+    mock_item.output.get_urls = [
+        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01",
+        "https://search.example.com/indexes/idx/docs/41?api-version=2024-07-01",
+    ]
+    raw_output_event = MagicMock()
+    raw_output_event.type = "response.output_item.added"
+    raw_output_event.item = mock_item
+    hook(ChatResponseUpdate(raw_representation=raw_output_event))
+
+    # Step 2: Feed url_citation annotation event (annotation is always a dict in streaming)
+    raw_ann_event = MagicMock()
+    raw_ann_event.type = "response.output_text.annotation.added"
+    raw_ann_event.annotation = {
+        "type": "url_citation",
+        "title": "doc_0",
+        "url": "https://search.example.com/",
+        "start_index": 100,
+        "end_index": 112,
+    }
+    raw_ann_event.annotation_index = 0
+
+    result = hook(ChatResponseUpdate(raw_representation=raw_ann_event))
+
+    # Verify the result has enriched annotation
+    assert result.contents is not None
+    found = False
+    for content_item in result.contents:
+        if hasattr(content_item, "annotations") and content_item.annotations:
+            for ann in content_item.annotations:
+                if isinstance(ann, dict) and ann.get("title") == "doc_0":
+                    found = True
+                    assert ann["additional_properties"]["get_url"] == (
+                        "https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01"
+                    )
+    assert found, "Expected url_citation annotation with enriched get_url"
+
+
+def test_build_url_citation_content(mock_project_client: MagicMock) -> None:
+    """Test _build_url_citation_content creates Content with enriched Annotation."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01"]
+
+    annotation_data = {
+        "type": "url_citation",
+        "title": "doc_0",
+        "url": "https://search.example.com/",
+        "start_index": 100,
+        "end_index": 112,
+    }
+
+    raw_event = MagicMock()
+    raw_event.annotation_index = 0
+
+    content = client._build_url_citation_content(annotation_data, get_urls, raw_event)
+
+    assert content.annotations is not None
+    ann = content.annotations[0]
+    assert ann["type"] == "citation"
+    assert ann["title"] == "doc_0"
+    assert ann["url"] == "https://search.example.com/"
+    assert ann["additional_properties"]["get_url"] == get_urls[0]
+    assert ann["annotated_regions"][0]["start_index"] == 100
+    assert ann["annotated_regions"][0]["end_index"] == 112
+
+
+def test_build_url_citation_content_with_dict(mock_project_client: MagicMock) -> None:
+    """Test _build_url_citation_content handles dict-style annotation data."""
+    client = create_test_azure_ai_client(mock_project_client)
+    get_urls = ["https://search.example.com/indexes/idx/docs/16?api-version=2024-07-01"]
+
+    annotation_data = {
+        "type": "url_citation",
+        "title": "doc_1",
+        "url": "https://search.example.com/",
+        "start_index": 200,
+        "end_index": 215,
+    }
+
+    raw_event = MagicMock()
+    raw_event.annotation_index = 1
+
+    content = client._build_url_citation_content(annotation_data, get_urls, raw_event)
+
+    assert content.annotations is not None
+    ann = content.annotations[0]
+    assert ann["type"] == "citation"
+    assert ann["title"] == "doc_1"
+    # doc_1 is out of range for a 1-element get_urls, so no get_url
+    assert "get_url" not in ann.get("additional_properties", {})
+
+
+# region OAuth Consent
+
+
+def test_parse_chunk_with_oauth_consent_request(mock_project_client: MagicMock) -> None:
+    """Test that a streaming oauth_consent_request output item is parsed into oauth_consent_request content.
+
+    This reproduces the bug from issue #3950 where the event was logged as "Unparsed event"
+    and silently discarded, causing the agent run to complete with zero content.
+    """
+    client = AzureAIClient(project_client=mock_project_client, agent_name="test")
+    chat_options: dict[str, Any] = {}
+    function_call_ids: dict[int, tuple[str, str]] = {}
+
+    mock_item = MagicMock()
+    mock_item.type = "oauth_consent_request"
+    mock_item.consent_link = "https://login.microsoftonline.com/common/oauth2/authorize?client_id=abc123"
+
+    mock_event = MagicMock()
+    mock_event.type = "response.output_item.added"
+    mock_event.item = mock_item
+    mock_event.output_index = 0
+
+    update = client._parse_chunk_from_openai(mock_event, chat_options, function_call_ids)
+
+    assert len(update.contents) == 1
+    consent_content = update.contents[0]
+    assert consent_content.type == "oauth_consent_request"
+    assert consent_content.consent_link == "https://login.microsoftonline.com/common/oauth2/authorize?client_id=abc123"
+    assert consent_content.user_input_request is True
+
+
+def test_parse_response_with_oauth_consent_output_item(mock_project_client: MagicMock) -> None:
+    """Test that a non-streaming oauth_consent_request output item is parsed correctly."""
+    client = AzureAIClient(project_client=mock_project_client, agent_name="test")
+
+    mock_item = MagicMock()
+    mock_item.type = "oauth_consent_request"
+    mock_item.consent_link = "https://login.microsoftonline.com/consent?code=abc"
+
+    mock_response = MagicMock()
+    mock_response.output = [mock_item]
+    mock_response.output_parsed = None
+    mock_response.metadata = {}
+    mock_response.id = "resp-oauth-1"
+    mock_response.model = "test-model"
+    mock_response.created_at = 1000000000
+    mock_response.usage = None
+    mock_response.status = "completed"
+
+    response = client._parse_response_from_openai(mock_response, {})
+
+    assert len(response.messages) > 0
+    consent_contents = [c for c in response.messages[0].contents if c.type == "oauth_consent_request"]
+    assert len(consent_contents) == 1
+    assert consent_contents[0].consent_link == "https://login.microsoftonline.com/consent?code=abc"
+
+
+def test_parse_chunk_oauth_consent_no_link(mock_project_client: MagicMock) -> None:
+    """Test that a streaming oauth_consent_request with no consent_link produces empty contents."""
+    client = AzureAIClient(project_client=mock_project_client, agent_name="test")
+
+    mock_item = MagicMock()
+    mock_item.type = "oauth_consent_request"
+    mock_item.consent_link = ""
+
+    mock_event = MagicMock()
+    mock_event.type = "response.output_item.added"
+    mock_event.item = mock_item
+    mock_event.output_index = 0
+
+    update = client._parse_chunk_from_openai(mock_event, {}, {})
+
+    assert not any(c.type == "oauth_consent_request" for c in update.contents)
+
+
+def test_parse_response_oauth_consent_no_link(mock_project_client: MagicMock) -> None:
+    """Test that a non-streaming oauth_consent_request with no consent_link appends no content."""
+    client = AzureAIClient(project_client=mock_project_client, agent_name="test")
+
+    mock_item = MagicMock()
+    mock_item.type = "oauth_consent_request"
+    mock_item.consent_link = None
+
+    mock_response = MagicMock()
+    mock_response.output = [mock_item]
+    mock_response.output_parsed = None
+    mock_response.metadata = {}
+    mock_response.id = "resp-oauth-2"
+    mock_response.model = "test-model"
+    mock_response.created_at = 1000000000
+    mock_response.usage = None
+    mock_response.status = "completed"
+
+    response = client._parse_response_from_openai(mock_response, {})
+
+    consent_contents = [c for c in response.messages[0].contents if c.type == "oauth_consent_request"]
+    assert len(consent_contents) == 0
 
 
 # endregion

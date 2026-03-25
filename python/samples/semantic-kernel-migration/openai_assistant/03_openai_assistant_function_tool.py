@@ -14,11 +14,17 @@ import asyncio
 import os
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 ASSISTANT_MODEL = os.environ.get("OPENAI_ASSISTANT_MODEL", "gpt-4o-mini")
 
 
 async def fake_weather_lookup(city: str, day: str) -> dict[str, Any]:
     """Pretend to call a weather service."""
+
     return {
         "city": city,
         "day": day,
@@ -34,7 +40,7 @@ async def run_semantic_kernel() -> None:
 
     class WeatherPlugin:
         @kernel_function(name="get_forecast", description="Look up the forecast for a city and day.")
-        async def fake_weather_lookup(city: str, day: str) -> dict[str, Any]:
+        async def fake_weather_lookup(self, city: str, day: str) -> dict[str, Any]:
             """Pretend to call a weather service."""
             return {
                 "city": city,
@@ -50,9 +56,8 @@ async def run_semantic_kernel() -> None:
         model=ASSISTANT_MODEL,
         name="WeatherHelper",
         instructions="Call get_forecast to fetch weather details.",
-        plugins=[WeatherPlugin()],
     )
-    agent = OpenAIAssistantAgent(client=client, definition=definition)
+    agent = OpenAIAssistantAgent(client=client, definition=definition, plugins=[WeatherPlugin()])
 
     thread: AssistantAgentThread | None = None
     response = await agent.get_response(
@@ -64,7 +69,7 @@ async def run_semantic_kernel() -> None:
 
 
 async def run_agent_framework() -> None:
-    from agent_framework._tools import tool
+    from agent_framework import Agent, tool
     from agent_framework.openai import OpenAIAssistantsClient
 
     @tool(
@@ -76,7 +81,7 @@ async def run_agent_framework() -> None:
 
     assistants_client = OpenAIAssistantsClient()
     # AF converts the decorated function into an assistant-compatible tool.
-    async with assistants_client.as_agent(
+    async with Agent(client=assistants_client,
         name="WeatherHelper",
         instructions="Call get_forecast to fetch weather details.",
         model=ASSISTANT_MODEL,

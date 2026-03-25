@@ -9,6 +9,12 @@
 #   uv run samples/autogen-migration/single_agent/01_basic_assistant_agent.py
 
 # Copyright (c) Microsoft. All rights reserved.
+
+import asyncio
+
+from agent_framework import Agent
+from dotenv import load_dotenv
+
 """Basic AutoGen AssistantAgent vs Agent Framework Agent.
 
 Both samples expect OpenAI-compatible environment variables (OPENAI_API_KEY or
@@ -16,11 +22,13 @@ Azure OpenAI configuration). Update the prompts or client wiring to match your
 model of choice before running.
 """
 
-import asyncio
+# Load environment variables from .env file
+load_dotenv()
 
 
 async def run_autogen() -> None:
     """Call AutoGen's AssistantAgent for a simple question."""
+
     from autogen_agentchat.agents import AssistantAgent
     from autogen_ext.models.openai import OpenAIChatCompletionClient
 
@@ -42,8 +50,9 @@ async def run_agent_framework() -> None:
     from agent_framework.openai import OpenAIChatClient
 
     # AF constructs a lightweight Agent backed by OpenAIChatClient
-    client = OpenAIChatClient(model_id="gpt-4.1-mini")
-    agent = client.as_agent(
+    client = OpenAIChatClient(model="gpt-4.1-mini")
+    agent = Agent(
+        client=client,
         name="assistant",
         instructions="You are a helpful assistant. Answer in one sentence.",
     )

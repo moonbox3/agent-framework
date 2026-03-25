@@ -9,14 +9,12 @@ from agent_framework import (
     Agent,
     tool,
 )
-from agent_framework.exceptions import ServiceInitializationError
 from azure.ai.agents.models import (
     Agent as AzureAgent,
 )
 from azure.ai.agents.models import (
     CodeInterpreterToolDefinition,
 )
-from azure.identity.aio import AzureCliCredential
 from pydantic import BaseModel
 
 from agent_framework_azure_ai import (
@@ -30,13 +28,9 @@ from agent_framework_azure_ai._shared import (
 )
 
 skip_if_azure_ai_integration_tests_disabled = pytest.mark.skipif(
-    os.getenv("RUN_INTEGRATION_TESTS", "false").lower() != "true"
-    or os.getenv("AZURE_AI_PROJECT_ENDPOINT", "") in ("", "https://test-project.cognitiveservices.azure.com/"),
-    reason="No real AZURE_AI_PROJECT_ENDPOINT provided; skipping integration tests."
-    if os.getenv("RUN_INTEGRATION_TESTS", "false").lower() == "true"
-    else "Integration tests are disabled.",
+    os.getenv("AZURE_AI_PROJECT_ENDPOINT", "") in ("", "https://test-project.cognitiveservices.azure.com/"),
+    reason="No real AZURE_AI_PROJECT_ENDPOINT provided; skipping integration tests.",
 )
-
 
 # region Provider Initialization Tests
 
@@ -86,14 +80,11 @@ def test_provider_init_missing_endpoint_raises(
     mock_azure_credential: MagicMock,
 ) -> None:
     """Test AzureAIAgentsProvider raises error when endpoint is missing."""
-    # Mock AzureAISettings to return None for project_endpoint
-    with patch("agent_framework_azure_ai._agent_provider.AzureAISettings") as mock_settings_class:
-        mock_settings = MagicMock()
-        mock_settings.project_endpoint = None
-        mock_settings.model_deployment_name = "test-model"
-        mock_settings_class.return_value = mock_settings
+    # Mock load_settings to return a dict with None for project_endpoint
+    with patch("agent_framework_azure_ai._agent_provider.load_settings") as mock_load_settings:
+        mock_load_settings.return_value = {"project_endpoint": None, "model_deployment_name": "test-model"}
 
-        with pytest.raises(ServiceInitializationError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             AzureAIAgentsProvider(credential=mock_azure_credential)
 
         assert "project endpoint is required" in str(exc_info.value).lower()
@@ -101,14 +92,13 @@ def test_provider_init_missing_endpoint_raises(
 
 def test_provider_init_missing_credential_raises(azure_ai_unit_test_env: dict[str, str]) -> None:
     """Test AzureAIAgentsProvider raises error when credential is missing."""
-    with pytest.raises(ServiceInitializationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         AzureAIAgentsProvider()
 
     assert "credential is required" in str(exc_info.value).lower()
 
 
 # endregion
-
 
 # region Context Manager Tests
 
@@ -144,7 +134,6 @@ async def test_provider_context_manager_does_not_close_external_client(mock_agen
 
 
 # endregion
-
 
 # region create_agent Tests
 
@@ -270,22 +259,18 @@ async def test_create_agent_missing_model_raises(
 ) -> None:
     """Test that create_agent raises error when model is not specified."""
     # Create provider with mocked settings that has no model
-    with patch("agent_framework_azure_ai._agent_provider.AzureAISettings") as mock_settings_class:
-        mock_settings = MagicMock()
-        mock_settings.project_endpoint = "https://test.com"
-        mock_settings.model_deployment_name = None  # No model configured
-        mock_settings_class.return_value = mock_settings
+    with patch("agent_framework_azure_ai._agent_provider.load_settings") as mock_load_settings:
+        mock_load_settings.return_value = {"project_endpoint": "https://test.com", "model_deployment_name": None}
 
         provider = AzureAIAgentsProvider(agents_client=mock_agents_client)
 
-        with pytest.raises(ServiceInitializationError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             await provider.create_agent(name="TestAgent")
 
         assert "model deployment name is required" in str(exc_info.value).lower()
 
 
 # endregion
-
 
 # region get_agent Tests
 
@@ -338,7 +323,7 @@ async def test_get_agent_with_function_tools(
 
     provider = AzureAIAgentsProvider(agents_client=mock_agents_client)
 
-    with pytest.raises(ServiceInitializationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         await provider.get_agent("agent-with-tools")
 
     assert "get_weather" in str(exc_info.value)
@@ -379,7 +364,6 @@ async def test_get_agent_with_provided_function_tools(
 
 
 # endregion
-
 
 # region as_agent Tests
 
@@ -433,7 +417,7 @@ def test_as_agent_with_function_tools_validates(
 
     provider = AzureAIAgentsProvider(agents_client=mock_agents_client)
 
-    with pytest.raises(ServiceInitializationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         provider.as_agent(mock_agent)
 
     assert "my_function" in str(exc_info.value)
@@ -443,7 +427,7 @@ def test_as_agent_with_hosted_tools(
     azure_ai_unit_test_env: dict[str, str],
     mock_agents_client: MagicMock,
 ) -> None:
-    """Test as_agent handles hosted tools correctly."""
+    """Test as_agent excludes hosted tools from local tools (they stay on the server agent)."""
     mock_code_interpreter = MagicMock()
     mock_code_interpreter.type = "code_interpreter"
 
@@ -462,9 +446,10 @@ def test_as_agent_with_hosted_tools(
     agent = provider.as_agent(mock_agent)
 
     assert isinstance(agent, Agent)
-    # Should have code_interpreter dict tool in the default_options tools
+    # Hosted tools (code_interpreter, file_search, etc.) are already on the server agent
+    # and should NOT be in local tools to avoid re-sending them at run time
     tools = agent.default_options.get("tools") or []
-    assert any(isinstance(t, dict) and t.get("type") == "code_interpreter" for t in tools)
+    assert not any(isinstance(t, dict) and t.get("type") == "code_interpreter" for t in tools)
 
 
 def test_as_agent_with_dict_function_tools_validates(
@@ -494,7 +479,7 @@ def test_as_agent_with_dict_function_tools_validates(
 
     provider = AzureAIAgentsProvider(agents_client=mock_agents_client)
 
-    with pytest.raises(ServiceInitializationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         provider.as_agent(mock_agent)
 
     assert "dict_based_function" in str(exc_info.value)
@@ -538,7 +523,6 @@ def test_as_agent_with_dict_function_tools_provided(
 
 
 # endregion
-
 
 # region Tool Conversion Tests - to_azure_ai_agent_tools
 
@@ -664,7 +648,6 @@ def test_to_azure_ai_agent_tools_unsupported_type() -> None:
 
 # endregion
 
-
 # region Tool Conversion Tests - from_azure_ai_agent_tools
 
 
@@ -785,80 +768,6 @@ def test_from_azure_ai_agent_tools_unknown_dict() -> None:
 
     assert len(result) == 1
     assert result[0] == tool
-
-
-# endregion
-
-
-# region Integration Tests
-
-
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_create_agent() -> None:
-    """Integration test: Create an agent using the provider."""
-    async with (
-        AzureCliCredential() as credential,
-        AzureAIAgentsProvider(credential=credential) as provider,
-    ):
-        agent = await provider.create_agent(
-            name="IntegrationTestAgent",
-            instructions="You are a helpful assistant for testing.",
-        )
-
-        try:
-            assert isinstance(agent, Agent)
-            assert agent.name == "IntegrationTestAgent"
-            assert agent.id is not None
-        finally:
-            # Cleanup: delete the agent
-            if agent.id:
-                await provider._agents_client.delete_agent(agent.id)  # type: ignore
-
-
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_get_agent() -> None:
-    """Integration test: Get an existing agent using the provider."""
-    async with (
-        AzureCliCredential() as credential,
-        AzureAIAgentsProvider(credential=credential) as provider,
-    ):
-        # First create an agent
-        created = await provider._agents_client.create_agent(  # type: ignore
-            model=os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
-            name="GetAgentTest",
-            instructions="Test agent",
-        )
-
-        try:
-            # Then get it using the provider
-            agent = await provider.get_agent(created.id)
-
-            assert isinstance(agent, Agent)
-            assert agent.id == created.id
-        finally:
-            await provider._agents_client.delete_agent(created.id)  # type: ignore
-
-
-@skip_if_azure_ai_integration_tests_disabled
-async def test_integration_create_and_run() -> None:
-    """Integration test: Create an agent and run a conversation."""
-    async with (
-        AzureCliCredential() as credential,
-        AzureAIAgentsProvider(credential=credential) as provider,
-    ):
-        agent = await provider.create_agent(
-            name="RunTestAgent",
-            instructions="You are a helpful assistant. Always respond with 'Hello!' to any greeting.",
-        )
-
-        try:
-            result = await agent.run("Hi there!")
-
-            assert result is not None
-            assert len(result.messages) > 0
-        finally:
-            if agent.id:
-                await provider._agents_client.delete_agent(agent.id)  # type: ignore
 
 
 # endregion

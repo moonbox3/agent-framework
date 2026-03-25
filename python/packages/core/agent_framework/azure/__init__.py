@@ -1,5 +1,10 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+"""Azure integration namespace for optional Agent Framework connectors.
+
+This module lazily re-exports objects from optional Azure connector packages.
+"""
+
 import importlib
 from typing import Any
 
@@ -16,19 +21,21 @@ _IMPORTS: dict[str, tuple[str, str]] = {
     "AzureAISearchSettings": ("agent_framework_azure_ai_search", "agent-framework-azure-ai-search"),
     "AzureAISettings": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
     "AzureAIAgentsProvider": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
-    "AzureOpenAIAssistantsClient": ("agent_framework.azure._assistants_client", "agent-framework-core"),
-    "AzureOpenAIAssistantsOptions": ("agent_framework.azure._assistants_client", "agent-framework-core"),
-    "AzureOpenAIChatClient": ("agent_framework.azure._chat_client", "agent-framework-core"),
-    "AzureOpenAIChatOptions": ("agent_framework.azure._chat_client", "agent-framework-core"),
-    "AzureOpenAIResponsesClient": ("agent_framework.azure._responses_client", "agent-framework-core"),
-    "AzureOpenAIResponsesOptions": ("agent_framework.azure._responses_client", "agent-framework-core"),
-    "AzureOpenAISettings": ("agent_framework.azure._shared", "agent-framework-core"),
-    "AzureUserSecurityContext": ("agent_framework.azure._chat_client", "agent-framework-core"),
+    "AzureCredentialTypes": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureTokenProvider": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIAssistantsClient": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIAssistantsOptions": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIChatClient": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIChatOptions": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIEmbeddingClient": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIResponsesClient": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAIResponsesOptions": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureOpenAISettings": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
+    "AzureUserSecurityContext": ("agent_framework_azure_ai", "agent-framework-azure-ai"),
     "DurableAIAgent": ("agent_framework_durabletask", "agent-framework-durabletask"),
     "DurableAIAgentClient": ("agent_framework_durabletask", "agent-framework-durabletask"),
     "DurableAIAgentOrchestrationContext": ("agent_framework_durabletask", "agent-framework-durabletask"),
     "DurableAIAgentWorker": ("agent_framework_durabletask", "agent-framework-durabletask"),
-    "get_entra_auth_token": ("agent_framework.azure._entra_id_authentication", "agent-framework-core"),
 }
 
 

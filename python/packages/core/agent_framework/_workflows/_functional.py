@@ -299,6 +299,15 @@ class RunContext:
         self._responses = dict(responses)
 
     def _get_response(self, request_id: str) -> tuple[bool, Any]:
+        """Look up a HITL response by *request_id*.
+
+        Returns:
+            A ``(found, value)`` tuple.  When *found* is ``True``, *value* is
+            the caller-supplied response (which **may be** ``None`` — a warning
+            is logged by :meth:`_set_responses` in that case).  When *found* is
+            ``False``, *value* is always ``None`` and simply means no response
+            has been provided yet.
+        """
         if request_id in self._responses:
             return True, self._responses[request_id]
         return False, None
@@ -392,7 +401,9 @@ class StepWrapper(Generic[R]):
         found, cached = ctx._get_cached_result(cache_key)
         invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
-            # Replay path: emit a single bypass event and return cached result
+            # Replay path: emit the dedicated ``executor_bypassed`` event type
+            # (distinct from executor_invoked/completed/failed) so consumers
+            # can unambiguously identify cache-hit replays.
             await ctx.add_event(WorkflowEvent.executor_bypassed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
@@ -406,6 +417,10 @@ class StepWrapper(Generic[R]):
         try:
             result = await self._func(*args, **call_kwargs)
         except Exception as exc:
+            # NOTE: WorkflowInterrupted (from request_info inside a step) inherits
+            # from BaseException, NOT Exception, so it propagates past this handler
+            # without emitting a spurious executor_failed event.  This is intentional
+            # — request_info is fully supported inside @step functions.
             await ctx.add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
             raise
         ctx._set_cached_result(cache_key, result)

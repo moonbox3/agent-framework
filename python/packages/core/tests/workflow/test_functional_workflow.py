@@ -1082,7 +1082,7 @@ class TestExecutorBypassed:
         assert "executor_bypassed" not in event_types1
 
         # Restore from checkpoint — cached replay
-        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[0].checkpoint_id
+        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[-1].checkpoint_id
         result2 = await wf.run(checkpoint_id=ckpt_id)
         assert result2.get_outputs() == [6]
         assert call_count == 1  # not called again
@@ -1105,7 +1105,7 @@ class TestExecutorBypassed:
             return await compute(x)
 
         await wf.run(3)
-        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[0].checkpoint_id
+        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[-1].checkpoint_id
 
         result = await wf.run(checkpoint_id=ckpt_id)
         bypassed = [e for e in result if e.type == "executor_bypassed"]
@@ -1239,3 +1239,118 @@ def caplog_context(target_logger: logging.Logger) -> Iterator[list[str]]:
         yield messages
     finally:
         target_logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# Combined regression tests (cross-cutting review comments #1, #2, #3)
+# ---------------------------------------------------------------------------
+
+
+class TestHITLInStepWithCaching:
+    """Regression tests: request_info inside @step combined with caching and bypass."""
+
+    async def test_preceding_step_bypassed_on_hitl_resume(self):
+        """When a step after a completed step calls request_info and interrupts,
+        resuming should bypass the first step (cached) and re-execute the HITL step."""
+        call_count_a = 0
+
+        @step
+        async def step_a(x: int) -> int:
+            nonlocal call_count_a
+            call_count_a += 1
+            return x + 1
+
+        @step
+        async def step_b(val: int, ctx: RunContext) -> str:
+            feedback = await ctx.request_info({"val": val}, response_type=str, request_id="r1")
+            return f"{val}:{feedback}"
+
+        @workflow
+        async def wf(x: int) -> str:
+            a = await step_a(x)
+            return await step_b(a)
+
+        # Phase 1: step_a completes, step_b interrupts
+        result1 = await wf.run(5)
+        assert call_count_a == 1
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+
+        # Phase 2: resume — step_a should be bypassed, step_b re-executes
+        result2 = await wf.run(responses={"r1": "ok"})
+        assert call_count_a == 1  # step_a not called again
+        assert result2.get_outputs() == ["6:ok"]
+
+        event_types = [e.type for e in result2]
+        assert "executor_bypassed" in event_types
+
+    async def test_hitl_step_with_checkpoint_full_lifecycle(self):
+        """Full lifecycle: run -> interrupt -> resume -> checkpoint restore -> all bypassed."""
+        storage = InMemoryCheckpointStorage()
+
+        @step
+        async def compute(x: int) -> int:
+            return x * 10
+
+        @step
+        async def review(val: int, ctx: RunContext) -> str:
+            feedback = await ctx.request_info({"val": val}, response_type=str, request_id="rev")
+            return f"reviewed({val}):{feedback}"
+
+        @workflow(checkpoint_storage=storage)
+        async def wf(x: int) -> str:
+            v = await compute(x)
+            return await review(v)
+
+        # Phase 1: interrupt
+        result1 = await wf.run(3)
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+
+        # Phase 2: resume
+        result2 = await wf.run(responses={"rev": "LGTM"})
+        assert result2.get_outputs() == ["reviewed(30):LGTM"]
+
+        # Phase 3: restore from latest checkpoint -- both steps should be bypassed
+        ckpt_id = (await storage.list_checkpoints(workflow_name="wf"))[-1].checkpoint_id
+        result3 = await wf.run(checkpoint_id=ckpt_id)
+        assert result3.get_outputs() == ["reviewed(30):LGTM"]
+
+        event_types3 = [e.type for e in result3]
+        bypassed = [e for e in result3 if e.type == "executor_bypassed"]
+        assert len(bypassed) == 2
+        assert "executor_invoked" not in event_types3
+
+    async def test_none_response_in_step_request_info(self):
+        """None response inside a @step request_info should warn and return None."""
+
+        @step
+        async def needs_feedback(doc: str, ctx: RunContext) -> str:
+            val = await ctx.request_info({"doc": doc}, response_type=str, request_id="r1")
+            return f"got:{val}"
+
+        @workflow
+        async def wf(doc: str) -> str:
+            return await needs_feedback(doc)
+
+        await wf.run("draft")
+
+        with caplog_context(logging.getLogger("agent_framework._workflows._functional")) as logs:
+            result = await wf.run(responses={"r1": None})
+
+        assert result.get_outputs() == ["got:None"]
+        assert any("None" in msg and "r1" in msg for msg in logs)
+
+    async def test_step_hitl_does_not_emit_executor_failed(self):
+        """WorkflowInterrupted from request_info inside a step should NOT emit executor_failed."""
+
+        @step
+        async def hitl_step(x: int, ctx: RunContext) -> str:
+            return await ctx.request_info("need data", response_type=str, request_id="r1")
+
+        @workflow
+        async def wf(x: int) -> str:
+            return await hitl_step(x)
+
+        result = await wf.run(1)
+        event_types = [e.type for e in result]
+        assert "executor_failed" not in event_types
+        assert result.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS

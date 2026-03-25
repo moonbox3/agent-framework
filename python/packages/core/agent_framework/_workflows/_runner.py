@@ -5,7 +5,7 @@ import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from typing import Any, cast
+from typing import Any
 
 from ..exceptions import (
     WorkflowCheckpointException,
@@ -116,7 +116,7 @@ class Runner:
             return
 
         request_data: Any = event.data
-        request_data_type: type[Any] = cast(type[Any], type(request_data))
+        request_data_type: type[Any] = type(request_data)
         matched_handler = request_handlers.get(request_data_type)
         if matched_handler is None:
             registered_types = [self._type_name(t) for t in request_handlers]

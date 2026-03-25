@@ -48,7 +48,7 @@ Backend default URL:
 ## 2) Install Frontend Packages (npm)
 
 ```bash
-cd python/samples/05-end-to-end/ag_ui_workflow_handoff/frontend
+cd samples/05-end-to-end/ag_ui_workflow_handoff/frontend
 npm install
 ```
 

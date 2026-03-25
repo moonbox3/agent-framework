@@ -116,7 +116,7 @@ class Runner:
             return
 
         request_data: Any = event.data
-        request_data_type: type[Any] = type(request_data)
+        request_data_type: type[Any] = type(request_data)  # pyright: ignore[reportUnknownVariableType]
         matched_handler = request_handlers.get(request_data_type)
         if matched_handler is None:
             registered_types = [self._type_name(t) for t in request_handlers]

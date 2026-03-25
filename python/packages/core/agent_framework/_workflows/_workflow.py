@@ -196,7 +196,7 @@ class Workflow(DictConvertible):
                 WorkflowBuilder, this will be the description of the builder.
             output_executors: Optional list of executor IDs whose outputs will be considered workflow outputs.
                               If None or empty, all executor outputs are treated as workflow outputs.
-            request_handlers: Optional default response handlers for automatic HITL request handling.
+            request_handlers: Optional default request handlers for automatic HITL request handling.
                 Can be overridden per-run via workflow.run(request_handlers=...).
             kwargs: Additional keyword arguments. Unused in this implementation.
         """
@@ -378,7 +378,11 @@ class Workflow(DictConvertible):
                         with _framework_event_origin():
                             pending_status = WorkflowEvent.status(WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS)
                         yield pending_status
-                # Workflow runs until idle - emit final status based on whether requests are pending
+                # Workflow runs until idle - emit final status based on whether requests are pending.
+                # NOTE: The runner's convergence check waits for all outstanding request handler
+                # tasks to complete before returning, so by this point every dispatched handler
+                # has either submitted a response (triggering further supersteps) or failed
+                # (leaving the request pending). The idle status below is therefore accurate.
                 pending = await self._runner_context.get_pending_request_info_events()
                 if pending:
                     with _framework_event_origin():

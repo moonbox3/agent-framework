@@ -549,6 +549,34 @@ class TestResponseHandlers:
         # Final state should be IDLE (all branches complete, all requests handled)
         assert result.get_final_state() == WorkflowRunState.IDLE
 
+    async def test_slow_handler_completes_before_idle(self):
+        """Workflow waits for slow handler to complete before declaring idle.
+
+        Regression: if run_until_convergence did not wait for outstanding handler
+        tasks, the workflow could go idle while the handler is still running, and
+        the handler's response would never be processed.
+        """
+        reviewer = ReviewerExecutor()
+        collector = CollectorExecutor()
+        workflow = WorkflowBuilder(start_executor=reviewer).add_edge(reviewer, collector).build()
+
+        async def slow_handler(request: ReviewRequest) -> str:
+            # Simulate an external call that takes noticeably longer than a superstep
+            await asyncio.sleep(0.3)
+            return "slow_response"
+
+        result = await workflow.run(
+            "slow_handler_test",
+            request_handlers={ReviewRequest: slow_handler},
+        )
+
+        # The handler must have completed and its response must have been processed
+        assert reviewer.feedback_received is True
+        assert reviewer.feedback_value == "slow_response"
+        assert result.get_final_state() == WorkflowRunState.IDLE
+        # Collector should have received the downstream message from the response handler
+        assert any("review_done:slow_response" in msg for msg in collector.collected)
+
 
 class TestBuilderLevelResponseHandlers:
     """Tests for request_handlers passed via WorkflowBuilder constructor."""

@@ -2,6 +2,11 @@
 
 """Functional workflow API for writing workflows as plain async functions.
 
+.. warning:: Experimental
+
+    This API is experimental and subject to change or removal
+    in future versions without notice.
+
 This module provides the ``@workflow`` and ``@step`` decorators that let users
 define workflows using native Python control flow (if/else, loops,
 ``asyncio.gather``) instead of a graph-based topology.
@@ -99,6 +104,11 @@ class WorkflowInterrupted(BaseException):
 
 class RunContext:
     """Execution context injected into ``@workflow`` functions.
+
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
 
     Every ``@workflow`` invocation receives a ``RunContext`` instance that
     provides human-in-the-loop (HITL) requests, custom event emission,
@@ -342,6 +352,11 @@ class RunContext:
 class StepWrapper(Generic[R]):
     """Wrapper returned by the ``@step`` decorator.
 
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
+
     When called inside a running ``@workflow`` function, the wrapper
     intercepts execution to provide:
 
@@ -450,6 +465,11 @@ def step(
 ) -> StepWrapper[Any] | Callable[[Callable[..., Awaitable[Any]]], StepWrapper[Any]]:
     """Decorator that marks an async function as a tracked workflow step.
 
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
+
     Supports both bare ``@step`` and parameterized ``@step(name="custom")``
     forms.  Inside a running ``@workflow`` function, calls to a step are
     intercepted for result caching, event emission, and per-step
@@ -512,6 +532,11 @@ def step(
 
 class FunctionalWorkflow:
     """A workflow backed by a user-defined async function.
+
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
 
     Created by the :func:`workflow` decorator.  Exposes the same ``run()``
     interface as graph-based :class:`Workflow` objects, returning a
@@ -1022,6 +1047,11 @@ def workflow(
 ) -> FunctionalWorkflow | Callable[[Callable[..., Awaitable[Any]]], FunctionalWorkflow]:
     """Decorator that converts an async function into a :class:`FunctionalWorkflow`.
 
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
+
     Supports both bare ``@workflow`` and parameterized
     ``@workflow(name="my_wf")`` forms.
 
@@ -1072,6 +1102,11 @@ def workflow(
 
 class FunctionalWorkflowAgent:
     """Agent adapter for a :class:`FunctionalWorkflow`.
+
+    .. warning:: Experimental
+
+        This API is experimental and subject to change or removal
+        in future versions without notice.
 
     Provides a ``run()`` method with the same overloaded signature as
     :class:`BaseAgent` — returning an :class:`AgentResponse` (non-streaming)

@@ -99,7 +99,7 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
             or type_key in self._allowed_types
             or module.startswith(_FRAMEWORK_MODULE_PREFIX)
         ):
-            return super().find_class(module, name)  # noqa: S301  # nosec
+            return super().find_class(module, name)  # type: ignore[no-any-return]  # nosec
 
         raise WorkflowCheckpointException(
             f"Checkpoint deserialization blocked for type '{type_key}'. "

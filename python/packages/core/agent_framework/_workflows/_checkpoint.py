@@ -264,7 +264,7 @@ class FileCheckpointStorage:
         storage_path: str | Path,
         *,
         allowed_checkpoint_types: list[str] | None = None,
-    ):
+    ) -> None:
         """Initialize the file storage.
 
         Args:

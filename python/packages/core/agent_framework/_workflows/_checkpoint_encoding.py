@@ -2,14 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import io
-import logging
-import pickle  # nosec  # noqa: S403
-from typing import Any
-
-from ..exceptions import WorkflowCheckpointException
-
 """Checkpoint encoding using JSON structure with pickle+base64 for arbitrary data.
 
 This hybrid approach provides:
@@ -24,6 +16,14 @@ value types (primitives, datetime, uuid, ...) and all ``agent_framework``
 internal types.  Callers can extend the set by passing additional
 ``"module:qualname"`` strings.
 """
+
+import base64
+import io
+import logging
+import pickle  # nosec  # noqa: S403
+from typing import Any
+
+from ..exceptions import WorkflowCheckpointException
 
 
 logger = logging.getLogger("agent_framework")
@@ -91,7 +91,7 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
         super().__init__(io.BytesIO(data))
         self._allowed_types = allowed_types
 
-    def find_class(self, module: str, name: str) -> type:
+    def find_class(self, module: str, name: str) -> type[Any]:
         type_key = f"{module}:{name}"
 
         if (
@@ -99,12 +99,14 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
             or type_key in self._allowed_types
             or module.startswith(_FRAMEWORK_MODULE_PREFIX)
         ):
-            return super().find_class(module, name)  # type: ignore[no-any-return]  # nosec
+            return super().find_class(module, name)  # type: ignore[no-any-return]  # noqa: S301  # nosec
 
         raise WorkflowCheckpointException(
             f"Checkpoint deserialization blocked for type '{type_key}'. "
-            f"To allow this type, add it to 'allowed_checkpoint_types' on "
-            f"your checkpoint storage."
+            f"To allow this type, either include its 'module:qualname' key in the "
+            f"'allowed_types' set passed to 'decode_checkpoint_value', or add it to "
+            f"'allowed_checkpoint_types' on your checkpoint storage "
+            f"(for example, 'FileCheckpointStorage.allowed_checkpoint_types')."
         )
 
 

@@ -12,7 +12,6 @@ unpickler by default:
 """
 
 import base64
-import contextlib
 import os
 import pickle
 import tempfile
@@ -69,24 +68,34 @@ def test_restricted_decode_blocks_reduce_payload():
 
 def test_restricted_decode_prevents_code_execution():
     """Restricted deserialization prevents __reduce__ code from running."""
-    marker_file = tempfile.mktemp(suffix="_checkpoint_test_marker")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        marker_file = os.path.join(tmpdir, "checkpoint_test_marker")
 
-    payload_bytes = pickle.dumps(
-        type("Exploit", (), {"__reduce__": lambda self: (eval, (f"open({marker_file!r}, 'w').write('pwned')",))})(),
-        protocol=pickle.HIGHEST_PROTOCOL,
-    )
-    encoded_b64 = base64.b64encode(payload_bytes).decode("ascii")
+        payload_bytes = pickle.dumps(
+            type(
+                "Exploit",
+                (),
+                {
+                    "__reduce__": lambda self: (
+                        eval,
+                        (f"open({marker_file!r}, 'w').write('pwned')",),
+                    )
+                },
+            )(),
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        encoded_b64 = base64.b64encode(payload_bytes).decode("ascii")
 
-    checkpoint_value = {
-        _PICKLE_MARKER: encoded_b64,
-        _TYPE_MARKER: "builtins:int",
-    }
-    with contextlib.suppress(Exception):
-        decode_checkpoint_value(checkpoint_value, allowed_types=frozenset())
+        checkpoint_value = {
+            _PICKLE_MARKER: encoded_b64,
+            _TYPE_MARKER: "builtins:int",
+        }
+        with pytest.raises(WorkflowCheckpointException, match="deserialization blocked"):
+            decode_checkpoint_value(checkpoint_value, allowed_types=frozenset())
 
-    assert not os.path.exists(marker_file), (
-        "Restricted unpickler should have prevented code execution, but the marker file was created."
-    )
+        assert not os.path.exists(marker_file), (
+            "Restricted unpickler should have prevented code execution, but the marker file was created."
+        )
 
 
 def test_file_checkpoint_storage_accepts_allowed_types():

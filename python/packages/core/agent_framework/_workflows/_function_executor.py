@@ -325,7 +325,13 @@ def _validate_function_signature(
     if not skip_message_annotation and message_param.annotation == inspect.Parameter.empty:
         raise ValueError(f"Function instance {func.__name__} must have a type annotation for the message parameter")
 
-    type_hints = typing.get_type_hints(func)
+    # Resolve string annotations from `from __future__ import annotations`.
+    # Fall back to raw annotations if resolution fails (e.g. unresolvable forward refs,
+    # AttributeError, or RecursionError), so registration failures are easier to diagnose.
+    try:
+        type_hints = typing.get_type_hints(func)
+    except Exception:
+        type_hints = {p.name: p.annotation for p in params}
     message_type = type_hints.get(message_param.name, message_param.annotation)
     if message_type == inspect.Parameter.empty:
         message_type = None

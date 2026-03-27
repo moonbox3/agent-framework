@@ -932,6 +932,15 @@ class TestFunctionExecutorTypeVarRejection:
         exec_instance = FunctionExecutor(echo, id="echo", input=str, output=str)
         assert str in exec_instance.input_types
 
+    def test_function_executor_allows_concrete_types(self):
+        """Test that FunctionExecutor works normally with concrete type annotations."""
+
+        async def handle(message: str, ctx: WorkflowContext[str]) -> None:
+            pass
+
+        exec_instance = FunctionExecutor(handle, id="concrete")
+        assert str in exec_instance.input_types
+
     def test_function_executor_error_recommends_explicit_types(self):
         """Test that error message recommends @executor(input=..., output=...)."""
 

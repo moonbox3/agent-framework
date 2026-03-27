@@ -731,19 +731,6 @@ def _validate_handler_signature(
     except Exception:
         type_hints = {p.name: p.annotation for p in params}
 
-    # Validate ctx parameter is WorkflowContext and extract type args
-    ctx_param = params[2]
-    ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
-    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
-        # When explicit types are provided via @handler(input=..., output=...),
-        # the ctx parameter doesn't need a type annotation - types come from the decorator.
-        output_types: list[type[Any] | types.UnionType] = []
-        workflow_output_types: list[type[Any] | types.UnionType] = []
-    else:
-        output_types, workflow_output_types = validate_workflow_context_annotation(
-            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
-        )
-
     message_type = type_hints.get(message_param.name, message_param.annotation)
     if message_type == inspect.Parameter.empty:
         message_type = None
@@ -755,6 +742,19 @@ def _validate_handler_signature(
             f"Handler {func.__name__} has an unresolved TypeVar '{message_type}' as its message type annotation. "
             "Generic TypeVar annotations are not supported for workflow type validation. "
             "Use @handler(input=<concrete_type>, output=<concrete_type>) to specify explicit types."
+        )
+
+    # Validate ctx parameter is WorkflowContext and extract type args
+    ctx_param = params[2]
+    ctx_annotation = type_hints.get(ctx_param.name, ctx_param.annotation)
+    if skip_message_annotation and ctx_annotation == inspect.Parameter.empty:
+        # When explicit types are provided via @handler(input=..., output=...),
+        # the ctx parameter doesn't need a type annotation - types come from the decorator.
+        output_types: list[type[Any] | types.UnionType] = []
+        workflow_output_types: list[type[Any] | types.UnionType] = []
+    else:
+        output_types, workflow_output_types = validate_workflow_context_annotation(
+            ctx_annotation, f"parameter '{ctx_param.name}'", "Handler"
         )
 
     return message_type, ctx_annotation, output_types, workflow_output_types

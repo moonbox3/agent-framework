@@ -938,14 +938,17 @@ def test_handler_rejects_unresolved_typevar_in_message_annotation():
                 pass
 
 
-def test_handler_rejects_unresolved_typevar_with_workflow_context_generic():
-    """Test that @handler raises ValueError for unresolved TypeVar in message even with bare WorkflowContext."""
+_BT = TypeVar("_BT", bound=str)
+
+
+def test_handler_rejects_bounded_typevar_in_message_annotation():
+    """Test that @handler raises ValueError for a bounded TypeVar in message annotation."""
 
     with pytest.raises(ValueError, match="unresolved TypeVar"):
 
-        class GenericProcessor(Executor, Generic[_T]):
+        class BoundedGenericExecutor(Executor, Generic[_BT]):
             @handler
-            async def process(self, message: _T, ctx: WorkflowContext) -> None:
+            async def process(self, message: _BT, ctx: WorkflowContext) -> None:
                 await ctx.send_message(message)
 
 

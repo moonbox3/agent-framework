@@ -988,3 +988,19 @@ def test_handler_error_message_recommends_explicit_types():
 
 
 # endregion: Tests for unresolved TypeVar rejection in handler registration
+
+
+def test_handler_typevar_error_takes_priority_over_context_error():
+    """Test that TypeVar message error is raised before WorkflowContext validation.
+
+    When a handler has both a TypeVar message annotation and an unannotated ctx
+    parameter, the TypeVar error should be reported first since it is the more
+    actionable issue.
+    """
+
+    with pytest.raises(ValueError, match="unresolved TypeVar"):
+
+        class DualBad(Executor, Generic[_T]):
+            @handler
+            async def process(self, message: _T, ctx) -> None:  # type: ignore[no-untyped-def]
+                pass

@@ -330,6 +330,15 @@ def _validate_function_signature(
     if message_type == inspect.Parameter.empty:
         message_type = None
 
+    # Reject unresolved TypeVar in message annotation -- these are not supported
+    # for workflow type validation and must be replaced with concrete types.
+    if not skip_message_annotation and isinstance(message_type, typing.TypeVar):
+        raise ValueError(
+            f"Function instance {func.__name__} has an unresolved TypeVar '{message_type}' as its message type "
+            "annotation. Generic TypeVar annotations are not supported for workflow type validation. "
+            "Use @executor(input=<concrete_type>, output=<concrete_type>) to specify explicit types."
+        )
+
     # Check if there's a context parameter
     if len(params) == 2:
         ctx_param = params[1]

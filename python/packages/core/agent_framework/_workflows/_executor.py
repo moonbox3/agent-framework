@@ -748,6 +748,15 @@ def _validate_handler_signature(
     if message_type == inspect.Parameter.empty:
         message_type = None
 
+    # Reject unresolved TypeVar in message annotation -- these are not supported
+    # for workflow type validation and must be replaced with concrete types.
+    if not skip_message_annotation and isinstance(message_type, TypeVar):
+        raise ValueError(
+            f"Handler {func.__name__} has an unresolved TypeVar '{message_type}' as its message type annotation. "
+            "Generic TypeVar annotations are not supported for workflow type validation. "
+            "Use @handler(input=<concrete_type>, output=<concrete_type>) to specify explicit types."
+        )
+
     return message_type, ctx_annotation, output_types, workflow_output_types
 
 

@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 import pytest
 from typing_extensions import Never
@@ -919,3 +920,68 @@ class TestHandlerExplicitTypes:
 
 
 # endregion: Tests for @handler decorator with explicit input_type and output_type
+
+
+# region Tests for unresolved TypeVar rejection in handler registration
+
+_T = TypeVar("_T")
+
+
+def test_handler_rejects_unresolved_typevar_in_message_annotation():
+    """Test that @handler raises ValueError when the message parameter is an unresolved TypeVar."""
+
+    with pytest.raises(ValueError, match="unresolved TypeVar"):
+
+        class GenericEcho(Executor, Generic[_T]):
+            @handler
+            async def echo(self, message: _T, ctx: WorkflowContext) -> None:
+                pass
+
+
+def test_handler_rejects_unresolved_typevar_with_workflow_context_generic():
+    """Test that @handler raises ValueError for unresolved TypeVar in message even with bare WorkflowContext."""
+
+    with pytest.raises(ValueError, match="unresolved TypeVar"):
+
+        class GenericProcessor(Executor, Generic[_T]):
+            @handler
+            async def process(self, message: _T, ctx: WorkflowContext) -> None:
+                await ctx.send_message(message)
+
+
+def test_handler_allows_concrete_types():
+    """Test that @handler works normally with concrete type annotations."""
+
+    class ConcreteExecutor(Executor):
+        @handler
+        async def handle(self, message: str, ctx: WorkflowContext[str]) -> None:
+            pass
+
+    exec_instance = ConcreteExecutor(id="concrete")
+    assert str in exec_instance.input_types
+
+
+def test_handler_explicit_input_bypasses_typevar_check():
+    """Test that @handler(input=...) bypasses TypeVar check since explicit types take precedence."""
+
+    class GenericWithExplicit(Executor, Generic[_T]):
+        @handler(input=str, output=str)
+        async def echo(self, message, ctx: WorkflowContext) -> None:
+            pass
+
+    exec_instance = GenericWithExplicit(id="explicit")
+    assert str in exec_instance.input_types
+
+
+def test_handler_error_message_recommends_explicit_types():
+    """Test that the TypeVar error message recommends @handler(input=..., output=...)."""
+
+    with pytest.raises(ValueError, match=r"@handler\(input=<concrete_type>, output=<concrete_type>\)"):
+
+        class GenericBad(Executor, Generic[_T]):
+            @handler
+            async def echo(self, message: _T, ctx: WorkflowContext) -> None:
+                pass
+
+
+# endregion: Tests for unresolved TypeVar rejection in handler registration

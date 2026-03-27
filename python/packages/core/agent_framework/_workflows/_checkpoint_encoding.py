@@ -1,7 +1,5 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-from __future__ import annotations
-
 """Checkpoint encoding using JSON structure with pickle+base64 for arbitrary data.
 
 This hybrid approach provides:
@@ -16,6 +14,8 @@ value types (primitives, datetime, uuid, ...) and all ``agent_framework``
 internal types.  Callers can extend the set by passing additional
 ``"module:qualname"`` strings.
 """
+
+from __future__ import annotations
 
 import base64
 import io
@@ -91,7 +91,7 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
         super().__init__(io.BytesIO(data))
         self._allowed_types = allowed_types
 
-    def find_class(self, module: str, name: str) -> type[Any]:
+    def find_class(self, module: str, name: str) -> type:
         type_key = f"{module}:{name}"
 
         if (

@@ -352,9 +352,7 @@ class FileCheckpointStorage:
         from ._checkpoint_encoding import decode_checkpoint_value
 
         try:
-            decoded_checkpoint_dict = decode_checkpoint_value(
-                encoded_checkpoint, allowed_types=self._allowed_types
-            )
+            decoded_checkpoint_dict = decode_checkpoint_value(encoded_checkpoint, allowed_types=self._allowed_types)
         except WorkflowCheckpointException:
             raise
         checkpoint = WorkflowCheckpoint.from_dict(decoded_checkpoint_dict)

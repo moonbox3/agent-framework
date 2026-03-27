@@ -12,6 +12,7 @@ unpickler by default:
 """
 
 import base64
+import contextlib
 import os
 import pickle
 import tempfile
@@ -23,7 +24,6 @@ import pytest
 from agent_framework import WorkflowCheckpointException
 from agent_framework._workflows._checkpoint import FileCheckpointStorage
 from agent_framework._workflows._checkpoint_encoding import (
-    _BUILTIN_ALLOWED_TYPE_KEYS,
     _PICKLE_MARKER,
     _TYPE_MARKER,
     decode_checkpoint_value,
@@ -81,11 +81,8 @@ def test_restricted_decode_prevents_code_execution():
         _PICKLE_MARKER: encoded_b64,
         _TYPE_MARKER: "builtins:int",
     }
-
-    try:
+    with contextlib.suppress(Exception):
         decode_checkpoint_value(checkpoint_value, allowed_types=frozenset())
-    except Exception:
-        pass
 
     assert not os.path.exists(marker_file), (
         "Restricted unpickler should have prevented code execution, but the marker file was created."

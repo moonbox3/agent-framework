@@ -79,7 +79,7 @@ _BUILTIN_ALLOWED_TYPE_KEYS: frozenset[str] = frozenset({
 })
 
 
-class _RestrictedUnpickler(pickle.Unpickler):
+class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
     """Unpickler that restricts which classes may be instantiated.
 
     Only classes whose ``module:qualname`` key appears in the combined allow
@@ -99,7 +99,8 @@ class _RestrictedUnpickler(pickle.Unpickler):
             or type_key in self._allowed_types
             or module.startswith(_FRAMEWORK_MODULE_PREFIX)
         ):
-            return super().find_class(module, name)
+            result: type = super().find_class(module, name)
+            return result
 
         raise WorkflowCheckpointException(
             f"Checkpoint deserialization blocked for type '{type_key}'. "

@@ -330,7 +330,7 @@ def _validate_function_signature(
     # AttributeError, or RecursionError), so registration failures are easier to diagnose.
     try:
         type_hints = typing.get_type_hints(func)
-    except Exception:
+    except (NameError, AttributeError, RecursionError):
         type_hints = {p.name: p.annotation for p in params}
     message_type = type_hints.get(message_param.name, message_param.annotation)
     if message_type == inspect.Parameter.empty:

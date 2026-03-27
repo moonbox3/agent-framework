@@ -952,3 +952,16 @@ class TestFunctionExecutorTypeVarRejection:
 
 
 # endregion: Tests for unresolved TypeVar rejection in function executor registration
+
+
+_FBT = TypeVar("_FBT", bound=str)
+
+
+def test_function_executor_rejects_bounded_typevar_in_message_annotation():
+    """Test that FunctionExecutor raises ValueError for a bounded TypeVar in message annotation."""
+
+    async def process(message: _FBT, ctx: WorkflowContext) -> None:
+        await ctx.send_message(message)
+
+    with pytest.raises(ValueError, match="unresolved TypeVar"):
+        FunctionExecutor(process, id="bounded")

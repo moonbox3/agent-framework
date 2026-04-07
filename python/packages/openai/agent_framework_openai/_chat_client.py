@@ -1296,26 +1296,6 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                     new_args.update(self._prepare_content_for_openai(message.role, content, message=message))
                     if new_args:
                         all_messages.append(new_args)
-                    # When rich function output isn't supported (e.g. Foundry),
-                    # surface image/file items as a follow-up user message so
-                    # the model can still process the visual content.
-                    if (
-                        not self.SUPPORTS_RICH_FUNCTION_OUTPUT
-                        and content.items
-                        and any(item.type in ("data", "uri") for item in content.items)
-                    ):
-                        rich_parts: list[dict[str, Any]] = []
-                        for item in content.items:
-                            if item.type in ("data", "uri"):
-                                part = self._prepare_content_for_openai("user", item)
-                                if part:
-                                    rich_parts.append(part)
-                        if rich_parts:
-                            all_messages.append({
-                                "type": "message",
-                                "role": "user",
-                                "content": rich_parts,
-                            })
                 case "function_call":
                     function_call = self._prepare_content_for_openai(message.role, content, message=message)
                     if function_call:

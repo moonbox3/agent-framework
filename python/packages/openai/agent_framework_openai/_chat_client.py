@@ -265,6 +265,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
 
     INJECTABLE: ClassVar[set[str]] = {"client"}
     STORES_BY_DEFAULT: ClassVar[bool] = True  # type: ignore[reportIncompatibleVariableOverride, misc]
+    SUPPORTS_RICH_FUNCTION_OUTPUT: ClassVar[bool] = True
 
     FILE_SEARCH_MAX_RESULTS: int = 50
 
@@ -1445,7 +1446,11 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                     }
                 # call_id for the result needs to be the same as the call_id for the function call
                 output: str | list[dict[str, Any]] = content.result or ""
-                if content.items and any(item.type in ("data", "uri") for item in content.items):
+                if (
+                    self.SUPPORTS_RICH_FUNCTION_OUTPUT
+                    and content.items
+                    and any(item.type in ("data", "uri") for item in content.items)
+                ):
                     output_parts: list[dict[str, Any]] = []
                     for item in content.items:
                         if item.type == "text":

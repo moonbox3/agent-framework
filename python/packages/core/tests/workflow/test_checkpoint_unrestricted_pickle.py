@@ -205,3 +205,14 @@ async def test_file_storage_allows_listed_user_type():
         assert isinstance(loaded.state["data"], _AllowedTestState)
         assert loaded.state["data"].name == "allowed"
         assert loaded.state["data"].value == 99
+
+
+def test_restricted_unpickler_raises_pickle_error():
+    """_RestrictedUnpickler.find_class raises pickle.UnpicklingError, not a framework exception."""
+    from agent_framework._workflows._checkpoint_encoding import _RestrictedUnpickler
+
+    pickled = pickle.dumps(os.getpid, protocol=pickle.HIGHEST_PROTOCOL)
+
+    unpickler = _RestrictedUnpickler(pickled, frozenset())
+    with pytest.raises(pickle.UnpicklingError, match="deserialization blocked"):
+        unpickler.load()

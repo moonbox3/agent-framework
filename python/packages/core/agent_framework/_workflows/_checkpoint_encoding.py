@@ -83,7 +83,7 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
 
     Only classes whose ``module:qualname`` key appears in the combined allow
     set (built-in safe types + framework types + caller-specified extras) are
-    permitted.  All other classes raise :class:`WorkflowCheckpointException`.
+    permitted.  All other classes raise :class:`pickle.UnpicklingError`.
     """
 
     def __init__(self, data: bytes, allowed_types: frozenset[str]) -> None:
@@ -100,7 +100,7 @@ class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301
         ):
             return super().find_class(module, name)  # type: ignore[no-any-return]  # nosec
 
-        raise WorkflowCheckpointException(
+        raise pickle.UnpicklingError(
             f"Checkpoint deserialization blocked for type '{type_key}'. "
             f"To allow this type, either include its 'module:qualname' key in the "
             f"'allowed_types' set passed to 'decode_checkpoint_value', or add it to "
@@ -136,9 +136,17 @@ def decode_checkpoint_value(value: Any, *, allowed_types: frozenset[str] | None 
         value: A JSON-deserialized value from checkpoint storage.
         allowed_types: If not ``None``, restrict pickle deserialization to the
             built-in safe set, framework types, and the types listed here.
-            Each entry should use ``"module:qualname"`` format (e.g.,
-            ``"my_app.models:SafeState"``).  If ``None``, no restriction is
-            applied (backward-compatible behavior).
+            Each entry should use ``"module:qualname"`` format — that is, the
+            dotted module path followed by a colon and the class
+            ``__qualname__``.  For example, given a user-defined class::
+
+                # my_app/models.py
+                class MyState:
+                    ...
+
+            the corresponding entry would be ``"my_app.models:MyState"``.
+            If ``None``, no restriction is applied (backward-compatible
+            behavior).
 
     Returns:
         The original Python value.
@@ -245,8 +253,6 @@ def _base64_to_unpickle(encoded: str, *, allowed_types: frozenset[str] | None = 
         if allowed_types is not None:
             return _RestrictedUnpickler(pickled, allowed_types).load()
         return pickle.loads(pickled)  # nosec  # noqa: S301
-    except WorkflowCheckpointException:
-        raise
     except Exception as exc:
         raise WorkflowCheckpointException(f"Failed to decode pickled checkpoint data: {exc}") from exc
 

@@ -141,8 +141,7 @@ def decode_checkpoint_value(value: Any, *, allowed_types: frozenset[str] | None 
             ``__qualname__``.  For example, given a user-defined class::
 
                 # my_app/models.py
-                class MyState:
-                    ...
+                class MyState: ...
 
             the corresponding entry would be ``"my_app.models:MyState"``::
 

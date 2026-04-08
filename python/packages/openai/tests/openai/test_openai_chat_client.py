@@ -2825,7 +2825,9 @@ def test_streaming_reasoning_text_done_event_skipped_after_deltas() -> None:
     )
 
     with patch.object(client, "_get_metadata_from_response", return_value={"test": "data"}) as mock_metadata:
-        response = client._parse_chunk_from_openai(event, chat_options, function_call_ids, seen_reasoning_delta_item_ids)  # type: ignore
+        response = client._parse_chunk_from_openai(
+            event, chat_options, function_call_ids, seen_reasoning_delta_item_ids
+        )  # type: ignore
 
         assert len(response.contents) == 0
         mock_metadata.assert_called_once_with(event)
@@ -2849,7 +2851,9 @@ def test_streaming_reasoning_text_done_event_fallback_without_deltas() -> None:
     )
 
     with patch.object(client, "_get_metadata_from_response", return_value={"test": "data"}) as mock_metadata:
-        response = client._parse_chunk_from_openai(event, chat_options, function_call_ids, seen_reasoning_delta_item_ids)  # type: ignore
+        response = client._parse_chunk_from_openai(
+            event, chat_options, function_call_ids, seen_reasoning_delta_item_ids
+        )  # type: ignore
 
         assert len(response.contents) == 1
         assert response.contents[0].type == "text_reasoning"
@@ -2901,7 +2905,9 @@ def test_streaming_reasoning_summary_text_done_event_skipped_after_deltas() -> N
     )
 
     with patch.object(client, "_get_metadata_from_response", return_value={"custom": "meta"}) as mock_metadata:
-        response = client._parse_chunk_from_openai(event, chat_options, function_call_ids, seen_reasoning_delta_item_ids)  # type: ignore
+        response = client._parse_chunk_from_openai(
+            event, chat_options, function_call_ids, seen_reasoning_delta_item_ids
+        )  # type: ignore
 
         assert len(response.contents) == 0
         mock_metadata.assert_called_once_with(event)
@@ -2925,7 +2931,9 @@ def test_streaming_reasoning_summary_text_done_event_fallback_without_deltas() -
     )
 
     with patch.object(client, "_get_metadata_from_response", return_value={"custom": "meta"}) as mock_metadata:
-        response = client._parse_chunk_from_openai(event, chat_options, function_call_ids, seen_reasoning_delta_item_ids)  # type: ignore
+        response = client._parse_chunk_from_openai(
+            event, chat_options, function_call_ids, seen_reasoning_delta_item_ids
+        )  # type: ignore
 
         assert len(response.contents) == 1
         assert response.contents[0].type == "text_reasoning"
@@ -2933,7 +2941,6 @@ def test_streaming_reasoning_summary_text_done_event_fallback_without_deltas() -
         assert response.contents[0].text == "complete summary"
         mock_metadata.assert_called_once_with(event)
         assert response.additional_properties == {"custom": "meta"}
-
 
 
 def test_streaming_reasoning_deltas_then_done_no_duplication() -> None:
@@ -2973,7 +2980,10 @@ def test_streaming_reasoning_deltas_then_done_no_duplication() -> None:
     with patch.object(client, "_get_metadata_from_response", return_value={}):
         for event in [delta1, delta2, done]:
             response = client._parse_chunk_from_openai(
-                event, chat_options, function_call_ids, seen_reasoning_delta_item_ids  # type: ignore
+                event,
+                chat_options,
+                function_call_ids,
+                seen_reasoning_delta_item_ids,  # type: ignore
             )
             all_contents.extend(response.contents)
 

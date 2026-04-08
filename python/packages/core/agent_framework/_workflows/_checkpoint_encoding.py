@@ -144,7 +144,21 @@ def decode_checkpoint_value(value: Any, *, allowed_types: frozenset[str] | None 
                 class MyState:
                     ...
 
-            the corresponding entry would be ``"my_app.models:MyState"``.
+            the corresponding entry would be ``"my_app.models:MyState"``::
+
+                decode_checkpoint_value(
+                    data,
+                    allowed_types=frozenset({"my_app.models:MyState"}),
+                )
+
+            When using :class:`FileCheckpointStorage`, pass the same strings
+            via ``allowed_checkpoint_types``::
+
+                storage = FileCheckpointStorage(
+                    "/tmp/checkpoints",
+                    allowed_checkpoint_types=["my_app.models:MyState"],
+                )
+
             If ``None``, no restriction is applied (backward-compatible
             behavior).
 

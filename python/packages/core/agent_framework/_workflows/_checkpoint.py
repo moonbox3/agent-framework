@@ -254,7 +254,7 @@ class FileCheckpointStorage:
         storage = FileCheckpointStorage(
             "/tmp/checkpoints",
             allowed_checkpoint_types=[
-                "my_app.models:SafeState",
+                "my_app.models:MyState",
             ],
         )
     """
@@ -272,7 +272,7 @@ class FileCheckpointStorage:
             allowed_checkpoint_types: Additional types (beyond the built-in safe set
                 and framework types) that are permitted during checkpoint
                 deserialization.  Each entry should be a ``"module:qualname"``
-                string (e.g., ``"my_app.models:SafeState"``).
+                string (e.g., ``"my_app.models:MyState"``).
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)

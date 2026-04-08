@@ -1502,10 +1502,15 @@ class TestReasoningInSnapshot:
         assert flow.reasoning_messages[0]["content"] == "part1 part2"
         assert flow.reasoning_messages[0]["encryptedValue"] == "encrypted-payload"
 
-    def test_reasoning_deltas_accumulate_correctly(self):
-        """Multiple reasoning delta events with the same id accumulate text without duplication."""
+    def test_reasoning_done_after_deltas_does_not_duplicate(self):
+        """A done-style content arriving after deltas does not duplicate accumulated text.
+
+        The upstream client should skip done events when deltas preceded them,
+        but if one leaks through, the accumulator must not double-append.
+        This test verifies that only the delta-produced text is stored.
+        """
         flow = FlowState()
-        msg_id = "reason_acc"
+        msg_id = "reason_dedup"
 
         delta1 = Content.from_text_reasoning(id=msg_id, text="Hello ")
         delta2 = Content.from_text_reasoning(id=msg_id, text="world")
@@ -1513,8 +1518,10 @@ class TestReasoningInSnapshot:
         _emit_text_reasoning(delta1, flow)
         _emit_text_reasoning(delta2, flow)
 
+        # Accumulated text should equal the concatenation of deltas only
         assert len(flow.reasoning_messages) == 1
         assert flow.reasoning_messages[0]["content"] == "Hello world"
+        assert flow.reasoning_messages[0]["id"] == msg_id
 
     def test_reasoning_deltas_emit_one_content_event_each(self):
         """Each reasoning delta emits exactly one ReasoningMessageContentEvent."""

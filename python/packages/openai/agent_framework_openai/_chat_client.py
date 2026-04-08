@@ -2017,13 +2017,9 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                 )
                 metadata.update(self._get_metadata_from_response(event))
             case "response.reasoning_text.done":
-                contents.append(
-                    Content.from_text_reasoning(
-                        id=event.item_id,
-                        text=event.text,
-                        raw_representation=event,
-                    )
-                )
+                # Done event carries the full accumulated text which the deltas
+                # already streamed.  Emitting it again would duplicate content
+                # in downstream consumers (e.g. ag-ui reasoning accumulation).
                 metadata.update(self._get_metadata_from_response(event))
             case "response.reasoning_summary_text.delta":
                 contents.append(
@@ -2035,13 +2031,9 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                 )
                 metadata.update(self._get_metadata_from_response(event))
             case "response.reasoning_summary_text.done":
-                contents.append(
-                    Content.from_text_reasoning(
-                        id=event.item_id,
-                        text=event.text,
-                        raw_representation=event,
-                    )
-                )
+                # Done event carries the full accumulated text which the deltas
+                # already streamed.  Emitting it again would duplicate content
+                # in downstream consumers (e.g. ag-ui reasoning accumulation).
                 metadata.update(self._get_metadata_from_response(event))
             case "response.code_interpreter_call_code.delta":
                 call_id = getattr(event, "call_id", None) or getattr(event, "id", None) or event.item_id

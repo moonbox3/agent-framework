@@ -1501,3 +1501,35 @@ class TestReasoningInSnapshot:
         assert len(flow.reasoning_messages) == 1
         assert flow.reasoning_messages[0]["content"] == "part1 part2"
         assert flow.reasoning_messages[0]["encryptedValue"] == "encrypted-payload"
+
+    def test_reasoning_deltas_accumulate_correctly(self):
+        """Multiple reasoning delta events with the same id accumulate text without duplication."""
+        flow = FlowState()
+        msg_id = "reason_acc"
+
+        delta1 = Content.from_text_reasoning(id=msg_id, text="Hello ")
+        delta2 = Content.from_text_reasoning(id=msg_id, text="world")
+
+        _emit_text_reasoning(delta1, flow)
+        _emit_text_reasoning(delta2, flow)
+
+        assert len(flow.reasoning_messages) == 1
+        assert flow.reasoning_messages[0]["content"] == "Hello world"
+
+    def test_reasoning_deltas_emit_one_content_event_each(self):
+        """Each reasoning delta emits exactly one ReasoningMessageContentEvent."""
+        flow = FlowState()
+        msg_id = "reason_evt"
+
+        delta1 = Content.from_text_reasoning(id=msg_id, text="Think ")
+        delta2 = Content.from_text_reasoning(id=msg_id, text="hard")
+
+        events1 = _emit_text_reasoning(delta1, flow)
+        events2 = _emit_text_reasoning(delta2, flow)
+
+        all_events = events1 + events2
+        content_events = [e for e in all_events if isinstance(e, ReasoningMessageContentEvent)]
+
+        assert len(content_events) == 2
+        assert content_events[0].delta == "Think "
+        assert content_events[1].delta == "hard"

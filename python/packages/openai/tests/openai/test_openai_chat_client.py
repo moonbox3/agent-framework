@@ -2809,7 +2809,7 @@ def test_streaming_reasoning_text_delta_event() -> None:
 
 
 def test_streaming_reasoning_text_done_event() -> None:
-    """Test reasoning text done event creates TextReasoningContent with complete text."""
+    """Test reasoning text done event does not emit content to avoid duplication with deltas."""
     client = OpenAIChatClient(model="test-model", api_key="test-key")
     chat_options = ChatOptions()
     function_call_ids: dict[int, tuple[str, str]] = {}
@@ -2826,10 +2826,7 @@ def test_streaming_reasoning_text_done_event() -> None:
     with patch.object(client, "_get_metadata_from_response", return_value={"test": "data"}) as mock_metadata:
         response = client._parse_chunk_from_openai(event, chat_options, function_call_ids)  # type: ignore
 
-        assert len(response.contents) == 1
-        assert response.contents[0].type == "text_reasoning"
-        assert response.contents[0].text == "complete reasoning"
-        assert response.contents[0].raw_representation == event
+        assert len(response.contents) == 0
         mock_metadata.assert_called_once_with(event)
         assert response.additional_properties == {"test": "data"}
 
@@ -2860,7 +2857,7 @@ def test_streaming_reasoning_summary_text_delta_event() -> None:
 
 
 def test_streaming_reasoning_summary_text_done_event() -> None:
-    """Test reasoning summary text done event creates TextReasoningContent with complete text."""
+    """Test reasoning summary text done event does not emit content to avoid duplication with deltas."""
     client = OpenAIChatClient(model="test-model", api_key="test-key")
     chat_options = ChatOptions()
     function_call_ids: dict[int, tuple[str, str]] = {}
@@ -2877,10 +2874,7 @@ def test_streaming_reasoning_summary_text_done_event() -> None:
     with patch.object(client, "_get_metadata_from_response", return_value={"custom": "meta"}) as mock_metadata:
         response = client._parse_chunk_from_openai(event, chat_options, function_call_ids)  # type: ignore
 
-        assert len(response.contents) == 1
-        assert response.contents[0].type == "text_reasoning"
-        assert response.contents[0].text == "complete summary"
-        assert response.contents[0].raw_representation == event
+        assert len(response.contents) == 0
         mock_metadata.assert_called_once_with(event)
         assert response.additional_properties == {"custom": "meta"}
 

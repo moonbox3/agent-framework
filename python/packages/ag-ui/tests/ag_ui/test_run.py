@@ -11,6 +11,7 @@ from ag_ui.core import (
     ReasoningMessageEndEvent,
     ReasoningMessageStartEvent,
     ReasoningStartEvent,
+    TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
     ToolCallArgsEvent,
@@ -1613,7 +1614,7 @@ class TestReasoningInSnapshot:
         assert isinstance(t_events[0], ReasoningMessageEndEvent)
         assert isinstance(t_events[1], ReasoningEndEvent)
         # then text start
-        from ag_ui.core import TextMessageStartEvent, TextMessageContentEvent
+
         assert isinstance(t_events[2], TextMessageStartEvent)
         assert isinstance(t_events[3], TextMessageContentEvent)
 

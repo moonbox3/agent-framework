@@ -730,8 +730,8 @@ async def run_workflow_stream(
             run_error_emitted = True
         terminal_emitted = True
 
-    for event in _close_reasoning_block(flow):
-        yield event
+    for reasoning_evt in _close_reasoning_block(flow):
+        yield reasoning_evt
 
     for end_event in _drain_open_message():
         yield end_event

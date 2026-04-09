@@ -59,6 +59,8 @@ _BUILTIN_ALLOWED_TYPE_KEYS: frozenset[str] = frozenset({
     "builtins:dict",
     "builtins:tuple",
     "builtins:type",
+    # getattr is used by pickle to reconstruct enum members
+    "builtins:getattr",
     # copyreg helpers used by pickle for object reconstruction
     "copyreg:_reconstructor",
     # datetime

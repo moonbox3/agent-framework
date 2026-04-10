@@ -43,9 +43,22 @@ class CosmosCheckpointStorage:
     ``FileCheckpointStorage``, allowing full Python object fidelity for
     complex workflow state while keeping the document structure human-readable.
 
-    SECURITY WARNING: Checkpoints use pickle for data serialization. Only load
-    checkpoints from trusted sources. Loading a malicious checkpoint can execute
-    arbitrary code.
+    By default, checkpoint deserialization is restricted to a built-in set of safe
+    Python types (primitives, datetime, uuid, ...) and all ``agent_framework``
+    internal types.  To allow additional application-specific types, pass them via
+    the ``allowed_checkpoint_types`` parameter using ``"module:qualname"`` format.
+
+    Example::
+
+        storage = CosmosCheckpointStorage(
+            endpoint="https://my-account.documents.azure.com:443/",
+            credential=DefaultAzureCredential(),
+            database_name="agent-db",
+            container_name="checkpoints",
+            allowed_checkpoint_types=[
+                "my_app.models:MyState",
+            ],
+        )
 
     The database and container are created automatically on first use
     if they do not already exist. The container uses partition key
@@ -97,6 +110,7 @@ class CosmosCheckpointStorage:
         container_client: ContainerProxy | None = None,
         env_file_path: str | None = None,
         env_file_encoding: str | None = None,
+        allowed_checkpoint_types: list[str] | None = None,
     ) -> None:
         """Initialize the Azure Cosmos DB checkpoint storage.
 
@@ -129,10 +143,15 @@ class CosmosCheckpointStorage:
             container_client: Pre-created Cosmos container client.
             env_file_path: Path to environment file for loading settings.
             env_file_encoding: Encoding of the environment file.
+            allowed_checkpoint_types: Additional types (beyond the built-in safe set
+                and framework types) that are permitted during checkpoint
+                deserialization.  Each entry should be a ``"module:qualname"``
+                string (e.g., ``"my_app.models:MyState"``).
         """
         self._cosmos_client: CosmosClient | None = cosmos_client
         self._container_proxy: ContainerProxy | None = container_client
         self._owns_client = False
+        self._allowed_types: frozenset[str] = frozenset(allowed_checkpoint_types or [])
 
         if self._container_proxy is not None:
             self.database_name: str = database_name or ""
@@ -401,8 +420,7 @@ class CosmosCheckpointStorage:
             partition_key=PartitionKey(path="/workflow_name"),
         )
 
-    @staticmethod
-    def _document_to_checkpoint(document: dict[str, Any]) -> WorkflowCheckpoint:
+    def _document_to_checkpoint(self, document: dict[str, Any]) -> WorkflowCheckpoint:
         """Convert a Cosmos DB document back to a WorkflowCheckpoint.
 
         Strips Cosmos DB system properties (``_rid``, ``_self``, ``_etag``,
@@ -413,7 +431,7 @@ class CosmosCheckpointStorage:
         cosmos_keys = {"id", "_rid", "_self", "_etag", "_attachments", "_ts"}
         cleaned = {k: v for k, v in document.items() if k not in cosmos_keys}
 
-        decoded = decode_checkpoint_value(cleaned)
+        decoded = decode_checkpoint_value(cleaned, allowed_types=self._allowed_types)
         return WorkflowCheckpoint.from_dict(decoded)
 
     @staticmethod

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-04-09
+## [1.0.1] - 2026-04-09
 
 ### Added
 - **samples**: Add sample documentation for two separate Neo4j context providers for retrieval and memory ([#4010](https://github.com/microsoft/agent-framework/pull/4010))
@@ -895,8 +895,8 @@ Release candidate for **agent-framework-core** and **agent-framework-azure-ai** 
 
 For more information, see the [announcement blog post](https://devblogs.microsoft.com/foundry/introducing-microsoft-agent-framework-the-open-source-engine-for-agentic-ai-apps/).
 
-[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.1.0...HEAD
-[1.1.0]: https://github.com/microsoft/agent-framework/compare/python-1.0.0...python-1.1.0
+[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.0.1...HEAD
+[1.0.1]: https://github.com/microsoft/agent-framework/compare/python-1.0.0...python-1.0.1
 [1.0.0]: https://github.com/microsoft/agent-framework/compare/python-1.0.0rc6...python-1.0.0
 [1.0.0rc6]: https://github.com/microsoft/agent-framework/compare/python-1.0.0rc5...python-1.0.0rc6
 [1.0.0rc5]: https://github.com/microsoft/agent-framework/compare/python-1.0.0rc4...python-1.0.0rc5

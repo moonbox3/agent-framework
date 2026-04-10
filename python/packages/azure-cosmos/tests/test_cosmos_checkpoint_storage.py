@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 

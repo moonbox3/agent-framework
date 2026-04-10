@@ -11,6 +11,7 @@ Supported classes and functions:
 - AGUIEventConverter
 - AGUIHttpService
 - add_agent_framework_fastapi_endpoint
+- state_update
 """
 
 import importlib
@@ -23,6 +24,7 @@ _IMPORTS = [
     "AgentFrameworkWorkflow",
     "add_agent_framework_fastapi_endpoint",
     "AGUIChatClient",
+    "state_update",
 ]
 
 

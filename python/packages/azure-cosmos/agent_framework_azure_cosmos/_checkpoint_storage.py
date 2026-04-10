@@ -43,12 +43,24 @@ class CosmosCheckpointStorage:
     ``FileCheckpointStorage``, allowing full Python object fidelity for
     complex workflow state while keeping the document structure human-readable.
 
+    Security warning: checkpoints use pickle for non-JSON-native values. Loading
+    checkpoints from untrusted sources is unsafe and can execute arbitrary code
+    during deserialization. The built-in deserialization restrictions reduce risk,
+    but they do not make untrusted checkpoints safe to load. Extending
+    ``allowed_checkpoint_types`` may further increase risk and should only be done
+    for trusted application types.
+
     By default, checkpoint deserialization is restricted to a built-in set of safe
     Python types (primitives, datetime, uuid, ...) and all ``agent_framework``
     internal types.  To allow additional application-specific types, pass them via
     the ``allowed_checkpoint_types`` parameter using ``"module:qualname"`` format.
 
-    Example::
+    Example:
+
+    .. code-block:: python
+
+        from azure.identity.aio import DefaultAzureCredential
+        from agent_framework_azure_cosmos import CosmosCheckpointStorage
 
         storage = CosmosCheckpointStorage(
             endpoint="https://my-account.documents.azure.com:443/",

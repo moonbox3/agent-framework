@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **docs**: Remove pre-release flag from agent-framework installation instructions ([#5082](https://github.com/microsoft/agent-framework/pull/5082))
 - **samples**: Revise agent examples in `README.md` ([#5067](https://github.com/microsoft/agent-framework/pull/5067))
 - **repo**: Update `CHANGELOG` with v1.0.0 release ([#5069](https://github.com/microsoft/agent-framework/pull/5069))
-- **agent-framework-core**: [BREAKING] Fix handoff workflow context management and improve AG-UI demo ([#5136](https://github.com/microsoft/agent-framework/pull/5136))
+- **agent-framework-orchestrations**: [BREAKING] Fix handoff workflow context management and improve AG-UI demo ([#5136](https://github.com/microsoft/agent-framework/pull/5136))
 - **agent-framework-core**: Restrict persisted checkpoint deserialization by default ([#4941](https://github.com/microsoft/agent-framework/pull/4941))
 - **samples**: Bump `vite` from 7.3.1 to 7.3.2 in `/python/samples/05-end-to-end/ag_ui_workflow_handoff/frontend` ([#5132](https://github.com/microsoft/agent-framework/pull/5132))
 - **python**: Bump `cryptography` from 46.0.6 to 46.0.7 ([#5176](https://github.com/microsoft/agent-framework/pull/5176))

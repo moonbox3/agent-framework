@@ -42,8 +42,9 @@ def state_update(
 
     * Forward ``text`` to the LLM as the normal ``function_result`` content.
     * Merge ``state`` into ``FlowState.current_state``.
-    * Emit a ``StateSnapshotEvent`` immediately after the ``ToolCallResult``
-      event so frontends observe the updated state deterministically.
+    * Emit a deterministic ``StateSnapshotEvent`` after the ``ToolCallResult``
+      event so frontends observe the updated state deterministically. If
+      predictive state is enabled, a predictive snapshot may be emitted first.
 
     Example:
         .. code-block:: python

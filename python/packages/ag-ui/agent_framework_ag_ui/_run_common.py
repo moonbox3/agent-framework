@@ -291,9 +291,10 @@ def _emit_tool_result_common(
         state_update: Optional deterministic state snapshot produced by a tool
             returning :func:`agent_framework_ag_ui.state_update`. When present,
             it is merged into ``flow.current_state`` and a ``StateSnapshotEvent``
-            is emitted after the ``ToolCallResult`` event. This is orthogonal to
-            ``predictive_handler`` — both may fire on the same result, with
-            predictive state applied first.
+            is emitted after the ``ToolCallResult`` event. When both
+            ``predictive_handler`` and ``state_update`` are active, predictive
+            updates are applied first, then the deterministic merge, and a
+            single coalesced ``StateSnapshotEvent`` is emitted.
     """
     events: list[BaseEvent] = []
 
@@ -322,17 +323,18 @@ def _emit_tool_result_common(
 
     if predictive_handler:
         predictive_handler.apply_pending_updates()
-        if flow.current_state:
-            events.append(StateSnapshotEvent(snapshot=flow.current_state))
 
     if state_update:
         flow.current_state.update(state_update)
-        events.append(StateSnapshotEvent(snapshot=flow.current_state))
         logger.debug(
             "Emitted deterministic tool-result StateSnapshotEvent for call_id=%s (keys=%s)",
             call_id,
             list(state_update.keys()),
         )
+
+    # Emit a single coalesced snapshot when either mechanism updated state.
+    if (predictive_handler or state_update) and flow.current_state:
+        events.append(StateSnapshotEvent(snapshot=flow.current_state))
 
     flow.tool_call_id = None
     flow.tool_call_name = None

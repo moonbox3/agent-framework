@@ -30,3 +30,12 @@ def test_agent_framework_ag_ui_exports_state_update() -> None:
     from agent_framework_ag_ui import state_update
 
     assert callable(state_update)
+
+
+def test_core_ag_ui_lazy_exports_include_event_converter_and_http_service() -> None:
+    """Core facade must expose AGUIEventConverter, AGUIHttpService, and __version__."""
+    from agent_framework import ag_ui
+
+    assert hasattr(ag_ui, "AGUIEventConverter")
+    assert hasattr(ag_ui, "AGUIHttpService")
+    assert hasattr(ag_ui, "__version__")

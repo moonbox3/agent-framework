@@ -266,14 +266,12 @@ class TestEmitToolResultWithState:
         assert TOOL_RESULT_STATE_KEY not in result_events[0].content
 
     def test_coexists_with_active_predictive_state_handler(self):
-        """Deterministic state must fire independently of an active predictive handler.
+        """Both predictive and deterministic state produce a single coalesced snapshot.
 
         Predictive state (``predict_state_config``) and deterministic state
-        (``state_update``) are two independent mechanisms. This test verifies
-        the deterministic path still emits a snapshot and merges into
-        ``flow.current_state`` even when a predictive handler is active on the
-        same tool result, and that the deterministic snapshot reflects both
-        contributions that were merged into flow state.
+        (``state_update``) are two independent mechanisms. When both are active,
+        a single coalesced ``StateSnapshotEvent`` is emitted containing the
+        merged result of both contributions.
         """
         flow = FlowState(current_state={"preexisting": "value"})
         handler = PredictiveStateHandler(
@@ -286,13 +284,30 @@ class TestEmitToolResultWithState:
 
         events = _emit_tool_result(content, flow, predictive_handler=handler)
 
-        # At minimum, the deterministic snapshot must be emitted and include all merged keys.
+        # Exactly one coalesced snapshot must be emitted containing all merged keys.
         snapshots = [e for e in events if e.type == EventType.STATE_SNAPSHOT]
-        assert len(snapshots) >= 1
-        assert snapshots[-1].snapshot["draft_final"] is True
-        assert snapshots[-1].snapshot["preexisting"] == "value"
+        assert len(snapshots) == 1
+        assert snapshots[0].snapshot["draft_final"] is True
+        assert snapshots[0].snapshot["preexisting"] == "value"
         assert flow.current_state["draft_final"] is True
         assert flow.current_state["preexisting"] == "value"
+
+    def test_predictive_and_deterministic_emit_single_snapshot(self):
+        """When both predictive_handler and state_update are active, only one snapshot is emitted."""
+        flow = FlowState(current_state={"existing": "yes"})
+        handler = PredictiveStateHandler(
+            predict_state_config={"draft": {"tool": "write_draft", "tool_argument": "body"}},
+            current_state=flow.current_state,
+        )
+
+        tool_return = state_update(text="ok", state={"new_key": 42})
+        content = Content.from_function_result(call_id="c1", result=[tool_return])
+
+        events = _emit_tool_result(content, flow, predictive_handler=handler)
+
+        snapshots = [e for e in events if e.type == EventType.STATE_SNAPSHOT]
+        assert len(snapshots) == 1, f"Expected 1 coalesced snapshot, got {len(snapshots)}"
+        assert snapshots[0].snapshot == {"existing": "yes", "new_key": 42}
 
 
 class TestEmitMcpToolResultWithState:

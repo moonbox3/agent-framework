@@ -26,7 +26,6 @@ from agent_framework._clients import BaseChatClient
 from agent_framework._middleware import (
     ChatMiddlewareLayer,
     FunctionInvocationContext,
-    FunctionMiddleware,
     MiddlewareTermination,
 )
 from agent_framework._tools import FunctionInvocationLayer, FunctionTool
@@ -784,8 +783,9 @@ async def test_handoff_clone_preserves_all_middleware_types() -> None:
     executor = workflow.executors[resolve_agent_id(agent_a)]
     assert isinstance(executor, HandoffAgentExecutor)
     cloned_middleware = executor._agent.middleware or []
-    function_mw = [m for m in cloned_middleware if isinstance(m, FunctionMiddleware)]
-    assert len(function_mw) >= 1, "Function middleware should be preserved on cloned agent"
+    assert tracking_middleware in cloned_middleware, (
+        "User function middleware should be preserved on cloned agent"
+    )
 
 
 def test_clean_conversation_for_handoff_keeps_text_only_history() -> None:

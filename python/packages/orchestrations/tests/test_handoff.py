@@ -23,7 +23,12 @@ from agent_framework import (
     tool,
 )
 from agent_framework._clients import BaseChatClient
-from agent_framework._middleware import ChatMiddlewareLayer, FunctionInvocationContext, FunctionMiddleware, MiddlewareTermination
+from agent_framework._middleware import (
+    ChatMiddlewareLayer,
+    FunctionInvocationContext,
+    FunctionMiddleware,
+    MiddlewareTermination,
+)
 from agent_framework._tools import FunctionInvocationLayer, FunctionTool
 from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffBuilder, HandoffSentEvent
 from pytest import param

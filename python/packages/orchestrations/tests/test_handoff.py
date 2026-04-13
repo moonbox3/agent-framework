@@ -783,9 +783,7 @@ async def test_handoff_clone_preserves_all_middleware_types() -> None:
     executor = workflow.executors[resolve_agent_id(agent_a)]
     assert isinstance(executor, HandoffAgentExecutor)
     cloned_middleware = executor._agent.middleware or []
-    assert tracking_middleware in cloned_middleware, (
-        "User function middleware should be preserved on cloned agent"
-    )
+    assert tracking_middleware in cloned_middleware, "User function middleware should be preserved on cloned agent"
 
 
 def test_clean_conversation_for_handoff_keeps_text_only_history() -> None:

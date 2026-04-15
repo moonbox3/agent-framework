@@ -1705,6 +1705,7 @@ async def test_workflow_run_passes_forwarded_props_as_function_invocation_kwargs
     assert "RUN_STARTED" in event_types
     assert "RUN_FINISHED" in event_types
 
+    assert workflow.captured_kwargs["stream"] is True
     assert "function_invocation_kwargs" in workflow.captured_kwargs
     assert workflow.captured_kwargs["function_invocation_kwargs"] == {
         "forwarded_props": {"custom_flag": True, "source": "copilotkit"},
@@ -1737,6 +1738,7 @@ async def test_workflow_run_omits_function_invocation_kwargs_when_no_forwarded_p
 
     event_types = [event.type for event in events]
     assert "RUN_STARTED" in event_types
+    assert workflow.captured_kwargs["stream"] is True
     assert "function_invocation_kwargs" not in workflow.captured_kwargs
 
 
@@ -1770,6 +1772,7 @@ async def test_workflow_run_accepts_camel_case_forwarded_props() -> None:
     event_types = [event.type for event in events]
     assert "RUN_STARTED" in event_types
 
+    assert workflow.captured_kwargs["stream"] is True
     assert "function_invocation_kwargs" in workflow.captured_kwargs
     assert workflow.captured_kwargs["function_invocation_kwargs"] == {
         "forwarded_props": {"source": "frontend"},
@@ -1807,6 +1810,7 @@ async def test_workflow_run_passes_empty_dict_forwarded_props() -> None:
     assert "RUN_STARTED" in event_types
     assert "RUN_FINISHED" in event_types
 
+    assert workflow.captured_kwargs["stream"] is True
     assert "function_invocation_kwargs" in workflow.captured_kwargs
     assert workflow.captured_kwargs["function_invocation_kwargs"] == {
         "forwarded_props": {},

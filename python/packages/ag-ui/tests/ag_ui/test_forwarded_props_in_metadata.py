@@ -68,10 +68,12 @@ class TestBuildSafeMetadata:
 
     def test_other_keys_preserved_when_one_dropped(self):
         """Dropping one oversized key does not affect other keys."""
-        result = _build_safe_metadata({
-            "small": "ok",
-            "big": "x" * 600,
-        })
+        result = _build_safe_metadata(
+            {
+                "small": "ok",
+                "big": "x" * 600,
+            }
+        )
         assert result == {"small": "ok"}
 
     def test_none_input_returns_empty(self):

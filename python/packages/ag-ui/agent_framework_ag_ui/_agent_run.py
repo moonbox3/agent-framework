@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Keys that are internal to AG-UI orchestration and should not be passed to chat clients
-AG_UI_INTERNAL_METADATA_KEYS = {"ag_ui_thread_id", "ag_ui_run_id", "current_state"}
+AG_UI_INTERNAL_METADATA_KEYS = {"ag_ui_thread_id", "ag_ui_run_id", "current_state", "forwarded_props"}
 
 
 def _build_safe_metadata(thread_metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -790,6 +790,9 @@ async def run_agent_stream(
         "ag_ui_thread_id": thread_id,
         "ag_ui_run_id": run_id,
     }
+    forwarded_props = input_data.get("forwarded_props") or input_data.get("forwardedProps")
+    if forwarded_props:
+        base_metadata["forwarded_props"] = forwarded_props
     if flow.current_state:
         base_metadata["current_state"] = flow.current_state
     session.metadata = _build_safe_metadata(base_metadata)  # type: ignore[attr-defined]

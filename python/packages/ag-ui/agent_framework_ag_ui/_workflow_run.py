@@ -581,11 +581,16 @@ async def run_workflow_stream(
         flow.accumulated_text = ""
         return [TextMessageEndEvent(message_id=current_message_id)]
 
+    forwarded_props = input_data.get("forwarded_props") or input_data.get("forwardedProps")
+    run_kwargs: dict[str, Any] = {"stream": True}
+    if forwarded_props:
+        run_kwargs["function_invocation_kwargs"] = {"forwarded_props": forwarded_props}
+
     try:
         if responses:
-            event_stream = workflow.run(responses=responses, stream=True)
+            event_stream = workflow.run(responses=responses, **run_kwargs)
         else:
-            event_stream = workflow.run(message=messages, stream=True)
+            event_stream = workflow.run(message=messages, **run_kwargs)
 
         async for event in event_stream:
             event_type = getattr(event, "type", None)

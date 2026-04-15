@@ -4,8 +4,6 @@
 
 from typing import Any
 
-import pytest
-
 from agent_framework_ag_ui._agent_run import AG_UI_INTERNAL_METADATA_KEYS, _build_safe_metadata
 
 

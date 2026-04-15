@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import uuid
@@ -581,10 +582,27 @@ async def run_workflow_stream(
         flow.accumulated_text = ""
         return [TextMessageEndEvent(message_id=current_message_id)]
 
-    forwarded_props = input_data.get("forwarded_props") or input_data.get("forwardedProps")
     fwd_kwargs: dict[str, Any] = {}
-    if forwarded_props:
+    if "forwarded_props" in input_data:
+        forwarded_props = input_data["forwarded_props"]
         fwd_kwargs["function_invocation_kwargs"] = {"forwarded_props": forwarded_props}
+    elif "forwardedProps" in input_data:
+        forwarded_props = input_data["forwardedProps"]
+        fwd_kwargs["function_invocation_kwargs"] = {"forwarded_props": forwarded_props}
+
+    # Only pass function_invocation_kwargs if the workflow.run signature accepts it
+    if fwd_kwargs:
+        try:
+            sig = inspect.signature(workflow.run)
+            params = sig.parameters
+            accepts_fwd = "function_invocation_kwargs" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+        except (ValueError, TypeError):
+            accepts_fwd = False
+        if not accepts_fwd:
+            logger.debug("workflow.run() does not accept function_invocation_kwargs; dropping forwarded_props")
+            fwd_kwargs = {}
 
     try:
         if responses:

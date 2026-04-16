@@ -3,8 +3,9 @@ import asyncio
 import os
 
 from agent_framework import Agent
-from agent_framework.openai import OpenAIChatClient
+from agent_framework.foundry import FoundryChatClient
 from agent_framework.orchestrations import SequentialBuilder
+from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -25,13 +26,18 @@ Note on internal adapters:
   You can safely ignore them when focusing on agent progress.
 
 Prerequisites:
-- OPENAI_CHAT_MODEL must be set to the model name for the OpenAI chat client.
+- FOUNDRY_PROJECT_ENDPOINT must be set to the Azure Foundry project endpoint.
+- FOUNDRY_MODEL must be set to the model name for the Foundry chat client.
 """
 
 
 async def main() -> None:
     # 1) Create agents
-    client = OpenAIChatClient(model=os.environ["OPENAI_CHAT_MODEL"])
+    client = FoundryChatClient(
+        project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+        model=os.environ["FOUNDRY_MODEL"],
+        credential=AzureCliCredential(),
+    )
 
     writer = Agent(
         client=client,

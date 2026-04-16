@@ -87,8 +87,15 @@ class _EndWithConversation(Executor):
         response: AgentExecutorResponse,
         ctx: WorkflowContext[Any],
     ) -> None:
-        """Sink for the agent-terminator graph edge; the last AgentExecutor is the output."""
-        return
+        """Convert the agent-terminator response into a workflow output.
+
+        When the last participant is a regular AgentExecutor (registered as the
+        output executor), this node is NOT in output_executors so the yield is
+        silently filtered — no duplicate output. When the last participant is an
+        AgentApprovalExecutor (or similar wrapper), this node IS the output
+        executor so the yield produces the workflow's terminal answer.
+        """
+        await ctx.yield_output(response.agent_response)
 
 
 class SequentialBuilder:

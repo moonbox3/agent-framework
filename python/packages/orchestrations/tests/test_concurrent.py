@@ -1,14 +1,21 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-from typing import Any, cast
+from collections.abc import AsyncIterable, Awaitable
+from typing import Any, Literal, cast, overload
 
 import pytest
 from agent_framework import (
     AgentExecutorRequest,
     AgentExecutorResponse,
     AgentResponse,
+    AgentResponseUpdate,
+    AgentRunInputs,
+    AgentSession,
+    BaseAgent,
+    Content,
     Executor,
     Message,
+    ResponseStream,
     WorkflowContext,
     WorkflowRunState,
     handler,
@@ -324,3 +331,84 @@ async def test_concurrent_builder_reusable_after_build_with_participants() -> No
 
     assert builder._participants[0] is e1  # type: ignore
     assert builder._participants[1] is e2  # type: ignore
+
+
+class _EchoAgent(BaseAgent):
+    """Simple agent that appends a single assistant message with its name."""
+
+    @overload
+    def run(
+        self,
+        messages: AgentRunInputs | None = ...,
+        *,
+        stream: Literal[False] = ...,
+        session: AgentSession | None = ...,
+        **kwargs: Any,
+    ) -> Awaitable[AgentResponse[Any]]: ...
+    @overload
+    def run(
+        self,
+        messages: AgentRunInputs | None = ...,
+        *,
+        stream: Literal[True],
+        session: AgentSession | None = ...,
+        **kwargs: Any,
+    ) -> ResponseStream[AgentResponseUpdate, AgentResponse[Any]]: ...
+
+    def run(
+        self,
+        messages: AgentRunInputs | None = None,
+        *,
+        stream: bool = False,
+        session: AgentSession | None = None,
+        **kwargs: Any,
+    ) -> Awaitable[AgentResponse[Any]] | ResponseStream[AgentResponseUpdate, AgentResponse[Any]]:
+        if stream:
+
+            async def _stream() -> AsyncIterable[AgentResponseUpdate]:
+                yield AgentResponseUpdate(contents=[Content.from_text(text=f"{self.name} reply")])
+
+            return ResponseStream(_stream(), finalizer=AgentResponse.from_updates)
+
+        async def _run() -> AgentResponse:
+            return AgentResponse(messages=[Message("assistant", [f"{self.name} reply"])])
+
+        return _run()
+
+
+async def test_concurrent_intermediate_outputs_emits_data_events() -> None:
+    """When intermediate_outputs=True, each participant emits a `data` event.
+
+    The single `output` event still carries the aggregated AgentResponse; per-participant
+    responses are emitted as `data` events so consumers can tell them apart.
+    """
+    a1 = _EchoAgent(id="agent1", name="A1")
+    a2 = _EchoAgent(id="agent2", name="A2")
+    a3 = _EchoAgent(id="agent3", name="A3")
+
+    wf = ConcurrentBuilder(participants=[a1, a2, a3], intermediate_outputs=True).build()
+
+    output_events = []
+    data_events = []
+    for ev in await wf.run("prompt: hello"):
+        if ev.type == "output":
+            output_events.append(ev)
+        elif ev.type == "data":
+            data_events.append(ev)
+
+    # One output event = the aggregated answer from the aggregator.
+    assert len(output_events) == 1
+    aggregated = output_events[0].data
+    assert isinstance(aggregated, AgentResponse)
+    assert len(aggregated.messages) == 3
+    assert all(m.role == "assistant" for m in aggregated.messages)
+
+    # Each participant emits a data event carrying its AgentResponse.
+    assert len(data_events) == 3
+    for dev in data_events:
+        assert isinstance(dev.data, AgentResponse)
+    data_texts = {dev.data.messages[0].text for dev in data_events}
+    assert data_texts == {"A1 reply", "A2 reply", "A3 reply"}
+    # Executor ids derive from the agent's name (resolve_agent_id behavior).
+    data_executor_ids = {dev.executor_id for dev in data_events}
+    assert data_executor_ids == {"A1", "A2", "A3"}

@@ -25,19 +25,12 @@ Note on internal adapters:
   You can safely ignore them when focusing on agent progress.
 
 Prerequisites:
-- FOUNDRY_PROJECT_ENDPOINT must be your Azure AI Foundry Agent Service (V2) project endpoint.
-- FOUNDRY_MODEL must be set to your Azure OpenAI model deployment name.
+- OPENAI_CHAT_MODEL_ID must be set to the model name for the OpenAI chat client.
 """
 
 
 async def main() -> None:
     # 1) Create agents
-    # client = FoundryChatClient(
-    #     project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-    #     model=os.environ["FOUNDRY_MODEL"],
-    #     credential=AzureCliCredential(),
-    # )
-
     client = OpenAIChatClient(model=os.environ["OPENAI_CHAT_MODEL_ID"])
 
     writer = Agent(

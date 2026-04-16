@@ -74,8 +74,9 @@ class _AggregateAgentConversations(Executor):
     """Aggregates agent responses and completes with a single AgentResponse.
 
     Emits an `AgentResponse` whose `messages` are the final assistant message from each
-    participant (one message per agent), in the order participants completed. The
-    user prompt is intentionally not included — that is part of the input, not the answer.
+    participant (one message per agent), in deterministic participant order matching
+    the fan-in `sources` configuration. The user prompt is intentionally not included —
+    that is part of the input, not the answer.
 
     For each participant the final assistant message is sourced from
     `r.agent_response.messages`, falling back to scanning `r.full_conversation` for

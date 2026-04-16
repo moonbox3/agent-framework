@@ -19,7 +19,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from agent_framework import Message, SupportsAgentRun
+from agent_framework import AgentResponse, Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import (
     AgentExecutor,
     AgentExecutorResponse,
@@ -85,7 +85,7 @@ class _EndWithConversation(Executor):
     async def end_with_agent_executor_response(
         self,
         response: AgentExecutorResponse,
-        ctx: WorkflowContext[Any],
+        ctx: WorkflowContext[Any, AgentResponse],
     ) -> None:
         """Convert the agent-terminator response into a workflow output.
 

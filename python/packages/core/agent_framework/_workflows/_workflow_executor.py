@@ -571,7 +571,7 @@ class WorkflowExecutor(Executor):
         # visible in the parent workflow's event stream.
         data_events = [event for event in result if isinstance(event, WorkflowEvent) and event.type == "data"]
         for data_event in data_events:
-            await ctx.add_event(WorkflowEvent.emit(data_event.executor_id, data_event.data))
+            await ctx.add_event(WorkflowEvent.emit(data_event.executor_id or "", data_event.data))
 
         # Process request info events
         for event in request_info_events:

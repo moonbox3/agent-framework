@@ -1057,7 +1057,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         if self._magentic_context is None:
             raise RuntimeError("Context not initialized")
         # Check limits first
-        within_limits = await self._check_within_limits_or_complete(cast(WorkflowContext[Never, list[Message]], ctx))
+        within_limits = await self._check_within_limits_or_complete(cast(WorkflowContext[Never, AgentResponse], ctx))
         if not within_limits:
             return
 
@@ -1092,7 +1092,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         # Check for task completion
         if self._progress_ledger.is_request_satisfied.answer:
             logger.info("Magentic Orchestrator: Task completed")
-            await self._prepare_final_answer(cast(WorkflowContext[Never, list[Message]], ctx))
+            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse], ctx))
             return
 
         # Check for stalling or looping
@@ -1116,7 +1116,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
 
         if next_speaker not in self._participant_registry.participants:
             logger.warning(f"Invalid next speaker: {next_speaker}")
-            await self._prepare_final_answer(cast(WorkflowContext[Never, list[Message]], ctx))
+            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse], ctx))
             return
 
         # Add instruction to conversation (assistant guidance)

@@ -542,11 +542,7 @@ async def test_sequential_request_info_with_intermediate_outputs_emits_data_even
     a1 = _EchoAgent(id="agent1", name="A1")
     a2 = _EchoAgent(id="agent2", name="A2")
 
-    wf = (
-        SequentialBuilder(participants=[a1, a2], intermediate_outputs=True)
-        .with_request_info()
-        .build()
-    )
+    wf = SequentialBuilder(participants=[a1, a2], intermediate_outputs=True).with_request_info().build()
 
     # Run and approve all request_info events until the workflow completes
     all_data_events: list[Any] = []

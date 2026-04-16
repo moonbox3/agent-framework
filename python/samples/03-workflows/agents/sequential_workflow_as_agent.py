@@ -25,13 +25,13 @@ Note on internal adapters:
   You can safely ignore them when focusing on agent progress.
 
 Prerequisites:
-- OPENAI_CHAT_MODEL_ID must be set to the model name for the OpenAI chat client.
+- OPENAI_CHAT_MODEL must be set to the model name for the OpenAI chat client.
 """
 
 
 async def main() -> None:
     # 1) Create agents
-    client = OpenAIChatClient(model=os.environ["OPENAI_CHAT_MODEL_ID"])
+    client = OpenAIChatClient(model=os.environ["OPENAI_CHAT_MODEL"])
 
     writer = Agent(
         client=client,

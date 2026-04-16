@@ -628,12 +628,10 @@ class WorkflowAgent(BaseAgent):
         Returns:
             A list of AgentResponseUpdate objects. Empty list if the event is not relevant.
         """
-        if event.type == "output" or (
-            event.type == "data" and isinstance(event.data, (AgentResponse, AgentResponseUpdate))
-        ):
+        data: Any = event.data
+        if event.type == "output" or (event.type == "data" and isinstance(data, (AgentResponse, AgentResponseUpdate))):
             # Convert workflow output to agent response updates.
             # Handle different data types appropriately.
-            data = event.data
             executor_id = event.executor_id
 
             if isinstance(data, AgentResponseUpdate):

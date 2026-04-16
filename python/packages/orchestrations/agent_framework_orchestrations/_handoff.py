@@ -447,10 +447,10 @@ class HandoffAgentExecutor(AgentExecutor):
             response: The user's response messages
             ctx: The workflow context
 
-        If the response is empty, it indicates termination of the handoff workflow.
+        If the response is empty, the handoff workflow terminates. Per-agent responses
+        already surfaced as `output` events; no terminal yield is needed.
         """
         if not response:
-            await ctx.yield_output(self._full_conversation)
             return
 
         # Broadcast the user response to all other agents
@@ -536,11 +536,8 @@ class HandoffAgentExecutor(AgentExecutor):
         if inspect.isawaitable(terminated):
             terminated = await terminated
 
-        if terminated:
-            await ctx.yield_output(self._full_conversation)
-            return True
-
-        return False
+        # Per-agent responses already surfaced as `output` events; no terminal yield needed.
+        return bool(terminated)
 
     @override
     async def on_checkpoint_save(self) -> dict[str, Any]:

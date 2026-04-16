@@ -1192,23 +1192,23 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         # Start inner loop
         await self._run_inner_loop(ctx)
 
-    async def _prepare_final_answer(self, ctx: WorkflowContext[Never, list[Message]]) -> None:
-        """Prepare the final answer using the manager."""
+    async def _prepare_final_answer(self, ctx: WorkflowContext[Never, AgentResponse]) -> None:
+        """Yield the manager's synthesized final answer as the workflow's `AgentResponse`."""
         if self._magentic_context is None:
             raise RuntimeError("Context not initialized")
 
         logger.info("Magentic Orchestrator: Preparing final answer")
         final_answer = await self._manager.prepare_final_answer(self._magentic_context.clone(deep=True))
 
-        # Emit a completed event for the workflow
-        await ctx.yield_output([final_answer])
+        await ctx.yield_output(AgentResponse(messages=[final_answer]))
 
         self._terminated = True
 
-    async def _check_within_limits_or_complete(self, ctx: WorkflowContext[Never, list[Message]]) -> bool:
+    async def _check_within_limits_or_complete(self, ctx: WorkflowContext[Never, AgentResponse]) -> bool:
         """Check if orchestrator is within operational limits.
 
-        If limits are exceeded, yield a termination message and mark the workflow as terminated.
+        If limits are exceeded, yield a termination AgentResponse and mark the workflow
+        as terminated.
 
         Args:
             ctx: The workflow context.
@@ -1229,15 +1229,12 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
             limit_type = "round" if hit_round_limit else "reset"
             logger.error(f"Magentic Orchestrator: Max {limit_type} count reached")
 
-            # Yield the full conversation with an indication of termination due to limits
-            await ctx.yield_output([
-                *self._magentic_context.chat_history,
-                Message(
-                    role="assistant",
-                    contents=[f"Workflow terminated due to reaching maximum {limit_type} count."],
-                    author_name=MAGENTIC_MANAGER_NAME,
-                ),
-            ])
+            termination_message = Message(
+                role="assistant",
+                contents=[f"Workflow terminated due to reaching maximum {limit_type} count."],
+                author_name=MAGENTIC_MANAGER_NAME,
+            )
+            await ctx.yield_output(AgentResponse(messages=[termination_message]))
             self._terminated = True
 
             return False
@@ -1316,7 +1313,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
 class MagenticAgentExecutor(AgentExecutor):
     """Specialized AgentExecutor for Magentic agent participants."""
 
-    def __init__(self, agent: SupportsAgentRun) -> None:
+    def __init__(self, agent: SupportsAgentRun, *, emit_intermediate_data: bool = False) -> None:
         """Initialize a Magentic Agent Executor.
 
         This executor wraps an SupportsAgentRun instance to be used as a participant
@@ -1324,13 +1321,14 @@ class MagenticAgentExecutor(AgentExecutor):
 
         Args:
             agent: The agent instance to wrap.
+            emit_intermediate_data: Forwarded to the base AgentExecutor.
 
         Notes: Magentic pattern requires a reset operation upon replanning. This executor
         extends the base AgentExecutor to handle resets appropriately. In order to handle
         resets, the agent threads and other states are reset when requested by the orchestrator.
         And because of this, MagenticAgentExecutor does not support custom threads.
         """
-        super().__init__(agent)
+        super().__init__(agent, emit_intermediate_data=emit_intermediate_data)
 
     @handler
     async def handle_magentic_reset(self, signal: MagenticResetSignal, ctx: WorkflowContext) -> None:
@@ -1741,7 +1739,7 @@ class MagenticBuilder:
             if isinstance(participant, Executor):
                 executors.append(participant)
             elif isinstance(participant, SupportsAgentRun):
-                executors.append(MagenticAgentExecutor(participant))
+                executors.append(MagenticAgentExecutor(participant, emit_intermediate_data=self._intermediate_outputs))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."
@@ -1760,7 +1758,7 @@ class MagenticBuilder:
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[orchestrator] if not self._intermediate_outputs else None,
+            output_executors=[orchestrator],
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

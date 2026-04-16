@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from agent_framework import Message, SupportsAgentRun
+from agent_framework import AgentResponse, Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._checkpoint import CheckpointStorage
@@ -71,18 +71,19 @@ class _DispatchToAllParticipants(Executor):
 
 
 class _AggregateAgentConversations(Executor):
-    """Aggregates agent responses and completes with combined ChatMessages.
+    """Aggregates agent responses and completes with a single AgentResponse.
 
-    Emits a list[Message] shaped as:
-      [ single_user_prompt?, agent1_final_assistant, agent2_final_assistant, ... ]
+    Emits an `AgentResponse` whose `messages` are the final assistant message from each
+    participant (one message per agent), in the order participants completed. The
+    user prompt is intentionally not included — that is part of the input, not the answer.
 
-    - Extracts a single user prompt (first user message seen across results).
-    - For each result, selects the final assistant message (prefers agent_response.messages).
-    - Avoids duplicating the same user message per agent.
+    For each participant the final assistant message is sourced from
+    `r.agent_response.messages`, falling back to scanning `r.full_conversation` for
+    pathological executors that did not populate the response.
     """
 
     @handler
-    async def aggregate(self, results: list[AgentExecutorResponse], ctx: WorkflowContext[Never, list[Message]]) -> None:
+    async def aggregate(self, results: list[AgentExecutorResponse], ctx: WorkflowContext[Never, AgentResponse]) -> None:
         if not results:
             logger.error("Concurrent aggregator received empty results list")
             raise ValueError("Aggregation failed: no results provided")
@@ -91,12 +92,10 @@ class _AggregateAgentConversations(Executor):
             r = getattr(msg, "role", None)
             if r is None:
                 return False
-            # Normalize both r and role to lowercase strings for comparison
             r_str = str(r).lower() if isinstance(r, str) or hasattr(r, "__str__") else r
             role_str = str(role).lower()
             return r_str == role_str
 
-        prompt_message: Message | None = None
         assistant_replies: list[Message] = []
 
         for r in results:
@@ -106,10 +105,6 @@ class _AggregateAgentConversations(Executor):
                 f"Aggregating executor {getattr(r, 'executor_id', '<unknown>')}: "
                 f"{len(resp_messages)} response msgs, {len(r.full_conversation)} conversation msgs"
             )
-
-            # Capture a single user prompt (first encountered across any conversation)
-            if prompt_message is None:
-                prompt_message = next((m for m in r.full_conversation if _is_role(m, "user")), None)
 
             # Pick the final assistant message from the response; fallback to conversation search
             final_assistant = next((m for m in reversed(resp_messages) if _is_role(m, "assistant")), None)
@@ -127,14 +122,7 @@ class _AggregateAgentConversations(Executor):
             logger.error(f"Aggregation failed: no assistant replies found across {len(results)} results")
             raise RuntimeError("Aggregation failed: no assistant replies found")
 
-        output: list[Message] = []
-        if prompt_message is not None:
-            output.append(prompt_message)
-        else:
-            logger.warning("No user prompt found in any conversation; emitting assistants only")
-        output.extend(assistant_replies)
-
-        await ctx.yield_output(output)
+        await ctx.yield_output(AgentResponse(messages=assistant_replies))
 
 
 class _CallbackAggregator(Executor):
@@ -190,7 +178,8 @@ class ConcurrentBuilder:
 
         from agent_framework_orchestrations import ConcurrentBuilder
 
-        # Minimal: use default aggregator (returns list[Message])
+        # Minimal: use default aggregator (yields one AgentResponse with one assistant
+        # message per participant)
         workflow = ConcurrentBuilder(participants=[agent1, agent2, agent3]).build()
 
 
@@ -351,7 +340,13 @@ class ConcurrentBuilder:
         return self
 
     def _resolve_participants(self) -> list[Executor]:
-        """Resolve participant instances into Executor objects."""
+        """Resolve participant instances into Executor objects.
+
+        When `intermediate_outputs=True`, every wrapped agent is constructed with
+        `emit_intermediate_data=True` so its individual response surfaces as a `data`
+        event without polluting the single `output` event reserved for the aggregator's
+        final answer.
+        """
         if not self._participants:
             raise ValueError("No participants provided. Pass participants to the constructor.")
 
@@ -366,9 +361,9 @@ class ConcurrentBuilder:
                     not self._request_info_filter or resolve_agent_id(p) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(p))
+                    executors.append(AgentApprovalExecutor(p, emit_intermediate_data=self._intermediate_outputs))
                 else:
-                    executors.append(AgentExecutor(p))
+                    executors.append(AgentExecutor(p, emit_intermediate_data=self._intermediate_outputs))
             else:
                 raise TypeError(f"Participants must be SupportsAgentRun or Executor instances. Got {type(p).__name__}.")
 
@@ -383,7 +378,7 @@ class ConcurrentBuilder:
         - If request info is enabled, the orchestration emits a request info event with outputs from all participants
             before sending the outputs to the aggregator
         - Aggregator yields output and the workflow becomes idle. The output is either:
-          - list[Message] (default aggregator: one user + one assistant per agent)
+          - AgentResponse (default aggregator: one assistant message per participant)
           - custom payload from the provided aggregator
 
         Returns:
@@ -408,7 +403,7 @@ class ConcurrentBuilder:
         builder = WorkflowBuilder(
             start_executor=dispatcher,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[aggregator] if not self._intermediate_outputs else None,
+            output_executors=[aggregator],
         )
         # Fan-out for parallel execution
         builder.add_fan_out_edges(dispatcher, participants)

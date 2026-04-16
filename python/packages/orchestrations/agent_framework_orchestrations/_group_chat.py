@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
-from agent_framework import Agent, AgentSession, Message, SupportsAgentRun
+from agent_framework import Agent, AgentResponse, AgentSession, Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._checkpoint import CheckpointStorage
@@ -522,9 +522,9 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _check_agent_terminate_and_yield(
         self,
         agent_orchestration_output: AgentOrchestrationOutput,
-        ctx: WorkflowContext[Never, list[Message]],
+        ctx: WorkflowContext[Never, AgentResponse],
     ) -> bool:
-        """Check if the agent requested termination and yield completion if so.
+        """Yield the orchestrator's completion `AgentResponse` if termination was requested.
 
         Args:
             agent_orchestration_output: Output from the orchestrator agent
@@ -536,8 +536,9 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
             final_message = (
                 agent_orchestration_output.final_message or "The conversation has been terminated by the agent."
             )
-            self._append_messages([self._create_completion_message(final_message)])
-            await ctx.yield_output(self._full_conversation)
+            completion_message = self._create_completion_message(final_message)
+            self._append_messages([completion_message])
+            await ctx.yield_output(AgentResponse(messages=[completion_message]))
             return True
 
         return False
@@ -963,9 +964,11 @@ class GroupChatBuilder:
                     not self._request_info_filter or resolve_agent_id(participant) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(participant))
+                    executors.append(
+                        AgentApprovalExecutor(participant, emit_intermediate_data=self._intermediate_outputs)
+                    )
                 else:
-                    executors.append(AgentExecutor(participant))
+                    executors.append(AgentExecutor(participant, emit_intermediate_data=self._intermediate_outputs))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."
@@ -991,7 +994,7 @@ class GroupChatBuilder:
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[orchestrator] if not self._intermediate_outputs else None,
+            output_executors=[orchestrator],
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

@@ -15,6 +15,7 @@ from .._sessions import AgentSession
 from .._types import AgentResponse, AgentResponseUpdate, Message, ResponseStream
 from ._agent_utils import resolve_agent_id
 from ._const import GLOBAL_KWARGS_KEY, WORKFLOW_RUN_KWARGS_KEY
+from ._events import WorkflowEvent
 from ._executor import Executor, handler
 from ._message_utils import normalize_messages_input
 from ._request_info_mixin import response_handler
@@ -85,6 +86,7 @@ class AgentExecutor(Executor):
         id: str | None = None,
         context_mode: Literal["full", "last_agent", "custom"] | None = None,
         context_filter: Callable[[list[Message]], list[Message]] | None = None,
+        emit_intermediate_data: bool = False,
     ):
         """Initialize the executor with a unique identifier.
 
@@ -102,6 +104,10 @@ class AgentExecutor(Executor):
                    as context for the agent run.
             context_filter: An optional function for filtering conversation context when context_mode is set
                 to "custom".
+            emit_intermediate_data: When True, additionally emits `data` events (via
+                `WorkflowEvent.emit`) carrying each AgentResponse / AgentResponseUpdate alongside
+                the existing `output` events. Orchestrations use this to surface intermediate
+                participants while reserving `output` events for the workflow's final answer.
         """
         # Prefer provided id; else use agent.name if present; else generate deterministic prefix
         exec_id = id or resolve_agent_id(agent)
@@ -126,6 +132,8 @@ class AgentExecutor(Executor):
             raise ValueError("context_mode must be one of 'full', 'last_agent', or 'custom'.")
         if self._context_mode == "custom" and not self._context_filter:
             raise ValueError("context_filter must be provided when context_mode is set to 'custom'.")
+
+        self._emit_intermediate_data = emit_intermediate_data
 
     @property
     def agent(self) -> SupportsAgentRun:
@@ -355,6 +363,8 @@ class AgentExecutor(Executor):
             client_kwargs=client_kwargs,
         )
         await ctx.yield_output(response)
+        if self._emit_intermediate_data:
+            await ctx.add_event(WorkflowEvent.emit(self.id, response))
 
         # Handle any user input requests
         if response.user_input_requests:
@@ -398,6 +408,8 @@ class AgentExecutor(Executor):
         async for update in stream:
             updates.append(update)
             await ctx.yield_output(update)
+            if self._emit_intermediate_data:
+                await ctx.add_event(WorkflowEvent.emit(self.id, update))
             if update.user_input_requests:
                 streamed_user_input_requests.extend(update.user_input_requests)
 

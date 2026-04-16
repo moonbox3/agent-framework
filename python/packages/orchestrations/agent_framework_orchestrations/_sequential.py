@@ -2,39 +2,17 @@
 
 """Sequential builder for agent/executor workflows with shared conversation context.
 
-This module provides a high-level, agent-focused API to assemble a sequential
-workflow where:
-- Participants are provided as SupportsAgentRun or Executor instances via `participants=[...]`
-- A shared conversation context (list[Message]) is passed along the chain
-- Agents append their assistant messages to the context
-- Custom executors can transform or summarize and return a refined context
-- The workflow finishes with the final context produced by the last participant
+Participants (SupportsAgentRun or Executor instances) run in order, sharing a
+conversation along the chain. Agents append their assistant messages; custom executors
+transform and return a refined `list[Message]`.
 
-Typical wiring:
-    input -> _InputToConversation -> participant1 -> (agent? -> _ResponseToConversation) ->
-    ... -> participantN -> _EndWithConversation
+Wiring: input -> _InputToConversation -> participant1 -> ... -> participantN -> _EndWithConversation
 
-Notes:
-- Participants can mix SupportsAgentRun and Executor objects
-- Agents are auto-wrapped by WorkflowBuilder as AgentExecutor (unless already wrapped)
-- AgentExecutor produces AgentExecutorResponse; _ResponseToConversation converts this to list[Message]
-- Non-agent executors must define a handler that consumes `list[Message]` and sends back
-  the updated `list[Message]` via their workflow context
-
-Why include the small internal adapter executors?
-- Input normalization ("input-conversation"): ensures the workflow always starts with a
-  `list[Message]` regardless of whether callers pass a `str`, a single `Message`,
-  or a list. This keeps the first hop strongly typed and avoids boilerplate in participants.
-- Agent response adaptation ("to-conversation:<participant>"): agents (via AgentExecutor)
-  emit `AgentExecutorResponse`. The adapter converts that to a `list[Message]`
-  using `full_conversation` so original prompts aren't lost when chaining.
-- Result output ("end"): yields the final conversation list and the workflow becomes idle
-  giving a consistent terminal payload shape for both agents and custom executors.
-
-These adapters are first-class executors by design so they are type-checked at edges,
-observable (ExecutorInvoke/Completed events), and easily testable/reusable. Their IDs are
-deterministic and self-describing (for example, "to-conversation:writer") to reduce event-log
-confusion and to mirror how the concurrent builder uses explicit dispatcher/aggregator nodes.
+The workflow's final `output` event is either the last agent's `AgentResponse` (when the
+terminator is an agent) or the custom executor's `list[Message]`. With
+`intermediate_outputs=True`, intermediate agents emit `data` events (via
+`AgentExecutor.emit_intermediate_data`) so consumers can observe them separately from the
+terminal answer.
 """
 
 import logging
@@ -79,7 +57,20 @@ class _InputToConversation(Executor):
 
 
 class _EndWithConversation(Executor):
-    """Terminates the workflow by emitting the final conversation context."""
+    """Graph terminator for the sequential workflow.
+
+    For custom-executor terminators, this emits the final `list[Message]` as an `output`
+    event (the executor's own contract). For agent terminators it is a passive sink: the
+    last `AgentExecutor` is itself registered as the workflow's output executor in
+    `SequentialBuilder.build()`, so its `yield_output` calls — a single `AgentResponse`
+    non-streaming, or per-chunk `AgentResponseUpdate` events streaming — become the
+    workflow's outputs directly.
+
+    Intermediate participants emit observation `data` events (via
+    `AgentExecutor.emit_intermediate_data`) when `intermediate_outputs=True`; they never
+    emit `output` events because output_executors is restricted to the terminator
+    executor (the last agent or this node).
+    """
 
     @handler
     async def end_with_messages(
@@ -87,23 +78,17 @@ class _EndWithConversation(Executor):
         conversation: list[Message],
         ctx: WorkflowContext[Any, list[Message]],
     ) -> None:
-        """Handler for ending with a list of Message.
-
-        This is used when the last participant is a custom executor.
-        """
+        """Yield the final conversation when the last participant is a custom executor."""
         await ctx.yield_output(list(conversation))
 
     @handler
     async def end_with_agent_executor_response(
         self,
         response: AgentExecutorResponse,
-        ctx: WorkflowContext[Any, list[Message] | None],
+        ctx: WorkflowContext[Any],
     ) -> None:
-        """Handle case where last participant is an agent.
-
-        The agent is wrapped by AgentExecutor and emits AgentExecutorResponse.
-        """
-        await ctx.yield_output(response.full_conversation)
+        """Sink for the agent-terminator graph edge; the last AgentExecutor is the output."""
+        return
 
 
 class SequentialBuilder:
@@ -225,7 +210,13 @@ class SequentialBuilder:
         return self
 
     def _resolve_participants(self) -> list[Executor]:
-        """Resolve participant instances into Executor objects."""
+        """Resolve participant instances into Executor objects.
+
+        Wraps `SupportsAgentRun` participants as `AgentExecutor`. When `intermediate_outputs=True`,
+        every wrapped agent except the final one is constructed with `emit_intermediate_data=True`
+        so its responses surface as workflow `data` events without polluting the single `output`
+        event reserved for the final answer.
+        """
         if not self._participants:
             raise ValueError("No participants provided. Pass participants to the constructor.")
 
@@ -235,18 +226,32 @@ class SequentialBuilder:
             "last_agent" if self._chain_only_agent_responses else None
         )
 
+        last_idx = len(participants) - 1
         executors: list[Executor] = []
-        for p in participants:
+        for idx, p in enumerate(participants):
             if isinstance(p, Executor):
                 executors.append(p)
             elif isinstance(p, SupportsAgentRun):
+                emit_intermediate = self._intermediate_outputs and idx != last_idx
                 if self._request_info_enabled and (
                     not self._request_info_filter or resolve_agent_id(p) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(p, context_mode=context_mode))
+                    executors.append(
+                        AgentApprovalExecutor(
+                            p,
+                            context_mode=context_mode,
+                            emit_intermediate_data=emit_intermediate,
+                        )
+                    )
                 else:
-                    executors.append(AgentExecutor(p, context_mode=context_mode))
+                    executors.append(
+                        AgentExecutor(
+                            p,
+                            context_mode=context_mode,
+                            emit_intermediate_data=emit_intermediate,
+                        )
+                    )
             else:
                 raise TypeError(f"Participants must be SupportsAgentRun or Executor instances. Got {type(p).__name__}.")
 
@@ -258,11 +263,12 @@ class SequentialBuilder:
         Wiring pattern:
         - _InputToConversation normalizes the initial input into list[Message]
         - For each participant in order:
-            - If Agent (or AgentExecutor): pass conversation to the agent, then optionally
-              route through a request info interceptor, then convert response to conversation
-              via _ResponseToConversation
-            - Else (custom Executor): pass conversation directly to the executor
-        - _EndWithConversation yields the final conversation and the workflow becomes idle
+            - Agent or AgentExecutor: receives the conversation/AgentExecutorResponse,
+              produces an AgentExecutorResponse forwarded downstream
+            - Custom Executor: receives list[Message] and forwards a list[Message]
+        - The workflow's `output_executor` is selected based on the last participant:
+            - Agent terminator: the last AgentExecutor itself (its yield_output is the answer)
+            - Custom-executor terminator: `_EndWithConversation` (yields the final list[Message])
         """
         # Internal nodes
         input_conv = _InputToConversation(id="input-conversation")
@@ -271,10 +277,15 @@ class SequentialBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
+        last_executor = participants[-1]
+        output_executors: list[Executor | SupportsAgentRun] = [
+            last_executor if isinstance(last_executor, AgentExecutor) else end
+        ]
+
         builder = WorkflowBuilder(
             start_executor=input_conv,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[end] if not self._intermediate_outputs else None,
+            output_executors=output_executors,
         )
 
         # Start of the chain is the input normalizer

@@ -300,7 +300,9 @@ class WorkflowAgent(BaseAgent):
             function_invocation_kwargs=function_invocation_kwargs,
             client_kwargs=client_kwargs,
         ):
-            if event.type == "output" or event.type == "request_info":
+            if event.type in ("output", "request_info") or (
+                event.type == "data" and isinstance(event.data, (AgentResponse, AgentResponseUpdate))
+            ):
                 output_events.append(event)
 
         result = self._convert_workflow_events_to_agent_response(response_id, output_events)
@@ -618,16 +620,17 @@ class WorkflowAgent(BaseAgent):
     ) -> list[AgentResponseUpdate]:
         """Convert a workflow event to a list of AgentResponseUpdate objects.
 
-        Events with type='output' and type='request_info' are processed.
-        Other workflow events are ignored as they are workflow-internal.
-
-        For 'output' events, AgentExecutor yields AgentResponseUpdate for streaming updates
-        via ctx.yield_output(). This method converts those to agent response updates.
+        Processes `output` and `request_info` events, plus `data` events carrying
+        `AgentResponse` or `AgentResponseUpdate` (emitted by orchestrations to surface
+        intermediate participants when `intermediate_outputs=True`). Other event types
+        are workflow-internal and ignored.
 
         Returns:
             A list of AgentResponseUpdate objects. Empty list if the event is not relevant.
         """
-        if event.type == "output":
+        if event.type == "output" or (
+            event.type == "data" and isinstance(event.data, (AgentResponse, AgentResponseUpdate))
+        ):
             # Convert workflow output to agent response updates.
             # Handle different data types appropriately.
             data = event.data

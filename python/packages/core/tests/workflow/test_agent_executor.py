@@ -699,3 +699,61 @@ async def test_resolve_executor_kwargs_empty_per_executor_does_not_fallback_to_g
     resolved = {"exec_a": {}, GLOBAL_KWARGS_KEY: {"global_key": "global_val"}}
     result = executor._resolve_executor_kwargs(resolved)  # pyright: ignore[reportPrivateUsage]
     assert result == {}
+
+
+async def test_emit_intermediate_data_emits_data_events_non_streaming() -> None:
+    """When emit_intermediate_data=True, AgentExecutor emits a data event with the AgentResponse."""
+    agent = _CountingAgent(id="agent_a", name="AgentA")
+    executor = AgentExecutor(agent, id="exec_a", emit_intermediate_data=True)
+    workflow = WorkflowBuilder(start_executor=executor).build()
+
+    output_events: list[WorkflowEvent[Any]] = []
+    data_events: list[WorkflowEvent[Any]] = []
+    for event in await workflow.run("hello"):
+        if event.type == "output":
+            output_events.append(event)
+        elif event.type == "data":
+            data_events.append(event)
+
+    # Output event still emitted (existing behavior unchanged)
+    assert len(output_events) == 1
+    assert isinstance(output_events[0].data, AgentResponse)
+    # Plus a parallel data event with the same AgentResponse payload
+    assert len(data_events) == 1
+    assert data_events[0].executor_id == "exec_a"
+    assert isinstance(data_events[0].data, AgentResponse)
+    assert data_events[0].data.messages[0].text == output_events[0].data.messages[0].text
+
+
+async def test_emit_intermediate_data_emits_data_events_streaming() -> None:
+    """When emit_intermediate_data=True and streaming, data events accompany each AgentResponseUpdate."""
+    agent = _CountingAgent(id="agent_a", name="AgentA")
+    executor = AgentExecutor(agent, id="exec_a", emit_intermediate_data=True)
+    workflow = WorkflowBuilder(start_executor=executor).build()
+
+    output_updates: list[WorkflowEvent[Any]] = []
+    data_updates: list[WorkflowEvent[Any]] = []
+    async for event in workflow.run("hello", stream=True):
+        if event.type == "output":
+            output_updates.append(event)
+        elif event.type == "data":
+            data_updates.append(event)
+
+    assert output_updates and all(isinstance(e.data, AgentResponseUpdate) for e in output_updates)
+    assert len(data_updates) == len(output_updates)
+    assert all(isinstance(e.data, AgentResponseUpdate) for e in data_updates)
+    assert all(e.executor_id == "exec_a" for e in data_updates)
+
+
+async def test_emit_intermediate_data_default_false_no_data_events() -> None:
+    """When emit_intermediate_data is not set, no extra data events are emitted (default behavior)."""
+    agent = _CountingAgent(id="agent_a", name="AgentA")
+    executor = AgentExecutor(agent, id="exec_a")  # default: emit_intermediate_data=False
+    workflow = WorkflowBuilder(start_executor=executor).build()
+
+    data_events: list[WorkflowEvent[Any]] = []
+    for event in await workflow.run("hello"):
+        if event.type == "data":
+            data_events.append(event)
+
+    assert data_events == []

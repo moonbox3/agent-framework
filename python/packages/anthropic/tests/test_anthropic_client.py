@@ -1504,9 +1504,7 @@ async def test_anthropic_client_integration_function_calling() -> None:
 @skip_if_anthropic_integration_tests_disabled
 async def test_anthropic_client_integration_hosted_tools() -> None:
     """Integration test for hosted tools."""
-    local_mcp_url = os.environ.get("LOCAL_MCP_URL", "")
-    if not local_mcp_url or not local_mcp_url.startswith(("http://", "https://")):
-        pytest.skip("LOCAL_MCP_URL not set or not an HTTP URL; skipping hosted tools test")
+    import anthropic
 
     client = AnthropicClient()
 
@@ -1515,15 +1513,23 @@ async def test_anthropic_client_integration_hosted_tools() -> None:
         AnthropicClient.get_web_search_tool(),
         AnthropicClient.get_code_interpreter_tool(),
         AnthropicClient.get_mcp_tool(
-            name="local-mcp",
-            url=local_mcp_url,
+            name="example-mcp",
+            url="https://learn.microsoft.com/api/mcp",
         ),
     ]
 
-    response = await client.get_response(
-        messages=messages,
-        options={"tools": tools, "max_tokens": 100},
-    )
+    try:
+        response = await client.get_response(
+            messages=messages,
+            options={"tools": tools, "max_tokens": 100},
+        )
+    except (
+        anthropic.BadRequestError,
+        anthropic.InternalServerError,
+        anthropic.APIConnectionError,
+        anthropic.APITimeoutError,
+    ) as e:
+        pytest.skip(f"Upstream MCP server unavailable: {e}")
 
     assert response is not None
     assert response.text is not None

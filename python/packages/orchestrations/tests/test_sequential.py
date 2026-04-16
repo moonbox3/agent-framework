@@ -483,3 +483,106 @@ async def test_chain_only_agent_responses_three_agents() -> None:
     # a3 should see only A2's reply
     assert len(a3.last_messages) == 1
     assert a3.last_messages[0].role == "assistant" and "A2 reply" in (a3.last_messages[0].text or "")
+
+
+# ---------------------------------------------------------------------------
+# with_request_info tests
+# ---------------------------------------------------------------------------
+
+
+async def test_sequential_request_info_last_participant_emits_output() -> None:
+    """When the last participant is wrapped via with_request_info(), the workflow
+    still emits a terminal output event after approval.
+
+    This exercises the _EndWithConversation.end_with_agent_executor_response path
+    that converts the AgentApprovalExecutor's forwarded AgentExecutorResponse into
+    the workflow's final AgentResponse output.
+    """
+    from agent_framework_orchestrations._orchestration_request_info import AgentRequestInfoResponse
+
+    a1 = _EchoAgent(id="agent1", name="A1")
+    a2 = _EchoAgent(id="agent2", name="A2")
+
+    wf = SequentialBuilder(participants=[a1, a2]).with_request_info().build()
+
+    # First run: collect request_info events for both agents
+    request_events: list[Any] = []
+    async for ev in wf.run("hello with approval", stream=True):
+        if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
+            request_events.append(ev)
+
+    # Approve each agent in sequence until the workflow completes
+    while request_events:
+        responses = {req.request_id: AgentRequestInfoResponse.approve() for req in request_events}
+        request_events = []
+        output_events: list[Any] = []
+        async for ev in wf.run(stream=True, responses=responses):
+            if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
+                request_events.append(ev)
+            elif ev.type == "output":
+                output_events.append(ev)
+
+    # The workflow must produce a terminal output with the last agent's response.
+    assert len(output_events) == 1
+    response = output_events[0].data
+    assert isinstance(response, AgentResponse)
+    assert any("A2 reply" in m.text for m in response.messages)
+
+
+async def test_sequential_request_info_with_intermediate_outputs_emits_data_events() -> None:
+    """With both with_request_info() and intermediate_outputs=True, intermediate
+    agents' responses are surfaced as data events while the final output is an
+    AgentResponse from the last agent.
+
+    This verifies that WorkflowExecutor correctly forwards data events from the
+    inner AgentExecutor through the AgentApprovalExecutor wrapper.
+    """
+    from agent_framework_orchestrations._orchestration_request_info import AgentRequestInfoResponse
+
+    a1 = _EchoAgent(id="agent1", name="A1")
+    a2 = _EchoAgent(id="agent2", name="A2")
+
+    wf = (
+        SequentialBuilder(participants=[a1, a2], intermediate_outputs=True)
+        .with_request_info()
+        .build()
+    )
+
+    # Run and approve all request_info events until the workflow completes
+    all_data_events: list[Any] = []
+    all_output_events: list[Any] = []
+    request_events: list[Any] = []
+
+    async for ev in wf.run("hello intermediate", stream=True):
+        if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
+            request_events.append(ev)
+        elif ev.type == "data":
+            all_data_events.append(ev)
+        elif ev.type == "output":
+            all_output_events.append(ev)
+
+    while request_events:
+        responses = {req.request_id: AgentRequestInfoResponse.approve() for req in request_events}
+        request_events = []
+        async for ev in wf.run(stream=True, responses=responses):
+            if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
+                request_events.append(ev)
+            elif ev.type == "data":
+                all_data_events.append(ev)
+            elif ev.type == "output":
+                all_output_events.append(ev)
+
+    # The first (intermediate) agent should emit a data event.
+    assert len(all_data_events) >= 1
+    intermediate_texts = set()
+    for dev in all_data_events:
+        if isinstance(dev.data, AgentResponse):
+            for m in dev.data.messages:
+                intermediate_texts.add(m.text)
+    assert "A1 reply" in intermediate_texts
+
+    # The final output should contain the last agent's response.
+    assert len(all_output_events) >= 1
+    final = all_output_events[-1].data
+    assert isinstance(final, AgentResponse)
+    assert any("A2 reply" in m.text for m in final.messages)

@@ -637,14 +637,12 @@ class WorkflowAgent(BaseAgent):
         Returns:
             A list of AgentResponseUpdate objects. Empty list if the event is not relevant.
         """
-        if event.type == "output" or (
-            event.type == "data" and isinstance(event.data, (AgentResponse, AgentResponseUpdate))
-        ):
+        data: Any = event.data
+        if event.type == "output" or (event.type == "data" and isinstance(data, (AgentResponse, AgentResponseUpdate))):
             # `data` events carry intermediate participant content (e.g., orchestration agents
             # via emit_data_events). Reframe their text content as `text_reasoning` so consumers
             # render them as agent thinking. `output` events pass through unchanged.
             as_reasoning = event.type == "data"
-            data = event.data
             executor_id = event.executor_id
 
             def _contents(src: Sequence[Content]) -> list[Content]:

@@ -201,7 +201,7 @@ async def test_sequential_as_agent_returns_only_last_agent_response() -> None:
 
 async def test_sequential_as_agent_with_intermediate_outputs_includes_chain() -> None:
     """With `intermediate_outputs=True`, `as_agent()` surfaces intermediate agent responses
-    (via `data` events) followed by the final answer."""
+    (rewritten as `text_reasoning` content) followed by the final answer (`text` content)."""
     a1 = _EchoAgent(id="agent1", name="A1")
     a2 = _EchoAgent(id="agent2", name="A2")
 
@@ -209,12 +209,15 @@ async def test_sequential_as_agent_with_intermediate_outputs_includes_chain() ->
     response = await agent.run("hello as_agent")
 
     assert isinstance(response, AgentResponse)
-    combined_text = " ".join(m.text for m in response.messages)
-    assert "A1 reply" in combined_text
-    assert "A2 reply" in combined_text
+
+    reasoning_text = " ".join(c.text or "" for m in response.messages for c in m.contents if c.type == "text_reasoning")
+    answer_text = " ".join(c.text or "" for m in response.messages for c in m.contents if c.type == "text")
+    assert "A1 reply" in reasoning_text, "Intermediate writer reply should arrive as reasoning content"
+    assert "A2 reply" in answer_text, "Terminal reviewer reply should arrive as text content"
+    assert "A1 reply" not in answer_text, "Intermediate content should not appear as final text"
     # Final agent's reply should appear last in the message ordering.
-    last_text = response.messages[-1].text
-    assert "A2 reply" in last_text
+    last_msg_text = " ".join(c.text or "" for c in response.messages[-1].contents if c.type == "text")
+    assert "A2 reply" in last_msg_text
 
 
 async def test_sequential_with_custom_executor_summary() -> None:

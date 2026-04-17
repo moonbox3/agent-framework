@@ -1313,7 +1313,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
 class MagenticAgentExecutor(AgentExecutor):
     """Specialized AgentExecutor for Magentic agent participants."""
 
-    def __init__(self, agent: SupportsAgentRun, *, emit_intermediate_data: bool = False) -> None:
+    def __init__(self, agent: SupportsAgentRun, *, emit_data_events: bool = False) -> None:
         """Initialize a Magentic Agent Executor.
 
         This executor wraps an SupportsAgentRun instance to be used as a participant
@@ -1321,14 +1321,14 @@ class MagenticAgentExecutor(AgentExecutor):
 
         Args:
             agent: The agent instance to wrap.
-            emit_intermediate_data: Forwarded to the base AgentExecutor.
+            emit_data_events: Forwarded to the base AgentExecutor.
 
         Notes: Magentic pattern requires a reset operation upon replanning. This executor
         extends the base AgentExecutor to handle resets appropriately. In order to handle
         resets, the agent threads and other states are reset when requested by the orchestrator.
         And because of this, MagenticAgentExecutor does not support custom threads.
         """
-        super().__init__(agent, emit_intermediate_data=emit_intermediate_data)
+        super().__init__(agent, emit_data_events=emit_data_events)
 
     @handler
     async def handle_magentic_reset(self, signal: MagenticResetSignal, ctx: WorkflowContext) -> None:
@@ -1739,7 +1739,7 @@ class MagenticBuilder:
             if isinstance(participant, Executor):
                 executors.append(participant)
             elif isinstance(participant, SupportsAgentRun):
-                executors.append(MagenticAgentExecutor(participant, emit_intermediate_data=self._intermediate_outputs))
+                executors.append(MagenticAgentExecutor(participant, emit_data_events=self._intermediate_outputs))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."

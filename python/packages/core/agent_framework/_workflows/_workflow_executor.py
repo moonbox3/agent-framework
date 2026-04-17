@@ -567,7 +567,7 @@ class WorkflowExecutor(Executor):
             await asyncio.gather(*[ctx.send_message(output) for output in outputs])
 
         # Forward data events from the sub-workflow so that intermediate
-        # observations (e.g. emit_intermediate_data from AgentExecutor) are
+        # observations (e.g. emit_data_events from AgentExecutor) are
         # visible in the parent workflow's event stream.
         data_events = [event for event in result if isinstance(event, WorkflowEvent) and event.type == "data"]
         for data_event in data_events:

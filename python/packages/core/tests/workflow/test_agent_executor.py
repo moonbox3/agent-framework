@@ -701,10 +701,10 @@ async def test_resolve_executor_kwargs_empty_per_executor_does_not_fallback_to_g
     assert result == {}
 
 
-async def test_emit_intermediate_data_emits_data_events_non_streaming() -> None:
-    """When emit_intermediate_data=True, AgentExecutor emits a data event with the AgentResponse."""
+async def test_emit_data_events_mirrors_yield_output_non_streaming() -> None:
+    """When emit_data_events=True, AgentExecutor emits a data event with the AgentResponse."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a", emit_intermediate_data=True)
+    executor = AgentExecutor(agent, id="exec_a", emit_data_events=True)
     workflow = WorkflowBuilder(start_executor=executor).build()
 
     output_events: list[WorkflowEvent[Any]] = []
@@ -725,10 +725,10 @@ async def test_emit_intermediate_data_emits_data_events_non_streaming() -> None:
     assert data_events[0].data.messages[0].text == output_events[0].data.messages[0].text
 
 
-async def test_emit_intermediate_data_emits_data_events_streaming() -> None:
-    """When emit_intermediate_data=True and streaming, data events accompany each AgentResponseUpdate."""
+async def test_emit_data_events_mirrors_yield_output_streaming() -> None:
+    """When emit_data_events=True and streaming, data events accompany each AgentResponseUpdate."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a", emit_intermediate_data=True)
+    executor = AgentExecutor(agent, id="exec_a", emit_data_events=True)
     workflow = WorkflowBuilder(start_executor=executor).build()
 
     output_updates: list[WorkflowEvent[Any]] = []
@@ -745,10 +745,10 @@ async def test_emit_intermediate_data_emits_data_events_streaming() -> None:
     assert all(e.executor_id == "exec_a" for e in data_updates)
 
 
-async def test_emit_intermediate_data_default_false_no_data_events() -> None:
-    """When emit_intermediate_data is not set, no extra data events are emitted (default behavior)."""
+async def test_emit_data_events_default_false_no_data_events() -> None:
+    """When emit_data_events is not set, no extra data events are emitted (default behavior)."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a")  # default: emit_intermediate_data=False
+    executor = AgentExecutor(agent, id="exec_a")  # default: emit_data_events=False
     workflow = WorkflowBuilder(start_executor=executor).build()
 
     data_events: list[WorkflowEvent[Any]] = []

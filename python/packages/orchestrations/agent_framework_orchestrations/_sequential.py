@@ -11,7 +11,7 @@ Wiring: input -> _InputToConversation -> participant1 -> ... -> participantN -> 
 The workflow's final `output` event is either the last agent's `AgentResponse` (when the
 terminator is an agent) or the custom executor's `list[Message]`. With
 `intermediate_outputs=True`, intermediate agents emit `data` events (via
-`AgentExecutor.emit_intermediate_data`) so consumers can observe them separately from the
+`AgentExecutor.emit_data_events`) so consumers can observe them separately from the
 terminal answer.
 """
 
@@ -67,7 +67,7 @@ class _EndWithConversation(Executor):
     workflow's outputs directly.
 
     Intermediate participants emit observation `data` events (via
-    `AgentExecutor.emit_intermediate_data`) when `intermediate_outputs=True`; they never
+    `AgentExecutor.emit_data_events`) when `intermediate_outputs=True`; they never
     emit `output` events because output_executors is restricted to the terminator
     executor (the last agent or this node).
     """
@@ -220,7 +220,7 @@ class SequentialBuilder:
         """Resolve participant instances into Executor objects.
 
         Wraps `SupportsAgentRun` participants as `AgentExecutor`. When `intermediate_outputs=True`,
-        every wrapped agent except the final one is constructed with `emit_intermediate_data=True`
+        every wrapped agent except the final one is constructed with `emit_data_events=True`
         so its responses surface as workflow `data` events without polluting the single `output`
         event reserved for the final answer.
         """
@@ -248,7 +248,7 @@ class SequentialBuilder:
                         AgentApprovalExecutor(
                             p,
                             context_mode=context_mode,
-                            emit_intermediate_data=emit_intermediate,
+                            emit_data_events=emit_intermediate,
                         )
                     )
                 else:
@@ -256,7 +256,7 @@ class SequentialBuilder:
                         AgentExecutor(
                             p,
                             context_mode=context_mode,
-                            emit_intermediate_data=emit_intermediate,
+                            emit_data_events=emit_intermediate,
                         )
                     )
             else:

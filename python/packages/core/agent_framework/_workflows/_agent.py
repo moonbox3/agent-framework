@@ -529,7 +529,14 @@ class WorkflowAgent(BaseAgent):
                 )
                 raw_representations.append(output_event)
             else:
+                # `data` events carry intermediate participant responses (e.g., orchestration
+                # agents emitting via emit_data_events). Reframe their text content as
+                # `text_reasoning` so consumers can render them like agent thinking, mirroring
+                # how reasoning-capable agents (Claude thinking, OpenAI reasoning) already
+                # surface intermediate content. `output` events pass through unchanged.
+                as_reasoning = output_event.type == "data"
                 data = output_event.data
+
                 if isinstance(data, AgentResponseUpdate):
                     # We cannot support AgentResponseUpdate in non-streaming mode. This is because the message
                     # sequence cannot be guaranteed when there are streaming updates in between non-streaming
@@ -540,7 +547,7 @@ class WorkflowAgent(BaseAgent):
                     )
 
                 if isinstance(data, AgentResponse):
-                    messages.extend(data.messages)
+                    messages.extend(self._msg_maybe_reasoning(m, as_reasoning=as_reasoning) for m in data.messages)
                     raw_representations.append(data.raw_representation)
                     merged_usage = add_usage_details(merged_usage, data.usage_details)
                     latest_created_at = (
@@ -551,16 +558,18 @@ class WorkflowAgent(BaseAgent):
                         else latest_created_at
                     )
                 elif isinstance(data, Message):
-                    messages.append(data)
+                    messages.append(self._msg_maybe_reasoning(data, as_reasoning=as_reasoning))
                     raw_representations.append(data.raw_representation)
                 elif is_instance_of(data, list[Message]):
                     chat_messages = cast(list[Message], data)
-                    messages.extend(chat_messages)
+                    messages.extend(self._msg_maybe_reasoning(m, as_reasoning=as_reasoning) for m in chat_messages)
                     raw_representations.append(data)
                 else:
                     contents = self._extract_contents(data)
                     if not contents:
                         continue
+                    if as_reasoning:
+                        contents = self._rewrite_text_to_reasoning(contents)
 
                     messages.append(
                         Message(
@@ -628,24 +637,41 @@ class WorkflowAgent(BaseAgent):
         Returns:
             A list of AgentResponseUpdate objects. Empty list if the event is not relevant.
         """
-        data: Any = event.data
-        if event.type == "output" or (event.type == "data" and isinstance(data, (AgentResponse, AgentResponseUpdate))):
-            # Convert workflow output to agent response updates.
-            # Handle different data types appropriately.
+        if event.type == "output" or (
+            event.type == "data" and isinstance(event.data, (AgentResponse, AgentResponseUpdate))
+        ):
+            # `data` events carry intermediate participant content (e.g., orchestration agents
+            # via emit_data_events). Reframe their text content as `text_reasoning` so consumers
+            # render them as agent thinking. `output` events pass through unchanged.
+            as_reasoning = event.type == "data"
+            data = event.data
             executor_id = event.executor_id
 
+            def _contents(src: Sequence[Content]) -> list[Content]:
+                return self._rewrite_text_to_reasoning(src) if as_reasoning else list(src)
+
             if isinstance(data, AgentResponseUpdate):
-                # Pass through AgentResponseUpdate directly (streaming from AgentExecutor)
-                if not data.author_name:
-                    data.author_name = executor_id
-                return [data]
+                # Construct a fresh AgentResponseUpdate so we don't mutate a payload
+                # that AgentExecutor (and the data-event publisher) still hold references
+                # to in their `updates` list / output channel.
+                return [
+                    AgentResponseUpdate(
+                        contents=_contents(data.contents),
+                        role=data.role,
+                        author_name=data.author_name or executor_id,
+                        response_id=data.response_id,
+                        message_id=data.message_id,
+                        created_at=data.created_at,
+                        raw_representation=data.raw_representation,
+                    )
+                ]
             if isinstance(data, AgentResponse):
                 # Convert each message in AgentResponse to an AgentResponseUpdate
                 updates: list[AgentResponseUpdate] = []
                 for msg in data.messages:
                     updates.append(
                         AgentResponseUpdate(
-                            contents=list(msg.contents),
+                            contents=_contents(msg.contents),
                             role=msg.role,
                             author_name=msg.author_name or executor_id,
                             response_id=data.response_id or response_id,
@@ -659,7 +685,7 @@ class WorkflowAgent(BaseAgent):
             if isinstance(data, Message):
                 return [
                     AgentResponseUpdate(
-                        contents=list(data.contents),
+                        contents=_contents(data.contents),
                         role=data.role,
                         author_name=data.author_name or executor_id,
                         response_id=response_id,
@@ -675,7 +701,7 @@ class WorkflowAgent(BaseAgent):
                 for msg in chat_messages:
                     updates.append(
                         AgentResponseUpdate(
-                            contents=list(msg.contents),
+                            contents=_contents(msg.contents),
                             role=msg.role,
                             author_name=msg.author_name or executor_id,
                             response_id=response_id,
@@ -688,6 +714,8 @@ class WorkflowAgent(BaseAgent):
             contents = self._extract_contents(data)
             if not contents:
                 return []
+            if as_reasoning:
+                contents = self._rewrite_text_to_reasoning(contents)
             return [
                 AgentResponseUpdate(
                     contents=contents,
@@ -791,6 +819,52 @@ class WorkflowAgent(BaseAgent):
         if isinstance(data, str):
             return [Content.from_text(text=data)]
         return [Content.from_text(text=str(data))]
+
+    @staticmethod
+    def _rewrite_text_to_reasoning(contents: Sequence[Content]) -> list[Content]:
+        """Rewrite TextContent blocks as TextReasoningContent.
+
+        Used by WorkflowAgent to reframe content arriving on the workflow's `data` channel —
+        e.g., intermediate participants in an orchestration — as reasoning content from the
+        perspective of the wrapped workflow agent. This aligns workflow-as-agent intermediate
+        output with how reasoning-capable agents (Claude thinking, OpenAI reasoning) already
+        emit thinking content, so consumers can use one rendering path.
+
+        Non-text content (function calls, results, already-reasoning text, hosted files, etc.)
+        passes through unchanged.
+        """
+        rewritten: list[Content] = []
+        for content in contents:
+            if content.type == "text":
+                rewritten.append(
+                    Content.from_text_reasoning(
+                        id=content.id,
+                        text=content.text,
+                        annotations=content.annotations,
+                        additional_properties=content.additional_properties,
+                        raw_representation=content.raw_representation,
+                    )
+                )
+            else:
+                rewritten.append(content)
+        return rewritten
+
+    @classmethod
+    def _msg_as_reasoning(cls, msg: Message) -> Message:
+        """Return a copy of `msg` with text content rewritten as reasoning content."""
+        return Message(
+            role=msg.role,
+            contents=cls._rewrite_text_to_reasoning(msg.contents),
+            author_name=msg.author_name,
+            message_id=msg.message_id,
+            additional_properties=msg.additional_properties,
+            raw_representation=msg.raw_representation,
+        )
+
+    @classmethod
+    def _msg_maybe_reasoning(cls, msg: Message, *, as_reasoning: bool) -> Message:
+        """Conditional `_msg_as_reasoning`: rewrite when `as_reasoning` is True, pass through otherwise."""
+        return cls._msg_as_reasoning(msg) if as_reasoning else msg
 
     class _ResponseState(TypedDict):
         """State for grouping response updates by message_id."""

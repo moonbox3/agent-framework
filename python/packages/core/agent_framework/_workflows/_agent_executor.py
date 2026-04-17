@@ -142,7 +142,7 @@ class AgentExecutor(Executor):
         id: str | None = None,
         context_mode: Literal["full", "last_agent", "custom"] | None = None,
         context_filter: Callable[[list[Message]], list[Message]] | None = None,
-        emit_intermediate_data: bool = False,
+        emit_data_events: bool = False,
     ):
         """Initialize the executor with a unique identifier.
 
@@ -160,7 +160,7 @@ class AgentExecutor(Executor):
                    as context for the agent run.
             context_filter: An optional function for filtering conversation context when context_mode is set
                 to "custom".
-            emit_intermediate_data: When True, additionally emits `data` events (via
+            emit_data_events: When True, additionally emits `data` events (via
                 `WorkflowEvent.emit`) carrying each AgentResponse / AgentResponseUpdate alongside
                 the existing `output` events. Orchestrations use this to surface intermediate
                 participants while reserving `output` events for the workflow's final answer.
@@ -189,7 +189,7 @@ class AgentExecutor(Executor):
         if self._context_mode == "custom" and not self._context_filter:
             raise ValueError("context_filter must be provided when context_mode is set to 'custom'.")
 
-        self._emit_intermediate_data = emit_intermediate_data
+        self._emit_data_events = emit_data_events
 
     @property
     def agent(self) -> SupportsAgentRun:
@@ -437,7 +437,7 @@ class AgentExecutor(Executor):
             client_kwargs=client_kwargs,
         )
         await ctx.yield_output(response)
-        if self._emit_intermediate_data:
+        if self._emit_data_events:
             await ctx.add_event(WorkflowEvent.emit(self.id, response))
 
         # Handle any user input requests
@@ -482,7 +482,7 @@ class AgentExecutor(Executor):
         async for update in stream:
             updates.append(update)
             await ctx.yield_output(update)
-            if self._emit_intermediate_data:
+            if self._emit_data_events:
                 await ctx.add_event(WorkflowEvent.emit(self.id, update))
             if update.user_input_requests:
                 streamed_user_input_requests.extend(update.user_input_requests)

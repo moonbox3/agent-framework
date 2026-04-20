@@ -411,7 +411,7 @@ async def test_integration_get_toolbox_round_trip_against_real_project() -> None
 
     toolbox_name = f"af-int-toolbox-{uuid4().hex[:12]}"
     created = await project_client.beta.toolboxes.create_version(
-        toolbox_name=toolbox_name,
+        name=toolbox_name,
         tools=[CodeInterpreterTool()],
         description=f"{toolbox_name} integration test",
     )

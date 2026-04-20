@@ -22,8 +22,7 @@ load_dotenv()
 Foundry Toolbox + Context Provider Example
 
 This sample composes a Foundry toolbox with a ContextProvider so the agent's
-tool list is chosen dynamically per-turn. Instead of a hand-rolled keyword
-heuristic, it uses the chat client itself as a lightweight "tool router": the
+tool list is chosen dynamically per-turn. It uses the chat client itself as a lightweight "tool router": the
 latest user message plus a short menu of toolbox tools is sent to the model
 with a Pydantic ``response_format``, and the returned tool names drive
 ``select_toolbox_tools``. The toolbox is fetched once and cached on the

@@ -12,7 +12,7 @@ Includes:
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from agent_framework._feature_stage import ExperimentalFeature, experimental
 from azure.ai.projects.models import MCPTool as FoundryMCPTool
@@ -104,7 +104,9 @@ def select_toolbox_tools(
     2. ``name``
     3. ``type``
     """
-    tool_items = tools.tools if hasattr(tools, "tools") else tools
+    tool_items: Sequence[Tool | dict[str, Any]] = (
+        tools if isinstance(tools, Sequence) else cast("Sequence[Tool | dict[str, Any]]", tools.tools)
+    )
     include_name_set = {str(item) for item in include_names} if include_names is not None else None
     exclude_name_set = {str(item) for item in exclude_names} if exclude_names is not None else None
     include_type_set = {str(item) for item in include_types} if include_types is not None else None
@@ -148,15 +150,17 @@ def sanitize_foundry_response_tool(tool_item: Any) -> Any:
     SDK/service behavior is corrected upstream.
     """
     if isinstance(tool_item, FoundryMCPTool):
-        sanitized = dict(tool_item)
+        sanitized: dict[str, Any] = dict(cast("Mapping[str, Any]", tool_item))
         sanitized.pop("name", None)
         sanitized.pop("description", None)
         return sanitized
 
-    if isinstance(tool_item, Mapping) and "type" in tool_item and tool_item.get("type") not in {"function", "custom"}:
-        sanitized = dict(tool_item)
-        sanitized.pop("name", None)
-        sanitized.pop("description", None)
-        return sanitized
+    if isinstance(tool_item, Mapping):
+        mapping = cast("Mapping[str, Any]", tool_item)
+        if "type" in mapping and mapping.get("type") not in {"function", "custom"}:
+            sanitized = dict(mapping)
+            sanitized.pop("name", None)
+            sanitized.pop("description", None)
+            return sanitized
 
-    return tool_item
+    return cast(Any, tool_item)

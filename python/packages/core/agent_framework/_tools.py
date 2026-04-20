@@ -897,7 +897,7 @@ def normalize_tools(
         # not flattened by the generic Iterable branch below because they are
         # also Mapping instances. If they expose a ``tools`` collection, spread
         # that collection into the normalized list.
-        collection_tools = getattr(tool_item, "tools", None)
+        collection_tools = getattr(tool_item, "tools", None)  # type: ignore[reportUnknownArgumentType]
         if isinstance(collection_tools, Iterable) and not isinstance(
             collection_tools, (str, bytes, bytearray, Mapping)
         ):

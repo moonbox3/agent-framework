@@ -73,33 +73,20 @@ class DynamicToolboxProvider(ContextProvider):
         """Cache the toolbox on first call, then pick tools by latest user message."""
         toolbox = state.get("toolbox")
         if toolbox is None:
-            toolbox = await self._client.get_toolbox(
-                self._toolbox_name, version=self._toolbox_version
-            )
+            toolbox = await self._client.get_toolbox(self._toolbox_name, version=self._toolbox_version)
             state["toolbox"] = toolbox
-            print(
-                f"[{self.source_id}] Loaded toolbox "
-                f"{toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tool(s))"
-            )
+            print(f"[{self.source_id}] Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tool(s))")
 
-        user_messages = [
-            m for m in context.get_messages(include_input=True)
-            if getattr(m, "role", None) == "user"
-        ]
+        user_messages = [m for m in context.get_messages(include_input=True) if getattr(m, "role", None) == "user"]
         latest_text = user_messages[-1].text.lower() if user_messages else ""
 
         include_types = self._match_tool_types(latest_text)
         if include_types:
             tools = select_toolbox_tools(toolbox, include_types=list(include_types))
-            print(
-                f"[{self.source_id}] Turn picks types {sorted(include_types)} — "
-                f"surfacing {len(tools)} tool(s)"
-            )
+            print(f"[{self.source_id}] Turn picks types {sorted(include_types)} — surfacing {len(tools)} tool(s)")
         else:
             tools = list(toolbox.tools)
-            print(
-                f"[{self.source_id}] No keyword match — surfacing all {len(tools)} toolbox tool(s)"
-            )
+            print(f"[{self.source_id}] No keyword match — surfacing all {len(tools)} toolbox tool(s)")
 
         context.extend_tools(self.source_id, tools)
 

@@ -37,9 +37,9 @@ Prerequisites:
 """
 
 # Replace with your own Foundry toolbox name and version.
-TOOLBOX_NAME = "<your-toolbox-name>"
+TOOLBOX_NAME = "research_toolbox"
 # Set to None to resolve the toolbox's current default version at fetch time.
-TOOLBOX_VERSION: str | None = "<your-toolbox-version>"
+TOOLBOX_VERSION: str | None = None
 
 # Generic queries that exercise the router without assuming any specific tool
 # types are configured. The first is introspective, the second forces a
@@ -50,6 +50,46 @@ QUERIES: list[str] = [
     "Pick the tool you think is most useful and demonstrate it with a short example.",
     "Say hi in one short sentence - no tools needed.",
 ]
+
+
+def create_sample_toolbox(name: str) -> str:
+    """Create (or replace) a toolbox version in the Foundry project.
+
+    Toolboxes are normally configured in the Foundry portal or a deployment
+    script, not the application itself. This helper exists so the sample can
+    be run end-to-end without first setting a toolbox up by hand — delete any
+    existing toolbox under ``name``, then create a fresh version containing a
+    single MCP tool. Returns the created version identifier.
+    """
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.models import MCPTool, Tool
+    from azure.core.exceptions import ResourceNotFoundError
+
+    with (
+        AzureCliCredential() as credential,
+        AIProjectClient(credential=credential, endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"]) as project_client,
+    ):
+        try:
+            project_client.beta.toolboxes.delete(name)
+            print(f"Toolbox `{name}` deleted")
+        except ResourceNotFoundError:
+            pass
+
+        tools: list[Tool] = [
+            MCPTool(
+                server_label="api_specs",
+                server_url="https://gitmcp.io/Azure/azure-rest-api-specs",
+                require_approval="never",
+            )
+        ]
+
+        created = project_client.beta.toolboxes.create_version(
+            name=name,
+            description="Toolbox version with MCP require_approval set to 'never'.",
+            tools=tools,
+        )
+        print(f"Created toolbox {created.name}@{created.version} ({len(created.tools)} tool(s))")
+        return created.version
 
 
 class ToolSelection(BaseModel):
@@ -138,6 +178,9 @@ async def main() -> None:
         model=os.environ["FOUNDRY_MODEL"],
         credential=AzureCliCredential(),
     )
+
+    # Comment out if the toolbox already exists in your Foundry project.
+    create_sample_toolbox(TOOLBOX_NAME)
 
     toolbox_provider = DynamicToolboxProvider(
         client=client,

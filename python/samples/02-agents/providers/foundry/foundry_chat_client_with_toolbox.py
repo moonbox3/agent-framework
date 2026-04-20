@@ -26,14 +26,54 @@ Prerequisites:
 """
 
 # Replace with your own Foundry toolbox name and version.
-TOOLBOX_NAME = "<your-toolbox-name>"
-TOOLBOX_VERSION = "<your-toolbox-version>"
+TOOLBOX_NAME = "research_toolbox"
+TOOLBOX_VERSION = "1"
 # Used only by combine_toolboxes() — swap in a second toolbox you own.
-SECOND_TOOLBOX_NAME = "<your-other-toolbox-name>"
-SECOND_TOOLBOX_VERSION = "<your-other-toolbox-version>"
+SECOND_TOOLBOX_NAME = "analysis_toolbox"
+SECOND_TOOLBOX_VERSION = "1"
 
 # Replace with any question that exercises the tools configured in your toolbox.
 QUERY = "Introduce yourself and briefly describe the tools you can use to help me."
+
+
+def create_sample_toolbox(name: str) -> str:
+    """Create (or replace) a toolbox version in the Foundry project.
+
+    Toolboxes are normally configured in the Foundry portal or a deployment
+    script, not the application itself. This helper exists so the samples can
+    be run end-to-end without first setting a toolbox up by hand — delete any
+    existing toolbox under ``name``, then create a fresh version containing a
+    single MCP tool. Returns the created version identifier.
+    """
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.models import MCPTool, Tool
+    from azure.core.exceptions import ResourceNotFoundError
+
+    with (
+        AzureCliCredential() as credential,
+        AIProjectClient(credential=credential, endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"]) as project_client,
+    ):
+        try:
+            project_client.beta.toolboxes.delete(name)
+            print(f"Toolbox `{name}` deleted")
+        except ResourceNotFoundError:
+            pass
+
+        tools: list[Tool] = [
+            MCPTool(
+                server_label="api_specs",
+                server_url="https://gitmcp.io/Azure/azure-rest-api-specs",
+                require_approval="never",
+            )
+        ]
+
+        created = project_client.beta.toolboxes.create_version(
+            name=name,
+            description="Toolbox version with MCP require_approval set to 'never'.",
+            tools=tools,
+        )
+        print(f"Created toolbox {created.name}@{created.version} ({len(created.tools)} tool(s))")
+        return created.version
 
 
 async def main() -> None:
@@ -48,10 +88,12 @@ async def main() -> None:
         model=os.environ["FOUNDRY_MODEL"],
     )
 
-    # Fetch the toolbox's current default version. Pin to a specific version
-    # (for example, version="v3") for production stability.
-    toolbox = await client.get_toolbox(TOOLBOX_NAME, version=TOOLBOX_VERSION)
-    print(f"Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tools)")
+    # Comment out if the toolbox already exists in your Foundry project.
+    create_sample_toolbox(TOOLBOX_NAME)
+
+    # Omit ``version`` to resolve the toolbox's current default version at runtime.
+    toolbox = await client.get_toolbox(TOOLBOX_NAME)
+    print(f"Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tool(s))")
 
     agent = Agent(
         client=client,
@@ -72,12 +114,16 @@ async def combine_toolboxes() -> None:
         model=os.environ["FOUNDRY_MODEL"],
     )
 
+    # Comment out if the toolboxes already exist in your Foundry project.
+    create_sample_toolbox(TOOLBOX_NAME)
+    create_sample_toolbox(SECOND_TOOLBOX_NAME)
+
     toolbox_a = await client.get_toolbox(TOOLBOX_NAME, version=TOOLBOX_VERSION)
     toolbox_b = await client.get_toolbox(SECOND_TOOLBOX_NAME, version=SECOND_TOOLBOX_VERSION)
     print(
         "Loaded toolboxes: "
-        f"{toolbox_a.name}@{toolbox_a.version} ({len(toolbox_a.tools)} tools), "
-        f"{toolbox_b.name}@{toolbox_b.version} ({len(toolbox_b.tools)} tools)"
+        f"{toolbox_a.name}@{toolbox_a.version} ({len(toolbox_a.tools)} tool(s)), "
+        f"{toolbox_b.name}@{toolbox_b.version} ({len(toolbox_b.tools)} tool(s))"
     )
 
     agent = Agent(
@@ -99,8 +145,11 @@ async def select_tools_from_toolbox() -> None:
         model=os.environ["FOUNDRY_MODEL"],
     )
 
+    # Comment out if the toolbox already exists in your Foundry project.
+    create_sample_toolbox(TOOLBOX_NAME)
+
     toolbox = await client.get_toolbox(TOOLBOX_NAME, version=TOOLBOX_VERSION)
-    print(f"Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tools)")
+    print(f"Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tool(s))")
 
     selected_tools = select_toolbox_tools(
         toolbox,

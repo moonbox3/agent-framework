@@ -4,10 +4,16 @@ import asyncio
 import os
 from typing import Any
 
-from agent_framework import Agent, AgentSession, ContextProvider, SessionContext
-from agent_framework.foundry import FoundryChatClient, select_toolbox_tools
+from agent_framework import Agent, AgentSession, ContextProvider, Message, SessionContext
+from agent_framework.foundry import (
+    FoundryChatClient,
+    get_toolbox_tool_name,
+    get_toolbox_tool_type,
+    select_toolbox_tools,
+)
 from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 # Load environment variables from .env file
 load_dotenv()
@@ -16,10 +22,12 @@ load_dotenv()
 Foundry Toolbox + Context Provider Example
 
 This sample composes a Foundry toolbox with a ContextProvider so the agent's
-tool list is chosen dynamically per-turn based on the latest user message. The
-toolbox is fetched once on the first invocation and cached on the provider's
-state dict; subsequent turns reuse the cache and apply message-driven filtering
-through ``select_toolbox_tools``.
+tool list is chosen dynamically per-turn. Instead of a hand-rolled keyword
+heuristic, it uses the chat client itself as a lightweight "tool router": the
+latest user message plus a short menu of toolbox tools is sent to the model
+with a Pydantic ``response_format``, and the returned tool names drive
+``select_toolbox_tools``. The toolbox is fetched once and cached on the
+provider's state dict; subsequent turns reuse the cache.
 
 Prerequisites:
 - A Microsoft Foundry project
@@ -33,19 +41,33 @@ TOOLBOX_NAME = "<your-toolbox-name>"
 # Set to None to resolve the toolbox's current default version at fetch time.
 TOOLBOX_VERSION: str | None = "<your-toolbox-version>"
 
-# Simple keyword → toolbox-tool-type mapping for message-driven selection.
-# Extend or swap this map to match the tools actually configured in your toolbox.
-TOOL_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "code_interpreter": ("code", "compute", "calculate", "python", "fibonacci"),
-    "web_search": ("search", "web", "look up", "news", "latest"),
-    "file_search": ("file", "document", "doc", "knowledge base"),
-    "image_generation": ("image", "picture", "draw", "render"),
-    "mcp": ("mcp",),
-}
+# Generic queries that exercise the router without assuming any specific tool
+# types are configured. The first is introspective, the second forces a
+# non-empty pick for whichever tools the toolbox actually contains, and the
+# third should route to nothing.
+QUERIES: list[str] = [
+    "Introduce yourself and briefly describe the tools you can use to help me.",
+    "Pick the tool you think is most useful and demonstrate it with a short example.",
+    "Say hi in one short sentence - no tools needed.",
+]
+
+
+class ToolSelection(BaseModel):
+    """Structured output for the per-turn tool router."""
+
+    tool_names: list[str]
+
+
+ROUTER_INSTRUCTIONS = (
+    "You are a tool router. Given the user's latest message and a menu of "
+    "available tools (one per line, formatted as 'NAME - TYPE'), return the "
+    "NAMES of the tools that would plausibly help answer the message. Return "
+    "an empty list if no tool is needed."
+)
 
 
 class DynamicToolboxProvider(ContextProvider):
-    """Fetches a Foundry toolbox once and picks tools per-turn from the user message."""
+    """Fetches a Foundry toolbox once and lets the model pick tools per-turn."""
 
     DEFAULT_SOURCE_ID = "foundry_toolbox"
 
@@ -70,7 +92,7 @@ class DynamicToolboxProvider(ContextProvider):
         context: SessionContext,
         state: dict[str, Any],
     ) -> None:
-        """Cache the toolbox on first call, then pick tools by latest user message."""
+        """Cache the toolbox on first call, then let the model pick tools per-turn."""
         toolbox = state.get("toolbox")
         if toolbox is None:
             toolbox = await self._client.get_toolbox(self._toolbox_name, version=self._toolbox_version)
@@ -78,25 +100,36 @@ class DynamicToolboxProvider(ContextProvider):
             print(f"[{self.source_id}] Loaded toolbox {toolbox.name}@{toolbox.version} ({len(toolbox.tools)} tool(s))")
 
         user_messages = [m for m in context.get_messages(include_input=True) if getattr(m, "role", None) == "user"]
-        latest_text = user_messages[-1].text.lower() if user_messages else ""
+        if not user_messages:
+            context.extend_tools(self.source_id, list(toolbox.tools))
+            return
 
-        include_types = self._match_tool_types(latest_text)
-        if include_types:
-            tools = select_toolbox_tools(toolbox, include_types=list(include_types))
-            print(f"[{self.source_id}] Turn picks types {sorted(include_types)} — surfacing {len(tools)} tool(s)")
+        picks = await self._route_tools(user_messages[-1].text, toolbox.tools)
+        if picks:
+            tools = select_toolbox_tools(toolbox, include_names=picks)
+            print(f"[{self.source_id}] Router picked {sorted(picks)} - surfacing {len(tools)} tool(s)")
         else:
             tools = list(toolbox.tools)
-            print(f"[{self.source_id}] No keyword match — surfacing all {len(tools)} toolbox tool(s)")
-
+            print(f"[{self.source_id}] Router picked nothing - surfacing all {len(tools)} tool(s)")
         context.extend_tools(self.source_id, tools)
 
-    @staticmethod
-    def _match_tool_types(text: str) -> set[str]:
-        matched: set[str] = set()
-        for tool_type, keywords in TOOL_KEYWORDS.items():
-            if any(keyword in text for keyword in keywords):
-                matched.add(tool_type)
-        return matched
+    async def _route_tools(self, user_text: str, tools: Any) -> list[str]:
+        """Ask the model which toolbox tools to surface for this turn."""
+        menu = "\n".join(f"- {get_toolbox_tool_name(t)} - {get_toolbox_tool_type(t)}" for t in tools)
+        prompt = (
+            f"User message:\n{user_text}\n\n"
+            f"Available tools:\n{menu}\n\n"
+            "Return the names of tools that should be surfaced for this turn."
+        )
+        response = await self._client.get_response(
+            messages=[Message("user", [prompt])],
+            options={
+                "instructions": ROUTER_INSTRUCTIONS,
+                "response_format": ToolSelection,
+            },
+        )
+        selection: ToolSelection = response.value  # type: ignore
+        return selection.tool_names
 
 
 async def main() -> None:
@@ -122,14 +155,7 @@ async def main() -> None:
     ) as agent:
         session = agent.create_session()
 
-        # Each query is shaped to trigger a different slice of the toolbox via
-        # the keyword-driven selector above.
-        queries = [
-            "Please search the web for the latest news about quantum computing.",
-            "Use Python to calculate the 20th Fibonacci number.",
-            "Briefly summarize what you can help me with right now.",
-        ]
-        for query in queries:
+        for query in QUERIES:
             print(f"\nUser: {query}")
             result = await agent.run(query, session=session)
             print(f"Assistant: {result}")

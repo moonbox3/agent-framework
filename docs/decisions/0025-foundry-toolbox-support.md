@@ -317,23 +317,6 @@ That enables:
 
 while still keeping `select_toolbox_tools(toolbox.tools, ...)` available for partial selection before the final agent construction step.
 
-## Files Created and Modified
-
-**New:**
-- `packages/foundry/agent_framework_foundry/_tools.py` — shared helper functions (`fetch_toolbox`) plus selection helpers.
-- `packages/foundry/tests/test_toolbox.py` — unit tests per above.
-- `samples/02-agents/providers/foundry/foundry_chat_client_with_toolbox.py` — end-to-end usage sample.
-
-**Modified:**
-- `packages/foundry/agent_framework_foundry/_chat_client.py` — add `get_toolbox` instance method on `RawFoundryChatClient`, delegating to helpers in `_tools.py`.
-- `packages/foundry/agent_framework_foundry/_tools.py` — add `FoundryHostedToolType`, `get_toolbox_tool_name`, `get_toolbox_tool_type`, and `select_toolbox_tools` helpers for local post-fetch tool selection.
-- `packages/core/agent_framework/_tools.py` — ensure toolbox objects can be flattened in `tools=...` alongside existing composite-tool behavior.
-- `packages/core/tests/core/test_tools.py` — unit tests for the flattening behavior.
-
-## Backwards Compatibility
-
-Purely additive. No changes to existing types, methods, or behavior. Users who don't touch toolboxes see no difference.
-
 ## Telemetry
 
 Telemetry for toolbox support has two separate goals:
@@ -365,6 +348,8 @@ Tool-level telemetry already captures which hosted Foundry tools are available /
 The design for closing the **client-side** observability gap is **internal provenance tracking**, not user-supplied metadata and not a new public wrapper type.
 
 #### Provenance model
+
+Note: this section is still under investigation.
 
 When `get_toolbox()` or `list_toolbox_versions()` returns a `ToolboxVersionObject`, Agent Framework will attach private provenance metadata to:
 

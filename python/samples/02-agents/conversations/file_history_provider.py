@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from pydantic import Field
 
 try:
-    import orjson  # type: ignore[import-not-found]
+    import orjson  # pyright: ignore[reportMissingImports]
 except ImportError:
     orjson = None
 

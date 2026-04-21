@@ -539,6 +539,37 @@ def test_prepare_message_for_a2a_forwards_context_id() -> None:
     assert result.metadata == {"trace_id": "trace-456"}
 
 
+def test_prepare_message_for_a2a_uses_fallback_context_id() -> None:
+    """Test that context_id kwarg is used when message has no context_id property."""
+
+    agent = A2AAgent(client=MagicMock(), http_client=None)
+
+    message = Message(
+        role="user",
+        contents=[Content.from_text(text="Hello")],
+    )
+
+    result = agent._prepare_message_for_a2a(message, context_id="session-ctx-1")
+
+    assert result.context_id == "session-ctx-1"
+
+
+def test_prepare_message_for_a2a_message_context_id_takes_precedence() -> None:
+    """Test that message.additional_properties context_id wins over the fallback."""
+
+    agent = A2AAgent(client=MagicMock(), http_client=None)
+
+    message = Message(
+        role="user",
+        contents=[Content.from_text(text="Hello")],
+        additional_properties={"context_id": "explicit-ctx"},
+    )
+
+    result = agent._prepare_message_for_a2a(message, context_id="session-ctx-1")
+
+    assert result.context_id == "explicit-ctx"
+
+
 def test_parse_contents_from_a2a_with_data_part() -> None:
     """Test conversion of A2A DataPart."""
 

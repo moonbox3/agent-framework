@@ -181,8 +181,6 @@ class RunContext:
 
         # User state (simple dict)
         self._state: dict[str, Any] = {}
-        # Step names actually invoked during this run (for signature hashing)
-        self._observed_step_names: set[str] = set()
 
         # Callback invoked after each step completes (set by FunctionalWorkflow)
         self._on_step_completed: Callable[[], Awaitable[None]] | None = None
@@ -228,21 +226,14 @@ class RunContext:
                 (not visible to workflow authors).
         """
         if request_id is None:
-            # Deterministic auto-ID: relies on the workflow function being
-            # deterministic w.r.t. call order (same contract as @step caching).
-            # Using a fresh uuid here would break HITL resume because the
-            # replayed call would generate a new id and never find the
-            # caller-supplied response.
+            # Deterministic id; same determinism contract as @step caching.
             rid = f"auto::{self._auto_request_info_index}"
             self._auto_request_info_index += 1
         else:
             rid = request_id
 
-        # Check if we already have a response for this request
         found, value = self._get_response(rid)
         if found:
-            # Response already satisfied on a prior round — do not re-emit as
-            # a pending request on the current checkpoint.
             self._pending_requests.pop(rid, None)
             return value
 
@@ -323,15 +314,6 @@ class RunContext:
 
     def _get_events(self) -> list[WorkflowEvent[Any]]:
         return list(self._events)
-
-    def _record_observed_step(self, name: str) -> None:
-        """Record a step name actually invoked during this run.
-
-        Used by :meth:`FunctionalWorkflow._compute_signature_hash` to produce a
-        signature based on steps the workflow actually executed, instead of a
-        static bytecode scan that misses attribute-access patterns.
-        """
-        self._observed_step_names.add(name)
 
     def _get_step_cache_key(self, step_name: str) -> tuple[str, int]:
         idx = self._step_call_counters.get(step_name, 0)
@@ -465,14 +447,10 @@ class StepWrapper(Generic[R]):
             return await self._func(*args, **kwargs)
 
         cache_key = ctx._get_step_cache_key(self.name)
-        ctx._record_observed_step(self.name)
         found, cached = ctx._get_cached_result(cache_key)
         if found:
-            # Replay path: emit the dedicated ``executor_bypassed`` event type
-            # (distinct from executor_invoked/completed/failed) so consumers
-            # can unambiguously identify cache-hit replays.  deepcopy is
-            # deferred to the live branch below so replays work even when
-            # arguments are not deepcopyable (e.g. open sessions, locks).
+            # Dedicated bypass event so consumers can tell cache-hit replays
+            # apart from fresh executions.
             await ctx.add_event(WorkflowEvent.executor_bypassed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
@@ -481,9 +459,8 @@ class StepWrapper(Generic[R]):
         if self._ctx_param_name is not None and self._ctx_param_name not in call_kwargs:
             call_kwargs[self._ctx_param_name] = ctx
 
-        # Live execution path — defensive deepcopy of args for the event log
-        # only.  If deepcopy fails (non-deepcopyable args), fall back to the
-        # original mapping; the events are diagnostic, not authoritative.
+        # Defensive deepcopy for the event log only; fall back to the live
+        # reference so non-deepcopyable args (locks, sockets) don't fail.
         if args or kwargs:
             try:
                 invocation_data: Any = deepcopy({"args": args, "kwargs": kwargs})
@@ -645,26 +622,17 @@ class FunctionalWorkflow:
         self.description = description
         self._checkpoint_storage = checkpoint_storage
         self._is_running = False
-        # Last message used to invoke the workflow (for replay on resume).
-        # Cleared on clean completion (no pending requests) so a later
-        # response-only call can't silently replay with a stale message.
+        # Replay state: cleared on clean completion so later responses-only
+        # calls can't silently replay with stale data from a prior run.
         self._last_message: Any = None
-        # Step cache from the last run (for response-only replay without checkpoint)
         self._last_step_cache: dict[tuple[str, int], Any] = {}
-        # IDs of the requests a caller is expected to answer on the next run.
-        # Empty after clean completion; populated when the workflow interrupts
-        # with pending request_info events.
         self._last_pending_request_ids: set[str] = set()
 
-        # Validate the signature once, at decoration time, instead of failing
-        # with a confusing TypeError on the first call.
+        # Signature arity is validated once at decoration time.
         self._non_ctx_param_names = self._classify_signature(func)
 
         # Discover step names referenced in the function for signature hash
         self._step_names = self._discover_step_names(func)
-        # Additional step names accumulated from observed executions (covers
-        # attribute-access patterns the static discovery misses).
-        self._runtime_step_names: set[str] = set()
 
         # Compute a stable signature hash
         self.graph_signature_hash = self._compute_signature_hash()
@@ -784,12 +752,10 @@ class FunctionalWorkflow:
         """
         self._validate_run_params(message, responses, checkpoint_id)
         if responses and checkpoint_id is None:
-            # Response-only resume: require at least one key to match an
-            # actually-pending request on this instance.  Prevents silent
-            # replay against stale singleton state after a clean completion.
-            # Callers whose workflows interrupt multiple times in sequence
-            # legitimately accumulate all prior responses plus the latest one
-            # — accept the call as long as any key matches the current set.
+            # Require at least one response key to match a currently-pending
+            # request; prevents silent replay against stale state while still
+            # allowing callers to accumulate prior answers across multi-round
+            # HITL.
             if not self._last_pending_request_ids:
                 raise ValueError(
                     f"responses={list(responses)!r} do not correspond to any pending request on "
@@ -956,13 +922,6 @@ class FunctionalWorkflow:
                 if return_value is not None:
                     await ctx.add_event(WorkflowEvent.output(self.name, return_value))
 
-                # Record observed step names as a diagnostic set (not mixed
-                # into graph_signature_hash — that would mutate the hash
-                # across runs and break per-step checkpoint restore).  The
-                # signature already includes co_code, which catches the
-                # attribute-access case the static scan missed.
-                self._runtime_step_names |= ctx._observed_step_names
-
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
 
@@ -990,9 +949,7 @@ class FunctionalWorkflow:
                     with _framework_event_origin():
                         yield WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
                 else:
-                    # Clean completion: clear the cross-run replay state so a
-                    # later `run(responses=...)` can't silently replay against
-                    # stale singleton state from this run.
+                    # Clean completion — drop cross-run replay state.
                     self._last_message = None
                     self._last_step_cache = {}
                     self._last_pending_request_ids = set()
@@ -1005,7 +962,6 @@ class FunctionalWorkflow:
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
                 self._last_pending_request_ids = set(ctx._pending_requests)
-                self._runtime_step_names |= ctx._observed_step_names
 
                 # HITL interruption — yield events collected so far
                 for event in ctx._get_events():
@@ -1118,17 +1074,12 @@ class FunctionalWorkflow:
         return await storage.save(checkpoint)
 
     def _compute_signature_hash(self) -> str:
-        """Compute a stable hash that identifies this workflow's code shape.
+        """Stable hash of the workflow's code shape.
 
-        The hash mixes:
-        * the workflow name,
-        * statically-discovered step names (from ``co_names`` scan),
-        * a digest of the function's bytecode and ``co_names``, so changes to
-          the function body invalidate old checkpoints even when the user
-          accesses steps via module / class attributes (``my_steps.fetch`` /
-          ``Steps.fetch``) that the static scan misses.  The code digest is
-          the load-bearing part of this hash; ``steps`` is kept for
-          human-readable diffing only.
+        Mixes workflow name, statically-discovered step names, and a digest
+        of ``__code__.co_code`` + ``co_names``.  The code digest catches
+        body changes that step-name discovery misses (e.g. attribute-access
+        step references).
         """
         code = getattr(self._func, "__code__", None)
         co_code_hex = hashlib.sha256(code.co_code).hexdigest() if code is not None else ""
@@ -1149,10 +1100,10 @@ class FunctionalWorkflow:
         """Extract step names referenced by the workflow function.
 
         Inspects the function's ``__code__.co_names`` and global scope for
-        ``StepWrapper`` instances.  Steps accessed through module or class
-        attributes (e.g. ``my_steps.fetch``, ``Steps.fetch``) are picked up
-        later via :meth:`RunContext._record_observed_step` as they execute;
-        the signature hash mixes both sources.
+        ``StepWrapper`` instances.  Steps accessed via module or class
+        attributes (``my_steps.fetch``) are missed here, but
+        :meth:`_compute_signature_hash` still captures them through the
+        ``co_code`` digest.
         """
         names: list[str] = []
         globs = getattr(func, "__globals__", {})
@@ -1335,15 +1286,15 @@ class FunctionalWorkflowAgent:
         context_providers: Sequence[Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        # kwargs is accepted for signature parity with graph Workflow.as_agent
+        # but not otherwise consumed.
+        del kwargs
         self._workflow = workflow
         self.name = name or workflow.name
         self.id = f"FunctionalWorkflowAgent_{self.name}"
         self.description: str | None = description if description is not None else workflow.description
         self.context_providers: Sequence[Any] | None = context_providers
         self._pending_requests: dict[str, WorkflowEvent[Any]] = {}
-        # Keep extra kwargs around for forward compatibility but don't act on
-        # them — signature parity with graph Workflow.as_agent is the goal.
-        self._extra_kwargs: dict[str, Any] = dict(kwargs)
 
     @property
     def pending_requests(self) -> dict[str, WorkflowEvent[Any]]:

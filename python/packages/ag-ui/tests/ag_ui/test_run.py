@@ -1727,3 +1727,28 @@ async def test_session_id_generated_when_no_thread_id():
     assert stub.last_session is not None
     # Should be a valid UUID (auto-generated)
     uuid.UUID(stub.last_session.session_id)
+
+
+async def test_service_session_no_thread_id_generates_uuid():
+    """With use_service_session=True and no thread_id, session_id is a UUID and service_session_id is None."""
+    import uuid
+
+    from conftest import StubAgent
+
+    from agent_framework_ag_ui import AgentFrameworkAgent
+
+    stub = StubAgent()
+    agent = AgentFrameworkAgent(agent=stub, use_service_session=True)
+
+    payload = {
+        "run_id": "run-5",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    _ = [event async for event in agent.run(payload)]
+
+    assert stub.last_session is not None
+    # session_id should be a valid auto-generated UUID
+    uuid.UUID(stub.last_session.session_id)
+    # service_session_id should be None since no thread_id was supplied
+    assert stub.last_session.service_session_id is None

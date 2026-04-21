@@ -1762,7 +1762,6 @@ class TestReasoningRoundTrip:
         assert "Prior reasoning" not in texts
 
 
-
 def test_parse_multimodal_media_part_base64_value_field():
     """Source with type='base64' reads data from the 'value' field per AG-UI spec."""
     from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part

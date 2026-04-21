@@ -41,7 +41,6 @@ import hashlib
 import inspect
 import logging
 import typing
-import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
@@ -172,6 +171,8 @@ class RunContext:
         self._step_cache: dict[tuple[str, int], Any] = {}
         # Per-step call counters for deterministic cache keys
         self._step_call_counters: dict[str, int] = {}
+        # Deterministic call counter for auto-generated request_info IDs
+        self._auto_request_info_index: int = 0
 
         # HITL responses (set via _set_responses before replay)
         self._responses: dict[str, Any] = {}
@@ -180,6 +181,8 @@ class RunContext:
 
         # User state (simple dict)
         self._state: dict[str, Any] = {}
+        # Step names actually invoked during this run (for signature hashing)
+        self._observed_step_names: set[str] = set()
 
         # Callback invoked after each step completes (set by FunctionalWorkflow)
         self._on_step_completed: Callable[[], Awaitable[None]] | None = None
@@ -211,7 +214,9 @@ class RunContext:
                 needed (e.g. a Pydantic model, dict, or string prompt).
             response_type: The expected Python type of the response value.
             request_id: Optional stable identifier for this request.  If
-                omitted a random UUID is generated.
+                omitted, a deterministic identifier is derived from the call
+                order (``auto::<index>``) so that resume works without the
+                caller needing to echo back an explicit ID.
 
         Returns:
             The response value supplied during replay.  ``None`` is allowed
@@ -222,11 +227,23 @@ class RunContext:
             WorkflowInterrupted: Raised internally on initial execution
                 (not visible to workflow authors).
         """
-        rid = request_id or str(uuid.uuid4())
+        if request_id is None:
+            # Deterministic auto-ID: relies on the workflow function being
+            # deterministic w.r.t. call order (same contract as @step caching).
+            # Using a fresh uuid here would break HITL resume because the
+            # replayed call would generate a new id and never find the
+            # caller-supplied response.
+            rid = f"auto::{self._auto_request_info_index}"
+            self._auto_request_info_index += 1
+        else:
+            rid = request_id
 
         # Check if we already have a response for this request
         found, value = self._get_response(rid)
         if found:
+            # Response already satisfied on a prior round — do not re-emit as
+            # a pending request on the current checkpoint.
+            self._pending_requests.pop(rid, None)
             return value
 
         # No response — emit event and interrupt
@@ -270,10 +287,26 @@ class RunContext:
         """Store a value in the workflow's key/value state.
 
         Args:
-            key: The state key.
+            key: The state key.  Must not start with ``_`` — framework
+                bookkeeping (e.g. ``_step_cache``, ``_original_message``) uses
+                the underscore prefix and user keys in that namespace are
+                silently clobbered by checkpoint save and dropped on
+                checkpoint restore.  Use names without a leading underscore
+                for user state.
             value: The value to store.  Must be JSON-serializable if
                 checkpoint storage is used.
+
+        Raises:
+            ValueError: If *key* begins with ``_`` (reserved for framework
+                bookkeeping).
         """
+        if key.startswith("_"):
+            raise ValueError(
+                f"State key {key!r} starts with '_', which is reserved for "
+                f"framework bookkeeping (e.g. '_step_cache', '_original_message') "
+                f"and would be silently dropped on checkpoint restore.  Use a "
+                f"non-underscore-prefixed key for user state."
+            )
         self._state[key] = value
 
     def is_streaming(self) -> bool:
@@ -290,6 +323,15 @@ class RunContext:
 
     def _get_events(self) -> list[WorkflowEvent[Any]]:
         return list(self._events)
+
+    def _record_observed_step(self, name: str) -> None:
+        """Record a step name actually invoked during this run.
+
+        Used by :meth:`FunctionalWorkflow._compute_signature_hash` to produce a
+        signature based on steps the workflow actually executed, instead of a
+        static bytecode scan that misses attribute-access patterns.
+        """
+        self._observed_step_names.add(name)
 
     def _get_step_cache_key(self, step_name: str) -> tuple[str, int]:
         idx = self._step_call_counters.get(step_name, 0)
@@ -313,6 +355,10 @@ class RunContext:
                     rid,
                 )
         self._responses = dict(responses)
+        # Remove resolved requests from the pending set so downstream
+        # checkpoints don't re-serialize them as still-pending.
+        for rid in responses:
+            self._pending_requests.pop(rid, None)
 
     def _get_response(self, request_id: str) -> tuple[bool, Any]:
         """Look up a HITL response by *request_id*.
@@ -419,12 +465,14 @@ class StepWrapper(Generic[R]):
             return await self._func(*args, **kwargs)
 
         cache_key = ctx._get_step_cache_key(self.name)
+        ctx._record_observed_step(self.name)
         found, cached = ctx._get_cached_result(cache_key)
-        invocation_data = deepcopy({"args": args, "kwargs": kwargs}) if args or kwargs else None
         if found:
             # Replay path: emit the dedicated ``executor_bypassed`` event type
             # (distinct from executor_invoked/completed/failed) so consumers
-            # can unambiguously identify cache-hit replays.
+            # can unambiguously identify cache-hit replays.  deepcopy is
+            # deferred to the live branch below so replays work even when
+            # arguments are not deepcopyable (e.g. open sessions, locks).
             await ctx.add_event(WorkflowEvent.executor_bypassed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
@@ -433,7 +481,16 @@ class StepWrapper(Generic[R]):
         if self._ctx_param_name is not None and self._ctx_param_name not in call_kwargs:
             call_kwargs[self._ctx_param_name] = ctx
 
-        # Live execution path
+        # Live execution path — defensive deepcopy of args for the event log
+        # only.  If deepcopy fails (non-deepcopyable args), fall back to the
+        # original mapping; the events are diagnostic, not authoritative.
+        if args or kwargs:
+            try:
+                invocation_data: Any = deepcopy({"args": args, "kwargs": kwargs})
+            except Exception:
+                invocation_data = {"args": args, "kwargs": kwargs}
+        else:
+            invocation_data = None
         await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
         try:
             result = await self._func(*args, **call_kwargs)
@@ -588,18 +645,61 @@ class FunctionalWorkflow:
         self.description = description
         self._checkpoint_storage = checkpoint_storage
         self._is_running = False
-        # Last message used to invoke the workflow (for replay on resume)
+        # Last message used to invoke the workflow (for replay on resume).
+        # Cleared on clean completion (no pending requests) so a later
+        # response-only call can't silently replay with a stale message.
         self._last_message: Any = None
         # Step cache from the last run (for response-only replay without checkpoint)
         self._last_step_cache: dict[tuple[str, int], Any] = {}
+        # IDs of the requests a caller is expected to answer on the next run.
+        # Empty after clean completion; populated when the workflow interrupts
+        # with pending request_info events.
+        self._last_pending_request_ids: set[str] = set()
+
+        # Validate the signature once, at decoration time, instead of failing
+        # with a confusing TypeError on the first call.
+        self._non_ctx_param_names = self._classify_signature(func)
 
         # Discover step names referenced in the function for signature hash
         self._step_names = self._discover_step_names(func)
+        # Additional step names accumulated from observed executions (covers
+        # attribute-access patterns the static discovery misses).
+        self._runtime_step_names: set[str] = set()
 
         # Compute a stable signature hash
         self.graph_signature_hash = self._compute_signature_hash()
 
         functools.update_wrapper(self, func)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _classify_signature(func: Callable[..., Any]) -> list[str]:
+        """Return the names of non-ctx parameters, validating arity.
+
+        A workflow function may declare at most one non-ctx parameter (which
+        receives the caller-supplied ``message``).  Any extra non-ctx
+        parameters would be silently dropped by ``_execute``, so we reject
+        them at decoration time.
+        """
+        try:
+            hints = typing.get_type_hints(func)
+        except Exception:
+            hints = {}
+        non_ctx: list[str] = []
+        for param_name, param in inspect.signature(func).parameters.items():
+            resolved = hints.get(param_name, param.annotation)
+            if resolved is RunContext or param_name == "ctx":
+                continue
+            if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            non_ctx.append(param_name)
+        if len(non_ctx) > 1:
+            raise ValueError(
+                f"@workflow function '{func.__name__}' declares multiple non-RunContext "
+                f"parameters ({non_ctx}); at most one is supported (it receives the "
+                f"'message' argument passed to .run()).  Combine the inputs into a "
+                f"single object or dict."
+            )
+        return non_ctx
 
     # ------------------------------------------------------------------
     # run() — same overloaded interface as graph Workflow
@@ -643,10 +743,13 @@ class FunctionalWorkflow:
     ) -> ResponseStream[WorkflowEvent[Any], WorkflowRunResult] | Awaitable[WorkflowRunResult]:
         """Run the functional workflow.
 
-        Exactly one of *message*, *responses*, or *checkpoint_id* must be
-        provided.  Use *message* for a fresh run, *responses* to resume
-        after a HITL interruption, or *checkpoint_id* to restore from a
-        previously saved checkpoint.
+        At least one of *message*, *responses*, or *checkpoint_id* must be
+        provided.  *message* starts a fresh run; *responses* resumes after a
+        HITL interruption; *checkpoint_id* restores from a previously saved
+        checkpoint.  *responses* may be combined with *checkpoint_id* to
+        restore a checkpoint and inject HITL responses in a single call.
+        *message* is mutually exclusive with both *responses* and
+        *checkpoint_id*.
 
         Args:
             message: Input data passed as the first positional argument to
@@ -680,6 +783,26 @@ class FunctionalWorkflow:
                 execution is not allowed).
         """
         self._validate_run_params(message, responses, checkpoint_id)
+        if responses and checkpoint_id is None:
+            # Response-only resume: require at least one key to match an
+            # actually-pending request on this instance.  Prevents silent
+            # replay against stale singleton state after a clean completion.
+            # Callers whose workflows interrupt multiple times in sequence
+            # legitimately accumulate all prior responses plus the latest one
+            # — accept the call as long as any key matches the current set.
+            if not self._last_pending_request_ids:
+                raise ValueError(
+                    f"responses={list(responses)!r} do not correspond to any pending request on "
+                    f"workflow '{self.name}'.  The workflow has no pending request_info events, "
+                    f"so there is nothing to resume.  Start a fresh run with 'message', or supply "
+                    f"'checkpoint_id' to restore a specific checkpoint."
+                )
+            if not (set(responses) & self._last_pending_request_ids):
+                raise ValueError(
+                    f"responses={list(responses)!r} do not answer any of the currently-pending "
+                    f"requests on workflow '{self.name}' ({sorted(self._last_pending_request_ids)!r}).  "
+                    f"Provide a response keyed by one of the pending request_ids."
+                )
         self._ensure_not_running()
 
         response_stream: ResponseStream[WorkflowEvent[Any], WorkflowRunResult] = ResponseStream(
@@ -703,20 +826,43 @@ class FunctionalWorkflow:
     # As agent
     # ------------------------------------------------------------------
 
-    def as_agent(self, name: str | None = None) -> FunctionalWorkflowAgent:
+    def as_agent(
+        self,
+        name: str | None = None,
+        *,
+        description: str | None = None,
+        context_providers: Sequence[Any] | None = None,
+        **kwargs: Any,
+    ) -> FunctionalWorkflowAgent:
         """Wrap this workflow as an agent-compatible object.
 
         The returned :class:`FunctionalWorkflowAgent` exposes a ``run()``
-        method that delegates to the workflow and converts the first output
-        into an :class:`AgentResponse`.
+        method that delegates to the workflow, surfaces ``request_info``
+        events as function approval requests, and converts outputs into an
+        :class:`AgentResponse`.
+
+        Signature mirrors graph :meth:`Workflow.as_agent` so polymorphic
+        code works over either flavor.
 
         Args:
             name: Display name for the agent.  Defaults to the workflow name.
+            description: Optional description override.  Defaults to the
+                workflow's ``description``.
+            context_providers: Optional context providers to associate with
+                the agent.  Stored for caller introspection.
+            **kwargs: Reserved for future parity with
+                :meth:`Workflow.as_agent`.
 
         Returns:
             A :class:`FunctionalWorkflowAgent` wrapping this workflow.
         """
-        return FunctionalWorkflowAgent(workflow=self, name=name)
+        return FunctionalWorkflowAgent(
+            workflow=self,
+            name=name,
+            description=description,
+            context_providers=context_providers,
+            **kwargs,
+        )
 
     # ------------------------------------------------------------------
     # Internal execution
@@ -810,6 +956,13 @@ class FunctionalWorkflow:
                 if return_value is not None:
                     await ctx.add_event(WorkflowEvent.output(self.name, return_value))
 
+                # Record observed step names as a diagnostic set (not mixed
+                # into graph_signature_hash — that would mutate the hash
+                # across runs and break per-step checkpoint restore).  The
+                # signature already includes co_code, which catches the
+                # attribute-access case the static scan missed.
+                self._runtime_step_names |= ctx._observed_step_names
+
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
 
@@ -833,9 +986,16 @@ class FunctionalWorkflow:
 
                 # Final status
                 if saw_request:
+                    self._last_pending_request_ids = set(ctx._pending_requests)
                     with _framework_event_origin():
                         yield WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
                 else:
+                    # Clean completion: clear the cross-run replay state so a
+                    # later `run(responses=...)` can't silently replay against
+                    # stale singleton state from this run.
+                    self._last_message = None
+                    self._last_step_cache = {}
+                    self._last_pending_request_ids = set()
                     with _framework_event_origin():
                         yield WorkflowEvent.status(WorkflowRunState.IDLE)
 
@@ -844,6 +1004,8 @@ class FunctionalWorkflow:
             except WorkflowInterrupted:
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
+                self._last_pending_request_ids = set(ctx._pending_requests)
+                self._runtime_step_names |= ctx._observed_step_names
 
                 # HITL interruption — yield events collected so far
                 for event in ctx._get_events():
@@ -886,6 +1048,14 @@ class FunctionalWorkflow:
 
     async def _execute(self, ctx: RunContext, message: Any) -> Any:
         """Run the user's async function with the active context."""
+        if message is not None and not self._non_ctx_param_names:
+            raise ValueError(
+                f"@workflow function '{self._func.__name__}' has no non-RunContext "
+                f"parameter to receive a message, but .run(message=...) was called "
+                f"with a non-None value.  Either add a first parameter to the "
+                f"workflow function or omit 'message'."
+            )
+
         token = _active_run_ctx.set(ctx)
         try:
             sig = inspect.signature(self._func)
@@ -948,10 +1118,26 @@ class FunctionalWorkflow:
         return await storage.save(checkpoint)
 
     def _compute_signature_hash(self) -> str:
-        """Compute a stable hash from the workflow function name and step names."""
+        """Compute a stable hash that identifies this workflow's code shape.
+
+        The hash mixes:
+        * the workflow name,
+        * statically-discovered step names (from ``co_names`` scan),
+        * a digest of the function's bytecode and ``co_names``, so changes to
+          the function body invalidate old checkpoints even when the user
+          accesses steps via module / class attributes (``my_steps.fetch`` /
+          ``Steps.fetch``) that the static scan misses.  The code digest is
+          the load-bearing part of this hash; ``steps`` is kept for
+          human-readable diffing only.
+        """
+        code = getattr(self._func, "__code__", None)
+        co_code_hex = hashlib.sha256(code.co_code).hexdigest() if code is not None else ""
+        co_names = tuple(sorted(code.co_names)) if code is not None else ()
         sig_data = {
             "workflow": self.name,
             "steps": sorted(self._step_names),
+            "co_code": co_code_hex,
+            "co_names": list(co_names),
         }
         import json
 
@@ -963,7 +1149,10 @@ class FunctionalWorkflow:
         """Extract step names referenced by the workflow function.
 
         Inspects the function's ``__code__.co_names`` and global scope for
-        ``StepWrapper`` instances.
+        ``StepWrapper`` instances.  Steps accessed through module or class
+        attributes (e.g. ``my_steps.fetch``, ``Steps.fetch``) are picked up
+        later via :meth:`RunContext._record_observed_step` as they execute;
+        the signature hash mixes both sources.
         """
         names: list[str] = []
         globs = getattr(func, "__globals__", {})
@@ -1120,16 +1309,46 @@ class FunctionalWorkflowAgent:
     (streaming), making functional workflows usable anywhere an
     agent-compatible object is expected.
 
+    ``request_info`` events emitted by the underlying workflow are surfaced
+    as :class:`FunctionApprovalRequestContent` items (mirroring the graph
+    :class:`WorkflowAgent`), so HITL workflows are callable via this
+    adapter.  Callers resume via ``responses=`` / ``checkpoint_id=``.
+
     Args:
         workflow: The :class:`FunctionalWorkflow` to wrap.
         name: Display name for the agent.  Defaults to the workflow name.
+        description: Display description.  Defaults to ``workflow.description``.
+        context_providers: Optional context providers stored for caller
+            introspection.
+        **kwargs: Reserved for future parity with :class:`WorkflowAgent`;
+            currently ignored.
     """
 
-    def __init__(self, workflow: FunctionalWorkflow, *, name: str | None = None) -> None:
+    REQUEST_INFO_FUNCTION_NAME: str = "request_info"
+
+    def __init__(
+        self,
+        workflow: FunctionalWorkflow,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        context_providers: Sequence[Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._workflow = workflow
         self.name = name or workflow.name
         self.id = f"FunctionalWorkflowAgent_{self.name}"
-        self.description: str | None = workflow.description
+        self.description: str | None = description if description is not None else workflow.description
+        self.context_providers: Sequence[Any] | None = context_providers
+        self._pending_requests: dict[str, WorkflowEvent[Any]] = {}
+        # Keep extra kwargs around for forward compatibility but don't act on
+        # them — signature parity with graph Workflow.as_agent is the goal.
+        self._extra_kwargs: dict[str, Any] = dict(kwargs)
+
+    @property
+    def pending_requests(self) -> dict[str, WorkflowEvent[Any]]:
+        """Pending request_info events emitted during the last run."""
+        return self._pending_requests
 
     @overload
     def run(
@@ -1137,6 +1356,9 @@ class FunctionalWorkflowAgent:
         messages: Any | None = None,
         *,
         stream: Literal[True],
+        responses: dict[str, Any] | None = None,
+        checkpoint_id: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
         **kwargs: Any,
     ) -> ResponseStream[AgentResponseUpdate, AgentResponse]: ...
 
@@ -1146,6 +1368,9 @@ class FunctionalWorkflowAgent:
         messages: Any | None = None,
         *,
         stream: Literal[False] = ...,
+        responses: dict[str, Any] | None = None,
+        checkpoint_id: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
         **kwargs: Any,
     ) -> Awaitable[AgentResponse]: ...
 
@@ -1154,6 +1379,9 @@ class FunctionalWorkflowAgent:
         messages: Any | None = None,
         *,
         stream: bool = False,
+        responses: dict[str, Any] | None = None,
+        checkpoint_id: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
         **kwargs: Any,
     ) -> ResponseStream[AgentResponseUpdate, AgentResponse] | Awaitable[AgentResponse]:
         """Run the underlying workflow and return the result as an agent response.
@@ -1164,6 +1392,11 @@ class FunctionalWorkflowAgent:
         Keyword Args:
             stream: If ``True``, return a :class:`ResponseStream` of
                 :class:`AgentResponseUpdate` items.
+            responses: HITL responses keyed by ``request_id``, forwarded to
+                the underlying workflow so HITL resumes work via this agent.
+            checkpoint_id: Optional checkpoint to restore from.
+            checkpoint_storage: Override the workflow's default
+                :class:`CheckpointStorage` for this run.
             **kwargs: Extra keyword arguments forwarded to the workflow run.
 
         Returns:
@@ -1171,53 +1404,139 @@ class FunctionalWorkflowAgent:
             :class:`ResponseStream` (streaming).
         """
         if stream:
-            return self._run_streaming(messages, **kwargs)
-        return self._run_non_streaming(messages, **kwargs)
+            return self._run_streaming(
+                messages,
+                responses=responses,
+                checkpoint_id=checkpoint_id,
+                checkpoint_storage=checkpoint_storage,
+                **kwargs,
+            )
+        return self._run_non_streaming(
+            messages,
+            responses=responses,
+            checkpoint_id=checkpoint_id,
+            checkpoint_storage=checkpoint_storage,
+            **kwargs,
+        )
 
-    async def _run_non_streaming(self, messages: Any | None, **kwargs: Any) -> AgentResponse:
-        result = await self._workflow.run(messages, **kwargs)
+    async def _run_non_streaming(
+        self,
+        messages: Any | None,
+        *,
+        responses: dict[str, Any] | None = None,
+        checkpoint_id: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
+        **kwargs: Any,
+    ) -> AgentResponse:
+        result = await self._workflow.run(
+            messages,
+            responses=responses,
+            checkpoint_id=checkpoint_id,
+            checkpoint_storage=checkpoint_storage,
+            **kwargs,
+        )
         return self._result_to_agent_response(result)
 
-    def _run_streaming(self, messages: Any | None, **kwargs: Any) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
+    def _run_streaming(
+        self,
+        messages: Any | None,
+        *,
+        responses: dict[str, Any] | None = None,
+        checkpoint_id: str | None = None,
+        checkpoint_storage: CheckpointStorage | None = None,
+        **kwargs: Any,
+    ) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
         from .._types import Content
 
         agent_name = self.name
-        workflow_stream = self._workflow.run(messages, stream=True, **kwargs)
+        # Clear per-run pending state up front
+        self._pending_requests = {}
+        workflow_stream = self._workflow.run(
+            messages,
+            stream=True,
+            responses=responses,
+            checkpoint_id=checkpoint_id,
+            checkpoint_storage=checkpoint_storage,
+            **kwargs,
+        )
 
         async def _generate_updates() -> AsyncIterable[AgentResponseUpdate]:
             async for event in workflow_stream:
-                if event.type != "output":
-                    continue
-                data = event.data
-                if isinstance(data, str):
-                    contents = [Content.from_text(text=data)]
-                elif isinstance(data, Content):
-                    contents = [data]
-                else:
-                    contents = [Content.from_text(text=str(data))]
-                yield AgentResponseUpdate(
-                    contents=contents,
-                    role="assistant",
-                    author_name=agent_name,
-                )
+                if event.type == "output":
+                    data = event.data
+                    if isinstance(data, str):
+                        contents: list[Content] = [Content.from_text(text=data)]
+                    elif isinstance(data, Content):
+                        contents = [data]
+                    else:
+                        contents = [Content.from_text(text=str(data))]
+                    yield AgentResponseUpdate(
+                        contents=contents,
+                        role="assistant",
+                        author_name=agent_name,
+                    )
+                elif event.type == "request_info":
+                    approval = self._request_info_to_approval_request(event)
+                    if approval is None:
+                        continue
+                    yield AgentResponseUpdate(
+                        contents=[approval],
+                        role="assistant",
+                        author_name=agent_name,
+                    )
 
         return ResponseStream(
             _generate_updates(),
             finalizer=AgentResponse.from_updates,
         )
 
-    @staticmethod
-    def _result_to_agent_response(result: WorkflowRunResult) -> AgentResponse:
+    def _request_info_to_approval_request(self, event: WorkflowEvent[Any]) -> Any:
+        """Convert a `request_info` event to `FunctionApprovalRequestContent`.
+
+        Returns ``None`` if the event is missing a request_id (defensive;
+        `request_info` always sets one).
+        """
+        from .._types import Content
+
+        request_id = event.request_id
+        if not request_id:
+            return None
+        self._pending_requests[request_id] = event
+        function_call = Content.from_function_call(
+            call_id=request_id,
+            name=self.REQUEST_INFO_FUNCTION_NAME,
+            arguments={"request_id": request_id, "data": event.data},
+        )
+        return Content.from_function_approval_request(
+            id=request_id,
+            function_call=function_call,
+            additional_properties={"request_id": request_id},
+        )
+
+    def _result_to_agent_response(self, result: WorkflowRunResult) -> AgentResponse:
         from .._types import Content
         from .._types import Message as Msg
+
+        # Refresh pending_requests for this run.
+        self._pending_requests = {}
 
         messages: list[Msg] = []
         for output in result.get_outputs():
             if isinstance(output, str):
-                contents = [Content.from_text(text=output)]
+                contents: list[Content] = [Content.from_text(text=output)]
             elif isinstance(output, Content):
                 contents = [output]
             else:
                 contents = [Content.from_text(text=str(output))]
             messages.append(Msg("assistant", contents))
+
+        # Surface pending request_info events so HITL callers see them.
+        approval_contents: list[Content] = []
+        for event in result.get_request_info_events():
+            approval = self._request_info_to_approval_request(event)
+            if approval is not None:
+                approval_contents.append(approval)
+        if approval_contents:
+            messages.append(Msg("assistant", approval_contents))
+
         return AgentResponse(messages=messages)

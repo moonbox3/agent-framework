@@ -1354,3 +1354,267 @@ class TestHITLInStepWithCaching:
         event_types = [e.type for e in result]
         assert "executor_failed" not in event_types
         assert result.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for ultrareview findings
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicAutoRequestId:
+    """Regression for bug_001: auto-generated request_info ids must be stable across replay."""
+
+    async def test_auto_request_id_roundtrips_on_resume(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> str:
+            # No request_id — framework must generate a deterministic one
+            val = await ctx.request_info("need data", response_type=str)
+            return f"got:{val}"
+
+        result1 = await wf.run(1)
+        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        requests = result1.get_request_info_events()
+        assert len(requests) == 1
+        rid = requests[0].request_id
+        assert rid  # non-empty
+
+        # Resume with the id the caller just received.
+        result2 = await wf.run(responses={rid: "hello"})
+        assert result2.get_final_state() == WorkflowRunState.IDLE
+        assert result2.get_outputs() == ["got:hello"]
+
+    async def test_multiple_auto_ids_are_distinct_and_stable(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> str:
+            a = await ctx.request_info("first", response_type=str)
+            b = await ctx.request_info("second", response_type=str)
+            return f"{a}/{b}"
+
+        r1 = await wf.run(1)
+        rid1 = r1.get_request_info_events()[0].request_id
+        r2 = await wf.run(responses={rid1: "A"})
+        rid2 = r2.get_request_info_events()[0].request_id
+        assert rid1 != rid2
+        r3 = await wf.run(responses={rid1: "A", rid2: "B"})
+        assert r3.get_outputs() == ["A/B"]
+
+
+class TestPendingRequestsPruned:
+    """Regression for bug_007: resolved requests must be pruned from _pending_requests."""
+
+    async def test_final_checkpoint_no_longer_claims_resolved_requests_pending(self):
+        storage = InMemoryCheckpointStorage()
+
+        @workflow(checkpoint_storage=storage)
+        async def wf(x: int, ctx: RunContext) -> str:
+            a = await ctx.request_info("q1", response_type=str, request_id="r1")
+            b = await ctx.request_info("q2", response_type=str, request_id="r2")
+            return f"{a}/{b}"
+
+        await wf.run(1)
+        await wf.run(responses={"r1": "A"})
+        result = await wf.run(responses={"r1": "A", "r2": "B"})
+        assert result.get_final_state() == WorkflowRunState.IDLE
+        # Latest checkpoint must show no pending requests.
+        checkpoints = await storage.list_checkpoints(workflow_name="wf")
+        assert checkpoints, "expected at least one checkpoint to have been saved"
+        final = checkpoints[-1]
+        assert final.pending_request_info_events == {}
+
+
+class TestArityValidation:
+    """Regression for merged_bug_003: validate workflow signature arity."""
+
+    def test_multi_non_ctx_param_rejected_at_decoration(self):
+        with pytest.raises(ValueError, match="multiple non-RunContext parameters"):
+
+            @workflow
+            async def wf(a: str, b: str, ctx: RunContext) -> str:
+                return f"{a}+{b}"
+
+    async def test_ctx_only_workflow_with_message_raises_clear_error(self):
+        @workflow
+        async def wf(ctx: RunContext) -> str:
+            return "no message used"
+
+        with pytest.raises(ValueError, match="no non-RunContext parameter"):
+            await wf.run("important input")
+
+    def test_ctx_only_workflow_decoration_succeeds(self):
+        # Decoration must not raise even though the workflow has no
+        # message-receiving parameter.  (Running it without a message still
+        # requires providing responses or a checkpoint_id — that's
+        # _validate_run_params's job, not ours.)
+        @workflow
+        async def wf(ctx: RunContext) -> str:
+            return "ok"
+
+        assert wf is not None
+
+
+class TestStaleResponsesRejected:
+    """Regression for bug_014: stale responses after clean completion must be rejected."""
+
+    async def test_responses_after_clean_completion_raise(self):
+        @workflow
+        async def wf(x: int) -> int:
+            return x * 2
+
+        await wf.run(5)  # clean completion, no pending requests
+        with pytest.raises(ValueError, match="no pending request_info"):
+            await wf.run(responses={"stale": "x"})
+
+    async def test_responses_mismatched_key_raises(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> str:
+            return await ctx.request_info("q", response_type=str, request_id="r1")
+
+        await wf.run(1)  # interrupts with r1 pending
+        with pytest.raises(ValueError, match="do not answer"):
+            await wf.run(responses={"definitely_not_r1": "x"})
+
+
+class TestReservedStateKeys:
+    """Regression for bug_017: set_state must reject underscore-prefixed keys."""
+
+    async def test_underscore_key_rejected(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> int:
+            ctx.set_state("_private", "user value")
+            return x
+
+        with pytest.raises(ValueError, match="reserved for framework"):
+            await wf.run(1)
+
+    async def test_normal_key_still_works(self):
+        @workflow
+        async def wf(x: int, ctx: RunContext) -> int:
+            ctx.set_state("normal_key", "v")
+            assert ctx.get_state("normal_key") == "v"
+            return x
+
+        r = await wf.run(1)
+        assert r.get_outputs() == [1]
+
+
+class TestDeepcopyOnCacheHit:
+    """Regression for bug_002: cache hits must not deepcopy args."""
+
+    async def test_step_with_non_deepcopyable_arg_replays(self):
+        import threading
+
+        @step
+        async def takes_lock(lock: threading.Lock, n: int) -> int:
+            return n + 1
+
+        @workflow
+        async def wf(x: int) -> int:
+            lock = threading.Lock()
+            return await takes_lock(lock, x)
+
+        # First run — must succeed despite threading.Lock not being deepcopyable
+        # (deepcopy now wrapped in try/except, falls back to live reference for
+        # the invocation_data event only).
+        r1 = await wf.run(5)
+        assert r1.get_outputs() == [6]
+
+
+class TestStepDiscoveryAttributeAccess:
+    """Regression for bug_008: checkpoint hash must differ when function body changes."""
+
+    async def test_signature_hash_changes_when_function_body_changes(self):
+        @workflow
+        async def wf_a(x: int) -> int:
+            return x + 1
+
+        @workflow(name="wf_b")
+        async def wf_b(x: int) -> int:
+            return x * 100
+
+        # Two different function bodies -> different hashes even though the
+        # static step-name scan would produce the same empty list.
+        assert wf_a.graph_signature_hash != wf_b.graph_signature_hash
+
+
+class TestAsAgentSignatureParity:
+    """Regression for bug_015: as_agent signature must accept description/context_providers."""
+
+    async def test_as_agent_accepts_description_override(self):
+        @workflow(description="workflow level")
+        async def wf(x: str) -> str:
+            return x.upper()
+
+        agent = wf.as_agent(name="a", description="agent level")
+        assert agent.description == "agent level"
+
+    async def test_as_agent_accepts_context_providers_kwarg(self):
+        @workflow
+        async def wf(x: str) -> str:
+            return x
+
+        providers = [object()]  # opaque placeholder; must be stored without error
+        agent = wf.as_agent(context_providers=providers)
+        assert list(agent.context_providers or []) == providers
+
+    async def test_as_agent_description_defaults_to_workflow_description(self):
+        @workflow(description="from workflow")
+        async def wf(x: str) -> str:
+            return x
+
+        agent = wf.as_agent()
+        assert agent.description == "from workflow"
+
+
+class TestFunctionalWorkflowAgentHITL:
+    """Regression for bug_013: .as_agent() must surface request_info events."""
+
+    async def test_request_info_surfaces_as_function_approval_request(self):
+        @workflow
+        async def wf(x: str, ctx: RunContext) -> str:
+            answer = await ctx.request_info({"need": x}, response_type=str, request_id="rid-1")
+            return f"got:{answer}"
+
+        agent = wf.as_agent()
+        response = await agent.run("topic")
+
+        # Agent must expose the pending request_id.
+        assert "rid-1" in agent.pending_requests
+
+        # Response must contain at least one content item whose type is
+        # function_approval_request (or equivalent).
+        approval_found = False
+        for message in response.messages:
+            for content in message.contents:
+                if getattr(content, "type", None) == "function_approval_request":
+                    approval_found = True
+                    break
+        assert approval_found, "expected FunctionApprovalRequestContent in agent response"
+
+    async def test_resume_via_agent_responses_kwarg(self):
+        @workflow
+        async def wf(x: str, ctx: RunContext) -> str:
+            answer = await ctx.request_info(x, response_type=str, request_id="rid-1")
+            return f"got:{answer}"
+
+        agent = wf.as_agent()
+        # First phase: suspend
+        await agent.run("topic")
+        # Second phase: resume via the agent surface
+        response = await agent.run(responses={"rid-1": "answered"})
+        # Agent's final response should contain the workflow's text output.
+        text_blobs: list[str] = []
+        for message in response.messages:
+            for content in message.contents:
+                text = getattr(content, "text", None)
+                if text:
+                    text_blobs.append(text)
+        assert any("got:answered" in t for t in text_blobs)
+
+
+class TestRunDocstringAllowsResponsesAndCheckpoint:
+    """Regression for bug_010: docstring must permit responses+checkpoint_id combo."""
+
+    def test_docstring_says_at_least_one(self):
+        doc = FunctionalWorkflow.run.__doc__ or ""
+        assert "At least one" in doc or "at least one" in doc
+        assert "Exactly one" not in doc

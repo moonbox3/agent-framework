@@ -596,6 +596,13 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         - Converting file references (URI/data/hosted_file) to FilePart objects
         - Preserving metadata and additional properties from the original message
         - Setting the role to 'user' as framework messages are treated as user input
+
+        Args:
+            message: The framework Message to convert.
+            context_id: Optional fallback context identifier (e.g. derived from
+                ``AgentSession.service_session_id``). When the *message* already
+                carries a ``context_id`` in its ``additional_properties`` that
+                value takes precedence; otherwise this fallback is used.
         """
         parts: list[A2APart] = []
         if not message.contents:

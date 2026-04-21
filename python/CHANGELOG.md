@@ -30,7 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent-framework-core**: Move `InMemory` history provider injection to first invocation ([#5236](https://github.com/microsoft/agent-framework/pull/5236))
 - **agent-framework-github-copilot**: Forward provider config to `SessionConfig` in `GitHubCopilotAgent` ([#5195](https://github.com/microsoft/agent-framework/pull/5195))
 - **agent-framework-hyperlight-codeact**: Flatten `execute_code` output ([#5333](https://github.com/microsoft/agent-framework/pull/5333))
-- **agent-framework-devui**: Bump `agent-framework-devui` to `1.0.0b260414` for release ([#5259](https://github.com/microsoft/agent-framework/pull/5259))
 - **dependencies**: Bump `pygments` from `2.19.2` to `2.20.0` in `/python` ([#4978](https://github.com/microsoft/agent-framework/pull/4978))
 - **tests**: Bump misc integration retry delay to 30s ([#5293](https://github.com/microsoft/agent-framework/pull/5293))
 - **tests**: Improve misc integration test robustness ([#5295](https://github.com/microsoft/agent-framework/pull/5295))

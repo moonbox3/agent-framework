@@ -420,7 +420,7 @@ dev = [{ name = "types-pyyaml", specifier = "==6.0.12.20250915" }]
 
 [[package]]
 name = "agent-framework-devui"
-version = "1.0.0b260414"
+version = "1.0.0b260421"
 source = { editable = "packages/devui" }
 dependencies = [
     { name = "agent-framework-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },

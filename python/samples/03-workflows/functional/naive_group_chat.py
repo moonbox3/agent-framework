@@ -8,31 +8,19 @@ and the termination condition with plain Python — no framework abstractions.
 
 Compare this with the graph-based GroupChat orchestration to see how the
 functional API lets you start simple and add complexity only when needed.
-
-Environment variables:
-  AZURE_AI_PROJECT_ENDPOINT              — Your Azure AI Foundry project endpoint
-  AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME — Model deployment name (e.g. gpt-4o)
 """
 
 import asyncio
-import os
 
-from agent_framework import Agent, workflow
-from agent_framework.azure import AzureOpenAIResponsesClient
+from agent_framework import Agent, Message, workflow
+from agent_framework.foundry import FoundryChatClient
 from azure.identity import AzureCliCredential
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Create agents
 # ---------------------------------------------------------------------------
 
-client = AzureOpenAIResponsesClient(
-    project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-    deployment_name=os.environ["AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME"],
-    credential=AzureCliCredential(),
-)
+client = FoundryChatClient(credential=AzureCliCredential())
 
 expert = Agent(
     name="PythonExpert",
@@ -73,15 +61,16 @@ summarizer = Agent(
 async def group_chat(question: str) -> str:
     """Round-robin group chat: expert answers, critic reviews, summarizer wraps up."""
     participants = [expert, critic, summarizer]
-    conversation: list[str] = [f"User: {question}"]
+    # Passing list[Message] keeps roles/authorship intact between turns,
+    # instead of stringifying everything into a single prompt.
+    conversation: list[Message] = [Message("user", [question])]
 
     # Simple round-robin: each agent sees the full conversation so far
     for agent in participants:
-        prompt = "\n\n".join(conversation)
-        response = (await agent.run(prompt)).text
-        conversation.append(f"{agent.name}: {response}")
+        response = await agent.run(conversation)
+        conversation.extend(response.messages)
 
-    return "\n\n".join(conversation)
+    return "\n\n".join(f"{m.author_name or m.role}: {m.text}" for m in conversation)
 
 
 async def main():

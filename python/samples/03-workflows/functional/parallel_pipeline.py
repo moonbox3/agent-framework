@@ -44,6 +44,10 @@ async def research_pipeline(topic: str) -> str:
     """Fan-out to three research tasks, then synthesize results."""
     # asyncio.gather runs all three concurrently — this is standard Python,
     # not a framework concept. Use it the same way you would anywhere else.
+    #
+    # Tip: if any of these were wrapped with @step (e.g. an expensive agent call),
+    # the pattern is identical — @step composes with asyncio.gather, so each
+    # branch is independently cached on HITL resume or checkpoint restore.
     web, papers, news = await asyncio.gather(
         research_web(topic),
         research_papers(topic),

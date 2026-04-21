@@ -10,31 +10,19 @@ or crash recovery), add @step. Since each agent call hits an LLM API (time +
 money), @step is often worth it. But it's always opt-in.
 
 This sample shows both approaches side-by-side so you can see the difference.
-
-Environment variables:
-  AZURE_AI_PROJECT_ENDPOINT              — Your Azure AI Foundry project endpoint
-  AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME — Model deployment name (e.g. gpt-4o)
 """
 
 import asyncio
-import os
 
 from agent_framework import Agent, step, workflow
-from agent_framework.azure import AzureOpenAIResponsesClient
+from agent_framework.foundry import FoundryChatClient
 from azure.identity import AzureCliCredential
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Create agents
 # ---------------------------------------------------------------------------
 
-client = AzureOpenAIResponsesClient(
-    project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-    deployment_name=os.environ["AZURE_OPENAI_RESPONSES_DEPLOYMENT_NAME"],
-    credential=AzureCliCredential(),
-)
+client = FoundryChatClient(credential=AzureCliCredential())
 
 classifier_agent = Agent(
     name="ClassifierAgent",

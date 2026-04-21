@@ -52,6 +52,12 @@ async def main():
     result = await stream.get_final_response()
     print(f"Final state: {result.get_final_state()}")
 
+    """
+    Expected output:
+      Output: [200] Data from https://example.com/api/data (valid=True)
+      Final state: WorkflowRunState.IDLE
+    """
+
 
 if __name__ == "__main__":
     asyncio.run(main())

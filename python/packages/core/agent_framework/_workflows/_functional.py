@@ -103,20 +103,25 @@ class WorkflowInterrupted(BaseException):
 
 
 class RunContext:
-    """Execution context injected into ``@workflow`` functions.
+    """Opt-in handle for workflow-only features inside a ``@workflow`` function.
 
     .. warning:: Experimental
 
         This API is experimental and subject to change or removal
         in future versions without notice.
 
-    Every ``@workflow`` invocation receives a ``RunContext`` instance that
-    provides human-in-the-loop (HITL) requests, custom event emission,
-    key/value state, and event collection.  The context is available to the
-    workflow function via a parameter annotated as ``RunContext``.
+    Use ``RunContext`` when a workflow function needs one of the following,
+    otherwise omit it entirely for a cleaner signature:
 
-    The workflow's return value is automatically emitted as the output.
-    Use :meth:`add_event` to emit custom events during execution.
+    * Human-in-the-loop: :meth:`request_info` pauses the workflow until a
+      response is supplied, then resumes with that value.
+    * Custom events: :meth:`add_event` emits events into the run stream
+      (useful for progress reporting or tracing).
+    * Workflow-scoped key/value state: :meth:`get_state` / :meth:`set_state`
+      persist values across a run and survive checkpoints.
+
+    The context is injected automatically. Declare it either by parameter
+    name (``ctx``) or by type annotation (``: RunContext``); both work.
 
     Args:
         workflow_name: Identifier for the enclosing workflow, used when
@@ -129,19 +134,20 @@ class RunContext:
 
         .. code-block:: python
 
+            # Simple workflow: no context parameter needed.
             @workflow
             async def my_pipeline(data: str) -> str:
                 return await some_step(data)
 
 
-            # Add ctx: RunContext only when you need HITL, state, or custom events:
+            # HITL workflow: request a response from a human reviewer.
             @workflow
             async def hitl_pipeline(data: str, ctx: RunContext) -> str:
                 feedback = await ctx.request_info({"draft": data}, response_type=str)
                 return feedback
 
 
-            # RunContext is also available inside @step functions:
+            # RunContext also works inside @step functions.
             @step
             async def review_step(doc: str, ctx: RunContext) -> str:
                 feedback = await ctx.request_info({"draft": doc}, response_type=str)

@@ -65,8 +65,8 @@ async def main():
 
     # If request_info() was reached, the state is IDLE_WITH_PENDING_REQUESTS.
     # If the workflow completed without hitting request_info(), it would be IDLE.
-    print(f"State: {result1.get_final_state()}")
-    assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+    print(f"State: {(final_state := result1.get_final_state())}")
+    assert final_state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
 
     requests = result1.get_request_info_events()
     print(f"Pending request: {requests[0].request_id}")

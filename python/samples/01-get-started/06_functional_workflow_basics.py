@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 """
-First Functional Workflow — Orchestrate async functions with @workflow
+Functional Workflow Basics — Orchestrate async functions with @workflow
 
 The functional API lets you write workflows as plain Python async functions.
 No graph concepts, no edges, no executor classes — just call functions

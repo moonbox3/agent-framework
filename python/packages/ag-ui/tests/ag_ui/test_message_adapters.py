@@ -1760,3 +1760,68 @@ class TestReasoningRoundTrip:
         assert "First answer" in texts
         assert "Follow-up question" in texts
         assert "Prior reasoning" not in texts
+
+
+
+def test_parse_multimodal_media_part_base64_value_field():
+    """Source with type='base64' reads data from the 'value' field per AG-UI spec."""
+    from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part
+
+    result = _parse_multimodal_media_part(
+        {"type": "image", "source": {"type": "base64", "value": "aGVsbG8=", "mimeType": "image/png"}}
+    )
+    assert result is not None
+    assert "aGVsbG8=" in result.uri
+
+
+def test_parse_multimodal_media_part_data_source_value_field():
+    """Source with type='data' reads data from the 'value' field per AG-UI spec."""
+    from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part
+
+    result = _parse_multimodal_media_part(
+        {"type": "image", "source": {"type": "data", "value": "aGVsbG8=", "mimeType": "image/png"}}
+    )
+    assert result is not None
+    assert "aGVsbG8=" in result.uri
+
+
+def test_parse_multimodal_media_part_base64_data_field_backward_compat():
+    """Source with type='base64' still supports deprecated 'data' field."""
+    from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part
+
+    result = _parse_multimodal_media_part(
+        {"type": "image", "source": {"type": "base64", "data": "aGVsbG8=", "mimeType": "image/png"}}
+    )
+    assert result is not None
+    assert "aGVsbG8=" in result.uri
+
+
+def test_parse_multimodal_media_part_value_preferred_over_data():
+    """When both 'value' and 'data' are present, 'value' takes precedence."""
+    from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part
+
+    result = _parse_multimodal_media_part(
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "value": "dmFsdWU=",
+                "data": "ZGF0YQ==",
+                "mimeType": "image/png",
+            },
+        }
+    )
+    assert result is not None
+    # 'value' field content should be used (base64 of "value")
+    assert "dmFsdWU=" in result.uri
+
+
+def test_parse_multimodal_media_part_unknown_source_value_fallback():
+    """Unknown source type falls back to 'value' field before 'data' field."""
+    from agent_framework_ag_ui._message_adapters import _parse_multimodal_media_part
+
+    result = _parse_multimodal_media_part(
+        {"type": "image", "source": {"type": "custom", "value": "aGVsbG8=", "mimeType": "image/png"}}
+    )
+    assert result is not None
+    assert "aGVsbG8=" in result.uri

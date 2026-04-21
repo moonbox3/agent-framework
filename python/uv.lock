@@ -84,14 +84,14 @@ wheels = [
 
 [[package]]
 name = "ag-ui-protocol"
-version = "0.1.13"
+version = "0.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/04/b5/fc0b65b561d00d88811c8a7d98ee735833f81554be244340950e7b65820c/ag_ui_protocol-0.1.13.tar.gz", hash = "sha256:811d7d7dcce4783dec252918f40b717ebfa559399bf6b071c4ba47c0c1e21bcb", size = 5671, upload-time = "2026-02-19T18:40:38.602Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/0f/5a8ce5eb5cd7adf3f733da87d7a5a8a38f24ec9e029c1300f9495ae9c7fa/ag_ui_protocol-0.1.17.tar.gz", hash = "sha256:5fae4cfced8245c8ac329b85702fd166ff226d99dc1ea8a1ae95890826aa69e5", size = 6273, upload-time = "2026-04-20T21:09:19.436Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/9f/b833c1ab1999da35ebad54841ae85d2c2764c931da9a6f52d8541b6901b2/ag_ui_protocol-0.1.13-py3-none-any.whl", hash = "sha256:1393fa894c1e8416efe184168a50689e760d05b32f4646eebb8ff423dddf8e8f", size = 8053, upload-time = "2026-02-19T18:40:37.27Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/82/e5f1686b4c4e232818c75598d651b82088f584e59adef71802920d74f82f/ag_ui_protocol-0.1.17-py3-none-any.whl", hash = "sha256:6a9065590d21c7b9b8ae9bb1a3410ecf4d18cb8041a077d25574f792dfa504fe", size = 8648, upload-time = "2026-04-20T21:09:20.488Z" },
 ]
 
 [[package]]
@@ -183,7 +183,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ag-ui-protocol", specifier = "==0.1.13" },
+    { name = "ag-ui-protocol", specifier = ">=0.1.16,<0.2" },
     { name = "agent-framework-core", editable = "packages/core" },
     { name = "fastapi", specifier = ">=0.115.0,<0.133.1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "==0.28.1" },

@@ -294,12 +294,12 @@ def _parse_multimodal_media_part(part: dict[str, Any]) -> Content | None:
         if source_type in {"url", "uri"}:
             url = cast(str | None, source_dict.get("url") or source_dict.get("uri"))
         elif source_type in {"base64", "data", "binary"}:
-            data = cast(str | None, source_dict.get("data"))
+            data = cast(str | None, source_dict.get("value") or source_dict.get("data"))
         elif source_type in {"id", "file"}:
             binary_id = cast(str | None, source_dict.get("id"))
         else:
             url = cast(str | None, source_dict.get("url") or source_dict.get("uri") or url)
-            data = cast(str | None, source_dict.get("data") or data)
+            data = cast(str | None, source_dict.get("value") or source_dict.get("data") or data)
             binary_id = cast(str | None, source_dict.get("id") or binary_id)
 
     if isinstance(url, str) and url:

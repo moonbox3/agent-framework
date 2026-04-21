@@ -901,7 +901,6 @@ async def test_poll_task_completed(a2a_agent: A2AAgent, mock_a2a_client: MockA2A
 # endregion
 
 
-
 # region Session context_id Integration Tests
 
 

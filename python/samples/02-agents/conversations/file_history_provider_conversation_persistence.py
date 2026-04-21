@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from pydantic import Field
 
 try:
-    import orjson
+    import orjson  # type: ignore[import-not-found]
 except ImportError:
     orjson = None
 

@@ -1,0 +1,178 @@
+name: Issue Triage
+
+on:
+  issues:
+    types:
+      - opened
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to triage
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-triage-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  DEVFLOW_REPOSITORY: ${{ vars.DF_REPO }}
+  DEVFLOW_REF: main
+  TARGET_REPO_PATH: ${{ github.workspace }}/target-repo
+  DEVFLOW_PATH: ${{ github.workspace }}/devflow
+
+jobs:
+  team_check:
+    runs-on: ubuntu-latest
+    outputs:
+      is_team_member: ${{ steps.check.outputs.is_team_member }}
+      issue_number: ${{ steps.issue.outputs.issue_number }}
+      repo: ${{ steps.issue.outputs.repo }}
+    steps:
+      - name: Resolve issue metadata
+        id: issue
+        shell: bash
+        env:
+          ISSUE_NUMBER_EVENT: ${{ github.event.issue.number }}
+          ISSUE_NUMBER_INPUT: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "issues" ]]; then
+            issue_number="${ISSUE_NUMBER_EVENT}"
+          else
+            issue_number="${ISSUE_NUMBER_INPUT}"
+          fi
+
+          if [[ ! "$issue_number" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Could not determine issue number; for workflow_dispatch runs, the 'issue_number' input is required." >&2
+            exit 1
+          fi
+
+          echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
+          echo "repo=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
+
+      - name: Check issue author team membership
+        id: check
+        uses: actions/github-script@v8
+        env:
+          TEAM_NAME: ${{ secrets.DEVELOPER_TEAM }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.issue_number }}
+        with:
+          github-token: ${{ secrets.GH_ACTIONS_PR_WRITE }}
+          script: |
+            let author = context.payload.issue?.user?.login;
+            if (!author) {
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.ISSUE_NUMBER),
+              });
+              author = issue.user.login;
+            }
+
+            let isTeamMember = false;
+            try {
+              const teamMembership = await github.rest.teams.getMembershipForUserInOrg({
+                org: context.repo.owner,
+                team_slug: process.env.TEAM_NAME,
+                username: author,
+              });
+              isTeamMember = teamMembership.data.state === 'active';
+            } catch (error) {
+              console.log(`Team membership lookup failed for ${author}: ${error.message}`);
+              isTeamMember = false;
+            }
+
+            core.setOutput('is_team_member', isTeamMember ? 'true' : 'false');
+            if (isTeamMember) {
+              core.info(`Author ${author} is a team member; skipping auto-triage.`);
+            } else {
+              core.info(`Author ${author} is not a team member; proceeding with triage.`);
+            }
+
+  triage:
+    runs-on: ubuntu-latest
+    needs: team_check
+    if: ${{ needs.team_check.outputs.is_team_member == 'false' }}
+    timeout-minutes: 60
+
+    steps:
+      # Safe checkout: base repo only.
+      - name: Checkout target repo base
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: target-repo
+
+      # Private DevFlow (maf-dashboard) checkout.
+      - name: Checkout DevFlow
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.DEVFLOW_REPOSITORY }}
+          ref: ${{ env.DEVFLOW_REF }}
+          token: ${{ secrets.DEVFLOW_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: devflow
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+          enable-cache: true
+
+      - name: Install DevFlow dependencies
+        working-directory: ${{ env.DEVFLOW_PATH }}
+        run: uv sync --frozen
+
+      - name: Classify issue relevance
+        id: spam
+        working-directory: ${{ env.DEVFLOW_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SK_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
+          AGENT_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
+          ISSUE_REPO: ${{ needs.team_check.outputs.repo }}
+          ISSUE_NUMBER: ${{ needs.team_check.outputs.issue_number }}
+        run: |
+          uv run python scripts/classify_issue_spam.py \
+            --repo "$ISSUE_REPO" \
+            --issue-number "$ISSUE_NUMBER" \
+            --repo-path "${TARGET_REPO_PATH}" \
+            --apply-labels
+
+      - name: Stop after spam gate
+        if: ${{ steps.spam.outputs.decision != 'allow' }}
+        shell: bash
+        env:
+          SPAM_DECISION: ${{ steps.spam.outputs.decision }}
+        run: |
+          echo "Skipping reproduction because spam gate decided: ${SPAM_DECISION}"
+
+      - name: Reproduce reported issue
+        if: ${{ steps.spam.outputs.decision == 'allow' }}
+        id: repro
+        working-directory: ${{ env.DEVFLOW_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_COPILOT_TOKEN: ${{ secrets.GH_COPILOT_TOKEN }}
+          SK_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
+          AGENT_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
+          ISSUE_REPO: ${{ needs.team_check.outputs.repo }}
+          ISSUE_NUMBER: ${{ needs.team_check.outputs.issue_number }}
+        run: |
+          uv run python scripts/trigger_issue_repro.py \
+            --repo "$ISSUE_REPO" \
+            --issue-number "$ISSUE_NUMBER" \
+            --github-username "$GITHUB_ACTOR"

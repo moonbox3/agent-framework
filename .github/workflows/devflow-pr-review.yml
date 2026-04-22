@@ -19,7 +19,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: devflow-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  group: devflow-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 env:

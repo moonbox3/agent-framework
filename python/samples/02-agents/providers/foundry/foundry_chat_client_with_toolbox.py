@@ -42,8 +42,9 @@ def create_sample_toolbox(name: str) -> str:
     Toolboxes are normally configured in the Foundry portal or a deployment
     script, not the application itself. This helper exists so the samples can
     be run end-to-end without first setting a toolbox up by hand — delete any
-    existing toolbox under ``name``, then create a fresh version containing a
-    single MCP tool. Returns the created version identifier.
+    existing toolbox under ``name``, then create a fresh version containing an
+    MCP tool, a web search tool, and a code interpreter tool. Returns the
+    created version identifier.
     """
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import CodeInterpreterTool, MCPTool, Tool, WebSearchTool

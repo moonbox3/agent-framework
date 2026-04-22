@@ -46,7 +46,7 @@ def create_sample_toolbox(name: str) -> str:
     single MCP tool. Returns the created version identifier.
     """
     from azure.ai.projects import AIProjectClient
-    from azure.ai.projects.models import MCPTool, Tool
+    from azure.ai.projects.models import CodeInterpreterTool, MCPTool, Tool, WebSearchTool
     from azure.core.exceptions import ResourceNotFoundError
 
     with (
@@ -66,6 +66,9 @@ def create_sample_toolbox(name: str) -> str:
                 require_approval="never",
             )
         ]
+
+        tools.append(WebSearchTool(name="web_search"))
+        tools.append(CodeInterpreterTool(name="code_interpreter"))
 
         created = project_client.beta.toolboxes.create_version(
             name=name,

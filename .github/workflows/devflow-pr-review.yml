@@ -31,7 +31,6 @@ env:
 jobs:
   team_check:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request_target' || !github.event.pull_request.draft }}
     outputs:
       is_team_member: ${{ steps.check.outputs.is_team_member }}
       pr_number: ${{ steps.pr.outputs.pr_number }}

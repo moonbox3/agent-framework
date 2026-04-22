@@ -24,7 +24,7 @@ concurrency:
 
 env:
   DEVFLOW_REPOSITORY: ${{ vars.DF_REPO }}
-  DEVFLOW_REF: main
+  DEVFLOW_REF: v0.1.15
   TARGET_REPO_PATH: ${{ github.workspace }}/target-repo
   DEVFLOW_PATH: ${{ github.workspace }}/devflow
 

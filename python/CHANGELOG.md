@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent-framework-foundry**: Reconcile Toolbox hosted-tool payloads with the Responses API ([#5414](https://github.com/microsoft/agent-framework/pull/5414))
 - **agent-framework-ag-ui**: Pass client `thread_id` as `session_id` when constructing `AgentSession` ([#5384](https://github.com/microsoft/agent-framework/pull/5384))
 - **agent-framework-hyperlight**: Thread-confine `WasmSandbox` interactions via per-entry `ThreadPoolExecutor` to eliminate the PyO3 `unsendable` panic when touched from asyncio worker threads
-([#5424](https://github.com/microsoft/agent-framework/pull/5424))
+  ([#5424](https://github.com/microsoft/agent-framework/pull/5424))
 
 ## [1.1.0] - 2026-04-21
 

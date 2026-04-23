@@ -23,7 +23,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-    "agent-framework-core>=1.1.0,<2",
+    "agent-framework-core>=1.1.1,<2",
     "agent-framework-openai>=1.1.0,<2",
     "azure-ai-inference>=1.0.0b9,<1.0.0b10",
     "azure-ai-projects>=2.1.0,<3.0",

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.1] - 2026-04-22
+## [1.1.1] - 2026-04-23
 
 ### Added
 - **agent-framework-core**: Add `expected_output` ground-truth support to `evaluate_workflow` for similarity evaluators ([#5234](https://github.com/microsoft/agent-framework/pull/5234))

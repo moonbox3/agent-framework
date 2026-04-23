@@ -1,9 +1,6 @@
 name: Issue Triage
 
 on:
-  issues:
-    types:
-      - labeled
   workflow_dispatch:
     inputs:
       issue_number:

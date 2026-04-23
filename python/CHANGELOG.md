@@ -18,8 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **agent-framework-foundry-hosting**: Correct Development Status classifier from Beta (4) to Alpha (3) to match the package's lifecycle stage ([#5387](https://github.com/microsoft/agent-framework/pull/5387))
 - **tests**: Add Python flaky test report workflow ([#5342](https://github.com/microsoft/agent-framework/pull/5342))
-- **agent-framework-hyperlight**: Simplify host callback to pass raw Python results via `SKIP_PARSING`, switch `execute_code` input schema to a plain JSON-schema dict, and tighten public API
-surface ([#5424](https://github.com/microsoft/agent-framework/pull/5424))
+- **agent-framework-hyperlight**: Simplify host callback to pass raw Python results via `SKIP_PARSING`, switch `execute_code` input schema to a plain JSON-schema dict, and tighten public API surface ([#5424](https://github.com/microsoft/agent-framework/pull/5424))
 
 ### Fixed
 - **agent-framework-openai**: Fix OpenAI Responses streaming to propagate `created_at` from the final `response.completed` event ([#5382](https://github.com/microsoft/agent-framework/pull/5382))

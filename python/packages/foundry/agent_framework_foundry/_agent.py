@@ -34,7 +34,7 @@ from azure.ai.projects.aio import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 
-from ._tools import sanitize_foundry_response_tool
+from ._tools import _sanitize_foundry_response_tool
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
@@ -321,7 +321,7 @@ class RawFoundryAgentChatClient(  # type: ignore[misc]
         surface.
         """
         response_tools = super()._prepare_tools_for_openai(tools)
-        return [sanitize_foundry_response_tool(tool_item) for tool_item in response_tools]
+        return [_sanitize_foundry_response_tool(tool_item) for tool_item in response_tools]
 
     def _prepare_messages_for_azure_ai(self, messages: Sequence[Message]) -> tuple[list[Message], str | None]:
         """Extract system/developer messages as instructions for Azure AI.

@@ -33,7 +33,7 @@ from azure.ai.projects.models import MCPTool as FoundryMCPTool
 from azure.core.credentials import TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 
-from ._tools import fetch_toolbox, sanitize_foundry_response_tool
+from ._tools import _sanitize_foundry_response_tool, fetch_toolbox
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover
@@ -235,7 +235,7 @@ class RawFoundryChatClient(  # type: ignore[misc]
         them downstream.
         """
         response_tools = super()._prepare_tools_for_openai(tools)
-        return [sanitize_foundry_response_tool(tool_item) for tool_item in response_tools]
+        return [_sanitize_foundry_response_tool(tool_item) for tool_item in response_tools]
 
     async def configure_azure_monitor(
         self,

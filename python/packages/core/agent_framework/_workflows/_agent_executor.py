@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 from typing_extensions import Never
 
@@ -117,6 +117,9 @@ class AgentExecutorResponse:
         )
 
 
+_PayloadT = TypeVar("_PayloadT", AgentResponse, AgentResponseUpdate)
+
+
 class AgentExecutor(Executor):
     """built-in executor that wraps an agent for handling messages.
 
@@ -142,7 +145,7 @@ class AgentExecutor(Executor):
         id: str | None = None,
         context_mode: Literal["full", "last_agent", "custom"] | None = None,
         context_filter: Callable[[list[Message]], list[Message]] | None = None,
-        emit_data_events: bool = False,
+        intermediate: bool = False,
     ):
         """Initialize the executor with a unique identifier.
 
@@ -158,12 +161,13 @@ class AgentExecutor(Executor):
                    the agent run.
                 - "custom": use the provided context_filter function to determine which messages to include
                    as context for the agent run.
-            context_filter: An optional function for filtering conversation context when context_mode is set
-                to "custom".
-            emit_data_events: When True, additionally emits `data` events (via
-                `WorkflowEvent.emit`) carrying each AgentResponse / AgentResponseUpdate alongside
-                the existing `output` events. Orchestrations use this to surface intermediate
-                participants while reserving `output` events for the workflow's final answer.
+            context_filter: A function that takes the full conversation (list of Messages) as input and returns
+                a filtered list of Messages to be used as context for the agent run. This is required
+                if context_mode is set to "custom".
+            intermediate: When True, this executor is an intermediate participant in an
+                orchestration: each response is published as an observable `data` event
+                rather than as the workflow's `output` event. Standalone callers should
+                leave this False (the default), so responses surface as workflow output.
         """
         # Prefer provided id; else use agent.name if present; else generate deterministic prefix
         exec_id = id or resolve_agent_id(agent)
@@ -189,7 +193,7 @@ class AgentExecutor(Executor):
         if self._context_mode == "custom" and not self._context_filter:
             raise ValueError("context_filter must be provided when context_mode is set to 'custom'.")
 
-        self._emit_data_events = emit_data_events
+        self._intermediate = intermediate
 
     @property
     def agent(self) -> SupportsAgentRun:
@@ -377,15 +381,26 @@ class AgentExecutor(Executor):
         logger.debug("AgentExecutor %s: Resetting cache", self.id)
         self._cache.clear()
 
+    async def _publish(
+        self,
+        ctx: WorkflowContext[Any, _PayloadT],
+        payload: _PayloadT,
+    ) -> None:
+        """Route the payload to exactly one channel based on `self._intermediate`."""
+        if self._intermediate:
+            await ctx.add_event(WorkflowEvent.emit(self.id, payload))
+        else:
+            await ctx.yield_output(payload)
+
     async def _run_agent_and_emit(
         self,
         ctx: WorkflowContext[AgentExecutorResponse, AgentResponse | AgentResponseUpdate],
     ) -> None:
         """Execute the underlying agent, emit events, and enqueue response.
 
-        Checks ctx.is_streaming() to determine whether to emit output events (type='output')
-        containing incremental updates (streaming mode) or a single output event (type='output')
-        containing the complete response (non-streaming mode).
+        Checks ctx.is_streaming() to determine whether to publish per-update payloads
+        (streaming mode) or a single full-response payload (non-streaming mode). Each
+        payload is published on exactly one channel — see `_publish`.
         """
         if ctx.is_streaming():
             # Streaming mode: emit incremental updates
@@ -436,9 +451,7 @@ class AgentExecutor(Executor):
             function_invocation_kwargs=function_invocation_kwargs,
             client_kwargs=client_kwargs,
         )
-        await ctx.yield_output(response)
-        if self._emit_data_events:
-            await ctx.add_event(WorkflowEvent.emit(self.id, response))
+        await self._publish(ctx, response)
 
         # Handle any user input requests
         if response.user_input_requests:
@@ -481,9 +494,7 @@ class AgentExecutor(Executor):
         )
         async for update in stream:
             updates.append(update)
-            await ctx.yield_output(update)
-            if self._emit_data_events:
-                await ctx.add_event(WorkflowEvent.emit(self.id, update))
+            await self._publish(ctx, update)
             if update.user_input_requests:
                 streamed_user_input_requests.extend(update.user_input_requests)
 

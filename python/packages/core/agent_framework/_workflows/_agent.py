@@ -530,10 +530,11 @@ class WorkflowAgent(BaseAgent):
                 raw_representations.append(output_event)
             else:
                 # `data` events carry intermediate participant responses (e.g., orchestration
-                # agents emitting via emit_data_events). Reframe their text content as
-                # `text_reasoning` so consumers can render them like agent thinking, mirroring
-                # how reasoning-capable agents (Claude thinking, OpenAI reasoning) already
-                # surface intermediate content. `output` events pass through unchanged.
+                # agents constructed with `AgentExecutor(..., intermediate=True)`). Reframe
+                # their text content as `text_reasoning` so consumers can render them like
+                # agent thinking, mirroring how reasoning-capable agents (Claude thinking,
+                # OpenAI reasoning) already surface intermediate content. `output` events
+                # pass through unchanged.
                 as_reasoning = output_event.type == "data"
                 data = output_event.data
 
@@ -640,8 +641,9 @@ class WorkflowAgent(BaseAgent):
         data: Any = event.data
         if event.type == "output" or (event.type == "data" and isinstance(data, (AgentResponse, AgentResponseUpdate))):
             # `data` events carry intermediate participant content (e.g., orchestration agents
-            # via emit_data_events). Reframe their text content as `text_reasoning` so consumers
-            # render them as agent thinking. `output` events pass through unchanged.
+            # constructed with `AgentExecutor(..., intermediate=True)`). Reframe their text
+            # content as `text_reasoning` so consumers render them as agent thinking. `output`
+            # events pass through unchanged.
             as_reasoning = event.type == "data"
             executor_id = event.executor_id
 

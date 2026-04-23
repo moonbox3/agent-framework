@@ -344,9 +344,9 @@ class ConcurrentBuilder:
         """Resolve participant instances into Executor objects.
 
         When `intermediate_outputs=True`, every wrapped agent is constructed with
-        `emit_data_events=True` so its individual response surfaces as a `data`
-        event without polluting the single `output` event reserved for the aggregator's
-        final answer.
+        `intermediate=True` so its individual response publishes as a `data` event
+        instead of an `output` event, leaving the single `output` event reserved for
+        the aggregator's final answer.
         """
         if not self._participants:
             raise ValueError("No participants provided. Pass participants to the constructor.")
@@ -362,9 +362,9 @@ class ConcurrentBuilder:
                     not self._request_info_filter or resolve_agent_id(p) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(p, emit_data_events=self._intermediate_outputs))
+                    executors.append(AgentApprovalExecutor(p, intermediate=self._intermediate_outputs))
                 else:
-                    executors.append(AgentExecutor(p, emit_data_events=self._intermediate_outputs))
+                    executors.append(AgentExecutor(p, intermediate=self._intermediate_outputs))
             else:
                 raise TypeError(f"Participants must be SupportsAgentRun or Executor instances. Got {type(p).__name__}.")
 

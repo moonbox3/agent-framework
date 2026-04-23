@@ -1568,9 +1568,10 @@ class TestWorkflowAgentMergeUpdates:
 class _ReasoningEmittingExecutor(Executor):
     """Test executor that emits a `data` event followed by an `output` event.
 
-    Mirrors the pattern AgentExecutor(emit_data_events=True) uses: a data event surfaces
-    intermediate observation, an output event carries the workflow's terminal answer.
-    Used to validate WorkflowAgent's data → text_reasoning conversion in isolation.
+    Mirrors the orchestration pattern: an intermediate participant publishes a `data`
+    event (as `AgentExecutor(..., intermediate=True)` does), and a separate executor
+    publishes the workflow's terminal answer as an `output` event. Used to validate
+    WorkflowAgent's data → text_reasoning conversion in isolation.
     """
 
     def __init__(
@@ -1748,10 +1749,9 @@ class TestWorkflowAgentDataEventReasoningConversion:
     async def test_data_event_streaming_does_not_mutate_source_update(self) -> None:
         """Reasoning rewriting must not mutate the AgentResponseUpdate the source emitted.
 
-        AgentExecutor (and other emit_data_events publishers) hold references to the
-        update in their local `updates` list and yielded output channel. Mutating
-        `data.contents` in place would silently corrupt the AgentResponse the executor
-        finalizes from those updates.
+        AgentExecutor (and other publishers of intermediate data events) hold references
+        to the update in their local `updates` list. Mutating `data.contents` in place
+        would silently corrupt the AgentResponse the executor finalizes from those updates.
         """
         original_update = AgentResponseUpdate(
             contents=[Content.from_text(text="reason")],
@@ -1762,8 +1762,9 @@ class TestWorkflowAgentDataEventReasoningConversion:
         class _SharedUpdateExecutor(Executor):
             @handler
             async def handle(self, message: list[Message], ctx: WorkflowContext[Any, Any]) -> None:
-                # Mirror what AgentExecutor(emit_data_events=True) does: emit the same
-                # update via both data and output channels.
+                # Exercise the data → text_reasoning rewrite while keeping a reference
+                # to `original_update`. Also yield an output event so the workflow has a
+                # terminal answer for the consumer.
                 await ctx.add_event(WorkflowEvent.emit(self.id, original_update))
                 await ctx.yield_output(
                     AgentResponse(messages=[Message("assistant", [Content.from_text(text="final")])])

@@ -964,9 +964,9 @@ class GroupChatBuilder:
                     not self._request_info_filter or resolve_agent_id(participant) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(participant, emit_data_events=self._intermediate_outputs))
+                    executors.append(AgentApprovalExecutor(participant, intermediate=self._intermediate_outputs))
                 else:
-                    executors.append(AgentExecutor(participant, emit_data_events=self._intermediate_outputs))
+                    executors.append(AgentExecutor(participant, intermediate=self._intermediate_outputs))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."

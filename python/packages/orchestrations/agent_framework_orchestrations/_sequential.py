@@ -10,9 +10,10 @@ Wiring: input -> _InputToConversation -> participant1 -> ... -> participantN -> 
 
 The workflow's final `output` event is either the last agent's `AgentResponse` (when the
 terminator is an agent) or the custom executor's `list[Message]`. With
-`intermediate_outputs=True`, intermediate agents emit `data` events (via
-`AgentExecutor.emit_data_events`) so consumers can observe them separately from the
-terminal answer.
+`intermediate_outputs=True`, intermediate agents are constructed with
+`AgentExecutor(..., intermediate=True)` so they publish each response as a `data` event
+instead of an `output` event — consumers can observe intermediate participants without
+those payloads being collected as workflow outputs.
 """
 
 import logging
@@ -66,10 +67,9 @@ class _EndWithConversation(Executor):
     non-streaming, or per-chunk `AgentResponseUpdate` events streaming — become the
     workflow's outputs directly.
 
-    Intermediate participants emit observation `data` events (via
-    `AgentExecutor.emit_data_events`) when `intermediate_outputs=True`; they never
-    emit `output` events because output_executors is restricted to the terminator
-    executor (the last agent or this node).
+    Intermediate participants are constructed with `AgentExecutor(..., intermediate=True)`
+    when `intermediate_outputs=True`, so they publish each response as a `data` event
+    rather than an `output` event. They never compete with the terminator's output.
     """
 
     @handler
@@ -220,9 +220,9 @@ class SequentialBuilder:
         """Resolve participant instances into Executor objects.
 
         Wraps `SupportsAgentRun` participants as `AgentExecutor`. When `intermediate_outputs=True`,
-        every wrapped agent except the final one is constructed with `emit_data_events=True`
-        so its responses surface as workflow `data` events without polluting the single `output`
-        event reserved for the final answer.
+        every wrapped agent except the final one is constructed with `intermediate=True`
+        so its responses publish as workflow `data` events instead of `output` events,
+        leaving the single `output` event reserved for the final answer.
         """
         if not self._participants:
             raise ValueError("No participants provided. Pass participants to the constructor.")
@@ -248,7 +248,7 @@ class SequentialBuilder:
                         AgentApprovalExecutor(
                             p,
                             context_mode=context_mode,
-                            emit_data_events=emit_intermediate,
+                            intermediate=emit_intermediate,
                         )
                     )
                 else:
@@ -256,7 +256,7 @@ class SequentialBuilder:
                         AgentExecutor(
                             p,
                             context_mode=context_mode,
-                            emit_data_events=emit_intermediate,
+                            intermediate=emit_intermediate,
                         )
                     )
             else:

@@ -123,18 +123,18 @@ class AgentApprovalExecutor(WorkflowExecutor):
         agent: SupportsAgentRun,
         context_mode: Literal["full", "last_agent", "custom"] | None = None,
         *,
-        emit_data_events: bool = False,
+        intermediate: bool = False,
     ) -> None:
         """Initialize the AgentApprovalExecutor.
 
         Args:
             agent: The agent protocol to use for generating responses.
             context_mode: The mode for providing context to the agent.
-            emit_data_events: Forwarded to the inner AgentExecutor.
+            intermediate: Forwarded to the inner AgentExecutor. See ``AgentExecutor.__init__``.
         """
         self._context_mode: Literal["full", "last_agent", "custom"] | None = context_mode
         self._description = agent.description
-        self._emit_data_events = emit_data_events
+        self._intermediate = intermediate
 
         super().__init__(workflow=self._build_workflow(agent), id=resolve_agent_id(agent), propagate_request=True)
 
@@ -143,7 +143,7 @@ class AgentApprovalExecutor(WorkflowExecutor):
         agent_executor = AgentExecutor(
             agent,
             context_mode=self._context_mode,
-            emit_data_events=self._emit_data_events,
+            intermediate=self._intermediate,
         )
         request_info_executor = AgentRequestInfoExecutor(id="agent_request_info_executor")
 

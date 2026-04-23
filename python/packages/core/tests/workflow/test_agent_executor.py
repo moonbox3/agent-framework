@@ -701,10 +701,11 @@ async def test_resolve_executor_kwargs_empty_per_executor_does_not_fallback_to_g
     assert result == {}
 
 
-async def test_emit_data_events_mirrors_yield_output_non_streaming() -> None:
-    """When emit_data_events=True, AgentExecutor emits a data event with the AgentResponse."""
+async def test_intermediate_publishes_data_event_only_non_streaming() -> None:
+    """When intermediate=True, AgentExecutor publishes the response as a data event and
+    never as an output event — the two channels are mutually exclusive."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a", emit_data_events=True)
+    executor = AgentExecutor(agent, id="exec_a", intermediate=True)
     workflow = WorkflowBuilder(start_executor=executor).build()
 
     output_events: list[WorkflowEvent[Any]] = []
@@ -715,20 +716,19 @@ async def test_emit_data_events_mirrors_yield_output_non_streaming() -> None:
         elif event.type == "data":
             data_events.append(event)
 
-    # Output event still emitted (existing behavior unchanged)
-    assert len(output_events) == 1
-    assert isinstance(output_events[0].data, AgentResponse)
-    # Plus a parallel data event with the same AgentResponse payload
+    # No output event from the intermediate executor — the standalone workflow has no terminator
+    assert output_events == []
+    # Exactly one data event carrying the AgentResponse payload
     assert len(data_events) == 1
     assert data_events[0].executor_id == "exec_a"
     assert isinstance(data_events[0].data, AgentResponse)
-    assert data_events[0].data.messages[0].text == output_events[0].data.messages[0].text
 
 
-async def test_emit_data_events_mirrors_yield_output_streaming() -> None:
-    """When emit_data_events=True and streaming, data events accompany each AgentResponseUpdate."""
+async def test_intermediate_publishes_data_event_only_streaming() -> None:
+    """When intermediate=True and streaming, each AgentResponseUpdate publishes as a data
+    event and never as an output event."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a", emit_data_events=True)
+    executor = AgentExecutor(agent, id="exec_a", intermediate=True)
     workflow = WorkflowBuilder(start_executor=executor).build()
 
     output_updates: list[WorkflowEvent[Any]] = []
@@ -739,21 +739,27 @@ async def test_emit_data_events_mirrors_yield_output_streaming() -> None:
         elif event.type == "data":
             data_updates.append(event)
 
-    assert output_updates and all(isinstance(e.data, AgentResponseUpdate) for e in output_updates)
-    assert len(data_updates) == len(output_updates)
-    assert all(isinstance(e.data, AgentResponseUpdate) for e in data_updates)
+    assert output_updates == []
+    assert data_updates and all(isinstance(e.data, AgentResponseUpdate) for e in data_updates)
     assert all(e.executor_id == "exec_a" for e in data_updates)
 
 
-async def test_emit_data_events_default_false_no_data_events() -> None:
-    """When emit_data_events is not set, no extra data events are emitted (default behavior)."""
+async def test_intermediate_default_false_publishes_output_event_only() -> None:
+    """Default (intermediate=False) publishes via yield_output — the standalone path —
+    and never produces a data event for the same payload."""
     agent = _CountingAgent(id="agent_a", name="AgentA")
-    executor = AgentExecutor(agent, id="exec_a")  # default: emit_data_events=False
+    executor = AgentExecutor(agent, id="exec_a")  # default: intermediate=False
     workflow = WorkflowBuilder(start_executor=executor).build()
 
+    output_events: list[WorkflowEvent[Any]] = []
     data_events: list[WorkflowEvent[Any]] = []
     for event in await workflow.run("hello"):
-        if event.type == "data":
+        if event.type == "output":
+            output_events.append(event)
+        elif event.type == "data":
             data_events.append(event)
 
+    # Exactly one output event, no duplicate data event
+    assert len(output_events) == 1
+    assert isinstance(output_events[0].data, AgentResponse)
     assert data_events == []

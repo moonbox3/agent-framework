@@ -33,7 +33,7 @@ from azure.ai.projects.models import MCPTool as FoundryMCPTool
 from azure.core.credentials import TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 
-from ._tools import _sanitize_foundry_response_tool, fetch_toolbox
+from ._tools import _sanitize_foundry_response_tool, fetch_toolbox  # pyright: ignore[reportPrivateUsage]
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar  # type: ignore # pragma: no cover

@@ -117,7 +117,10 @@ def test_load_openai_service_settings_no_headers_still_applies_app_info() -> Non
     new_client = MagicMock()
     pre_built.with_options.return_value = new_client
 
-    with patch("agent_framework_openai._shared.APP_INFO", {"User-Agent": "test-agent"}):
+    with (
+        patch("agent_framework_openai._shared.APP_INFO", {"agent-framework-version": "python/test-version"}),
+        patch("agent_framework._telemetry.AGENT_FRAMEWORK_USER_AGENT", "agent-framework-python/test-version"),
+    ):
         _, client, _ = load_openai_service_settings(
             model="gpt-4o",
             api_key=None,
@@ -134,4 +137,6 @@ def test_load_openai_service_settings_no_headers_still_applies_app_info() -> Non
         )
 
     pre_built.with_options.assert_called_once()
+    call_kwargs = pre_built.with_options.call_args.kwargs
+    assert call_kwargs.get("default_headers", {}).get("User-Agent") == "agent-framework-python/test-version"
     assert client is new_client

@@ -180,6 +180,37 @@ def test_init_with_default_header() -> None:
         assert client.default_headers[key] == value
 
 
+def test_init_forwards_default_headers_to_openai_client() -> None:
+    """default_headers must be forwarded into get_openai_client() so the underlying
+    AsyncOpenAI client sends them on every outbound request."""
+    custom_headers = {"x-custom-header": "test-value"}
+    mock_openai_client = _make_mock_openai_client()
+    project_client = MagicMock()
+    project_client.get_openai_client.return_value = mock_openai_client
+
+    FoundryChatClient(
+        project_client=project_client,
+        model=_TEST_FOUNDRY_MODEL,
+        default_headers=custom_headers,
+    )
+
+    project_client.get_openai_client.assert_called_once_with(default_headers=custom_headers)
+
+
+def test_init_without_default_headers_passes_none_to_openai_client() -> None:
+    """When no default_headers are provided, get_openai_client() receives None."""
+    mock_openai_client = _make_mock_openai_client()
+    project_client = MagicMock()
+    project_client.get_openai_client.return_value = mock_openai_client
+
+    FoundryChatClient(
+        project_client=project_client,
+        model=_TEST_FOUNDRY_MODEL,
+    )
+
+    project_client.get_openai_client.assert_called_once_with(default_headers=None)
+
+
 def test_init_with_project_endpoint_creates_project_client() -> None:
     credential = MagicMock()
     mock_openai_client = _make_mock_openai_client()

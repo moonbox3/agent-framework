@@ -87,7 +87,8 @@ def test_load_openai_service_settings_applies_default_headers_to_prebuilt_client
     custom headers the caller passed.
     """
     pre_built = MagicMock()
-    pre_built._custom_headers = {}
+    new_client = MagicMock()
+    pre_built.with_options.return_value = new_client
 
     _, client, _ = load_openai_service_settings(
         model="gpt-4o",
@@ -104,14 +105,17 @@ def test_load_openai_service_settings_applies_default_headers_to_prebuilt_client
         env_file_encoding=None,
     )
 
-    assert client is pre_built
-    assert pre_built._custom_headers.get("x-custom-header") == "test-value"
+    pre_built.with_options.assert_called_once()
+    call_kwargs = pre_built.with_options.call_args.kwargs
+    assert call_kwargs.get("default_headers", {}).get("x-custom-header") == "test-value"
+    assert client is new_client
 
 
-def test_load_openai_service_settings_no_headers_preserves_prebuilt_client_existing_headers() -> None:
-    """When no default_headers are passed, existing custom headers on the pre-built client are preserved."""
+def test_load_openai_service_settings_no_headers_still_applies_app_info() -> None:
+    """Even with no default_headers, APP_INFO telemetry headers are applied via with_options."""
     pre_built = MagicMock()
-    pre_built._custom_headers = {"existing": "header"}
+    new_client = MagicMock()
+    pre_built.with_options.return_value = new_client
 
     _, client, _ = load_openai_service_settings(
         model="gpt-4o",
@@ -128,5 +132,5 @@ def test_load_openai_service_settings_no_headers_preserves_prebuilt_client_exist
         env_file_encoding=None,
     )
 
-    assert client is pre_built
-    assert pre_built._custom_headers.get("existing") == "header"
+    pre_built.with_options.assert_called_once()
+    assert client is new_client

@@ -80,6 +80,35 @@ def test_raw_foundry_agent_chat_client_init_uses_explicit_parameters() -> None:
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
 
 
+def test_raw_foundry_agent_chat_client_init_forwards_default_headers_to_openai_client() -> None:
+    """default_headers must be forwarded into get_openai_client() so the underlying
+    AsyncOpenAI client sends them on every outbound request."""
+    custom_headers = {"x-custom-header": "test-value"}
+    mock_project = MagicMock()
+    mock_project.get_openai_client.return_value = MagicMock()
+
+    RawFoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="test-agent",
+        default_headers=custom_headers,
+    )
+
+    mock_project.get_openai_client.assert_called_once_with(default_headers=custom_headers)
+
+
+def test_raw_foundry_agent_chat_client_init_without_default_headers_passes_none_to_openai_client() -> None:
+    """When no default_headers are provided, get_openai_client() receives None."""
+    mock_project = MagicMock()
+    mock_project.get_openai_client.return_value = MagicMock()
+
+    RawFoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="test-agent",
+    )
+
+    mock_project.get_openai_client.assert_called_once_with(default_headers=None)
+
+
 def test_raw_foundry_agent_chat_client_get_agent_reference_with_version() -> None:
     """Test agent reference includes version when provided."""
 

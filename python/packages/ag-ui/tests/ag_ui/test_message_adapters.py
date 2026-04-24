@@ -536,6 +536,77 @@ def test_agui_snapshot_format_preserves_multimodal_content():
     assert content_parts[1]["url"] == "https://example.com/image.png"
 
 
+def test_agui_snapshot_format_reads_base64_value_field():
+    """Snapshot normalization reads the spec 'value' field for base64 sources."""
+    payload = base64.b64encode(b"abc").decode("utf-8")
+    normalized = agui_messages_to_snapshot_format(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "value": payload, "mimeType": "image/png"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    binary_part = normalized[0]["content"][0]
+    assert binary_part["type"] == "binary"
+    assert binary_part["mimeType"] == "image/png"
+    assert binary_part["data"] == payload
+
+
+def test_agui_snapshot_format_base64_value_preferred_over_data():
+    """Snapshot normalization prefers 'value' when both 'value' and 'data' are set."""
+    value_payload = base64.b64encode(b"new-spec").decode("utf-8")
+    data_payload = base64.b64encode(b"legacy").decode("utf-8")
+    normalized = agui_messages_to_snapshot_format(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "value": value_payload,
+                            "data": data_payload,
+                            "mimeType": "image/png",
+                        },
+                    },
+                ],
+            }
+        ]
+    )
+
+    binary_part = normalized[0]["content"][0]
+    assert binary_part["data"] == value_payload
+
+
+def test_agui_snapshot_format_base64_data_field_backward_compat():
+    """Snapshot normalization still reads the legacy 'data' field when 'value' is absent."""
+    payload = base64.b64encode(b"legacy").decode("utf-8")
+    normalized = agui_messages_to_snapshot_format(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "data": payload, "mimeType": "image/png"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    binary_part = normalized[0]["content"][0]
+    assert binary_part["data"] == payload
+
+
 def test_agui_with_tool_calls_to_agent_framework():
     """Assistant message with tool_calls is converted to FunctionCallContent."""
     agui_msg = {

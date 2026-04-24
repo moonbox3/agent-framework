@@ -117,20 +117,21 @@ def test_load_openai_service_settings_no_headers_still_applies_app_info() -> Non
     new_client = MagicMock()
     pre_built.with_options.return_value = new_client
 
-    _, client, _ = load_openai_service_settings(
-        model="gpt-4o",
-        api_key=None,
-        credential=None,
-        org_id=None,
-        base_url=None,
-        endpoint=None,
-        api_version=None,
-        default_azure_api_version="2024-05-01-preview",
-        default_headers=None,
-        client=pre_built,
-        env_file_path=None,
-        env_file_encoding=None,
-    )
+    with patch("agent_framework_openai._shared.APP_INFO", {"User-Agent": "test-agent"}):
+        _, client, _ = load_openai_service_settings(
+            model="gpt-4o",
+            api_key=None,
+            credential=None,
+            org_id=None,
+            base_url=None,
+            endpoint=None,
+            api_version=None,
+            default_azure_api_version="2024-05-01-preview",
+            default_headers=None,
+            client=pre_built,
+            env_file_path=None,
+            env_file_encoding=None,
+        )
 
     pre_built.with_options.assert_called_once()
     assert client is new_client

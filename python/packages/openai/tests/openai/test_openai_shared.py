@@ -82,9 +82,9 @@ async def test_ensure_async_token_provider_wraps_async_provider() -> None:
 def test_load_openai_service_settings_applies_default_headers_to_prebuilt_client() -> None:
     """When a pre-built client is provided, default_headers must be applied to it.
 
-    Regression for #5416: load_openai_service_settings used to early-return the
-    pre-built client without applying merged_headers, silently dropping any
-    custom headers the caller passed.
+    load_openai_service_settings used to early-return the pre-built client
+    without applying merged_headers, silently dropping any custom headers the
+    caller passed.
     """
     pre_built = MagicMock()
     new_client = MagicMock()

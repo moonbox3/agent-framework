@@ -206,7 +206,9 @@ class RawFoundryChatClient(  # type: ignore[misc]
 
         super().__init__(
             model=resolved_model,
-            async_client=project_client.get_openai_client(),
+            async_client=project_client.get_openai_client(
+                default_headers=dict(default_headers) if default_headers else None,
+            ),
             default_headers=default_headers,
             instruction_role=instruction_role,
             compaction_strategy=compaction_strategy,

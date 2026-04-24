@@ -198,7 +198,9 @@ class RawFoundryAgentChatClient(  # type: ignore[misc]
             self._should_close_client = True
 
         # Get OpenAI client from project
-        async_client = self.project_client.get_openai_client()
+        async_client = self.project_client.get_openai_client(
+            default_headers=dict(default_headers) if default_headers else None,
+        )
 
         super().__init__(
             async_client=async_client,

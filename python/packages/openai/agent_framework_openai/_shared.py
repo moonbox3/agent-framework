@@ -199,6 +199,8 @@ def load_openai_service_settings(
         if resolved_model := _resolve_named_setting(openai_settings, openai_model_fields):
             openai_settings["model"] = resolved_model
         if client:
+            if merged_headers:
+                client._custom_headers.update(merged_headers)
             return openai_settings, client, False  # type: ignore[return-value]
         if openai_settings.get("api_key") is not None or api_key_callable is not None:
             resolved_model = _resolve_named_setting(openai_settings, openai_model_fields)
@@ -260,6 +262,8 @@ def load_openai_service_settings(
             f"or the {deployment_env_guidance} environment variable."
         )
     if client:
+        if merged_headers:
+            client._custom_headers.update(merged_headers)
         return azure_settings, client, True  # type: ignore[return-value]
     client_args["default_headers"] = merged_headers
     if endpoint := azure_settings.get("endpoint"):

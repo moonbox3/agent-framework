@@ -12,6 +12,7 @@ from agent_framework_openai._shared import (
     AZURE_OPENAI_TOKEN_SCOPE,
     _ensure_async_token_provider,
     _resolve_azure_credential_to_token_provider,
+    load_openai_service_settings,
 )
 
 
@@ -76,3 +77,56 @@ async def test_ensure_async_token_provider_wraps_async_provider() -> None:
     result = await wrapper()
 
     assert result == "async-token"
+
+
+def test_load_openai_service_settings_applies_default_headers_to_prebuilt_client() -> None:
+    """When a pre-built client is provided, default_headers must be applied to it.
+
+    Regression for #5416: load_openai_service_settings used to early-return the
+    pre-built client without applying merged_headers, silently dropping any
+    custom headers the caller passed.
+    """
+    pre_built = MagicMock()
+    pre_built._custom_headers = {}
+
+    _, client, _ = load_openai_service_settings(
+        model="gpt-4o",
+        api_key=None,
+        credential=None,
+        org_id=None,
+        base_url=None,
+        endpoint=None,
+        api_version=None,
+        default_azure_api_version="2024-05-01-preview",
+        default_headers={"x-custom-header": "test-value"},
+        client=pre_built,
+        env_file_path=None,
+        env_file_encoding=None,
+    )
+
+    assert client is pre_built
+    assert pre_built._custom_headers.get("x-custom-header") == "test-value"
+
+
+def test_load_openai_service_settings_no_headers_preserves_prebuilt_client_existing_headers() -> None:
+    """When no default_headers are passed, existing custom headers on the pre-built client are preserved."""
+    pre_built = MagicMock()
+    pre_built._custom_headers = {"existing": "header"}
+
+    _, client, _ = load_openai_service_settings(
+        model="gpt-4o",
+        api_key=None,
+        credential=None,
+        org_id=None,
+        base_url=None,
+        endpoint=None,
+        api_version=None,
+        default_azure_api_version="2024-05-01-preview",
+        default_headers=None,
+        client=pre_built,
+        env_file_path=None,
+        env_file_encoding=None,
+    )
+
+    assert client is pre_built
+    assert pre_built._custom_headers.get("existing") == "header"

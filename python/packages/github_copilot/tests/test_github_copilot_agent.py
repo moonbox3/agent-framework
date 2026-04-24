@@ -207,9 +207,7 @@ class TestGitHubCopilotAgentInit:
 
     def test_default_options_returns_independent_copy(self) -> None:
         """Test that mutating the returned dict does not affect internal state."""
-        agent: GitHubCopilotAgent[GitHubCopilotOptions] = GitHubCopilotAgent(
-            default_options={"model": "gpt-5.1-mini"}
-        )
+        agent: GitHubCopilotAgent[GitHubCopilotOptions] = GitHubCopilotAgent(default_options={"model": "gpt-5.1-mini"})
         opts = agent.default_options
         opts["model"] = "mutated"
         assert agent._settings.get("model") == "gpt-5.1-mini"

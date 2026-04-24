@@ -14,13 +14,16 @@ import pytest
 
 from agent_framework import (
     AgentResponseUpdate,
+    ExperimentalFeature,
     FunctionalWorkflow,
+    FunctionalWorkflowAgent,
     InMemoryCheckpointStorage,
     RunContext,
     StepWrapper,
     WorkflowEvent,
     WorkflowRunResult,
     WorkflowRunState,
+    get_run_context,
     step,
     workflow,
 )
@@ -1156,6 +1159,22 @@ class TestRequestInfoInStep:
         result = await needs_ctx("data", ctx)
         assert result == "data:hello"
 
+    async def test_step_injects_ctx_before_user_positional_parameters(self):
+        """RunContext injection should not conflict when ctx is the first step parameter."""
+
+        @step
+        async def needs_ctx_first(ctx: RunContext, data: str) -> str:
+            ctx.set_state("seen", data)
+            return f"{data}:{ctx.get_state('seen')}"
+
+        @workflow
+        async def wf(data: str) -> str:
+            return await needs_ctx_first(data)
+
+        result = await wf.run("draft")
+
+        assert result.get_outputs() == ["draft:draft"]
+
     async def test_get_run_context_inside_workflow(self):
         """get_run_context() returns the active RunContext inside a workflow."""
         from agent_framework import get_run_context
@@ -1398,6 +1417,39 @@ class TestDeterministicAutoRequestId:
         r3 = await wf.run(responses={rid1: "A", rid2: "B"})
         assert r3.get_outputs() == ["A/B"]
 
+    async def test_cached_step_advances_auto_request_id_counter(self):
+        call_count = 0
+
+        @step
+        async def first_review(value: int, ctx: RunContext) -> str:
+            nonlocal call_count
+            call_count += 1
+            return await ctx.request_info({"step": "first", "value": value}, response_type=str)
+
+        @step
+        async def second_review(value: int, ctx: RunContext) -> str:
+            return await ctx.request_info({"step": "second", "value": value}, response_type=str)
+
+        @workflow
+        async def wf(value: int) -> str:
+            first = await first_review(value)
+            second = await second_review(value)
+            return f"{first}/{second}"
+
+        first_run = await wf.run(1)
+        first_request_id = first_run.get_request_info_events()[0].request_id
+        assert first_request_id == "auto::0"
+
+        second_run = await wf.run(responses={first_request_id: "A"})
+        second_request_id = second_run.get_request_info_events()[0].request_id
+        assert second_request_id == "auto::1"
+        completed_call_count = call_count
+
+        final_run = await wf.run(responses={first_request_id: "A", second_request_id: "B"})
+
+        assert call_count == completed_call_count
+        assert final_run.get_outputs() == ["A/B"]
+
 
 class TestPendingRequestsPruned:
     """Regression for bug_007: resolved requests must be pruned from _pending_requests."""
@@ -1618,3 +1670,24 @@ class TestRunDocstringAllowsResponsesAndCheckpoint:
         doc = FunctionalWorkflow.run.__doc__ or ""
         assert "At least one" in doc or "at least one" in doc
         assert "Exactly one" not in doc
+
+
+class TestFunctionalWorkflowExperimentalStage:
+    """Tests for the experimental stage annotations applied to functional workflow APIs."""
+
+    def test_public_symbols_are_marked_experimental(self) -> None:
+        symbols = [
+            get_run_context,
+            RunContext,
+            StepWrapper,
+            step,
+            FunctionalWorkflow,
+            workflow,
+            FunctionalWorkflowAgent,
+        ]
+
+        for symbol in symbols:
+            assert symbol.__feature_stage__ == "experimental"
+            assert symbol.__feature_id__ == ExperimentalFeature.FUNCTIONAL_WORKFLOWS.value
+            assert symbol.__doc__ is not None
+            assert ".. warning:: Experimental" in symbol.__doc__

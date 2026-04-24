@@ -46,6 +46,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from typing import Any, Generic, Literal, TypeVar, overload
 
+from .._feature_stage import ExperimentalFeature, experimental
 from .._types import AgentResponse, AgentResponseUpdate, ResponseStream
 from ..observability import OtelAttr, capture_exception, create_workflow_span
 from ._checkpoint import CheckpointStorage, WorkflowCheckpoint
@@ -66,6 +67,7 @@ R = TypeVar("R")
 _active_run_ctx: ContextVar[RunContext | None] = ContextVar("_active_run_ctx", default=None)
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 def get_run_context() -> RunContext | None:
     """Return the active :class:`RunContext`, or ``None`` if not inside a ``@workflow``.
 
@@ -101,13 +103,9 @@ class WorkflowInterrupted(BaseException):
 # ---------------------------------------------------------------------------
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 class RunContext:
     """Opt-in handle for workflow-only features inside a ``@workflow`` function.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     Use ``RunContext`` when a workflow function needs one of the following,
     otherwise omit it entirely for a cleaner signature:
@@ -169,6 +167,8 @@ class RunContext:
 
         # Step result cache: (step_name, call_index) -> result
         self._step_cache: dict[tuple[str, int], Any] = {}
+        # Cached step metadata used to keep auto-generated request_info IDs in sync on bypass.
+        self._step_cache_auto_request_info_counts: dict[tuple[str, int], int] = {}
         # Per-step call counters for deterministic cache keys
         self._step_call_counters: dict[str, int] = {}
         # Deterministic call counter for auto-generated request_info IDs
@@ -328,6 +328,12 @@ class RunContext:
     def _set_cached_result(self, key: tuple[str, int], value: Any) -> None:
         self._step_cache[key] = value
 
+    def _set_cached_step_auto_request_info_count(self, key: tuple[str, int], count: int) -> None:
+        self._step_cache_auto_request_info_counts[key] = count
+
+    def _advance_auto_request_info_index_for_cached_step(self, key: tuple[str, int]) -> None:
+        self._auto_request_info_index += self._step_cache_auto_request_info_counts.get(key, 0)
+
     def _set_responses(self, responses: dict[str, Any]) -> None:
         for rid, value in responses.items():
             if value is None:
@@ -363,6 +369,10 @@ class RunContext:
         """
         return {f"{name}::{idx}": val for (name, idx), val in self._step_cache.items()}
 
+    def _export_step_cache_auto_request_info_counts(self) -> dict[str, int]:
+        """Serialize per-step auto request_info counts for checkpointing."""
+        return {f"{name}::{idx}": count for (name, idx), count in self._step_cache_auto_request_info_counts.items()}
+
     def _import_step_cache(self, data: dict[str, Any]) -> None:
         """Restore step cache from checkpoint data."""
         self._step_cache = {}
@@ -377,19 +387,29 @@ class RunContext:
                     f"Original error: {exc}"
                 ) from exc
 
+    def _import_step_cache_auto_request_info_counts(self, data: dict[str, Any]) -> None:
+        """Restore per-step auto request_info counts from checkpoint data."""
+        self._step_cache_auto_request_info_counts = {}
+        for k, v in data.items():
+            try:
+                name, idx_str = k.rsplit("::", 1)
+                self._step_cache_auto_request_info_counts[name, int(idx_str)] = int(v)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"Corrupted step cache request_info metadata in checkpoint: key={k!r}, value={v!r}. "
+                    f"The checkpoint may be from an incompatible version or corrupted. "
+                    f"Original error: {exc}"
+                ) from exc
+
 
 # ---------------------------------------------------------------------------
 # StepWrapper
 # ---------------------------------------------------------------------------
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 class StepWrapper(Generic[R]):
     """Wrapper returned by the ``@step`` decorator.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     When called inside a running ``@workflow`` function, the wrapper
     intercepts execution to provide:
@@ -426,6 +446,7 @@ class StepWrapper(Generic[R]):
             )
         self._func = func
         self.name: str = name or func.__name__
+        self._signature = inspect.signature(func)
         functools.update_wrapper(self, func)
 
         # Detect RunContext parameter for auto-injection inside workflows
@@ -434,11 +455,52 @@ class StepWrapper(Generic[R]):
             hints = typing.get_type_hints(func)
         except Exception:
             hints = {}
-        for param_name, param in inspect.signature(func).parameters.items():
+        for param_name, param in self._signature.parameters.items():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                continue
             resolved = hints.get(param_name, param.annotation)
             if resolved is RunContext or param_name == "ctx":
                 self._ctx_param_name = param_name
                 break
+
+    def _build_call_args_with_ctx(
+        self,
+        ctx: RunContext,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Inject RunContext without consuming a user positional argument."""
+        if self._ctx_param_name is None or self._ctx_param_name in kwargs:
+            return args, dict(kwargs)
+
+        call_args: list[Any] = []
+        call_kwargs = dict(kwargs)
+        arg_index = 0
+
+        for param in self._signature.parameters.values():
+            if param.name == self._ctx_param_name:
+                if param.kind == inspect.Parameter.KEYWORD_ONLY:
+                    call_kwargs[param.name] = ctx
+                else:
+                    call_args.append(ctx)
+                continue
+
+            if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                if arg_index < len(args):
+                    call_args.append(args[arg_index])
+                    arg_index += 1
+            elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+                call_args.extend(args[arg_index:])
+                arg_index = len(args)
+
+        if arg_index < len(args):
+            call_args.extend(args[arg_index:])
+
+        return tuple(call_args), call_kwargs
 
     async def __call__(self, *args: Any, **kwargs: Any) -> R:
         ctx = _active_run_ctx.get()
@@ -449,15 +511,14 @@ class StepWrapper(Generic[R]):
         cache_key = ctx._get_step_cache_key(self.name)
         found, cached = ctx._get_cached_result(cache_key)
         if found:
+            ctx._advance_auto_request_info_index_for_cached_step(cache_key)
             # Dedicated bypass event so consumers can tell cache-hit replays
             # apart from fresh executions.
             await ctx.add_event(WorkflowEvent.executor_bypassed(self.name, cached))
             return cached  # type: ignore[return-value, no-any-return]
 
         # Inject RunContext if the step function declares it
-        call_kwargs = dict(kwargs)
-        if self._ctx_param_name is not None and self._ctx_param_name not in call_kwargs:
-            call_kwargs[self._ctx_param_name] = ctx
+        call_args, call_kwargs = self._build_call_args_with_ctx(ctx, args, kwargs)
 
         # Defensive deepcopy for the event log only; fall back to the live
         # reference so non-deepcopyable args (locks, sockets) don't fail.
@@ -469,8 +530,9 @@ class StepWrapper(Generic[R]):
         else:
             invocation_data = None
         await ctx.add_event(WorkflowEvent.executor_invoked(self.name, invocation_data))
+        auto_request_info_index_before = ctx._auto_request_info_index
         try:
-            result = await self._func(*args, **call_kwargs)
+            result = await self._func(*call_args, **call_kwargs)
         except Exception as exc:
             # NOTE: WorkflowInterrupted (from request_info inside a step) inherits
             # from BaseException, NOT Exception, so it propagates past this handler
@@ -478,6 +540,10 @@ class StepWrapper(Generic[R]):
             # — request_info is fully supported inside @step functions.
             await ctx.add_event(WorkflowEvent.executor_failed(self.name, WorkflowErrorDetails.from_exception(exc)))
             raise
+        ctx._set_cached_step_auto_request_info_count(
+            cache_key,
+            ctx._auto_request_info_index - auto_request_info_index_before,
+        )
         ctx._set_cached_result(cache_key, result)
         await ctx.add_event(WorkflowEvent.executor_completed(self.name, result))
         if ctx._on_step_completed is not None:
@@ -498,17 +564,13 @@ def step(func: Callable[..., Awaitable[R]]) -> StepWrapper[R]: ...
 def step(*, name: str | None = None) -> Callable[[Callable[..., Awaitable[R]]], StepWrapper[R]]: ...
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 def step(
     func: Callable[..., Awaitable[Any]] | None = None,
     *,
     name: str | None = None,
 ) -> StepWrapper[Any] | Callable[[Callable[..., Awaitable[Any]]], StepWrapper[Any]]:
     """Decorator that marks an async function as a tracked workflow step.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     Supports both bare ``@step`` and parameterized ``@step(name="custom")``
     forms.  Inside a running ``@workflow`` function, calls to a step are
@@ -570,13 +632,9 @@ def step(
 # ---------------------------------------------------------------------------
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 class FunctionalWorkflow:
     """A workflow backed by a user-defined async function.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     Created by the :func:`workflow` decorator.  Exposes the same ``run()``
     interface as graph-based :class:`Workflow` objects, returning a
@@ -626,6 +684,7 @@ class FunctionalWorkflow:
         # calls can't silently replay with stale data from a prior run.
         self._last_message: Any = None
         self._last_step_cache: dict[tuple[str, int], Any] = {}
+        self._last_step_cache_auto_request_info_counts: dict[tuple[str, int], int] = {}
         self._last_pending_request_ids: set[str] = set()
 
         # Signature arity is validated once at decoration time.
@@ -868,6 +927,8 @@ class FunctionalWorkflow:
             # Restore step cache
             step_cache_data = checkpoint.state.get("_step_cache", {})
             ctx._import_step_cache(step_cache_data)
+            step_cache_auto_request_info_counts = checkpoint.state.get("_step_cache_auto_request_info_counts", {})
+            ctx._import_step_cache_auto_request_info_counts(step_cache_auto_request_info_counts)
             # Restore user state
             ctx._state = {k: v for k, v in checkpoint.state.items() if not k.startswith("_")}
             # Restore pending request info events
@@ -881,6 +942,7 @@ class FunctionalWorkflow:
             if message is None:
                 message = self._last_message
             ctx._step_cache = dict(self._last_step_cache)
+            ctx._step_cache_auto_request_info_counts = dict(self._last_step_cache_auto_request_info_counts)
 
         # Store message for future replays
         if message is not None:
@@ -924,6 +986,7 @@ class FunctionalWorkflow:
 
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
+                self._last_step_cache_auto_request_info_counts = dict(ctx._step_cache_auto_request_info_counts)
 
                 # Yield collected events.
                 # NOTE: Events are buffered during _execute() and yielded after
@@ -952,6 +1015,7 @@ class FunctionalWorkflow:
                     # Clean completion — drop cross-run replay state.
                     self._last_message = None
                     self._last_step_cache = {}
+                    self._last_step_cache_auto_request_info_counts = {}
                     self._last_pending_request_ids = set()
                     with _framework_event_origin():
                         yield WorkflowEvent.status(WorkflowRunState.IDLE)
@@ -961,6 +1025,7 @@ class FunctionalWorkflow:
             except WorkflowInterrupted:
                 # Persist step cache for response-only replay
                 self._last_step_cache = dict(ctx._step_cache)
+                self._last_step_cache_auto_request_info_counts = dict(ctx._step_cache_auto_request_info_counts)
                 self._last_pending_request_ids = set(ctx._pending_requests)
 
                 # HITL interruption — yield events collected so far
@@ -1062,6 +1127,7 @@ class FunctionalWorkflow:
     ) -> str:
         state = dict(ctx._state)
         state["_step_cache"] = ctx._export_step_cache()
+        state["_step_cache_auto_request_info_counts"] = ctx._export_step_cache_auto_request_info_counts()
         state["_original_message"] = self._last_message
 
         checkpoint = WorkflowCheckpoint(
@@ -1184,6 +1250,7 @@ def workflow(
 ) -> Callable[[Callable[..., Awaitable[Any]]], FunctionalWorkflow]: ...
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 def workflow(
     func: Callable[..., Awaitable[Any]] | None = None,
     *,
@@ -1192,11 +1259,6 @@ def workflow(
     checkpoint_storage: CheckpointStorage | None = None,
 ) -> FunctionalWorkflow | Callable[[Callable[..., Awaitable[Any]]], FunctionalWorkflow]:
     """Decorator that converts an async function into a :class:`FunctionalWorkflow`.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     Supports both bare ``@workflow`` and parameterized
     ``@workflow(name="my_wf")`` forms.
@@ -1246,13 +1308,9 @@ def workflow(
 # ---------------------------------------------------------------------------
 
 
+@experimental(feature_id=ExperimentalFeature.FUNCTIONAL_WORKFLOWS)
 class FunctionalWorkflowAgent:
     """Agent adapter for a :class:`FunctionalWorkflow`.
-
-    .. warning:: Experimental
-
-        This API is experimental and subject to change or removal
-        in future versions without notice.
 
     Provides a ``run()`` method with the same overloaded signature as
     :class:`BaseAgent` — returning an :class:`AgentResponse` (non-streaming)

@@ -6,17 +6,21 @@ Read more about Foundry Hosted Agents [here](https://learn.microsoft.com/en-us/a
 
 ## Environment setup
 
-1. Navigate to the sample directory you want to run. For example:
+1. Navigate to the sample directory you want to run. For example, create and activate a virtual environment using [uv](https://docs.astral.sh/uv/) (recommended):
 
    ```bash
-   python -m venv .venv
+   uv venv .venv
+   ```
 
+   ```bash
    # Windows
    .venv\Scripts\Activate
 
    # macOS/Linux
    source .venv/bin/activate
    ```
+
+   > **Note:** `python -m venv .venv` also works, but can hang indefinitely on Windows with Microsoft Store Python due to a known `ensurepip` issue. Use `uv venv .venv` to avoid this.
 
 2. Install dependencies:
 

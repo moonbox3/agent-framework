@@ -197,3 +197,60 @@ jobs:
             --repo "$ISSUE_REPO" \
             --issue-number "$ISSUE_NUMBER" \
             --github-username "$GITHUB_ACTOR"
+
+      # Push triage snapshot bundles (REPRODUCTION_REPORT.md, generated.patch,
+      # metadata.json, logs.txt) to a private archive branch in DevFlow so the
+      # agent's generated code survives runner teardown. Runs whether the repro
+      # step succeeded or failed, as long as the spam gate let us through.
+      - name: Archive triage artifacts to DevFlow
+        if: ${{ always() && steps.spam.outputs.decision == 'allow' }}
+        shell: bash
+        env:
+          DEVFLOW_TOKEN: ${{ secrets.DEVFLOW_TOKEN }}
+          DEVFLOW_REPO: ${{ env.DEVFLOW_REPOSITORY }}
+          ARCHIVE_BRANCH: triage-archive
+          ISSUE_NUMBER: ${{ needs.team_check.outputs.issue_number }}
+          ISSUE_REPO: ${{ needs.team_check.outputs.repo }}
+          ARTIFACT_ROOT: ${{ runner.temp }}/triage-artifacts
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEVFLOW_TOKEN:-}" ]; then
+            echo "DEVFLOW_TOKEN is not set; skipping artifact archive."
+            exit 0
+          fi
+          if [ ! -d "$ARTIFACT_ROOT" ] || [ -z "$(ls -A "$ARTIFACT_ROOT" 2>/dev/null)" ]; then
+            echo "No triage artifacts to archive at ${ARTIFACT_ROOT}."
+            exit 0
+          fi
+
+          work=$(mktemp -d)
+          git -C "$work" init -q -b "$ARCHIVE_BRANCH"
+          git -C "$work" config user.email "triage-bot@users.noreply.github.com"
+          git -C "$work" config user.name  "agent-framework triage bot"
+
+          remote="https://x-access-token:${DEVFLOW_TOKEN}@github.com/${DEVFLOW_REPO}.git"
+          if git -C "$work" fetch --depth=1 "$remote" "$ARCHIVE_BRANCH" 2>/dev/null; then
+            git -C "$work" reset --hard FETCH_HEAD
+          fi
+
+          last_uid=""
+          for run_dir in "$ARTIFACT_ROOT"/*/; do
+            uid=$(basename "$run_dir")
+            dest="$work/triage-runs/${ISSUE_NUMBER}/${uid}"
+            mkdir -p "$dest"
+            cp -R "$run_dir". "$dest"/
+            last_uid="$uid"
+          done
+
+          git -C "$work" add -A
+          if git -C "$work" diff --cached --quiet; then
+            echo "Snapshot bundle was empty; nothing to push."
+            exit 0
+          fi
+          git -C "$work" commit -q -m "triage: ${ISSUE_REPO}#${ISSUE_NUMBER} run ${GITHUB_RUN_ID}"
+          git -C "$work" push "$remote" "HEAD:${ARCHIVE_BRANCH}"
+
+          if [ -n "$last_uid" ]; then
+            echo "Triage artifacts: https://github.com/${DEVFLOW_REPO}/tree/${ARCHIVE_BRANCH}/triage-runs/${ISSUE_NUMBER}/${last_uid}"
+          fi

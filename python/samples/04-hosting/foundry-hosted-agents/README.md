@@ -13,8 +13,11 @@ Read more about Foundry Hosted Agents [here](https://learn.microsoft.com/en-us/a
    ```
 
    ```bash
-   # Windows
-   .venv\Scripts\Activate
+   # Windows (PowerShell)
+   .venv\Scripts\Activate.ps1
+
+   # Windows (Command Prompt)
+   .venv\Scripts\activate.bat
 
    # macOS/Linux
    source .venv/bin/activate

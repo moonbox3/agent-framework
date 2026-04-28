@@ -14,6 +14,7 @@ from typing import Any, ClassVar, TypeVar, cast
 
 from agent_framework import (
     AgentResponse,
+    AgentResponseUpdate,
     AgentSession,
     Message,
     SupportsAgentRun,
@@ -1057,7 +1058,9 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         if self._magentic_context is None:
             raise RuntimeError("Context not initialized")
         # Check limits first
-        within_limits = await self._check_within_limits_or_complete(cast(WorkflowContext[Never, AgentResponse], ctx))
+        within_limits = await self._check_within_limits_or_complete(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        )
         if not within_limits:
             return
 
@@ -1092,7 +1095,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         # Check for task completion
         if self._progress_ledger.is_request_satisfied.answer:
             logger.info("Magentic Orchestrator: Task completed")
-            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse], ctx))
+            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx))
             return
 
         # Check for stalling or looping
@@ -1116,7 +1119,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
 
         if next_speaker not in self._participant_registry.participants:
             logger.warning(f"Invalid next speaker: {next_speaker}")
-            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse], ctx))
+            await self._prepare_final_answer(cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx))
             return
 
         # Add instruction to conversation (assistant guidance)
@@ -1192,23 +1195,28 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
         # Start inner loop
         await self._run_inner_loop(ctx)
 
-    async def _prepare_final_answer(self, ctx: WorkflowContext[Never, AgentResponse]) -> None:
-        """Yield the manager's synthesized final answer as the workflow's `AgentResponse`."""
+    async def _prepare_final_answer(self, ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate]) -> None:
+        """Yield the manager's synthesized final answer.
+
+        Mode-aware: streaming -> ``AgentResponseUpdate``, non-streaming → ``AgentResponse``.
+        See ``BaseGroupChatOrchestrator._yield_completion``.
+        """
         if self._magentic_context is None:
             raise RuntimeError("Context not initialized")
 
         logger.info("Magentic Orchestrator: Preparing final answer")
         final_answer = await self._manager.prepare_final_answer(self._magentic_context.clone(deep=True))
 
-        await ctx.yield_output(AgentResponse(messages=[final_answer]))
+        await self._yield_completion(ctx, final_answer)
 
         self._terminated = True
 
-    async def _check_within_limits_or_complete(self, ctx: WorkflowContext[Never, AgentResponse]) -> bool:
+    async def _check_within_limits_or_complete(
+        self, ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate]
+    ) -> bool:
         """Check if orchestrator is within operational limits.
 
-        If limits are exceeded, yield a termination AgentResponse and mark the workflow
-        as terminated.
+        If limits are exceeded, yield a termination message and mark the workflow as terminated.
 
         Args:
             ctx: The workflow context.
@@ -1234,7 +1242,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
                 contents=[f"Workflow terminated due to reaching maximum {limit_type} count."],
                 author_name=MAGENTIC_MANAGER_NAME,
             )
-            await ctx.yield_output(AgentResponse(messages=[termination_message]))
+            await self._yield_completion(ctx, termination_message)
             self._terminated = True
 
             return False

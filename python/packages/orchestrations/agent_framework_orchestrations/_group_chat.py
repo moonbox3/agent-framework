@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
-from agent_framework import Agent, AgentResponse, AgentSession, Message, SupportsAgentRun
+from agent_framework import Agent, AgentResponse, AgentResponseUpdate, AgentSession, Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._checkpoint import CheckpointStorage
@@ -522,9 +522,9 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
     async def _check_agent_terminate_and_yield(
         self,
         agent_orchestration_output: AgentOrchestrationOutput,
-        ctx: WorkflowContext[Never, AgentResponse],
+        ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate],
     ) -> bool:
-        """Yield the orchestrator's completion `AgentResponse` if termination was requested.
+        """Yield the orchestrator's completion if termination was requested.
 
         Args:
             agent_orchestration_output: Output from the orchestrator agent
@@ -538,7 +538,7 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
             )
             completion_message = self._create_completion_message(final_message)
             self._append_messages([completion_message])
-            await ctx.yield_output(AgentResponse(messages=[completion_message]))
+            await self._yield_completion(ctx, completion_message)
             return True
 
         return False

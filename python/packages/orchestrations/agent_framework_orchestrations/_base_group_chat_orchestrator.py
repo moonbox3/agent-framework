@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeAlias
 
-from agent_framework._types import AgentResponse, Message
+from agent_framework._types import AgentResponse, AgentResponseUpdate, Message
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
 from agent_framework._workflows._events import WorkflowEvent
 from agent_framework._workflows._executor import Executor, handler
@@ -351,7 +351,9 @@ class BaseGroupChatOrchestrator(Executor, ABC):
             result = await result
         return result
 
-    async def _check_terminate_and_yield(self, ctx: WorkflowContext[Never, AgentResponse]) -> bool:
+    async def _check_terminate_and_yield(
+        self, ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate]
+    ) -> bool:
         """Check termination conditions and yield the completion message if met.
 
         Args:
@@ -364,10 +366,34 @@ class BaseGroupChatOrchestrator(Executor, ABC):
         if terminate:
             completion_message = self._create_completion_message(self.TERMINATION_CONDITION_MET_MESSAGE)
             self._append_messages([completion_message])
-            await ctx.yield_output(AgentResponse(messages=[completion_message]))
+            await self._yield_completion(ctx, completion_message)
             return True
 
         return False
+
+    async def _yield_completion(
+        self,
+        ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate],
+        completion_message: Message,
+    ) -> None:
+        """Yield a synthesized terminal completion message in the right shape for the run mode.
+
+        Mode-aware to mirror ``AgentExecutor`` semantics:
+        - Streaming (``ctx.is_streaming()``): yield a single ``AgentResponseUpdate`` so the
+          ``output`` event stream stays uniformly per-chunk.
+        - Non-streaming: yield the full ``AgentResponse``.
+        """
+        if ctx.is_streaming():
+            await ctx.yield_output(
+                AgentResponseUpdate(
+                    contents=list(completion_message.contents),
+                    role=completion_message.role,
+                    author_name=completion_message.author_name,
+                    message_id=completion_message.message_id,
+                )
+            )
+        else:
+            await ctx.yield_output(AgentResponse(messages=[completion_message]))
 
     def _create_completion_message(self, message: str) -> Message:
         """Create a standardized completion message.
@@ -491,7 +517,9 @@ class BaseGroupChatOrchestrator(Executor, ABC):
 
         return False
 
-    async def _check_round_limit_and_yield(self, ctx: WorkflowContext[Never, AgentResponse]) -> bool:
+    async def _check_round_limit_and_yield(
+        self, ctx: WorkflowContext[Never, AgentResponse | AgentResponseUpdate]
+    ) -> bool:
         """Check round limit and yield the max-rounds completion message if reached.
 
         Args:
@@ -504,7 +532,7 @@ class BaseGroupChatOrchestrator(Executor, ABC):
         if reach_max_rounds:
             completion_message = self._create_completion_message(self.MAX_ROUNDS_MET_MESSAGE)
             self._append_messages([completion_message])
-            await ctx.yield_output(AgentResponse(messages=[completion_message]))
+            await self._yield_completion(ctx, completion_message)
             return True
 
         return False

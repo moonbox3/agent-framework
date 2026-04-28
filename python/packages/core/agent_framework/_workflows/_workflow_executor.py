@@ -361,7 +361,7 @@ class WorkflowExecutor(Executor):
         return any(is_instance_of(message.data, input_type) for input_type in self.workflow.input_types)
 
     @handler
-    async def process_workflow(self, input_data: object, ctx: WorkflowContext[Any]) -> None:
+    async def process_workflow(self, input_data: object, ctx: WorkflowContext[Any, Any]) -> None:
         """Execute the sub-workflow with raw input data.
 
         This handler starts a new sub-workflow execution. When the sub-workflow
@@ -428,7 +428,7 @@ class WorkflowExecutor(Executor):
     async def handle_message_wrapped_request_response(
         self,
         response: SubWorkflowResponseMessage,
-        ctx: WorkflowContext[Any],
+        ctx: WorkflowContext[Any, Any],
     ) -> None:
         """Handle response from parent for a forwarded request.
 
@@ -565,13 +565,6 @@ class WorkflowExecutor(Executor):
             await asyncio.gather(*[ctx.yield_output(output) for output in outputs])
         else:
             await asyncio.gather(*[ctx.send_message(output) for output in outputs])
-
-        # Forward data events from the sub-workflow so that intermediate
-        # observations (e.g. AgentExecutor with intermediate=True) are
-        # visible in the parent workflow's event stream.
-        data_events = [event for event in result if isinstance(event, WorkflowEvent) and event.type == "data"]
-        for data_event in data_events:
-            await ctx.add_event(WorkflowEvent.emit(data_event.executor_id or "", data_event.data))
 
         # Process request info events
         for event in request_info_events:

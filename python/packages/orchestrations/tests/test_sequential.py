@@ -22,6 +22,7 @@ from agent_framework import (
 )
 from agent_framework._workflows._checkpoint import InMemoryCheckpointStorage
 from agent_framework.orchestrations import SequentialBuilder
+from typing_extensions import Never
 
 
 class _EchoAgent(BaseAgent):
@@ -67,16 +68,20 @@ class _EchoAgent(BaseAgent):
         return _run()
 
 
-class _SummarizerExec(Executor):
-    """Custom executor that summarizes by appending a short assistant message."""
+class _SummarizerTerminator(Executor):
+    """Custom-executor terminator that yields a synthesized summary as the workflow's final answer."""
 
     @handler
-    async def summarize(self, agent_response: AgentExecutorResponse, ctx: WorkflowContext[list[Message]]) -> None:
+    async def summarize(
+        self,
+        agent_response: AgentExecutorResponse,
+        ctx: WorkflowContext[Never, AgentResponse],
+    ) -> None:
         conversation = agent_response.full_conversation or []
         user_texts = [m.text for m in conversation if m.role == "user"]
         agents = [m.author_name or m.role for m in conversation if m.role == "assistant"]
         summary = Message("assistant", [f"Summary of users:{len(user_texts)} agents:{len(agents)}"])
-        await ctx.send_message(list(conversation) + [summary])
+        await ctx.yield_output(AgentResponse(messages=[summary]))
 
 
 class _InvalidExecutor(Executor):
@@ -101,8 +106,8 @@ def test_sequential_builder_validation_rejects_invalid_executor() -> None:
 async def test_sequential_streaming_yields_only_last_agent_updates() -> None:
     """Streaming mode surfaces only the last agent's AgentResponseUpdate chunks as outputs.
 
-    Intermediate agents do NOT emit `output` events when intermediate_outputs=False (default);
-    only the last agent (the workflow's output_executor) emits chunks of the final answer.
+    Intermediate agents do NOT emit `output` events; only the last agent (the workflow's
+    output_executor) emits chunks of the final answer.
     """
     a1 = _EchoAgent(id="agent1", name="A1")
     a2 = _EchoAgent(id="agent2", name="A2")
@@ -146,41 +151,6 @@ async def test_sequential_non_streaming_yields_only_last_agent_response() -> Non
     assert "A1 reply" not in combined
 
 
-async def test_sequential_intermediate_outputs_emits_data_events() -> None:
-    """When intermediate_outputs=True, intermediate agents surface as `data` events.
-
-    The single `output` event still carries the last agent's AgentResponse; intermediate
-    agents are emitted as `data` events (not output events) so consumers can clearly tell
-    them apart.
-    """
-    a1 = _EchoAgent(id="agent1", name="A1")
-    a2 = _EchoAgent(id="agent2", name="A2")
-
-    wf = SequentialBuilder(participants=[a1, a2], intermediate_outputs=True).build()
-
-    output_events = []
-    data_events = []
-    for ev in await wf.run("hello"):
-        if ev.type == "output":
-            output_events.append(ev)
-        elif ev.type == "data":
-            data_events.append(ev)
-
-    # One output event = the final answer (last agent).
-    assert len(output_events) == 1
-    final = output_events[0].data
-    assert isinstance(final, AgentResponse)
-    assert "A2 reply" in " ".join(m.text for m in final.messages)
-
-    # Intermediate agents emit data events (not output events).
-    assert len(data_events) == 1
-    intermediate = data_events[0].data
-    assert isinstance(intermediate, AgentResponse)
-    assert "A1 reply" in " ".join(m.text for m in intermediate.messages)
-    # Executor id derives from the agent's name (resolve_agent_id behavior).
-    assert data_events[0].executor_id == "A1"
-
-
 async def test_sequential_as_agent_returns_only_last_agent_response() -> None:
     """`workflow.as_agent().run(prompt)` returns ONLY the last agent's messages — not the user
     input or earlier agents' replies. This is the core fix for the orchestration-as-agent
@@ -199,51 +169,25 @@ async def test_sequential_as_agent_returns_only_last_agent_response() -> None:
     assert "hello as_agent" not in combined
 
 
-async def test_sequential_as_agent_with_intermediate_outputs_includes_chain() -> None:
-    """With `intermediate_outputs=True`, `as_agent()` surfaces intermediate agent responses
-    (rewritten as `text_reasoning` content) followed by the final answer (`text` content)."""
-    a1 = _EchoAgent(id="agent1", name="A1")
-    a2 = _EchoAgent(id="agent2", name="A2")
-
-    agent = SequentialBuilder(participants=[a1, a2], intermediate_outputs=True).build().as_agent()
-    response = await agent.run("hello as_agent")
-
-    assert isinstance(response, AgentResponse)
-
-    reasoning_text = " ".join(c.text or "" for m in response.messages for c in m.contents if c.type == "text_reasoning")
-    answer_text = " ".join(c.text or "" for m in response.messages for c in m.contents if c.type == "text")
-    assert "A1 reply" in reasoning_text, "Intermediate writer reply should arrive as reasoning content"
-    assert "A2 reply" in answer_text, "Terminal reviewer reply should arrive as text content"
-    assert "A1 reply" not in answer_text, "Intermediate content should not appear as final text"
-    # Final agent's reply should appear last in the message ordering.
-    last_msg_text = " ".join(c.text or "" for c in response.messages[-1].contents if c.type == "text")
-    assert "A2 reply" in last_msg_text
-
-
 async def test_sequential_with_custom_executor_summary() -> None:
+    """A custom-executor terminator yields its own AgentResponse — that becomes the workflow output.
+
+    Custom executors used as the terminator must call `ctx.yield_output(AgentResponse(...))`
+    directly (rather than `ctx.send_message(list[Message])` like an intermediate executor would),
+    because the terminator IS the workflow's output executor.
+    """
     a1 = _EchoAgent(id="agent1", name="A1")
-    summarizer = _SummarizerExec(id="summarizer")
+    summarizer = _SummarizerTerminator(id="summarizer")
 
     wf = SequentialBuilder(participants=[a1, summarizer]).build()
 
-    completed = False
-    output: list[Message] | None = None
-    async for ev in wf.run("topic X", stream=True):
-        if ev.type == "status" and ev.state == WorkflowRunState.IDLE:
-            completed = True
-        elif ev.type == "output":
-            output = ev.data
-        if completed and output is not None:
-            break
-
-    assert completed
-    assert output is not None
-    msgs: list[Message] = output
-    # Expect: [user, A1 reply, summary]
-    assert len(msgs) == 3
-    assert msgs[0].role == "user"
-    assert msgs[1].role == "assistant" and "A1 reply" in msgs[1].text
-    assert msgs[2].role == "assistant" and msgs[2].text.startswith("Summary of users:")
+    output_events = [ev for ev in await wf.run("topic X") if ev.type == "output"]
+    assert len(output_events) == 1
+    response = output_events[0].data
+    assert isinstance(response, AgentResponse)
+    assert len(response.messages) == 1
+    assert response.messages[0].role == "assistant"
+    assert response.messages[0].text.startswith("Summary of users:")
 
 
 async def test_sequential_checkpoint_resume_round_trip() -> None:
@@ -530,58 +474,3 @@ async def test_sequential_request_info_last_participant_emits_output() -> None:
     response = output_events[0].data
     assert isinstance(response, AgentResponse)
     assert any("A2 reply" in m.text for m in response.messages)
-
-
-async def test_sequential_request_info_with_intermediate_outputs_emits_data_events() -> None:
-    """With both with_request_info() and intermediate_outputs=True, intermediate
-    agents' responses are surfaced as data events while the final output is an
-    AgentResponse from the last agent.
-
-    This verifies that WorkflowExecutor correctly forwards data events from the
-    inner AgentExecutor through the AgentApprovalExecutor wrapper.
-    """
-    from agent_framework_orchestrations._orchestration_request_info import AgentRequestInfoResponse
-
-    a1 = _EchoAgent(id="agent1", name="A1")
-    a2 = _EchoAgent(id="agent2", name="A2")
-
-    wf = SequentialBuilder(participants=[a1, a2], intermediate_outputs=True).with_request_info().build()
-
-    # Run and approve all request_info events until the workflow completes
-    all_data_events: list[Any] = []
-    all_output_events: list[Any] = []
-    request_events: list[Any] = []
-
-    async for ev in wf.run("hello intermediate", stream=True):
-        if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
-            request_events.append(ev)
-        elif ev.type == "data":
-            all_data_events.append(ev)
-        elif ev.type == "output":
-            all_output_events.append(ev)
-
-    while request_events:
-        responses = {req.request_id: AgentRequestInfoResponse.approve() for req in request_events}
-        request_events = []
-        async for ev in wf.run(stream=True, responses=responses):
-            if ev.type == "request_info" and isinstance(ev.data, AgentExecutorResponse):
-                request_events.append(ev)
-            elif ev.type == "data":
-                all_data_events.append(ev)
-            elif ev.type == "output":
-                all_output_events.append(ev)
-
-    # The first (intermediate) agent should emit a data event.
-    assert len(all_data_events) >= 1
-    intermediate_texts = set()
-    for dev in all_data_events:
-        if isinstance(dev.data, AgentResponse):
-            for m in dev.data.messages:
-                intermediate_texts.add(m.text)
-    assert "A1 reply" in intermediate_texts
-
-    # The final output should contain the last agent's response.
-    assert len(all_output_events) >= 1
-    final = all_output_events[-1].data
-    assert isinstance(final, AgentResponse)
-    assert any("A2 reply" in m.text for m in final.messages)

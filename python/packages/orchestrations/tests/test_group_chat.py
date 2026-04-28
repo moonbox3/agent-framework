@@ -428,25 +428,17 @@ class TestGroupChatWorkflow:
             participants=[agent],
             termination_condition=termination_condition,
             selection_func=selector,
-            intermediate_outputs=True,
         ).build()
 
         outputs: list[AgentResponse] = []
-        intermediate_updates: list[AgentResponseUpdate] = []
         async for event in workflow.run("test task", stream=True):
             if event.type == "output" and isinstance(event.data, AgentResponse):
                 outputs.append(event.data)
-            elif event.type == "data" and isinstance(event.data, AgentResponseUpdate):
-                intermediate_updates.append(event.data)
 
         assert outputs, "Expected termination to yield output"
         # Terminal output is the orchestrator's completion message only.
         final_output = outputs[-1].messages[-1]
         assert "termination condition" in final_output.text.lower()
-        # Agent's intermediate replies surface as `data` events (per-update in streaming mode).
-        agent_updates = [u for u in intermediate_updates if u.author_name == "agent"]
-        # Each agent reply produces at least one update; expect 2 agent rounds before termination.
-        assert len(agent_updates) >= 2
 
     async def test_termination_condition_agent_manager_finalizes(self) -> None:
         """Test that termination condition with agent orchestrator produces default termination message."""

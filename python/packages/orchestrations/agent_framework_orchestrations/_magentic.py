@@ -1313,7 +1313,7 @@ class MagenticOrchestrator(BaseGroupChatOrchestrator):
 class MagenticAgentExecutor(AgentExecutor):
     """Specialized AgentExecutor for Magentic agent participants."""
 
-    def __init__(self, agent: SupportsAgentRun, *, intermediate: bool = False) -> None:
+    def __init__(self, agent: SupportsAgentRun) -> None:
         """Initialize a Magentic Agent Executor.
 
         This executor wraps an SupportsAgentRun instance to be used as a participant
@@ -1321,14 +1321,13 @@ class MagenticAgentExecutor(AgentExecutor):
 
         Args:
             agent: The agent instance to wrap.
-            intermediate: Forwarded to the base AgentExecutor. See ``AgentExecutor.__init__``.
 
         Notes: Magentic pattern requires a reset operation upon replanning. This executor
         extends the base AgentExecutor to handle resets appropriately. In order to handle
         resets, the agent threads and other states are reset when requested by the orchestrator.
         And because of this, MagenticAgentExecutor does not support custom threads.
         """
-        super().__init__(agent, intermediate=intermediate)
+        super().__init__(agent)
 
     @handler
     async def handle_magentic_reset(self, signal: MagenticResetSignal, ctx: WorkflowContext) -> None:
@@ -1425,7 +1424,9 @@ class MagenticBuilder:
             max_round_count: Max total coordination rounds. None means unlimited.
             enable_plan_review: If True, requires human approval of the initial plan before proceeding.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            intermediate_outputs: If True, enables intermediate outputs from agent participants.
+            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
+                workflow `output` event in addition to the orchestrator's. By default (False)
+                only the orchestrator's output surfaces.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
 
@@ -1438,7 +1439,6 @@ class MagenticBuilder:
 
         self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
-        # Intermediate outputs
         self._intermediate_outputs = intermediate_outputs
 
         self._set_participants(participants)
@@ -1739,7 +1739,7 @@ class MagenticBuilder:
             if isinstance(participant, Executor):
                 executors.append(participant)
             elif isinstance(participant, SupportsAgentRun):
-                executors.append(MagenticAgentExecutor(participant, intermediate=self._intermediate_outputs))
+                executors.append(MagenticAgentExecutor(participant))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."
@@ -1758,7 +1758,7 @@ class MagenticBuilder:
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[orchestrator],
+            output_executors=[orchestrator] if not self._intermediate_outputs else None,
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

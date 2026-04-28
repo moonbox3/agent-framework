@@ -623,7 +623,9 @@ class GroupChatBuilder:
                 True to terminate the conversation, False to continue.
             max_rounds: Optional maximum number of orchestrator rounds to prevent infinite conversations.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            intermediate_outputs: If True, enables intermediate outputs from agent participants.
+            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
+                workflow `output` event in addition to the orchestrator's. By default (False)
+                only the orchestrator's output surfaces.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
         self._participant_factories: list[Callable[[], SupportsAgentRun | Executor]] = []
@@ -644,8 +646,7 @@ class GroupChatBuilder:
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] = set()
 
-        # Intermediate outputs
-        self._intermediate_outputs = intermediate_outputs
+        self._intermediate_outputs: bool = intermediate_outputs
 
         if participants is None and participant_factories is None:
             raise ValueError("Either participants or participant_factories must be provided.")
@@ -964,9 +965,9 @@ class GroupChatBuilder:
                     not self._request_info_filter or resolve_agent_id(participant) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(participant, intermediate=self._intermediate_outputs))
+                    executors.append(AgentApprovalExecutor(participant))
                 else:
-                    executors.append(AgentExecutor(participant, intermediate=self._intermediate_outputs))
+                    executors.append(AgentExecutor(participant))
             else:
                 raise TypeError(
                     f"Participants must be SupportsAgentRun or Executor instances. Got {type(participant).__name__}."
@@ -992,7 +993,7 @@ class GroupChatBuilder:
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[orchestrator],
+            output_executors=[orchestrator] if not self._intermediate_outputs else None,
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

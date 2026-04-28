@@ -212,8 +212,9 @@ class ConcurrentBuilder:
         Args:
             participants: Sequence of agent or executor instances to run in parallel.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            intermediate_outputs: If True, enables intermediate outputs from agent participants
-                before aggregation.
+            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
+                workflow `output` event in addition to the aggregator's. By default
+                (False) only the aggregator's output surfaces.
         """
         self._participants: list[SupportsAgentRun | Executor] = []
         self._aggregator: Executor | None = None
@@ -341,13 +342,7 @@ class ConcurrentBuilder:
         return self
 
     def _resolve_participants(self) -> list[Executor]:
-        """Resolve participant instances into Executor objects.
-
-        When `intermediate_outputs=True`, every wrapped agent is constructed with
-        `intermediate=True` so its individual response publishes as a `data` event
-        instead of an `output` event, leaving the single `output` event reserved for
-        the aggregator's final answer.
-        """
+        """Resolve participant instances into Executor objects."""
         if not self._participants:
             raise ValueError("No participants provided. Pass participants to the constructor.")
 
@@ -362,9 +357,9 @@ class ConcurrentBuilder:
                     not self._request_info_filter or resolve_agent_id(p) in self._request_info_filter
                 ):
                     # Handle request info enabled agents
-                    executors.append(AgentApprovalExecutor(p, intermediate=self._intermediate_outputs))
+                    executors.append(AgentApprovalExecutor(p))
                 else:
-                    executors.append(AgentExecutor(p, intermediate=self._intermediate_outputs))
+                    executors.append(AgentExecutor(p))
             else:
                 raise TypeError(f"Participants must be SupportsAgentRun or Executor instances. Got {type(p).__name__}.")
 
@@ -404,7 +399,7 @@ class ConcurrentBuilder:
         builder = WorkflowBuilder(
             start_executor=dispatcher,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=[aggregator],
+            output_executors=[aggregator] if not self._intermediate_outputs else None,
         )
         # Fan-out for parallel execution
         builder.add_fan_out_edges(dispatcher, participants)

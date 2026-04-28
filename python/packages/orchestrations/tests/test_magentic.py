@@ -576,11 +576,12 @@ async def _collect_agent_responses_setup(participant: SupportsAgentRun) -> list[
 
     wf = MagenticBuilder(participants=[participant], intermediate_outputs=True, manager=InvokeOnceManager()).build()
 
-    # With intermediate_outputs=True, participant updates surface as `data` events
-    # carrying AgentResponseUpdate; the orchestrator's terminal AgentResponse comes via
-    # an `output` event.
+    # Run a bounded stream to allow one invoke and then completion
+    events: list[WorkflowEvent] = []
     async for ev in wf.run("task", stream=True):
-        if ev.type == "data" and isinstance(ev.data, AgentResponseUpdate):
+        events.append(ev)
+        # Capture streaming updates (type="output" with AgentResponseUpdate data)
+        if ev.type == "output" and isinstance(ev.data, AgentResponseUpdate):
             captured.append(
                 Message(
                     role=ev.data.role or "assistant",
@@ -588,6 +589,7 @@ async def _collect_agent_responses_setup(participant: SupportsAgentRun) -> list[
                     author_name=ev.data.author_name,
                 )
             )
+        # Break on final AgentResponse output
         elif ev.type == "output" and isinstance(ev.data, AgentResponse):
             break
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-28
+
+### Added
+- **agent-framework-foundry-hosting**: Add file data type support to hosted-agent Responses, refresh `foundry-hosted-agents` samples, and add response test coverage ([#5485](https://github.com/microsoft/agent-framework/pull/5485))
+- **samples**: Add `requirements.txt` and `.env.example` to the `a2a/` hosting sample for pip-based setup ([#5510](https://github.com/microsoft/agent-framework/pull/5510))
+
+### Fixed
+- **agent-framework-core**: Prevent `inner_exception` from being lost in `AgentFrameworkException` ([#5167](https://github.com/microsoft/agent-framework/pull/5167))
+
 ## [1.2.0] - 2026-04-24
 
 ### Added
@@ -977,7 +986,8 @@ Release candidate for **agent-framework-core** and **agent-framework-azure-ai** 
 
 For more information, see the [announcement blog post](https://devblogs.microsoft.com/foundry/introducing-microsoft-agent-framework-the-open-source-engine-for-agentic-ai-apps/).
 
-[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.2.0...HEAD
+[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.2.1...HEAD
+[1.2.1]: https://github.com/microsoft/agent-framework/compare/python-1.2.0...python-1.2.1
 [1.2.0]: https://github.com/microsoft/agent-framework/compare/python-1.1.1...python-1.2.0
 [1.1.1]: https://github.com/microsoft/agent-framework/compare/python-1.1.0...python-1.1.1
 [1.1.0]: https://github.com/microsoft/agent-framework/compare/python-1.0.1...python-1.1.0

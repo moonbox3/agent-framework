@@ -169,7 +169,9 @@ class GroupChatOrchestrator(BaseGroupChatOrchestrator):
         """Initialize orchestrator state and start the conversation loop."""
         self._append_messages(messages)
         # Termination condition will also be applied to the input messages
-        if await self._check_terminate_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_terminate_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
 
         next_speaker = await self._get_next_speaker()
@@ -198,9 +200,13 @@ class GroupChatOrchestrator(BaseGroupChatOrchestrator):
         messages = clean_conversation_for_handoff(messages)
         self._append_messages(messages)
 
-        if await self._check_terminate_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_terminate_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
-        if await self._check_round_limit_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_round_limit_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
 
         next_speaker = await self._get_next_speaker()
@@ -332,13 +338,15 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
         """Initialize orchestrator state and start the conversation loop."""
         self._append_messages(messages)
         # Termination condition will also be applied to the input messages
-        if await self._check_terminate_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_terminate_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
 
         agent_orchestration_output = await self._invoke_agent()
         if await self._check_agent_terminate_and_yield(
             agent_orchestration_output,
-            cast(WorkflowContext[Never, AgentResponse], ctx),
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx),
         ):
             return
 
@@ -366,15 +374,19 @@ class AgentBasedGroupChatOrchestrator(BaseGroupChatOrchestrator):
         # Remove tool-related content to prevent API errors from empty messages
         messages = clean_conversation_for_handoff(messages)
         self._append_messages(messages)
-        if await self._check_terminate_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_terminate_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
-        if await self._check_round_limit_and_yield(cast(WorkflowContext[Never, AgentResponse], ctx)):
+        if await self._check_round_limit_and_yield(
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx)
+        ):
             return
 
         agent_orchestration_output = await self._invoke_agent()
         if await self._check_agent_terminate_and_yield(
             agent_orchestration_output,
-            cast(WorkflowContext[Never, AgentResponse], ctx),
+            cast(WorkflowContext[Never, AgentResponse | AgentResponseUpdate], ctx),
         ):
             return
 

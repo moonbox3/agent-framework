@@ -550,7 +550,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-framework-core", editable = "packages/core" },
-    { name = "google-genai", specifier = ">=1.0.0,<2.0.0" },
+    { name = "google-genai", specifier = ">=1.65.0,<2.0.0" },
 ]
 
 [[package]]

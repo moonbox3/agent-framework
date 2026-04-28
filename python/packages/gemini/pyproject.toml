@@ -25,7 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "agent-framework-core>=1.2.1,<2.0",
-    "google-genai>=1.0.0,<2.0.0",
+    "google-genai>=1.65.0,<2.0.0",
 ]
 
 [tool.uv]

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dependencies**: Update workspace package dependencies and preserve `mcp[ws]` / `uvicorn[standard]` extras through override-dependencies in `/python` ([#5555](https://github.com/microsoft/agent-framework/pull/5555))
 
 ### Fixed
+- **agent-framework-core**: Fix observability spans not being correctly nested when using streaming ([#5552](https://github.com/microsoft/agent-framework/pull/5552))
 - **agent-framework-openai**: Fix `file_search` citations breaking the assistant-message history roundtrip — skip `hosted_file` content in the assistant role so the Responses API no longer rejects `input_file` ([#5557](https://github.com/microsoft/agent-framework/pull/5557))
 
 ## [1.2.1] - 2026-04-28

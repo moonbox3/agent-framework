@@ -284,17 +284,13 @@ actions:
         agent = workflow.as_agent(name="continuation-agent")
 
         first = await agent.run("turn-1-msg")
-        assert first.text == "turn-1-msg", (
-            f"Expected turn-1 echo 'turn-1-msg', got: {first.text!r}"
-        )
+        assert first.text == "turn-1-msg", f"Expected turn-1 echo 'turn-1-msg', got: {first.text!r}"
 
         # Stamp a marker into the declarative state between turns. The
         # continuation branch must preserve it; a state-clearing run would
         # wipe ``DECLARATIVE_STATE_KEY`` and force re-initialization.
         state_data = workflow._state.get(DECLARATIVE_STATE_KEY)
-        assert isinstance(state_data, dict), (
-            "Expected declarative state to be initialized after turn 1"
-        )
+        assert isinstance(state_data, dict), "Expected declarative state to be initialized after turn 1"
         state_data["Local"] = {"persisted_marker": "kept-from-turn-1"}
         workflow._state.set(DECLARATIVE_STATE_KEY, state_data)
         workflow._state.commit()

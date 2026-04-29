@@ -15,7 +15,10 @@ from typing import Any
 _IMPORTS: dict[str, tuple[str, str]] = {
     "AnalysisSection": ("agent_framework_azure_contentunderstanding", "agent-framework-azure-contentunderstanding"),
     "AnthropicFoundryClient": ("agent_framework_anthropic", "agent-framework-anthropic"),
-    "ContentUnderstandingContextProvider": ("agent_framework_azure_contentunderstanding", "agent-framework-azure-contentunderstanding"),
+    "ContentUnderstandingContextProvider": (
+        "agent_framework_azure_contentunderstanding",
+        "agent-framework-azure-contentunderstanding",
+    ),
     "DocumentStatus": ("agent_framework_azure_contentunderstanding", "agent-framework-azure-contentunderstanding"),
     "FileSearchBackend": ("agent_framework_azure_contentunderstanding", "agent-framework-azure-contentunderstanding"),
     "FileSearchConfig": ("agent_framework_azure_contentunderstanding", "agent-framework-azure-contentunderstanding"),

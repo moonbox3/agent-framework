@@ -622,9 +622,7 @@ class Workflow(DictConvertible):
                 "checkpointing; there is no in-process recovery path."
             )
 
-        initial_executor_fn = self._resolve_execution_mode(
-            message, responses, checkpoint_id, checkpoint_storage
-        )
+        initial_executor_fn = self._resolve_execution_mode(message, responses, checkpoint_id, checkpoint_storage)
 
         async for event in self._run_workflow_with_tracing(
             initial_executor_fn=initial_executor_fn,
@@ -724,9 +722,7 @@ class Workflow(DictConvertible):
                 initial_executor_fn = functools.partial(self._send_responses_internal, responses)
             return initial_executor_fn
         # Regular run or checkpoint restoration
-        return functools.partial(
-            self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage
-        )
+        return functools.partial(self._execute_with_message_or_checkpoint, message, checkpoint_id, checkpoint_storage)
 
     async def _restore_and_send_responses(
         self,

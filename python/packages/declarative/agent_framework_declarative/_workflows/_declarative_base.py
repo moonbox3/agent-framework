@@ -959,16 +959,12 @@ class DeclarativeActionExecutor(Executor):
                 last_user_msg = messages_list[last_user_index]
                 last_user_text = last_user_msg.text or ""
                 last_user_id = getattr(last_user_msg, "message_id", "") or ""
-                history_messages = (
-                    messages_list[:last_user_index] + messages_list[last_user_index + 1:]
-                )
+                history_messages = messages_list[:last_user_index] + messages_list[last_user_index + 1 :]
             else:
                 history_messages = list(messages_list)
                 tail = messages_list[-1] if messages_list else None
                 last_user_text = (tail.text or "") if tail is not None else ""
-                last_user_id = (
-                    getattr(tail, "message_id", "") or "" if tail is not None else ""
-                )
+                last_user_id = getattr(tail, "message_id", "") or "" if tail is not None else ""
 
             if is_continuation:
                 # Continuation turn: keep prior Conversation.messages intact.

@@ -16,11 +16,9 @@ import time
 from pathlib import Path
 
 from agent_framework import Agent, AgentSession, Content, Message
-from agent_framework.foundry import FoundryChatClient
+from agent_framework.foundry import ContentUnderstandingContextProvider, FoundryChatClient
 from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
-
-from agent_framework.foundry import ContentUnderstandingContextProvider
 
 load_dotenv()
 

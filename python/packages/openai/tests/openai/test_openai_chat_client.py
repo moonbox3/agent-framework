@@ -1975,6 +1975,92 @@ def test_assistant_text_preserves_citation_annotations_on_roundtrip() -> None:
     assert container["end_index"] == 3
 
 
+def test_assistant_text_preserves_file_path_annotation() -> None:
+    """A `file_path`-style citation (file_id only, no url) should serialize as `file_path`."""
+    from agent_framework._types import Annotation
+
+    client = OpenAIChatClient(model="test-model", api_key="test-key")
+
+    text_content = Content.from_text(
+        "See attached.",
+        annotations=[
+            Annotation(
+                type="citation",
+                file_id="file-only",
+                additional_properties={"index": 42},
+            ),
+        ],
+    )
+
+    result = client._prepare_content_for_openai("assistant", text_content)
+
+    assert result["type"] == "output_text"
+    annotations = result["annotations"]
+    assert annotations == [{"type": "file_path", "file_id": "file-only", "index": 42}]
+
+
+def test_assistant_text_fans_out_multiple_annotated_regions() -> None:
+    """A url_citation with multiple `annotated_regions` should emit one entry per region.
+
+    The Responses API annotation dict carries one start/end pair, so a framework Annotation
+    with N regions must produce N output annotation entries.
+    """
+    from agent_framework._types import Annotation, TextSpanRegion
+
+    client = OpenAIChatClient(model="test-model", api_key="test-key")
+
+    text_content = Content.from_text(
+        "See report. The report says X. Also report.",
+        annotations=[
+            Annotation(
+                type="citation",
+                title="Report",
+                url="https://example.com/report",
+                annotated_regions=[
+                    TextSpanRegion(type="text_span", start_index=4, end_index=10),
+                    TextSpanRegion(type="text_span", start_index=16, end_index=22),
+                    TextSpanRegion(type="text_span", start_index=36, end_index=42),
+                ],
+            ),
+        ],
+    )
+
+    result = client._prepare_content_for_openai("assistant", text_content)
+    annotations = result["annotations"]
+    assert len(annotations) == 3
+    assert all(a["type"] == "url_citation" for a in annotations)
+    spans = [(a["start_index"], a["end_index"]) for a in annotations]
+    assert spans == [(4, 10), (16, 22), (36, 42)]
+
+
+def test_assistant_text_skips_regions_with_invalid_span() -> None:
+    """Regions missing integer start/end bounds are skipped rather than emitted with `None`."""
+    from agent_framework._types import Annotation, TextSpanRegion
+
+    client = OpenAIChatClient(model="test-model", api_key="test-key")
+
+    text_content = Content.from_text(
+        "See report.",
+        annotations=[
+            Annotation(
+                type="citation",
+                title="Report",
+                url="https://example.com/report",
+                annotated_regions=[
+                    TextSpanRegion(type="text_span"),  # type: ignore[typeddict-item]
+                    TextSpanRegion(type="text_span", start_index=4, end_index=10),
+                ],
+            ),
+        ],
+    )
+
+    result = client._prepare_content_for_openai("assistant", text_content)
+    annotations = result["annotations"]
+    assert len(annotations) == 1
+    assert annotations[0]["start_index"] == 4
+    assert annotations[0]["end_index"] == 10
+
+
 def test_assistant_text_without_annotations_emits_empty_list() -> None:
     """Plain assistant text should still emit `annotations: []` (Azure validation requires the field)."""
     client = OpenAIChatClient(model="test-model", api_key="test-key")
@@ -1984,6 +2070,50 @@ def test_assistant_text_without_annotations_emits_empty_list() -> None:
     assert result["type"] == "output_text"
     assert result["text"] == "hello"
     assert result["annotations"] == []
+
+
+def test_streamed_file_citation_coalesces_onto_surrounding_text() -> None:
+    """Streamed citation events emit empty-text Content with annotations; `_finalize_response`
+    coalesces consecutive text contents and unions their annotations, so the citation lands on
+    the merged assistant text content (not a stray empty-text entry).
+
+    Without this, span indices in the annotation would reference `text == ""` after roundtrip.
+    """
+    text_event = MagicMock()
+    text_event.type = "response.output_text.delta"
+    text_event.delta = "Hello world."
+    text_event.item_id = "item_1"
+    text_event.output_index = 0
+    text_event.content_index = 0
+
+    citation_event = MagicMock()
+    citation_event.type = "response.output_text.annotation.added"
+    citation_event.annotation_index = 0
+    citation_event.annotation = {
+        "type": "file_citation",
+        "file_id": "file-abc",
+        "filename": "guidelines.md",
+        "index": 5,
+    }
+
+    client = OpenAIChatClient(model="test-model", api_key="test-key")
+    chat_options = ChatOptions()
+    function_call_ids: dict[int, tuple[str, str]] = {}
+
+    update1 = client._parse_chunk_from_openai(text_event, chat_options, function_call_ids)
+    update2 = client._parse_chunk_from_openai(citation_event, chat_options, function_call_ids)
+
+    response = ChatResponse.from_updates([update1, update2])
+
+    assert len(response.messages) == 1
+    contents = response.messages[0].contents
+    assert len(contents) == 1
+    merged = contents[0]
+    assert merged.type == "text"
+    assert merged.text == "Hello world."
+    assert merged.annotations is not None
+    assert len(merged.annotations) == 1
+    assert merged.annotations[0]["file_id"] == "file-abc"
 
 
 def test_streamed_file_citation_roundtrips_as_assistant_history() -> None:

@@ -250,6 +250,10 @@ def _annotations_to_output_text(annotations: Sequence[Annotation] | None) -> lis
     Citations from `file_search`, `code_interpreter` file paths, and url citations all collapse
     to `Annotation(type="citation", ...)` in the framework. The original API form is recovered
     here so assistant messages roundtrip cleanly through history forwarding.
+
+    Each Responses API annotation dict carries at most one `start_index`/`end_index` pair, so an
+    `Annotation` with multiple `annotated_regions` is fanned out into one entry per region.
+    Regions missing valid integer span bounds are skipped.
     """
     if not annotations:
         return []
@@ -259,31 +263,40 @@ def _annotations_to_output_text(annotations: Sequence[Annotation] | None) -> lis
             continue
         props = annotation.get("additional_properties") or {}
         regions = annotation.get("annotated_regions") or []
-        first_region = regions[0] if regions else None
         file_id = annotation.get("file_id")
         url = annotation.get("url")
         title = annotation.get("title")
         container_id = props.get("container_id")
 
-        if container_id and file_id and first_region is not None:
-            entry: dict[str, Any] = {
-                "type": "container_file_citation",
-                "container_id": container_id,
-                "file_id": file_id,
-                "start_index": first_region.get("start_index"),
-                "end_index": first_region.get("end_index"),
-            }
-            if url:
-                entry["filename"] = url
-            out.append(entry)
-        elif first_region is not None and url and not file_id:
-            out.append({
-                "type": "url_citation",
-                "url": url,
-                "title": title or "",
-                "start_index": first_region.get("start_index"),
-                "end_index": first_region.get("end_index"),
-            })
+        if container_id and file_id:
+            for region in regions:
+                start = region.get("start_index")
+                end = region.get("end_index")
+                if not (isinstance(start, int) and isinstance(end, int)):
+                    continue
+                entry: dict[str, Any] = {
+                    "type": "container_file_citation",
+                    "container_id": container_id,
+                    "file_id": file_id,
+                    "start_index": start,
+                    "end_index": end,
+                }
+                if url:
+                    entry["filename"] = url
+                out.append(entry)
+        elif url and not file_id and regions:
+            for region in regions:
+                start = region.get("start_index")
+                end = region.get("end_index")
+                if not (isinstance(start, int) and isinstance(end, int)):
+                    continue
+                out.append({
+                    "type": "url_citation",
+                    "url": url,
+                    "title": title or "",
+                    "start_index": start,
+                    "end_index": end,
+                })
         elif file_id and url:
             entry = {
                 "type": "file_citation",

@@ -236,6 +236,7 @@ version = "1.0.0a260429"
 source = { editable = "packages/azure-contentunderstanding" }
 dependencies = [
     { name = "agent-framework-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "agent-framework-foundry", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "aiohttp", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "azure-ai-contentunderstanding", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "filetype", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -244,6 +245,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-framework-core", editable = "packages/core" },
+    { name = "agent-framework-foundry", editable = "packages/foundry" },
     { name = "aiohttp", specifier = ">=3.9,<4" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.0.1,<1.1" },
     { name = "filetype", specifier = ">=1.2,<2" },

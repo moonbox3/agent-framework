@@ -1750,8 +1750,11 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         if isinstance(output, str):
             return output
         if isinstance(output, Sequence) and not isinstance(output, (str, bytes, bytearray)):
+            # cast is for pyright (reportUnknownVariableType); mypy considers
+            # it redundant after the isinstance narrowing.
+            entries = cast(Sequence[Any], output)  # type: ignore[redundant-cast]
             parts: list[str] = []
-            for entry in cast(Sequence[Any], output):
+            for entry in entries:
                 if isinstance(entry, str):
                     parts.append(entry)
                     continue

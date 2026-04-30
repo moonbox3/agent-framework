@@ -5242,6 +5242,27 @@ def test_prepare_messages_for_openai_drops_orphan_mcp_server_tool_result() -> No
     assert mcp_items == [], f"orphan mcp_server_tool_result must not synthesize a stand-alone mcp_call; got {mcp_items}"
 
 
+def test_stringify_mcp_output_extracts_text_from_dict_entries() -> None:
+    """A list of dicts in the canonical MCP text-content shape
+    (`{"type": "text", "text": "..."}`, e.g. from raw-JSON-decoded MCP
+    responses) must unwrap to plain text rather than Python `repr`.
+    """
+    result = OpenAIChatClient._stringify_mcp_output([{"type": "text", "text": "found 10 cats"}])
+    assert result == "found 10 cats"
+
+
+def test_stringify_mcp_output_falls_back_to_json_for_non_text_dict_entries() -> None:
+    """Dict entries that are not in the canonical text-content shape must
+    serialize as JSON, not Python `repr`. Python `repr` for a dict uses
+    single quotes and would not round-trip through any JSON-aware consumer.
+    """
+    result = OpenAIChatClient._stringify_mcp_output([{"type": "image", "url": "https://example.com/x"}])
+    # Valid JSON: starts with `{`, contains the keys, no Python-repr single quotes.
+    assert result.startswith("{")
+    assert '"url"' in result
+    assert "'" not in result
+
+
 # endregion
 
 

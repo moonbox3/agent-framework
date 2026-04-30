@@ -1740,7 +1740,10 @@ class RawOpenAIChatClient(  # type: ignore[misc]
 
         Accepts a string, a list of text-bearing Content objects (the form
         the chat client produces when parsing an `mcp_call` Responses item),
-        or any other value (best-effort `str()`).
+        or any other value. List entries that are dicts with the canonical
+        MCP text-content shape (`{"text": "..."}`) are unwrapped to their
+        text. Anything else falls back to JSON encoding rather than Python
+        `repr`, so the wire payload stays parseable for downstream callers.
         """
         if output is None:
             return ""
@@ -1749,13 +1752,21 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         if isinstance(output, Sequence) and not isinstance(output, (str, bytes, bytearray)):
             parts: list[str] = []
             for entry in cast(Sequence[Any], output):
+                if isinstance(entry, str):
+                    parts.append(entry)
+                    continue
                 text = getattr(entry, "text", None)
                 if isinstance(text, str):
                     parts.append(text)
-                else:
-                    parts.append(str(entry))
+                    continue
+                if isinstance(entry, Mapping):
+                    mapping_text = cast(Any, entry).get("text")
+                    if isinstance(mapping_text, str):
+                        parts.append(mapping_text)
+                        continue
+                parts.append(json.dumps(entry, default=str))
             return "".join(parts)
-        return str(output)
+        return json.dumps(output, default=str)
 
     @staticmethod
     def _coalesce_pending_mcp_results(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -5216,7 +5216,7 @@ def test_prepare_messages_for_openai_coalesces_mcp_call_and_result_into_single_i
 
 def test_prepare_messages_for_openai_drops_orphan_mcp_server_tool_result() -> None:
     """When an mcp_server_tool_result has no matching mcp_server_tool_call in
-    the message list, it must be dropped — NOT serialized as a
+    the message list, it must be dropped, NOT serialized as a
     function_call_output. An orphan function_call_output is what triggers the
     Responses API 400 reported in #5546.
     """

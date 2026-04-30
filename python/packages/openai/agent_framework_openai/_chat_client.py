@@ -1748,7 +1748,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             return output
         if isinstance(output, Sequence) and not isinstance(output, (str, bytes, bytearray)):
             parts: list[str] = []
-            for entry in output:
+            for entry in cast(Sequence[Any], output):
                 text = getattr(entry, "text", None)
                 if isinstance(text, str):
                     parts.append(text)
@@ -1764,8 +1764,8 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         See `_AF_MCP_PENDING_OUTPUT_KEY`. The Responses API expects a single
         `mcp_call` input item carrying both `arguments` and `output`, so a
         result Content cannot be its own input item. Any unmatched markers
-        are dropped (debug-logged) — surfacing them as standalone items
-        would produce the orphan `function_call_output`/`mcp_call_output`
+        are dropped (debug-logged); surfacing them as standalone items
+        would produce the orphan `function_call_output` / `mcp_call_output`
         the API rejects.
         """
         out: list[dict[str, Any]] = []

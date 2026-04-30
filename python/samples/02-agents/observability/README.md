@@ -24,7 +24,9 @@ Next to what happens in the code when you run, we also make setting up observabi
 
 ### MCP trace propagation
 
-Whenever there is an active OpenTelemetry span context, Agent Framework automatically propagates trace context to MCP servers via the `params._meta` field of `tools/call` requests. It uses the globally-configured OpenTelemetry propagator(s) (W3C Trace Context by default, producing `traceparent` and `tracestate`), so custom propagators (B3, Jaeger, etc.) are also supported. This enables distributed tracing across agent-to-MCP-server boundaries for all transports (stdio, HTTP, WebSocket), compliant with the [MCP `_meta` specification](https://modelcontextprotocol.io/specification/2025-11-25/basic#_meta).
+Whenever there is an active OpenTelemetry span context, Agent Framework automatically propagates trace context to MCP servers via the `params._meta` field of `tools/call` requests. It uses the globally-configured OpenTelemetry propagator(s) (W3C Trace Context by default, producing `traceparent` and `tracestate`), so custom propagators (B3, Jaeger, etc.) are also supported. This enables distributed tracing across agent-to-MCP-server boundaries, compliant with the [MCP `_meta` specification](https://modelcontextprotocol.io/specification/2025-11-25/basic#_meta).
+
+**Scope:** automatic `_meta` injection applies to MCP sessions that the agent process itself opens — `MCPStreamableHTTPTool`, `MCPStdioTool`, and `MCPWebsocketTool`. For **hosted MCP tools** (`FoundryChatClient.get_mcp_tool(...)`) and **toolbox-fetched tools** (`FoundryChatClient.get_toolbox(...)`), the `tools/call` message is issued by the Foundry agent service runtime rather than by the agent process. As a result, the framework has no opportunity to inject trace context into those requests, and propagating `traceparent`/`tracestate` across the agent–toolbox–MCP boundary is the responsibility of the Foundry service runtime, not of Agent Framework. If end-to-end distributed tracing to the downstream MCP server is required, use `MCPStreamableHTTPTool` (or another client-opened transport) instead of a toolbox connector.
 
 ### Five patterns for configuring observability
 

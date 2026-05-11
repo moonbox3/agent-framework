@@ -13,6 +13,7 @@ internal static class MetaApiExtensions
     /// Maps the HTTP API endpoint for retrieving server metadata.
     /// </summary>
     /// <param name="endpoints">The <see cref="IEndpointRouteBuilder"/> to add the route to.</param>
+    /// <param name="authRequired">Value reported via <c>auth_required</c> in the meta response so the frontend can decide whether to prompt for a bearer token.</param>
     /// <returns>The <see cref="IEndpointConventionBuilder"/> for method chaining.</returns>
     /// <remarks>
     /// This extension method registers the following endpoint:

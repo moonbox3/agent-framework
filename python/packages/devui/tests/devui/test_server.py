@@ -264,8 +264,8 @@ async def test_api_restrictions_in_user_mode():
     dev_app = dev_server.create_app()
     user_app = user_server.create_app()
 
-    # base_url sets the Host header to a loopback alias so the host-header
-    # allowlist (DNS-rebinding guard) accepts the request.
+    # base_url sets the Host header to a loopback alias so the loopback
+    # host-header allowlist accepts the request.
     dev_client = TestClient(dev_app, base_url="http://127.0.0.1")
     user_client = TestClient(user_app, base_url="http://127.0.0.1")
 
@@ -432,13 +432,14 @@ def test_streaming_response_does_not_hardcode_acao_header():
     request, CORSMiddleware never adds ACAO — so any ACAO we see proves the
     streaming handler is still setting it.
     """
-    server = _server_with_mock_agent()
+    server = _server_with_mock_agent(auth_token="s3cret")
     app = server.get_app()
 
     with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.post(
             "/v1/responses",
             json={"metadata": {"entity_id": "mock"}, "input": "hello", "stream": True},
+            headers={"Authorization": "Bearer s3cret"},
         )
 
         assert "access-control-allow-origin" not in {k.lower() for k in response.headers}, (
@@ -453,7 +454,7 @@ def test_cors_default_does_not_allow_arbitrary_origin_even_on_localhost():
     developer visited read DevUI's responses. Default is now `[]` — opt in by
     passing `cors_origins=[...]` explicitly.
     """
-    server = _server_with_mock_agent(host="127.0.0.1")
+    server = _server_with_mock_agent(host="127.0.0.1", auth_token="s3cret")
     app = server.get_app()
 
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -466,15 +467,18 @@ def test_cors_default_does_not_allow_arbitrary_origin_even_on_localhost():
         )
         assert preflight.headers.get("access-control-allow-origin") not in ("*", "https://evil.example")
 
-        actual = client.get("/v1/entities", headers={"Origin": "https://evil.example"})
+        actual = client.get(
+            "/v1/entities",
+            headers={"Origin": "https://evil.example", "Authorization": "Bearer s3cret"},
+        )
         assert actual.headers.get("access-control-allow-origin") not in ("*", "https://evil.example")
 
 
 def test_devserver_requires_auth_by_default(monkeypatch):
     """A bare DevServer() must reject unauthenticated /v1/* requests.
 
-    Previously auth was opt-in via DEVUI_AUTH_TOKEN env var. The drive-by class
-    of attacks relies on the localhost API being unauthenticated by default.
+    Previously auth was opt-in via DEVUI_AUTH_TOKEN env var; the new default is
+    auth-on so a bare `devui ./agents` invocation does not expose an open API.
     """
     monkeypatch.delenv("DEVUI_AUTH_TOKEN", raising=False)
 
@@ -516,8 +520,8 @@ def test_devserver_accepts_request_with_valid_bearer_token(monkeypatch):
 def test_meta_endpoint_requires_auth(monkeypatch):
     """/meta exposes capability flags (deployment, instrumentation, version) — gate it behind auth.
 
-    Previously /meta was in the auth-bypass list alongside /health and /. That let an unauthenticated
-    cross-origin caller fingerprint the deployment to decide whether to bother attacking.
+    Previously /meta was in the auth-bypass list alongside /health and /, so any
+    unauthenticated caller could read the deployment's capability flags.
     """
     monkeypatch.delenv("DEVUI_AUTH_TOKEN", raising=False)
 
@@ -535,10 +539,9 @@ def test_meta_endpoint_requires_auth(monkeypatch):
 def test_loopback_bind_rejects_non_allowlisted_host_header(monkeypatch):
     """A loopback-bound server must reject requests with a non-loopback Host header.
 
-    DNS-rebinding mitigation: an attacker page resolves `evil.example` to 127.0.0.1
-    in the victim's browser; the browser sends `Host: evil.example` to DevUI.
-    CORSMiddleware blocks reading the response, but side-effect endpoints (deployments,
-    cancel) still execute. Reject by Host header before any handler runs.
+    On a loopback bind, only Host values that name a loopback address are valid;
+    anything else (e.g. an external hostname that happens to resolve to 127.0.0.1)
+    is rejected before any handler runs.
     """
     monkeypatch.delenv("DEVUI_AUTH_TOKEN", raising=False)
 

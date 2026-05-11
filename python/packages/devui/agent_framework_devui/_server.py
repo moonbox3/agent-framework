@@ -375,34 +375,10 @@ class DevServer:
             lifespan=lifespan,
         )
 
-        # Host-header allowlist for loopback binds. Defends against DNS rebinding:
-        # an attacker page resolves their domain to 127.0.0.1 in the victim's browser
-        # to reach DevUI without tripping CORS. Reject by Host header before any handler.
-        allowed_hosts = self._loopback_allowed_hosts()
-        if allowed_hosts is not None:
-            expected_hosts = allowed_hosts
-
-            @app.middleware("http")
-            async def host_header_middleware(request: Request, call_next: Callable[[Request], Awaitable[Any]]) -> Any:
-                host_header = request.headers.get("host", "")
-                hostname = host_header.split(":", 1)[0].lower()
-                if hostname and hostname not in expected_hosts:
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "error": {
-                                "message": (
-                                    f"Invalid Host header '{host_header}'. DevUI is bound to a "
-                                    "loopback interface and only accepts requests addressed to it."
-                                ),
-                                "type": "invalid_host",
-                                "code": "host_not_allowed",
-                            }
-                        },
-                    )
-                return await call_next(request)
-
-            _ = host_header_middleware
+        # Middleware registration order matters: Starlette wraps later-added
+        # middleware around earlier-added ones, so the LAST registered runs
+        # outermost (sees the request first). We want Host-header enforcement
+        # to run before CORS/auth, so it is registered last below.
 
         # Add CORS middleware
         # Note: allow_credentials cannot be True when allow_origins is ["*"]
@@ -468,6 +444,36 @@ class DevServer:
 
             _ = auth_middleware
 
+        # Host-header allowlist for loopback binds: on a loopback interface, only
+        # accept requests whose Host header names a loopback address. Registered LAST
+        # so it runs outermost, rejecting non-loopback Host values before CORS/auth
+        # (and before CORS can short-circuit a preflight on a rebound request).
+        allowed_hosts = self._loopback_allowed_hosts()
+        if allowed_hosts is not None:
+            expected_hosts = allowed_hosts
+
+            @app.middleware("http")
+            async def host_header_middleware(request: Request, call_next: Callable[[Request], Awaitable[Any]]) -> Any:
+                host_header = request.headers.get("host", "")
+                hostname = host_header.split(":", 1)[0].lower()
+                if hostname and hostname not in expected_hosts:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": {
+                                "message": (
+                                    f"Invalid Host header '{host_header}'. DevUI is bound to a "
+                                    "loopback interface and only accepts requests addressed to it."
+                                ),
+                                "type": "invalid_host",
+                                "code": "host_not_allowed",
+                            }
+                        },
+                    )
+                return await call_next(request)
+
+            _ = host_header_middleware
+
         self._register_routes(app)
         self._mount_ui(app)
 
@@ -488,8 +494,6 @@ class DevServer:
         @app.get("/meta", response_model=MetaResponse)
         async def get_meta() -> MetaResponse:
             """Get server metadata and configuration."""
-            import os
-
             # Ensure executors are initialized to check capabilities
             openai_executor = await self._ensure_openai_executor()
 
@@ -503,7 +507,7 @@ class DevServer:
                     "openai_proxy": openai_executor.is_configured,
                     "deployment": True,  # Deployment feature is available
                 },
-                auth_required=bool(os.getenv("DEVUI_AUTH_TOKEN")),
+                auth_required=self.auth_enabled,
             )
 
         @app.get("/v1/entities", response_model=DiscoveryResponse)

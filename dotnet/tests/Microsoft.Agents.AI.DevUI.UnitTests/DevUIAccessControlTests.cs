@@ -159,6 +159,7 @@ public class DevUIAccessControlTests
         builder.Services.AddDevUI(o => o.AuthToken = "secret-token");
 
         using var app = builder.Build();
+        SimulateRemoteIp(app, IPAddress.Loopback);
         app.MapDevUI();
         await app.StartAsync();
 

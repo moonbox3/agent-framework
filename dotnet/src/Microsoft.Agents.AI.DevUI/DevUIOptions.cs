@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 namespace Microsoft.Agents.AI.DevUI;
 
@@ -28,10 +28,10 @@ public sealed class DevUIOptions
     /// </summary>
     /// <remarks>
     /// When <see langword="false"/>, any request whose
-    /// <see cref="Microsoft.AspNetCore.Http.ConnectionInfo.RemoteIpAddress"/> is
-    /// not a loopback address is rejected with HTTP 403 before reaching the
-    /// DevUI handlers. Enable only when the host is responsible for fronting
-    /// DevUI with its own authentication, network policy, or both.
+    /// <see cref="ConnectionInfo.RemoteIpAddress"/> is
+    /// not a loopback address (or is missing) is rejected with HTTP 403 before
+    /// reaching the DevUI handlers. Enable only when the host is responsible
+    /// for fronting DevUI with its own authentication, network policy, or both.
     /// </remarks>
     public bool AllowRemoteAccess { get; set; }
 

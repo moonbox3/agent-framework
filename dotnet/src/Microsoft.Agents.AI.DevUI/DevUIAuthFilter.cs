@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System.Net;
 using System.Security.Cryptography;
@@ -20,6 +20,13 @@ internal sealed class DevUIAuthFilter : IEndpointFilter
     private readonly byte[]? _expectedTokenBytes;
     private readonly ILogger<DevUIAuthFilter> _logger;
 
+    /// <summary>
+    /// Gets a value indicating whether a bearer token is required by this filter
+    /// (either via <see cref="DevUIOptions.AuthToken"/> or the
+    /// <c>DEVUI_AUTH_TOKEN</c> environment variable).
+    /// </summary>
+    public bool TokenRequired => this._expectedTokenBytes is { Length: > 0 };
+
     public DevUIAuthFilter(IOptions<DevUIOptions> options, ILogger<DevUIAuthFilter> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -40,7 +47,7 @@ internal sealed class DevUIAuthFilter : IEndpointFilter
     {
         var httpContext = context.HttpContext;
         var remoteIp = httpContext.Connection.RemoteIpAddress;
-        var isLoopback = remoteIp is null || IPAddress.IsLoopback(remoteIp);
+        var isLoopback = remoteIp is not null && IPAddress.IsLoopback(remoteIp);
 
         if (!isLoopback && !this._options.AllowRemoteAccess)
         {

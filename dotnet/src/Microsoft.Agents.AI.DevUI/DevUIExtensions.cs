@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Options;
@@ -46,16 +46,21 @@ public static class DevUIExtensions
 
         WarnIfInsecurelyExposed(startupLogger, options);
 
-        var group = endpoints.MapGroup("");
-        group.AddEndpointFilter(authFilter);
+        // /meta must remain reachable without authentication so the frontend can
+        // discover whether a bearer token is required before prompting for one.
+        endpoints.MapMeta(authRequired: authFilter.TokenRequired);
 
-        group.MapDevUI(pattern: "/devui");
-        group.MapMeta();
-        group.MapEntities();
+        var protectedGroup = endpoints.MapGroup("");
 
-        options.ConfigureEndpoints?.Invoke(group);
+        // Conventions must be applied before endpoints are added to the group so
+        // they reliably attach to every protected DevUI endpoint.
+        options.ConfigureEndpoints?.Invoke(protectedGroup);
+        protectedGroup.AddEndpointFilter(authFilter);
 
-        return group;
+        protectedGroup.MapDevUI(pattern: "/devui");
+        protectedGroup.MapEntities();
+
+        return protectedGroup;
     }
 
     /// <summary>

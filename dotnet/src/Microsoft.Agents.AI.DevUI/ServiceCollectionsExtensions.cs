@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.DevUI;
@@ -16,9 +16,17 @@ public static class MicrosoftAgentAIDevUIServiceCollectionsExtensions
     /// Adds services required for DevUI integration.
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection"/> to configure.</param>
+    /// <returns>The <see cref="IServiceCollection"/> for method chaining.</returns>
+    public static IServiceCollection AddDevUI(this IServiceCollection services)
+        => AddDevUI(services, configure: null);
+
+    /// <summary>
+    /// Adds services required for DevUI integration.
+    /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection"/> to configure.</param>
     /// <param name="configure">Optional callback used to configure <see cref="DevUIOptions"/>.</param>
     /// <returns>The <see cref="IServiceCollection"/> for method chaining.</returns>
-    public static IServiceCollection AddDevUI(this IServiceCollection services, Action<DevUIOptions>? configure = null)
+    public static IServiceCollection AddDevUI(this IServiceCollection services, Action<DevUIOptions>? configure)
     {
         ArgumentNullException.ThrowIfNull(services);
 

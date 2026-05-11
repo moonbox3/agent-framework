@@ -1,11 +1,10 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
-using Microsoft.Agents.AI.DevUI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
@@ -77,6 +76,7 @@ public class DevUIAccessControlTests
         builder.Services.AddDevUI(o => o.AuthToken = "secret-token");
 
         using var app = builder.Build();
+        SimulateRemoteIp(app, IPAddress.Loopback);
         app.MapDevUI();
         await app.StartAsync();
 
@@ -92,6 +92,7 @@ public class DevUIAccessControlTests
         builder.Services.AddDevUI(o => o.AuthToken = "secret-token");
 
         using var app = builder.Build();
+        SimulateRemoteIp(app, IPAddress.Loopback);
         app.MapDevUI();
         await app.StartAsync();
 
@@ -100,6 +101,55 @@ public class DevUIAccessControlTests
         var response = await app.GetTestClient().SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task EnvironmentVariableToken_IsEnforcedWhenAuthTokenNotConfiguredAsync()
+    {
+        const string EnvVar = "DEVUI_AUTH_TOKEN";
+        const string EnvToken = "env-token";
+        var previous = Environment.GetEnvironmentVariable(EnvVar);
+        Environment.SetEnvironmentVariable(EnvVar, EnvToken);
+        try
+        {
+            var builder = NewBuilder();
+            builder.Services.AddDevUI();
+
+            using var app = builder.Build();
+            SimulateRemoteIp(app, IPAddress.Loopback);
+            app.MapDevUI();
+            await app.StartAsync();
+
+            var missing = await app.GetTestClient().GetAsync(new Uri("/v1/entities", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.Unauthorized, missing.StatusCode);
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri("/v1/entities", UriKind.Relative));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EnvToken);
+            var accepted = await app.GetTestClient().SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(EnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public async Task MetaEndpoint_IsReachableWithoutAuthenticationAsync()
+    {
+        var builder = NewBuilder();
+        builder.Services.AddDevUI(o => o.AuthToken = "secret-token");
+
+        using var app = builder.Build();
+        SimulateRemoteIp(app, IPAddress.Loopback);
+        app.MapDevUI();
+        await app.StartAsync();
+
+        var response = await app.GetTestClient().GetAsync(new Uri("/meta", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("\"auth_required\":true", body);
     }
 
     [Fact]

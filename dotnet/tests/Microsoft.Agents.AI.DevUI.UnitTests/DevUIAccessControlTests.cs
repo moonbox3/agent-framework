@@ -110,12 +110,27 @@ public class DevUIAccessControlTests
         const string EnvToken = "env-token";
         var previous = Environment.GetEnvironmentVariable(EnvVar);
         Environment.SetEnvironmentVariable(EnvVar, EnvToken);
+
+        WebApplication? app = null;
         try
         {
             var builder = NewBuilder();
             builder.Services.AddDevUI();
 
-            using var app = builder.Build();
+            app = builder.Build();
+
+            // Force singleton construction so the env var is captured before we
+            // restore it; otherwise tests running in parallel can pick up the
+            // leaked DEVUI_AUTH_TOKEN.
+            _ = app.Services.GetRequiredService<DevUIAuthFilter>();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(EnvVar, previous);
+        }
+
+        await using (app)
+        {
             SimulateRemoteIp(app, IPAddress.Loopback);
             app.MapDevUI();
             await app.StartAsync();
@@ -127,10 +142,6 @@ public class DevUIAccessControlTests
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EnvToken);
             var accepted = await app.GetTestClient().SendAsync(request);
             Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(EnvVar, previous);
         }
     }
 

@@ -14,23 +14,37 @@ motivating discussion.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
 from agent_framework import Content
 
-__all__ = ["TOOL_RESULT_STATE_KEY", "state_update"]
+from ._utils import make_json_safe
+
+__all__ = ["TOOL_RESULT_DISPLAY_KEY", "TOOL_RESULT_STATE_KEY", "state_update"]
 
 
 TOOL_RESULT_STATE_KEY = "__ag_ui_tool_result_state__"
 """Reserved ``Content.additional_properties`` key used to carry a tool-driven
 state snapshot from a tool return value through to the AG-UI emitter."""
 
+TOOL_RESULT_DISPLAY_KEY = "__ag_ui_tool_result_display__"
+"""Reserved ``Content.additional_properties`` key used to carry UI-only tool
+result display content from a tool return value through to the AG-UI emitter."""
+
+_UNSET = object()
+
+
+def _serialize_tool_result(value: Any) -> str:  # noqa: ANN401
+    return value if isinstance(value, str) else json.dumps(make_json_safe(value))
+
 
 def state_update(
     text: str = "",
     *,
-    state: Mapping[str, Any],
+    state: Mapping[str, Any] | None = None,
+    tool_result: Any = _UNSET,  # noqa: ANN401
 ) -> Content:
     """Build a tool return value that deterministically updates AG-UI shared state.
 
@@ -76,9 +90,17 @@ def state_update(
     Raises:
         TypeError: If ``state`` is not a ``Mapping``.
     """
-    if not isinstance(state, Mapping):
+    if state is not None and not isinstance(state, Mapping):
         raise TypeError(f"state_update() 'state' must be a Mapping, got {type(state).__name__}")
+    additional_properties: dict[str, Any] = {}
+    if state is not None:
+        additional_properties[TOOL_RESULT_STATE_KEY] = dict(state)
+    if tool_result is not _UNSET:
+        display_content = _serialize_tool_result(tool_result)
+        additional_properties[TOOL_RESULT_DISPLAY_KEY] = display_content
+        if not text:
+            text = display_content
     return Content.from_text(
         text,
-        additional_properties={TOOL_RESULT_STATE_KEY: dict(state)},
+        additional_properties=additional_properties,
     )

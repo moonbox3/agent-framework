@@ -574,6 +574,9 @@ async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentF
     # Check item contains the output text
     item = events[0].item
     assert item.type == "message"
+    assert item.metadata["workflow_event_type"] == "output"
+    assert item.metadata["workflow_output_kind"] == "terminal"
+    assert item.metadata["executor_id"] == "final_executor"
     assert any("Final workflow output" in str(c) for c in item.content)
 
 
@@ -610,8 +613,17 @@ async def test_workflow_intermediate_event_with_agent_response_update_dispatched
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) >= 1
+    added_events = [e for e in events if getattr(e, "type", "") == "response.output_item.added"]
+    assert added_events
+    item = added_events[0].item
+    assert item.metadata["workflow_event_type"] == "intermediate"
+    assert item.metadata["workflow_output_kind"] == "intermediate"
+    assert item.metadata["executor_id"] == "non_designated"
     text_events = [e for e in events if getattr(e, "type", "") == "response.output_text.delta"]
     assert len(text_events) >= 1
+    assert text_events[0].metadata["workflow_event_type"] == "intermediate"
+    assert text_events[0].metadata["workflow_output_kind"] == "intermediate"
+    assert text_events[0].metadata["executor_id"] == "non_designated"
     assert text_events[0].delta == "intermediate progress"
 
 
@@ -631,6 +643,9 @@ async def test_workflow_intermediate_event_with_string_payload_renders_visible_t
     assert events[0].type == "response.output_item.added"
     item = events[0].item
     assert item.type == "message"
+    assert item.metadata["workflow_event_type"] == "intermediate"
+    assert item.metadata["workflow_output_kind"] == "intermediate"
+    assert item.metadata["executor_id"] == "planner"
     assert any("plan: starting work" in str(c) for c in item.content)
 
 
@@ -648,7 +663,29 @@ async def test_workflow_intermediate_event_with_message_payload_renders_visible_
     assert len(events) == 1
     assert events[0].type == "response.output_item.added"
     item = events[0].item
+    assert item.metadata["workflow_event_type"] == "intermediate"
+    assert item.metadata["workflow_output_kind"] == "intermediate"
+    assert item.metadata["executor_id"] == "researcher"
     assert any("research note" in str(c) for c in item.content)
+
+
+async def test_workflow_data_event_keeps_intermediate_compatibility_metadata(
+    mapper: MessageMapper, test_request: AgentFrameworkRequest
+) -> None:
+    """Deprecated type='data' workflow events remain visible and explicitly intermediate."""
+    from agent_framework._workflows._events import WorkflowEvent
+
+    with pytest.warns(DeprecationWarning):
+        event = WorkflowEvent.emit(executor_id="legacy", data="legacy progress")
+    events = await mapper.convert_event(event, test_request)
+
+    assert len(events) == 1
+    assert events[0].type == "response.output_item.added"
+    item = events[0].item
+    assert item.metadata["workflow_event_type"] == "data"
+    assert item.metadata["workflow_output_kind"] == "intermediate"
+    assert item.metadata["executor_id"] == "legacy"
+    assert any("legacy progress" in str(c) for c in item.content)
 
 
 # =============================================================================

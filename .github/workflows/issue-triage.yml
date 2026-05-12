@@ -164,6 +164,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_COPILOT_TOKEN: ${{ secrets.GH_COPILOT_TOKEN }}
+          # Not seen by the agent prompt; used only to push a paper-trail
+          # branch back to maf-dashboard at run end.
+          DEVFLOW_TOKEN: ${{ secrets.DEVFLOW_TOKEN }}
           SK_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
           AGENT_REPO_PATH: ${{ env.TARGET_REPO_PATH }}
           ISSUE_REPO: ${{ needs.team_check.outputs.repo }}

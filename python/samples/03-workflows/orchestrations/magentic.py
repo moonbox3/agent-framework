@@ -93,7 +93,7 @@ async def main() -> None:
     # terminal workflow output.
     workflow = MagenticBuilder(
         participants=[researcher_agent, coder_agent],
-        intermediate_participants=[researcher_agent, coder_agent],
+        intermediate_output_from=[researcher_agent, coder_agent],
         manager_agent=manager_agent,
         max_round_count=10,
         max_stall_count=3,

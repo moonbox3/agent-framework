@@ -15,37 +15,37 @@ _WorkflowExecutorSpecifier = Executor | SupportsAgentRun
 def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
     *,
     participants: Sequence[Executor],
-    output_participants: Sequence[_ParticipantOutputSpecifier] | None,
-    intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None,
-    default_output_participants: Sequence[Executor] = (),
+    final_output_from: Sequence[_ParticipantOutputSpecifier] | None,
+    intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None,
+    default_final_output_from: Sequence[Executor] = (),
     extra_output_executors: Sequence[Executor] = (),
 ) -> tuple[list[_WorkflowExecutorSpecifier], list[_WorkflowExecutorSpecifier]]:
     """Resolve public participant output config into workflow executor config."""
-    explicit_config = output_participants is not None or intermediate_participants is not None
-    if explicit_config and not (output_participants or intermediate_participants):
-        raise ValueError("output_participants and intermediate_participants cannot both be empty.")
+    explicit_config = final_output_from is not None or intermediate_output_from is not None
+    if explicit_config and not (final_output_from or intermediate_output_from):
+        raise ValueError("final_output_from and intermediate_output_from cannot both be empty.")
 
     participants_by_id = {participant.id: participant for participant in participants}
     known_participants = sorted(participants_by_id)
 
     output_designated = (
         _resolve_designated_participants(
-            output_participants,
+            final_output_from,
             kind="output",
             participants_by_id=participants_by_id,
             known_participants=known_participants,
         )
-        if output_participants is not None
-        else list(default_output_participants)
+        if final_output_from is not None
+        else list(default_final_output_from)
     )
     intermediate_designated = (
         _resolve_designated_participants(
-            intermediate_participants,
+            intermediate_output_from,
             kind="intermediate",
             participants_by_id=participants_by_id,
             known_participants=known_participants,
         )
-        if intermediate_participants is not None
+        if intermediate_output_from is not None
         else []
     )
 

@@ -226,7 +226,7 @@ Share your perspective authentically. Feel free to:
         GroupChatBuilder(
             participants=[farmer, developer, teacher, activist, spiritual_leader, artist, immigrant, doctor],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 10,
-            intermediate_participants=[
+            intermediate_output_from=[
                 farmer,
                 developer,
                 teacher,

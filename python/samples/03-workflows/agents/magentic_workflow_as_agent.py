@@ -76,7 +76,7 @@ async def main() -> None:
     # them to text_reasoning content while the final answer remains normal text.
     workflow = MagenticBuilder(
         participants=[researcher_agent, coder_agent],
-        intermediate_participants=[researcher_agent, coder_agent],
+        intermediate_output_from=[researcher_agent, coder_agent],
         manager_agent=manager_agent,
         max_round_count=10,
         max_stall_count=3,

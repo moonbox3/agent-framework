@@ -117,25 +117,25 @@ async def test_sequential_default_only_terminator_is_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sequential_output_participants_designates_terminal_participants() -> None:
-    """Sequential output_participants controls which participant yields surface as terminal output."""
+async def test_sequential_final_output_from_designates_terminal_participants() -> None:
+    """Sequential final_output_from controls which participant yields surface as terminal output."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
 
-    workflow = SequentialBuilder(participants=[a, b, c], output_participants=["A", "B", "C"]).build()
+    workflow = SequentialBuilder(participants=[a, b, c], final_output_from=["A", "B", "C"]).build()
     result = await workflow.run("hello")
     outputs = result.get_outputs()
     assert len(outputs) == 3
 
 
 @pytest.mark.asyncio
-async def test_sequential_intermediate_participants_surface_as_intermediate() -> None:
+async def test_sequential_intermediate_output_from_surface_as_intermediate() -> None:
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
 
-    workflow = SequentialBuilder(participants=[a, b, c], intermediate_participants=[a, "B"]).build()
+    workflow = SequentialBuilder(participants=[a, b, c], intermediate_output_from=[a, "B"]).build()
 
     output_executors: set[str] = set()
     intermediate_executors: set[str] = set()
@@ -189,23 +189,23 @@ async def test_concurrent_default_only_aggregator_is_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_output_participants_designates_terminal_participants() -> None:
-    """Concurrent output_participants designates participant outputs alongside the aggregator."""
+async def test_concurrent_final_output_from_designates_terminal_participants() -> None:
+    """Concurrent final_output_from designates participant outputs alongside the aggregator."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
 
-    workflow = ConcurrentBuilder(participants=[a, b], output_participants=[a, "B"]).build()
+    workflow = ConcurrentBuilder(participants=[a, b], final_output_from=[a, "B"]).build()
     result = await workflow.run("hello")
     outputs = result.get_outputs()
     assert len(outputs) == 3
 
 
 @pytest.mark.asyncio
-async def test_concurrent_intermediate_participants_surface_as_intermediate() -> None:
+async def test_concurrent_intermediate_output_from_surface_as_intermediate() -> None:
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
 
-    workflow = ConcurrentBuilder(participants=[a, b], intermediate_participants=["A", b]).build()
+    workflow = ConcurrentBuilder(participants=[a, b], intermediate_output_from=["A", b]).build()
 
     output_executors: set[str] = set()
     intermediate_executors: set[str] = set()
@@ -248,13 +248,13 @@ async def test_sequential_default_as_agent_intermediates_are_text_reasoning() ->
 
 
 @pytest.mark.asyncio
-async def test_sequential_as_agent_output_participants_all_text() -> None:
-    """output_participants makes designated participant replies terminal text content."""
+async def test_sequential_as_agent_final_output_from_all_text() -> None:
+    """final_output_from makes designated participant replies terminal text content."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
 
-    workflow = SequentialBuilder(participants=[a, b, c], output_participants=["A", "B", "C"]).build()
+    workflow = SequentialBuilder(participants=[a, b, c], final_output_from=["A", "B", "C"]).build()
     agent = workflow.as_agent("seq")
 
     response = await agent.run("hi")
@@ -266,13 +266,13 @@ async def test_sequential_as_agent_output_participants_all_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sequential_as_agent_intermediate_participants_are_text_reasoning() -> None:
-    """intermediate_participants maps selected participant replies to reasoning content."""
+async def test_sequential_as_agent_intermediate_output_from_are_text_reasoning() -> None:
+    """intermediate_output_from maps selected participant replies to reasoning content."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
 
-    workflow = SequentialBuilder(participants=[a, b, c], intermediate_participants=["A", "B"]).build()
+    workflow = SequentialBuilder(participants=[a, b, c], intermediate_output_from=["A", "B"]).build()
     agent = workflow.as_agent("seq")
 
     response = await agent.run("hi")
@@ -362,8 +362,8 @@ async def test_group_chat_default_only_orchestrator_is_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_group_chat_output_participants_designates_terminal_participants() -> None:
-    """GroupChat output_participants designates participants alongside the orchestrator."""
+async def test_group_chat_final_output_from_designates_terminal_participants() -> None:
+    """GroupChat final_output_from designates participants alongside the orchestrator."""
     alpha = _EchoAgent(name="alpha")
     beta = _EchoAgent(name="beta")
 
@@ -371,7 +371,7 @@ async def test_group_chat_output_participants_designates_terminal_participants()
         participants=[alpha, beta],
         max_rounds=2,
         selection_func=_two_step_selector(),
-        output_participants=[alpha, "beta"],
+        final_output_from=[alpha, "beta"],
     ).build()
 
     output_executors: set[str] = set()
@@ -383,7 +383,7 @@ async def test_group_chat_output_participants_designates_terminal_participants()
 
 
 @pytest.mark.asyncio
-async def test_group_chat_intermediate_participants_surface_as_intermediate() -> None:
+async def test_group_chat_intermediate_output_from_surface_as_intermediate() -> None:
     alpha = _EchoAgent(name="alpha")
     beta = _EchoAgent(name="beta")
 
@@ -391,7 +391,7 @@ async def test_group_chat_intermediate_participants_surface_as_intermediate() ->
         participants=[alpha, beta],
         max_rounds=2,
         selection_func=_two_step_selector(),
-        intermediate_participants=["alpha", beta],
+        intermediate_output_from=["alpha", beta],
     ).build()
 
     output_executors: set[str] = set()
@@ -453,7 +453,7 @@ def test_handoff_builder_designates_every_participant_as_output() -> None:
     assert "beta" in designated, f"beta must be designated; got {designated}"
 
 
-def test_handoff_builder_output_participants_can_select_terminal_participants() -> None:
+def test_handoff_builder_final_output_from_can_select_terminal_participants() -> None:
     from agent_framework import Agent
     from agent_framework._clients import BaseChatClient
     from agent_framework._middleware import ChatMiddlewareLayer
@@ -481,7 +481,7 @@ def test_handoff_builder_output_participants_can_select_terminal_participants() 
         require_per_service_call_history_persistence=True,
     )
 
-    workflow = HandoffBuilder(participants=[alpha, beta], output_participants=["alpha"]).with_start_agent(alpha).build()
+    workflow = HandoffBuilder(participants=[alpha, beta], final_output_from=["alpha"]).with_start_agent(alpha).build()
 
     assert {ex.id for ex in workflow.get_output_executors()} == {"alpha"}
 
@@ -538,22 +538,22 @@ def test_magentic_builder_default_only_manager_designated() -> None:
     assert "alpha" not in designated, f"participant must not be designated by default; got {designated}"
 
 
-def test_magentic_builder_output_participants_designates_terminal_participants() -> None:
-    """Magentic output_participants designates workers alongside the orchestrator."""
+def test_magentic_builder_final_output_from_designates_terminal_participants() -> None:
+    """Magentic final_output_from designates workers alongside the orchestrator."""
     manager = _StubMagenticManager()
     alpha = _EchoAgent(name="alpha")
 
-    workflow = MagenticBuilder(participants=[alpha], manager=manager, output_participants=["alpha"]).build()
+    workflow = MagenticBuilder(participants=[alpha], manager=manager, final_output_from=["alpha"]).build()
 
     designated = {ex.id for ex in workflow.get_output_executors()}
     assert {"magentic_orchestrator", "alpha"}.issubset(designated)
 
 
-def test_magentic_builder_intermediate_participants_designates_intermediate_workers() -> None:
+def test_magentic_builder_intermediate_output_from_designates_intermediate_workers() -> None:
     manager = _StubMagenticManager()
     alpha = _EchoAgent(name="alpha")
 
-    workflow = MagenticBuilder(participants=[alpha], manager=manager, intermediate_participants=[alpha]).build()
+    workflow = MagenticBuilder(participants=[alpha], manager=manager, intermediate_output_from=[alpha]).build()
 
     assert {ex.id for ex in workflow.get_output_executors()} == {"magentic_orchestrator"}
     assert {ex.id for ex in workflow.get_intermediate_executors()} == {"alpha"}
@@ -628,10 +628,10 @@ def _build_handoff_with_designation(**kwargs: Any) -> None:
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"output_participants": [], "intermediate_participants": []}, "cannot both be empty"),
-        ({"output_participants": ["alpha", "alpha"]}, "Duplicate output participant"),
-        ({"output_participants": ["alpha"], "intermediate_participants": ["alpha"]}, "cannot be both output"),
-        ({"output_participants": ["missing"]}, "Unknown output participant"),
+        ({"final_output_from": [], "intermediate_output_from": []}, "cannot both be empty"),
+        ({"final_output_from": ["alpha", "alpha"]}, "Duplicate output participant"),
+        ({"final_output_from": ["alpha"], "intermediate_output_from": ["alpha"]}, "cannot be both output"),
+        ({"final_output_from": ["missing"]}, "Unknown output participant"),
     ],
 )
 def test_participant_output_config_validation(build: Callable[..., None], kwargs: dict[str, Any], match: str) -> None:

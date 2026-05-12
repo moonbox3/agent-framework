@@ -164,7 +164,7 @@ async def run_agent_framework_example(prompt: str) -> str | None:
     workflow = MagenticBuilder(
         participants=[researcher, coder],
         manager_agent=manager_agent,  # type: ignore
-        intermediate_participants=[researcher, coder],
+        intermediate_output_from=[researcher, coder],
     ).build()
 
     output_messages: list[Message] = []

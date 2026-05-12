@@ -82,8 +82,8 @@ from agent_framework.orchestrations import (
 ## Tips
 
 **Participant output designation**: Orchestration builders use participant-oriented names for workflow output
-selection. Use `output_participants=[...]` when participant responses should be terminal `output` events, and
-`intermediate_participants=[...]` when participant responses should be visible progress events. In explicit
+selection. Use `final_output_from=[...]` when participant responses should be terminal `output` events, and
+`intermediate_output_from=[...]` when participant responses should be visible progress events. In explicit
 designation mode, unlisted participant responses are hidden from caller-facing output streams. Builders validate
 empty explicit designation, duplicate participants, overlap between output and intermediate participants, and unknown
 participant names.

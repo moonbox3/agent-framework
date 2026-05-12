@@ -103,7 +103,7 @@ async def main() -> None:
         GroupChatBuilder(
             participants=[expert, verifier, clarifier, skeptic],
             termination_condition=lambda conversation: len(conversation) >= 6,
-            intermediate_participants=[expert, verifier, clarifier, skeptic],
+            intermediate_output_from=[expert, verifier, clarifier, skeptic],
             selection_func=round_robin_selector,
         )
         # Set a hard termination condition: stop after 6 messages (user task + one full rounds + 1)

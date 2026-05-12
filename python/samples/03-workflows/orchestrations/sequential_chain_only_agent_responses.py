@@ -66,7 +66,7 @@ async def main() -> None:
     workflow = SequentialBuilder(
         participants=[writer, translator, reviewer],
         chain_only_agent_responses=True,
-        intermediate_participants=[writer, translator],
+        intermediate_output_from=[writer, translator],
     ).build()
 
     # 3) Run and collect outputs

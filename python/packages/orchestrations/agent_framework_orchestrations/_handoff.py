@@ -593,8 +593,8 @@ class HandoffBuilder:
         description: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         termination_condition: TerminationCondition | None = None,
-        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
-        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -616,9 +616,9 @@ class HandoffBuilder:
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             termination_condition: Optional callable that receives the full conversation and returns True
                 (or awaitable True) if the workflow should terminate.
-            output_participants: Optional participant names or instances whose ``yield_output`` calls
+            final_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as terminal workflow ``output`` events. Defaults to all participants.
-            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+            intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._name = name
@@ -645,9 +645,9 @@ class HandoffBuilder:
 
         # Termination related members
         self._termination_condition: Callable[[list[Message]], bool | Awaitable[bool]] | None = termination_condition
-        self._output_participants = list(output_participants) if output_participants is not None else None
-        self._intermediate_participants = (
-            list(intermediate_participants) if intermediate_participants is not None else None
+        self._final_output_from = list(final_output_from) if final_output_from is not None else None
+        self._intermediate_output_from = (
+            list(intermediate_output_from) if intermediate_output_from is not None else None
         )
 
     def participants(self, participants: Sequence[Agent]) -> "HandoffBuilder":
@@ -974,9 +974,9 @@ class HandoffBuilder:
         # selected speakers.
         output_executors, intermediate_executors = _resolve_participant_output_config(
             participants=list(executors.values()),
-            output_participants=self._output_participants,
-            intermediate_participants=self._intermediate_participants,
-            default_output_participants=list(executors.values()),
+            final_output_from=self._final_output_from,
+            intermediate_output_from=self._intermediate_output_from,
+            default_final_output_from=list(executors.values()),
         )
         builder = WorkflowBuilder(
             name=self._name,

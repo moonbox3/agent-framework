@@ -248,7 +248,7 @@ async def run_agent_framework_example(task: str) -> str:
         participants=[researcher, planner],
         orchestrator_agent=Agent(client=client),
         max_rounds=8,
-        intermediate_participants=[researcher, planner],
+        intermediate_output_from=[researcher, planner],
     ).build()
 
     output_messages: list[Message] = []

@@ -78,7 +78,7 @@ async def main() -> None:
     Note:
     `workflow.as_agent()` returns ONLY the final agent's response (the "answer") — the prior agents' work
     is not included in the response. To preserve earlier participant replies while running as an agent, build with
-    `SequentialBuilder(participants=[...], intermediate_participants=[writer])`; intermediate workflow events become
+    `SequentialBuilder(participants=[...], intermediate_output_from=[writer])`; intermediate workflow events become
     `text_reasoning` content on the AgentResponse, while `.text` remains terminal-output only.
     """
 

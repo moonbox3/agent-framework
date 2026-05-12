@@ -85,7 +85,7 @@ async def main() -> None:
         GroupChatBuilder(
             participants=[researcher, writer],
             termination_condition=lambda messages: sum(1 for msg in messages if msg.role == "assistant") >= 4,
-            intermediate_participants=[researcher, writer],
+            intermediate_output_from=[researcher, writer],
             orchestrator_agent=orchestrator_agent,
         )
         # Set a hard termination condition: stop after 4 assistant messages

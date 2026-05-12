@@ -95,8 +95,8 @@ class SequentialBuilder:
         participants: Sequence[SupportsAgentRun | Executor],
         checkpoint_storage: CheckpointStorage | None = None,
         chain_only_agent_responses: bool = False,
-        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
-        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         """Initialize the SequentialBuilder.
 
@@ -106,9 +106,9 @@ class SequentialBuilder:
             chain_only_agent_responses: If True, only agent responses are chained between agents.
                 By default, the full conversation context is passed to the next agent. This also applies
                 to Executor -> Agent transitions if the executor sends `AgentExecutorResponse`.
-            output_participants: Optional participant names or instances whose ``yield_output`` calls
+            final_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as terminal workflow ``output`` events. Defaults to the final participant.
-            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+            intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._participants: list[SupportsAgentRun | Executor] = []
@@ -116,9 +116,9 @@ class SequentialBuilder:
         self._chain_only_agent_responses: bool = chain_only_agent_responses
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] | None = None
-        self._output_participants = list(output_participants) if output_participants is not None else None
-        self._intermediate_participants = (
-            list(intermediate_participants) if intermediate_participants is not None else None
+        self._final_output_from = list(final_output_from) if final_output_from is not None else None
+        self._intermediate_output_from = (
+            list(intermediate_output_from) if intermediate_output_from is not None else None
         )
 
         self._set_participants(participants)
@@ -247,9 +247,9 @@ class SequentialBuilder:
         # can surface selected earlier participant outputs as terminal or intermediate.
         designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
-            output_participants=self._output_participants,
-            intermediate_participants=self._intermediate_participants,
-            default_output_participants=[participants[-1]],
+            final_output_from=self._final_output_from,
+            intermediate_output_from=self._intermediate_output_from,
+            default_final_output_from=[participants[-1]],
         )
         builder = WorkflowBuilder(
             start_executor=input_conv,

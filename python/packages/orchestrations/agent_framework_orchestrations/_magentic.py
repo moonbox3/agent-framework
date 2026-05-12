@@ -1413,8 +1413,8 @@ class MagenticBuilder:
         # Existing params
         enable_plan_review: bool = False,
         checkpoint_storage: CheckpointStorage | None = None,
-        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
-        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         """Initialize the Magentic workflow builder.
 
@@ -1437,9 +1437,9 @@ class MagenticBuilder:
             max_round_count: Max total coordination rounds. None means unlimited.
             enable_plan_review: If True, requires human approval of the initial plan before proceeding.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            output_participants: Optional participant names or instances whose ``yield_output`` calls
+            final_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as terminal workflow ``output`` events alongside the manager.
-            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+            intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
@@ -1453,9 +1453,9 @@ class MagenticBuilder:
 
         self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
 
-        self._output_participants = list(output_participants) if output_participants is not None else None
-        self._intermediate_participants = (
-            list(intermediate_participants) if intermediate_participants is not None else None
+        self._final_output_from = list(final_output_from) if final_output_from is not None else None
+        self._intermediate_output_from = (
+            list(intermediate_output_from) if intermediate_output_from is not None else None
         )
 
         self._set_participants(participants)
@@ -1776,8 +1776,8 @@ class MagenticBuilder:
         # `magentic_orchestrator` events keep their dedicated event type.
         designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
-            output_participants=self._output_participants,
-            intermediate_participants=self._intermediate_participants,
+            final_output_from=self._final_output_from,
+            intermediate_output_from=self._intermediate_output_from,
             extra_output_executors=[orchestrator],
         )
         workflow_builder = WorkflowBuilder(

@@ -22,7 +22,7 @@ workflow = SequentialBuilder(participants=[agent1, agent2, agent3]).build()
 # Preserve agent1 and agent2 as visible progress, while agent3 remains terminal output.
 workflow = SequentialBuilder(
     participants=[agent1, agent2, agent3],
-    intermediate_participants=[agent1, agent2],
+    intermediate_output_from=[agent1, agent2],
 ).build()
 ```
 
@@ -61,7 +61,7 @@ from agent_framework.orchestrations import GroupChatBuilder
 workflow = GroupChatBuilder(
     participants=[agent1, agent2],
     selection_func=my_selector,
-    intermediate_participants=[agent1, agent2],
+    intermediate_output_from=[agent1, agent2],
 ).build()
 ```
 
@@ -75,7 +75,7 @@ from agent_framework.orchestrations import MagenticBuilder
 workflow = MagenticBuilder(
     participants=[researcher, writer, reviewer],
     manager_agent=manager_agent,
-    intermediate_participants=[researcher, writer, reviewer],
+    intermediate_output_from=[researcher, writer, reviewer],
 ).build()
 ```
 
@@ -83,8 +83,8 @@ workflow = MagenticBuilder(
 
 Orchestration builders expose workflow output selection using participant names:
 
-- `output_participants` designates participant emissions as terminal workflow `output` events.
-- `intermediate_participants` designates participant emissions as visible workflow `intermediate` events.
+- `final_output_from` designates participant emissions as terminal workflow `output` events.
+- `intermediate_output_from` designates participant emissions as visible workflow `intermediate` events.
 - Unlisted participant emissions are hidden in explicit designation mode.
 
 If neither list is provided, each builder uses its default terminal contract. Sequential emits the final participant;

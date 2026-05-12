@@ -58,7 +58,7 @@ async def main() -> None:
     # them to text_reasoning content while the final answer remains normal text.
     workflow = GroupChatBuilder(
         participants=[researcher, writer],
-        intermediate_participants=[researcher, writer],
+        intermediate_output_from=[researcher, writer],
         orchestrator_agent=Agent(
             client=_orch_client,
             name="Orchestrator",

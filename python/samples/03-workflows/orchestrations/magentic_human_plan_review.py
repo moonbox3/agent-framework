@@ -136,7 +136,7 @@ async def main() -> None:
     workflow = MagenticBuilder(
         participants=[researcher_agent, analyst_agent],
         enable_plan_review=True,
-        intermediate_participants=[researcher_agent, analyst_agent],
+        intermediate_output_from=[researcher_agent, analyst_agent],
         manager_agent=manager_agent,
         max_round_count=10,
         max_stall_count=1,

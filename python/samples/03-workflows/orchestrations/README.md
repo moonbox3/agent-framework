@@ -81,6 +81,21 @@ from agent_framework.orchestrations import (
 
 ## Tips
 
+**Participant output designation**: Orchestration builders use participant-oriented names for workflow output
+selection. Use `output_participants=[...]` when participant responses should be terminal `output` events, and
+`intermediate_participants=[...]` when participant responses should be visible progress events. In explicit
+designation mode, unlisted participant responses are hidden from caller-facing output streams. Builders validate
+empty explicit designation, duplicate participants, overlap between output and intermediate participants, and unknown
+participant names.
+
+By default, Sequential keeps the final participant terminal. Concurrent, GroupChat, and Magentic keep their synthetic
+aggregator/orchestrator/manager final executors terminal, while participant responses stay hidden unless designated.
+Handoff keeps participants terminal by default.
+
+When an orchestration workflow is exposed via `workflow.as_agent()`, terminal workflow outputs become normal text
+content in the `AgentResponse`; intermediate participant outputs become `text_reasoning` content. This preserves the
+final answer in `.text` while making designated progress available for callers that inspect message contents.
+
 **Magentic checkpointing tip**: Treat `MagenticBuilder.participants` keys as stable identifiers. When resuming from a checkpoint, the rebuilt workflow must reuse the same participant names; otherwise the checkpoint cannot be applied and the run will fail fast.
 
 **Handoff workflow tip**: Handoff workflows maintain the full conversation history including any `Message.additional_properties` emitted by your agents. This ensures routing metadata remains intact across all agent transitions. For specialist-to-specialist handoffs, use `.add_handoff(source, targets)` to configure which agents can route to which others with a fluent, type-safe API.

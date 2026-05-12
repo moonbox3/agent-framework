@@ -16,20 +16,25 @@ Sample: Intermediate vs terminal output labeling
 What this sample shows
 - How ``WorkflowBuilder(output_executors=[...])`` designates which executors emit
   the workflow's terminal output.
-- How yields from non-designated executors automatically surface as
-  ``type='intermediate'`` events, while yields from designated executors surface
-  as ``type='output'``.
+- How ``WorkflowBuilder(intermediate_executors=[...])`` designates which executor
+  yields surface as ``type='intermediate'`` events.
+- How unlisted executor yields are hidden from caller-facing output/intermediate
+  events in explicit designation mode.
 - How the same workflow wrapped via ``workflow.as_agent()`` translates intermediate
   events to ``text_reasoning`` content so existing ``.text`` accessors keep
   returning terminal-only output.
 
-The contract on ``output_executors``:
-- ``None`` (default, legacy): every ``yield_output`` produces ``type='output'``.
-  Emits a ``DeprecationWarning`` at build() time recommending explicit designation.
-- ``[]`` (explicit empty list): strict mode, no terminals. Every yield is
-  ``type='intermediate'``; ``WorkflowRunResult.get_outputs()`` returns ``[]``.
-- ``[X, ...]`` (explicit list): strict mode. Yields from designated executors
-  produce ``type='output'``; all other yields produce ``type='intermediate'``.
+The output designation contract:
+- Compatibility mode: when neither ``output_executors`` nor ``intermediate_executors``
+  is provided, every ``yield_output`` produces ``type='output'``.
+- Explicit designation mode: provide either ``output_executors`` or
+  ``intermediate_executors``. Designated output executors emit terminal
+  ``type='output'`` events; designated intermediate executors emit
+  ``type='intermediate'`` events; unlisted executor yields are hidden from the
+  stream and ``WorkflowRunResult`` output accessors.
+- Validation: explicit designation must not be empty, duplicate executor entries
+  are rejected, an executor cannot be both output and intermediate, unknown
+  executors are rejected, and designated executors must yield workflow output.
 
 Prerequisites
 - No external services required.
@@ -38,7 +43,7 @@ Prerequisites
 
 @executor(id="planner")
 async def planner(messages: list[Message], ctx: WorkflowContext[list[Message], str]) -> None:
-    """Non-designated step: emits an intermediate progress note, then forwards."""
+    """Intermediate step: emits a visible progress note, then forwards."""
     prompt = messages[0].text if messages else ""
     await ctx.yield_output(f"plan: starting work on '{prompt}'")
     await ctx.send_message(messages)
@@ -46,7 +51,7 @@ async def planner(messages: list[Message], ctx: WorkflowContext[list[Message], s
 
 @executor(id="researcher")
 async def researcher(messages: list[Message], ctx: WorkflowContext[list[Message], str]) -> None:
-    """Non-designated step: emits intermediate progress, then forwards."""
+    """Intermediate step: emits visible progress, then forwards."""
     prompt = messages[0].text if messages else ""
     await ctx.yield_output(f"research: gathering data for '{prompt}'")
     await ctx.send_message(messages)
@@ -60,10 +65,15 @@ async def answerer(messages: list[Message], ctx: WorkflowContext[Never, str]) ->
 
 
 async def main() -> None:
-    # Build with explicit output_executors=[answerer]. Only `answerer` yields
-    # produce type='output' events; planner and researcher emit type='intermediate'.
+    # Build with explicit output and intermediate designations. `answerer`
+    # produces terminal type='output' events; planner and researcher produce
+    # visible type='intermediate' progress events.
     workflow = (
-        WorkflowBuilder(start_executor=planner, output_executors=[answerer])
+        WorkflowBuilder(
+            start_executor=planner,
+            output_executors=[answerer],
+            intermediate_executors=[planner, researcher],
+        )
         .add_edge(planner, researcher)
         .add_edge(researcher, answerer)
         .build()
@@ -92,9 +102,7 @@ async def main() -> None:
     agent = workflow.as_agent("planner-agent")
     response = await agent.run("life, the universe, and everything")
     print(f"  response.text (terminal only): {response.text!r}")
-    reasoning = " | ".join(
-        c.text for m in response.messages for c in m.contents if c.type == "text_reasoning"
-    )
+    reasoning = " | ".join(c.text for m in response.messages for c in m.contents if c.type == "text_reasoning")
     print(f"  reasoning content (intermediates): {reasoning!r}")
 
     """

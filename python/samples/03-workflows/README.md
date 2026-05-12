@@ -89,7 +89,7 @@ Write workflows as plain Python async functions — no graph concepts, no execut
 | Multi-Selection Edge Group | [control-flow/multi_selection_edge_group.py](./control-flow/multi_selection_edge_group.py) | Select one or many targets dynamically (subset fan-out) |
 | Simple Loop                | [control-flow/simple_loop.py](./control-flow/simple_loop.py)                               | Feedback loop where an agent judges ABOVE/BELOW/MATCHED |
 | Workflow Cancellation      | [control-flow/workflow_cancellation.py](./control-flow/workflow_cancellation.py)           | Cancel a running workflow using asyncio tasks           |
-| Intermediate vs Terminal Outputs | [control-flow/intermediate_vs_terminal_outputs.py](./control-flow/intermediate_vs_terminal_outputs.py) | Designate output executors so non-designated yields surface as `type='intermediate'` events (and `text_reasoning` content via `as_agent`) |
+| Intermediate vs Terminal Outputs | [control-flow/intermediate_vs_terminal_outputs.py](./control-flow/intermediate_vs_terminal_outputs.py) | Designate terminal and intermediate executors; hide unlisted yields; map intermediate workflow events to `text_reasoning` content via `as_agent` |
 
 ### human-in-the-loop
 
@@ -118,6 +118,22 @@ For additional observability samples in Agent Framework, see the [observability 
 
 Orchestration-focused samples (Sequential, Concurrent, Handoff, GroupChat, Magentic), including builder-based
 `workflow.as_agent(...)` variants, are documented in the [orchestrations](./orchestrations/README.md) directory.
+
+### output designation
+
+Workflow output designation controls which `ctx.yield_output(...)` calls are visible to callers:
+
+- Compatibility mode applies when neither `output_executors` nor `intermediate_executors` is provided. Every
+  executor yield is emitted as a terminal `type='output'` event.
+- Explicit designation mode applies when either list is provided. `output_executors` emit terminal `output`
+  events, `intermediate_executors` emit visible `intermediate` events, and unlisted executor yields are hidden from
+  caller-facing output accessors and streams.
+- Validation rejects empty explicit designation, duplicate executors, overlap between output and intermediate
+  executors, unknown executors, and designated executors that do not yield workflow output.
+
+When a workflow is wrapped with `workflow.as_agent()`, terminal workflow output becomes normal agent text content.
+Intermediate workflow output becomes `text_reasoning` content, so `AgentResponse.text` remains focused on the final
+answer while callers can still inspect progress or supporting work from the response messages.
 
 ### parallelism
 

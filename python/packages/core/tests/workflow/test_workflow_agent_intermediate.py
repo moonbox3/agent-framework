@@ -27,6 +27,7 @@ from agent_framework import (
     WorkflowEvent,
     executor,
 )
+from agent_framework.exceptions import AgentInvalidRequestException
 
 
 @pytest.mark.asyncio
@@ -99,6 +100,55 @@ async def test_workflow_agent_text_accessor_returns_terminal_only() -> None:
     assert isinstance(response, AgentResponse)
     # .text filters to content.type == "text" — intermediate text_reasoning is excluded.
     assert response.text == "the-answer"
+
+
+@pytest.mark.asyncio
+async def test_workflow_agent_hidden_yields_do_not_surface_non_streaming() -> None:
+    """In explicit designation mode, unlisted executor yields stay out of agent responses."""
+
+    @executor
+    async def hidden(messages: list[Message], ctx: WorkflowContext[str, str]) -> None:
+        await ctx.yield_output("hidden-progress")
+        await ctx.send_message("forward")
+
+    @executor
+    async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
+        await ctx.yield_output("visible-answer")
+
+    workflow = WorkflowBuilder(start_executor=hidden, output_executors=[terminal]).add_edge(hidden, terminal).build()
+    agent = workflow.as_agent("test")
+
+    response = await agent.run("hi")
+    all_text = " ".join(c.text for m in response.messages for c in m.contents if hasattr(c, "text"))
+
+    assert response.text == "visible-answer"
+    assert "hidden-progress" not in all_text
+
+
+@pytest.mark.asyncio
+async def test_workflow_agent_hidden_yields_do_not_surface_streaming() -> None:
+    """In explicit designation mode, unlisted executor yields stay out of agent updates."""
+
+    @executor
+    async def hidden(messages: list[Message], ctx: WorkflowContext[str, str]) -> None:
+        await ctx.yield_output("hidden-progress")
+        await ctx.send_message("forward")
+
+    @executor
+    async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
+        await ctx.yield_output("visible-answer")
+
+    workflow = WorkflowBuilder(start_executor=hidden, output_executors=[terminal]).add_edge(hidden, terminal).build()
+    agent = workflow.as_agent("test")
+
+    updates: list[AgentResponseUpdate] = []
+    async for update in agent.run("hi", stream=True):
+        updates.append(update)
+
+    all_text = " ".join(c.text for u in updates for c in u.contents if hasattr(c, "text"))
+
+    assert "visible-answer" in all_text
+    assert "hidden-progress" not in all_text
 
 
 @pytest.mark.asyncio
@@ -183,27 +233,85 @@ async def test_workflow_agent_terminal_text_stays_text_not_reasoning() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_agent_non_streaming_accepts_intermediate_update() -> None:
-    """An intermediate event carrying AgentResponseUpdate must not raise in non-streaming
-    mode. It surfaces as a Message with text_reasoning content."""
+async def test_workflow_agent_non_streaming_rejects_terminal_update() -> None:
+    """A terminal event carrying AgentResponseUpdate is streaming-only and invalid in run()."""
 
     @executor
     async def emit(messages: list[Message], ctx: WorkflowContext[Never, AgentResponseUpdate]) -> None:
-        await ctx.add_event(
-            WorkflowEvent.intermediate(
-                "emit",
-                AgentResponseUpdate(contents=[Content.from_text(text="partial-thought")], role="assistant"),
-            )
-        )
-        await ctx.yield_output("FINAL")
+        await ctx.yield_output(AgentResponseUpdate(contents=[Content.from_text(text="partial")], role="assistant"))
 
     workflow = WorkflowBuilder(start_executor=emit, output_executors=[emit]).build()
     agent = workflow.as_agent("test")
 
-    response = await agent.run("hi")
-    reasoning = " ".join(c.text for m in response.messages for c in m.contents if c.type == "text_reasoning")
-    assert "partial-thought" in reasoning
-    assert response.text == "FINAL"
+    with pytest.raises(AgentInvalidRequestException, match="AgentResponseUpdate"):
+        await agent.run("hi")
+
+
+@pytest.mark.asyncio
+async def test_workflow_agent_non_streaming_rejects_intermediate_update() -> None:
+    """An intermediate event carrying AgentResponseUpdate is streaming-only and invalid in run()."""
+
+    @executor
+    async def emit(messages: list[Message], ctx: WorkflowContext[str, AgentResponseUpdate]) -> None:
+        await ctx.yield_output(AgentResponseUpdate(contents=[Content.from_text(text="partial")], role="assistant"))
+        await ctx.send_message("forward")
+
+    @executor
+    async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
+        await ctx.yield_output("FINAL")
+
+    workflow = (
+        WorkflowBuilder(
+            start_executor=emit,
+            output_executors=[terminal],
+            intermediate_executors=[emit],
+        )
+        .add_edge(emit, terminal)
+        .build()
+    )
+    agent = workflow.as_agent("test")
+
+    with pytest.raises(AgentInvalidRequestException, match="AgentResponseUpdate"):
+        await agent.run("hi")
+
+
+@pytest.mark.asyncio
+async def test_workflow_agent_streaming_update_payloads_preserve_classification() -> None:
+    """Streaming AgentResponseUpdate payloads keep output as text and intermediate as reasoning."""
+
+    @executor
+    async def emit(messages: list[Message], ctx: WorkflowContext[str, AgentResponseUpdate]) -> None:
+        await ctx.yield_output(
+            AgentResponseUpdate(contents=[Content.from_text(text="intermediate-chunk")], role="assistant")
+        )
+        await ctx.send_message("forward")
+
+    @executor
+    async def terminal(message: str, ctx: WorkflowContext[Never, AgentResponseUpdate]) -> None:
+        await ctx.yield_output(
+            AgentResponseUpdate(contents=[Content.from_text(text="terminal-chunk")], role="assistant")
+        )
+
+    workflow = (
+        WorkflowBuilder(
+            start_executor=emit,
+            output_executors=[terminal],
+            intermediate_executors=[emit],
+        )
+        .add_edge(emit, terminal)
+        .build()
+    )
+    agent = workflow.as_agent("test")
+
+    updates: list[AgentResponseUpdate] = []
+    async for update in agent.run("hi", stream=True):
+        updates.append(update)
+
+    reasoning_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text_reasoning")
+    terminal_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text")
+
+    assert "intermediate-chunk" in reasoning_text
+    assert "terminal-chunk" in terminal_text
 
 
 @pytest.mark.asyncio

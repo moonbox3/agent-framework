@@ -578,27 +578,15 @@ class WorkflowAgent(BaseAgent):
                     )
 
                 if isinstance(data, AgentResponseUpdate):
-                    if not is_intermediate:
-                        # Terminal AgentResponseUpdate in non-streaming mode would break
-                        # message ordering if interleaved with non-streaming AgentResponses.
-                        raise AgentInvalidRequestException(
-                            "Output event with AgentResponseUpdate data cannot be emitted in non-streaming mode. "
-                            "Please ensure executors emit AgentResponse for non-streaming workflows."
-                        )
-                    # Intermediate updates surface as reasoning content on a synthesized
-                    # Message; this preserves the partial signal without altering the
-                    # terminal response shape.
-                    messages.append(
-                        Message(
-                            contents=_to_text_reasoning(list(data.contents)),
-                            role=data.role or "assistant",
-                            author_name=data.author_name or output_event.executor_id,
-                            message_id=data.message_id or str(uuid.uuid4()),
-                            raw_representation=data.raw_representation,
-                        )
+                    # AgentResponseUpdate is a streaming-only payload. Accepting it
+                    # in non-streaming runs would make message ordering depend on
+                    # partial chunks for both terminal and intermediate events.
+                    event_label = "Intermediate" if is_intermediate else "Output"
+                    raise AgentInvalidRequestException(
+                        f"{event_label} event with AgentResponseUpdate data cannot be emitted "
+                        "in non-streaming mode. Please ensure executors emit AgentResponse "
+                        "for non-streaming workflows."
                     )
-                    raw_representations.append(data.raw_representation)
-                    continue
 
                 if isinstance(data, AgentResponse):
                     inner_msgs = [_mark_msg(m) for m in data.messages] if is_intermediate else list(data.messages)

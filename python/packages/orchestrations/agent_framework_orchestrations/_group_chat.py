@@ -51,6 +51,7 @@ from ._base_group_chat_orchestrator import (
 )
 from ._orchestration_request_info import AgentApprovalExecutor
 from ._orchestrator_helpers import clean_conversation_for_handoff
+from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -618,7 +619,8 @@ class GroupChatBuilder:
         termination_condition: TerminationCondition | None = None,
         max_rounds: int | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
-        intermediate_outputs: bool = False,
+        output_participants: Sequence[ParticipantSpecifier] | None = None,
+        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
     ) -> None:
         """Initialize the GroupChatBuilder.
 
@@ -635,9 +637,10 @@ class GroupChatBuilder:
                 True to terminate the conversation, False to continue.
             max_rounds: Optional maximum number of orchestrator rounds to prevent infinite conversations.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
-                workflow `output` event in addition to the orchestrator's. By default (False)
-                only the orchestrator's output surfaces.
+            output_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as terminal workflow ``output`` events alongside the orchestrator.
+            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
         self._participant_factories: list[Callable[[], SupportsAgentRun | Executor]] = []
@@ -658,7 +661,10 @@ class GroupChatBuilder:
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] = set()
 
-        self._intermediate_outputs: bool = intermediate_outputs
+        self._output_participants = list(output_participants) if output_participants is not None else None
+        self._intermediate_participants = (
+            list(intermediate_participants) if intermediate_participants is not None else None
+        )
 
         if participants is None and participant_factories is None:
             raise ValueError("Either participants or participant_factories must be provided.")
@@ -1001,15 +1007,14 @@ class GroupChatBuilder:
         participants: list[Executor] = self._resolve_participants()
         orchestrator: Executor = self._resolve_orchestrator(participants)
 
-        # Default: only the orchestrator is terminal; participants surface as intermediate.
-        # With intermediate_outputs=True, participants are also designated so their yields
-        # surface as type='output' — preserving the legacy contract.
+        # Default: only the orchestrator is terminal; participant outputs are hidden
+        # unless explicitly designated as terminal or intermediate.
         # `group_chat` orchestrator-progress events keep their dedicated event type.
-        designated: list[Executor | SupportsAgentRun] = (
-            [orchestrator, *participants] if self._intermediate_outputs else [orchestrator]
-        )
-        intermediate_designated: list[Executor | SupportsAgentRun] = (
-            [] if self._intermediate_outputs else [p for p in participants if p.workflow_output_types]
+        designated, intermediate_designated = resolve_participant_designation(
+            participants=participants,
+            output_participants=self._output_participants,
+            intermediate_participants=self._intermediate_participants,
+            extra_output_executors=[orchestrator],
         )
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,

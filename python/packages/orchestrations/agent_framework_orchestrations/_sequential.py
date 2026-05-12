@@ -32,6 +32,7 @@ from agent_framework._workflows._workflow_builder import WorkflowBuilder
 from agent_framework._workflows._workflow_context import WorkflowContext
 
 from ._orchestration_request_info import AgentApprovalExecutor
+from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,8 @@ class SequentialBuilder:
         participants: Sequence[SupportsAgentRun | Executor],
         checkpoint_storage: CheckpointStorage | None = None,
         chain_only_agent_responses: bool = False,
-        intermediate_outputs: bool = False,
+        output_participants: Sequence[ParticipantSpecifier] | None = None,
+        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
     ) -> None:
         """Initialize the SequentialBuilder.
 
@@ -101,16 +103,20 @@ class SequentialBuilder:
             chain_only_agent_responses: If True, only agent responses are chained between agents.
                 By default, the full conversation context is passed to the next agent. This also applies
                 to Executor -> Agent transitions if the executor sends `AgentExecutorResponse`.
-            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
-                workflow `output` event in addition to the terminator's. By default (False) only
-                the last participant's output surfaces.
+            output_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as terminal workflow ``output`` events. Defaults to the final participant.
+            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._participants: list[SupportsAgentRun | Executor] = []
         self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
         self._chain_only_agent_responses: bool = chain_only_agent_responses
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] | None = None
-        self._intermediate_outputs: bool = intermediate_outputs
+        self._output_participants = list(output_participants) if output_participants is not None else None
+        self._intermediate_participants = (
+            list(intermediate_participants) if intermediate_participants is not None else None
+        )
 
         self._set_participants(participants)
 
@@ -234,15 +240,13 @@ class SequentialBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
-        # Default: only the terminator is terminal; earlier participants' yields
-        # surface as type='intermediate'. With intermediate_outputs=True, every
-        # participant is designated so all yields surface as type='output' — preserving
-        # the legacy contract for callers who opt in to seeing per-participant outputs.
-        designated: list[Executor | SupportsAgentRun] = (
-            list(participants) if self._intermediate_outputs else [participants[-1]]
-        )
-        intermediate_designated: list[Executor | SupportsAgentRun] = (
-            [] if self._intermediate_outputs else [p for p in participants[:-1] if p.workflow_output_types]
+        # Default: only the terminator is terminal. Explicit participant designation
+        # can surface selected earlier participant outputs as terminal or intermediate.
+        designated, intermediate_designated = resolve_participant_designation(
+            participants=participants,
+            output_participants=self._output_participants,
+            intermediate_participants=self._intermediate_participants,
+            default_output_participants=[participants[-1]],
         )
         builder = WorkflowBuilder(
             start_executor=input_conv,

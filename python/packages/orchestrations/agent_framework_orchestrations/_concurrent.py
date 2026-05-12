@@ -18,6 +18,7 @@ from agent_framework._workflows._workflow_context import WorkflowContext
 from typing_extensions import Never
 
 from ._orchestration_request_info import AgentApprovalExecutor
+from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
 
 logger = logging.getLogger(__name__)
 
@@ -205,23 +206,28 @@ class ConcurrentBuilder:
         *,
         participants: Sequence[SupportsAgentRun | Executor],
         checkpoint_storage: CheckpointStorage | None = None,
-        intermediate_outputs: bool = False,
+        output_participants: Sequence[ParticipantSpecifier] | None = None,
+        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
     ) -> None:
         """Initialize the ConcurrentBuilder.
 
         Args:
             participants: Sequence of agent or executor instances to run in parallel.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            intermediate_outputs: If True, every participant's `yield_output` surfaces as a
-                workflow `output` event in addition to the aggregator's. By default
-                (False) only the aggregator's output surfaces.
+            output_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as terminal workflow ``output`` events alongside the aggregator.
+            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._participants: list[SupportsAgentRun | Executor] = []
         self._aggregator: Executor | None = None
         self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] | None = None
-        self._intermediate_outputs: bool = intermediate_outputs
+        self._output_participants = list(output_participants) if output_participants is not None else None
+        self._intermediate_participants = (
+            list(intermediate_participants) if intermediate_participants is not None else None
+        )
 
         self._set_participants(participants)
 
@@ -396,14 +402,13 @@ class ConcurrentBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
-        # Default: only the aggregator is terminal; participants surface as intermediate.
-        # With intermediate_outputs=True, participants are also designated so their yields
-        # surface as type='output' — preserving the legacy "see every participant" contract.
-        designated: list[Executor | SupportsAgentRun] = (
-            [aggregator, *participants] if self._intermediate_outputs else [aggregator]
-        )
-        intermediate_designated: list[Executor | SupportsAgentRun] = (
-            [] if self._intermediate_outputs else [p for p in participants if p.workflow_output_types]
+        # Default: only the aggregator is terminal; participant outputs are hidden
+        # unless explicitly designated as terminal or intermediate.
+        designated, intermediate_designated = resolve_participant_designation(
+            participants=participants,
+            output_participants=self._output_participants,
+            intermediate_participants=self._intermediate_participants,
+            extra_output_executors=[aggregator],
         )
         builder = WorkflowBuilder(
             start_executor=dispatcher,

@@ -53,6 +53,7 @@ from agent_framework._workflows._workflow_context import WorkflowContext
 
 from ._base_group_chat_orchestrator import TerminationCondition
 from ._orchestrator_helpers import clean_conversation_for_handoff
+from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -589,6 +590,8 @@ class HandoffBuilder:
         description: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         termination_condition: TerminationCondition | None = None,
+        output_participants: Sequence[ParticipantSpecifier] | None = None,
+        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -610,6 +613,10 @@ class HandoffBuilder:
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             termination_condition: Optional callable that receives the full conversation and returns True
                 (or awaitable True) if the workflow should terminate.
+            output_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as terminal workflow ``output`` events. Defaults to all participants.
+            intermediate_participants: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
         """
         self._name = name
         self._description = description
@@ -635,6 +642,10 @@ class HandoffBuilder:
 
         # Termination related members
         self._termination_condition: Callable[[list[Message]], bool | Awaitable[bool]] | None = termination_condition
+        self._output_participants = list(output_participants) if output_participants is not None else None
+        self._intermediate_participants = (
+            list(intermediate_participants) if intermediate_participants is not None else None
+        )
 
     def participants(self, participants: Sequence[Agent]) -> "HandoffBuilder":
         """Register the agents that will participate in the handoff workflow.
@@ -956,14 +967,21 @@ class HandoffBuilder:
             raise ValueError("Must call with_start_agent(...) before building the workflow.")
         start_executor = executors[self._resolve_to_id(resolved_agents[self._start_id])]
         # Handoff has no separate terminator: every participant's reply is a primary
-        # output (termination is implicit when no handoff fires). All participants are
-        # designated outputs so each yield surfaces as type='output'.
+        # output by default. Explicit participant designation can narrow or reclassify
+        # selected speakers.
+        output_executors, intermediate_executors = resolve_participant_designation(
+            participants=list(executors.values()),
+            output_participants=self._output_participants,
+            intermediate_participants=self._intermediate_participants,
+            default_output_participants=list(executors.values()),
+        )
         builder = WorkflowBuilder(
             name=self._name,
             description=self._description,
             start_executor=start_executor,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=list(executors.values()),
+            output_executors=output_executors,
+            intermediate_executors=intermediate_executors,
         )
 
         # Add the appropriate edges

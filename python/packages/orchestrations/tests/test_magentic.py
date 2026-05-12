@@ -630,9 +630,13 @@ class StubAssistantsAgent(BaseAgent):
 async def _collect_agent_responses_setup(participant: SupportsAgentRun) -> list[Message]:
     captured: list[Message] = []
 
-    wf = MagenticBuilder(participants=[participant], intermediate_outputs=True, manager=InvokeOnceManager()).build()
+    wf = MagenticBuilder(
+        participants=[participant],
+        output_participants=[participant],
+        manager=InvokeOnceManager(),
+    ).build()
 
-    # With intermediate_outputs=True, participants are designated as outputs alongside
+    # With output_participants, participants are designated as outputs alongside
     # the manager — so their streaming chunks surface as type='output' (not intermediate).
     events: list[WorkflowEvent] = []
     async for ev in wf.run("task", stream=True):

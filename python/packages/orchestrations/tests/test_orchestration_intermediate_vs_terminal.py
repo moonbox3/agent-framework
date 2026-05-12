@@ -634,6 +634,6 @@ def _build_handoff_with_designation(**kwargs: Any) -> None:
         ({"output_participants": ["missing"]}, "Unknown output participant"),
     ],
 )
-def test_participant_designation_validation(build: Callable[..., None], kwargs: dict[str, Any], match: str) -> None:
+def test_participant_output_config_validation(build: Callable[..., None], kwargs: dict[str, Any], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         build(**kwargs)

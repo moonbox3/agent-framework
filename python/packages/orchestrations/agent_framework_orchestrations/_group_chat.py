@@ -51,7 +51,10 @@ from ._base_group_chat_orchestrator import (
 )
 from ._orchestration_request_info import AgentApprovalExecutor
 from ._orchestrator_helpers import clean_conversation_for_handoff
-from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
+from ._participant_output_config import (
+    _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
+    _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
+)
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -619,8 +622,8 @@ class GroupChatBuilder:
         termination_condition: TerminationCondition | None = None,
         max_rounds: int | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
-        output_participants: Sequence[ParticipantSpecifier] | None = None,
-        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
+        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         """Initialize the GroupChatBuilder.
 
@@ -1010,7 +1013,7 @@ class GroupChatBuilder:
         # Default: only the orchestrator is terminal; participant outputs are hidden
         # unless explicitly designated as terminal or intermediate.
         # `group_chat` orchestrator-progress events keep their dedicated event type.
-        designated, intermediate_designated = resolve_participant_designation(
+        designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
             output_participants=self._output_participants,
             intermediate_participants=self._intermediate_participants,

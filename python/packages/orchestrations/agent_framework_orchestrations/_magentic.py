@@ -38,7 +38,10 @@ from ._base_group_chat_orchestrator import (
     GroupChatWorkflowContextOutT,
     ParticipantRegistry,
 )
-from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
+from ._participant_output_config import (
+    _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
+    _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
+)
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -1410,8 +1413,8 @@ class MagenticBuilder:
         # Existing params
         enable_plan_review: bool = False,
         checkpoint_storage: CheckpointStorage | None = None,
-        output_participants: Sequence[ParticipantSpecifier] | None = None,
-        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
+        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         """Initialize the Magentic workflow builder.
 
@@ -1771,7 +1774,7 @@ class MagenticBuilder:
         # Default: only the manager is terminal; worker outputs are hidden unless
         # explicitly designated as terminal or intermediate.
         # `magentic_orchestrator` events keep their dedicated event type.
-        designated, intermediate_designated = resolve_participant_designation(
+        designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
             output_participants=self._output_participants,
             intermediate_participants=self._intermediate_participants,

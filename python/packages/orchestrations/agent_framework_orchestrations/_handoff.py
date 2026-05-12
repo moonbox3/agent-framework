@@ -53,7 +53,10 @@ from agent_framework._workflows._workflow_context import WorkflowContext
 
 from ._base_group_chat_orchestrator import TerminationCondition
 from ._orchestrator_helpers import clean_conversation_for_handoff
-from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
+from ._participant_output_config import (
+    _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
+    _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
+)
 
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore # pragma: no cover
@@ -590,8 +593,8 @@ class HandoffBuilder:
         description: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         termination_condition: TerminationCondition | None = None,
-        output_participants: Sequence[ParticipantSpecifier] | None = None,
-        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
+        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -969,7 +972,7 @@ class HandoffBuilder:
         # Handoff has no separate terminator: every participant's reply is a primary
         # output by default. Explicit participant designation can narrow or reclassify
         # selected speakers.
-        output_executors, intermediate_executors = resolve_participant_designation(
+        output_executors, intermediate_executors = _resolve_participant_output_config(
             participants=list(executors.values()),
             output_participants=self._output_participants,
             intermediate_participants=self._intermediate_participants,

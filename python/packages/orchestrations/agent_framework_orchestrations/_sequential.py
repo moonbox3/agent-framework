@@ -32,7 +32,10 @@ from agent_framework._workflows._workflow_builder import WorkflowBuilder
 from agent_framework._workflows._workflow_context import WorkflowContext
 
 from ._orchestration_request_info import AgentApprovalExecutor
-from ._participant_designation import ParticipantSpecifier, resolve_participant_designation
+from ._participant_output_config import (
+    _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
+    _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +95,8 @@ class SequentialBuilder:
         participants: Sequence[SupportsAgentRun | Executor],
         checkpoint_storage: CheckpointStorage | None = None,
         chain_only_agent_responses: bool = False,
-        output_participants: Sequence[ParticipantSpecifier] | None = None,
-        intermediate_participants: Sequence[ParticipantSpecifier] | None = None,
+        output_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
+        intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None = None,
     ) -> None:
         """Initialize the SequentialBuilder.
 
@@ -242,7 +245,7 @@ class SequentialBuilder:
 
         # Default: only the terminator is terminal. Explicit participant designation
         # can surface selected earlier participant outputs as terminal or intermediate.
-        designated, intermediate_designated = resolve_participant_designation(
+        designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
             output_participants=self._output_participants,
             intermediate_participants=self._intermediate_participants,

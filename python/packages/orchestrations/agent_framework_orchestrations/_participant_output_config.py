@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Participant-oriented workflow output designation helpers."""
+"""Participant-oriented workflow output configuration helpers."""
 
 from collections.abc import Sequence
 
@@ -8,21 +8,21 @@ from agent_framework import SupportsAgentRun
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._executor import Executor
 
-ParticipantSpecifier = str | SupportsAgentRun | Executor
-WorkflowExecutorSpecifier = Executor | SupportsAgentRun
+_ParticipantOutputSpecifier = str | SupportsAgentRun | Executor
+_WorkflowExecutorSpecifier = Executor | SupportsAgentRun
 
 
-def resolve_participant_designation(
+def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
     *,
     participants: Sequence[Executor],
-    output_participants: Sequence[ParticipantSpecifier] | None,
-    intermediate_participants: Sequence[ParticipantSpecifier] | None,
+    output_participants: Sequence[_ParticipantOutputSpecifier] | None,
+    intermediate_participants: Sequence[_ParticipantOutputSpecifier] | None,
     default_output_participants: Sequence[Executor] = (),
     extra_output_executors: Sequence[Executor] = (),
-) -> tuple[list[WorkflowExecutorSpecifier], list[WorkflowExecutorSpecifier]]:
-    """Resolve public participant designations into workflow executor designations."""
-    explicit_designation = output_participants is not None or intermediate_participants is not None
-    if explicit_designation and not (output_participants or intermediate_participants):
+) -> tuple[list[_WorkflowExecutorSpecifier], list[_WorkflowExecutorSpecifier]]:
+    """Resolve public participant output config into workflow executor config."""
+    explicit_config = output_participants is not None or intermediate_participants is not None
+    if explicit_config and not (output_participants or intermediate_participants):
         raise ValueError("output_participants and intermediate_participants cannot both be empty.")
 
     participants_by_id = {participant.id: participant for participant in participants}
@@ -57,13 +57,13 @@ def resolve_participant_designation(
     if overlap:
         raise ValueError(f"Participants cannot be both output and intermediate designated: {overlap}")
 
-    output_executors: list[WorkflowExecutorSpecifier] = [*extra_output_executors, *output_designated]
-    intermediate_executors: list[WorkflowExecutorSpecifier] = list(intermediate_designated)
+    output_executors: list[_WorkflowExecutorSpecifier] = [*extra_output_executors, *output_designated]
+    intermediate_executors: list[_WorkflowExecutorSpecifier] = list(intermediate_designated)
     return output_executors, intermediate_executors
 
 
 def _resolve_designated_participants(
-    designations: Sequence[ParticipantSpecifier],
+    designations: Sequence[_ParticipantOutputSpecifier],
     *,
     kind: str,
     participants_by_id: dict[str, Executor],
@@ -85,7 +85,7 @@ def _resolve_designated_participants(
     return resolved
 
 
-def _participant_id(participant: ParticipantSpecifier) -> str:
+def _participant_id(participant: _ParticipantOutputSpecifier) -> str:
     if isinstance(participant, str):
         return participant
     if isinstance(participant, Executor):

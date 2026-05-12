@@ -135,7 +135,7 @@ WorkflowEventType = Literal[
 # orchestration-internal events (``group_chat``, ``handoff_sent``,
 # ``magentic_orchestrator``) — stays inside the workflow and is not surfaced to
 # agent callers. Internal to the ``_workflows`` package.
-_AGENT_FORWARDED_EVENT_TYPES: frozenset[str] = frozenset({
+AGENT_FORWARDED_EVENT_TYPES: frozenset[str] = frozenset({
     "output",
     "intermediate",
     "data",  # deprecated alias for intermediate; retained for backward compat

@@ -32,7 +32,7 @@ from .._types import (
 from ..exceptions import AgentInvalidRequestException, AgentInvalidResponseException
 from ._checkpoint import CheckpointStorage
 from ._events import (
-    _AGENT_FORWARDED_EVENT_TYPES,
+    AGENT_FORWARDED_EVENT_TYPES,
     WorkflowEvent,
 )
 from ._message_utils import normalize_messages_input
@@ -321,7 +321,7 @@ class WorkflowAgent(BaseAgent):
             function_invocation_kwargs=function_invocation_kwargs,
             client_kwargs=client_kwargs,
         ):
-            if event.type in _AGENT_FORWARDED_EVENT_TYPES:
+            if event.type in AGENT_FORWARDED_EVENT_TYPES:
                 output_events.append(event)
 
         result = self._convert_workflow_events_to_agent_response(response_id, output_events)
@@ -686,7 +686,7 @@ class WorkflowAgent(BaseAgent):
           orchestration-internal events like ``group_chat``/``handoff_sent``/
           ``magentic_orchestrator``) is dropped.
         """
-        if event.type not in _AGENT_FORWARDED_EVENT_TYPES:
+        if event.type not in AGENT_FORWARDED_EVENT_TYPES:
             return []
 
         if event.type != "request_info":

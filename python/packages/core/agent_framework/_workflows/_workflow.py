@@ -74,6 +74,14 @@ class WorkflowRunResult(list[WorkflowEvent]):
         """
         return [event.data for event in self if event.type == "output"]
 
+    def get_intermediate_outputs(self) -> list[Any]:
+        """Get all intermediate outputs from the workflow run result.
+
+        Returns:
+            A list of intermediate outputs produced by the workflow during its execution.
+        """
+        return [event.data for event in self if event.type == "intermediate"]
+
     def get_request_info_events(self) -> list[WorkflowEvent[Any]]:
         """Get all request info events from the workflow run result.
 
@@ -105,20 +113,38 @@ class WorkflowRunResult(list[WorkflowEvent]):
 
 @dataclass(frozen=True)
 class OutputDesignation:
-    """Immutable rule for labeling executor yields as terminal vs intermediate outputs.
+    """Immutable rule for labeling executor yields as terminal, intermediate, or hidden outputs.
 
-    ``designated`` is ``None`` in legacy mode (every yield is terminal) and a
-    ``frozenset[str]`` of executor IDs in strict mode (only those yields are terminal).
+    ``outputs`` is ``None`` in legacy mode (every yield is terminal). In explicit mode,
+    ``outputs`` and ``intermediates`` are disjoint executor ID sets; unlisted executor
+    yields are hidden from caller-facing output/intermediate events.
     Package-internal value type owned by ``Workflow``; not exported from ``agent_framework``.
     """
 
-    designated: frozenset[str] | None = field(default=None)
+    outputs: frozenset[str] | None = field(default=None)
+    intermediates: frozenset[str] = field(default_factory=lambda: frozenset[str]())
 
     def is_terminal(self, executor_id: str) -> bool:
         """Return True when ``executor_id``'s yields should be labeled type='output'."""
-        if self.designated is None:
+        if self.outputs is None:
             return True
-        return executor_id in self.designated
+        return executor_id in self.outputs
+
+    def is_intermediate(self, executor_id: str) -> bool:
+        """Return True when ``executor_id``'s yields should be labeled type='intermediate'."""
+        if self.outputs is None:
+            return False
+        return executor_id in self.intermediates
+
+    def classify(self, executor_id: str) -> Literal["output", "intermediate"] | None:
+        """Return the workflow event type for this executor's yield, or None when hidden."""
+        if self.outputs is None:
+            return "output"
+        if executor_id in self.outputs:
+            return "output"
+        if executor_id in self.intermediates:
+            return "intermediate"
+        return None
 
 
 class Workflow(DictConvertible):
@@ -202,6 +228,7 @@ class Workflow(DictConvertible):
         description: str | None = None,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         output_executors: list[str] | None = None,
+        intermediate_executors: list[str] | None = None,
     ):
         """Initialize the workflow with a list of edges.
 
@@ -218,9 +245,10 @@ class Workflow(DictConvertible):
             description: Optional description of what the workflow does. If the workflow is built using
                 WorkflowBuilder, this will be the description of the builder.
             output_executors: List of executor IDs designated as terminal outputs, or
-                ``None`` for legacy mode (every yield is ``type='output'``). Any list
-                (including ``[]``) opts into strict mode where only designated yields are
-                ``type='output'``; see ``WorkflowBuilder`` for the canonical contract.
+                ``None`` for legacy mode when ``intermediate_executors`` is also ``None``.
+            intermediate_executors: List of executor IDs designated as intermediate outputs.
+                In explicit designation mode, unlisted executor yields are hidden from
+                caller-facing output/intermediate events.
         """
         self.edge_groups = list(edge_groups)
         self.executors = dict(executors)
@@ -236,10 +264,16 @@ class Workflow(DictConvertible):
         self.graph_signature = self._compute_graph_signature()
         self.graph_signature_hash = self._hash_graph_signature(self.graph_signature)
 
-        # Single value type encodes legacy (None) vs strict (frozenset, possibly empty)
-        # output-designation policy; threaded as a parameter into executor invocations.
+        # Single value type encodes legacy vs explicit output-designation policy;
+        # threaded as a parameter into executor invocations.
+        output_designation_ids = (
+            frozenset(output_executors)
+            if output_executors is not None
+            else (frozenset[str]() if intermediate_executors is not None else None)
+        )
         self._output_designation: OutputDesignation = OutputDesignation(
-            designated=frozenset(output_executors) if output_executors is not None else None,
+            outputs=output_designation_ids,
+            intermediates=frozenset(intermediate_executors or []),
         )
 
         # Store non-serializable runtime objects as private attributes
@@ -279,7 +313,10 @@ class Workflow(DictConvertible):
             "edge_groups": [group.to_dict() for group in self.edge_groups],
             "executors": {executor_id: executor.to_dict() for executor_id, executor in self.executors.items()},
             "output_executors": (
-                sorted(self._output_designation.designated) if self._output_designation.designated is not None else None
+                sorted(self._output_designation.outputs) if self._output_designation.outputs is not None else None
+            ),
+            "intermediate_executors": (
+                sorted(self._output_designation.intermediates) if self._output_designation.outputs is not None else None
             ),
         }
 
@@ -320,10 +357,18 @@ class Workflow(DictConvertible):
         In legacy mode (no explicit ``output_executors``), returns every executor in the
         workflow. In strict mode, returns only the designated output executors.
         """
-        designated = self._output_designation.designated
+        designated = self._output_designation.outputs
         if designated is None:
             return list(self.executors.values())
         return [self.executors[executor_id] for executor_id in designated if executor_id in self.executors]
+
+    def get_intermediate_executors(self) -> list[Executor]:
+        """Get the list of intermediate executors in the workflow."""
+        return [
+            self.executors[executor_id]
+            for executor_id in self._output_designation.intermediates
+            if executor_id in self.executors
+        ]
 
     def is_terminal_executor(self, executor_id: str) -> bool:
         """Return True when ``executor_id``'s yields are labeled type='output'.
@@ -333,6 +378,10 @@ class Workflow(DictConvertible):
         than re-encoding the rule as a set-membership check.
         """
         return self._output_designation.is_terminal(executor_id)
+
+    def is_intermediate_executor(self, executor_id: str) -> bool:
+        """Return True when ``executor_id``'s yields are labeled type='intermediate'."""
+        return self._output_designation.is_intermediate(executor_id)
 
     def get_executors_list(self) -> list[Executor]:
         """Get the list of executors in the workflow."""

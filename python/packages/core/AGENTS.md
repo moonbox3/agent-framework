@@ -77,7 +77,10 @@ agent_framework/
 ### Workflows (`_workflows/`)
 
 - **`Workflow`** - Graph-based workflow definition
-- **`WorkflowBuilder`** - Fluent API for building workflows
+- **`WorkflowBuilder`** - Fluent API for building workflows, including explicit
+  `output_executors` / `intermediate_executors` designation for caller-facing emissions
+- **`WorkflowRunResult`** - Non-streaming workflow result with terminal `get_outputs()`
+  and intermediate `get_intermediate_outputs()` accessors
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

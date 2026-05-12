@@ -1001,17 +1001,21 @@ class GroupChatBuilder:
         participants: list[Executor] = self._resolve_participants()
         orchestrator: Executor = self._resolve_orchestrator(participants)
 
-        # Default: only the orchestrator is designated; participants surface as intermediate.
+        # Default: only the orchestrator is terminal; participants surface as intermediate.
         # With intermediate_outputs=True, participants are also designated so their yields
         # surface as type='output' — preserving the legacy contract.
         # `group_chat` orchestrator-progress events keep their dedicated event type.
         designated: list[Executor | SupportsAgentRun] = (
             [orchestrator, *participants] if self._intermediate_outputs else [orchestrator]
         )
+        intermediate_designated: list[Executor | SupportsAgentRun] = (
+            [] if self._intermediate_outputs else [p for p in participants if p.workflow_output_types]
+        )
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
             output_executors=designated,
+            intermediate_executors=intermediate_designated,
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

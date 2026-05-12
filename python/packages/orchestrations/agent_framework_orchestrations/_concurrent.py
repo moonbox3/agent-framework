@@ -396,16 +396,20 @@ class ConcurrentBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
-        # Default: only the aggregator is designated; participants surface as intermediate.
+        # Default: only the aggregator is terminal; participants surface as intermediate.
         # With intermediate_outputs=True, participants are also designated so their yields
         # surface as type='output' — preserving the legacy "see every participant" contract.
         designated: list[Executor | SupportsAgentRun] = (
             [aggregator, *participants] if self._intermediate_outputs else [aggregator]
         )
+        intermediate_designated: list[Executor | SupportsAgentRun] = (
+            [] if self._intermediate_outputs else [p for p in participants if p.workflow_output_types]
+        )
         builder = WorkflowBuilder(
             start_executor=dispatcher,
             checkpoint_storage=self._checkpoint_storage,
             output_executors=designated,
+            intermediate_executors=intermediate_designated,
         )
         # Fan-out for parallel execution
         builder.add_fan_out_edges(dispatcher, participants)

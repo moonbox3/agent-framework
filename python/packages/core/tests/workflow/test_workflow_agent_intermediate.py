@@ -31,7 +31,7 @@ from agent_framework import (
 
 @pytest.mark.asyncio
 async def test_workflow_agent_forwards_intermediate_events_as_text_reasoning() -> None:
-    """An intermediate yield from a non-designated executor surfaces through as_agent
+    """An intermediate yield from an intermediate-designated executor surfaces through as_agent
     as an AgentResponseUpdate carrying text_reasoning content."""
 
     @executor
@@ -43,7 +43,15 @@ async def test_workflow_agent_forwards_intermediate_events_as_text_reasoning() -
     async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("FINAL")
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[terminal]).add_edge(emit, terminal).build()
+    workflow = (
+        WorkflowBuilder(
+            start_executor=emit,
+            output_executors=[terminal],
+            intermediate_executors=[emit],
+        )
+        .add_edge(emit, terminal)
+        .build()
+    )
     agent = workflow.as_agent("test")
 
     updates: list[AgentResponseUpdate] = []
@@ -76,7 +84,15 @@ async def test_workflow_agent_text_accessor_returns_terminal_only() -> None:
     async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("the-answer")
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[terminal]).add_edge(emit, terminal).build()
+    workflow = (
+        WorkflowBuilder(
+            start_executor=emit,
+            output_executors=[terminal],
+            intermediate_executors=[emit],
+        )
+        .add_edge(emit, terminal)
+        .build()
+    )
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")
@@ -114,7 +130,7 @@ async def test_workflow_agent_intermediate_message_preserves_additional_properti
 
     Regression test for the omitted field in _mark_msg — without forwarding
     additional_properties, producer-attached metadata (tracking_id, conversation_id, etc.)
-    silently disappears for messages flowing through non-designated executors.
+    silently disappears for messages flowing through intermediate-designated executors.
     """
 
     @executor
@@ -131,7 +147,15 @@ async def test_workflow_agent_intermediate_message_preserves_additional_properti
     async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("done")
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[terminal]).add_edge(emit, terminal).build()
+    workflow = (
+        WorkflowBuilder(
+            start_executor=emit,
+            output_executors=[terminal],
+            intermediate_executors=[emit],
+        )
+        .add_edge(emit, terminal)
+        .build()
+    )
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")

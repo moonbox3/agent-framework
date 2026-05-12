@@ -1161,7 +1161,7 @@ async def test_output_executors_with_nonexistent_executor_id() -> None:
     workflow = WorkflowBuilder(start_executor=executor_a).build()
 
     # Designate a nonexistent executor so the workflow-level filter drops every yield.
-    workflow._output_designation = OutputDesignation(designated=frozenset({"nonexistent_executor"}))  # type: ignore[attr-defined]
+    workflow._output_designation = OutputDesignation(outputs=frozenset({"nonexistent_executor"}))  # type: ignore[attr-defined]
 
     result = await workflow.run(NumberMessage(data=0))
     outputs = result.get_outputs()
@@ -1257,7 +1257,7 @@ async def test_output_executors_filtering_with_run_responses_streaming() -> None
     # Designate a different executor so the workflow-level filter drops the approval yield.
     from agent_framework._workflows._workflow import OutputDesignation
 
-    workflow._output_designation = OutputDesignation(designated=frozenset({"other_executor"}))  # type: ignore[attr-defined]
+    workflow._output_designation = OutputDesignation(outputs=frozenset({"other_executor"}))  # type: ignore[attr-defined]
 
     # Send approval response via streaming
     responses = {request_events[0].request_id: ApprovalMessage(approved=True)}

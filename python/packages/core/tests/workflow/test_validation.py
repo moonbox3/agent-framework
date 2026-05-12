@@ -608,23 +608,77 @@ def test_output_validation_fails_for_executor_without_output_types():
     assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
 
 
-def test_output_validation_empty_list_passes():
-    """Test that output validation passes with an explicit empty output executors list.
-
-    Under the strict-output contract, ``output_executors=[]`` means "no terminals" —
-    no executor's yield is type='output'. This is distinct from the legacy default
-    (``output_executors=None``) which treats every executor as an output.
-    """
+def test_output_validation_empty_explicit_designation_fails():
+    """Test that explicit mode rejects an empty output/intermediate designation."""
     executor1 = OutputExecutor(id="executor1")
     executor2 = OutputExecutor(id="executor2")
 
-    workflow = WorkflowBuilder(start_executor=executor1, output_executors=[]).add_edge(executor1, executor2).build()
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        WorkflowBuilder(start_executor=executor1, output_executors=[]).add_edge(executor1, executor2).build()
+
+    assert "at least one output or intermediate executor" in str(exc_info.value)
+    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+
+
+def test_output_validation_with_valid_intermediate_executors():
+    """Test that output validation passes when intermediate executors exist and have output types."""
+    executor1 = OutputExecutor(id="executor1")
+    executor2 = OutputExecutor(id="executor2")
+
+    workflow = (
+        WorkflowBuilder(start_executor=executor1, intermediate_executors=[executor1])
+        .add_edge(executor1, executor2)
+        .build()
+    )
 
     assert workflow is not None
-    # Explicit empty list = strict mode with zero designated outputs.
-    assert workflow.get_output_executors() == []
-    assert not workflow.is_terminal_executor("executor1")
+    assert {ex.id for ex in workflow.get_intermediate_executors()} == {"executor1"}
+    assert workflow.is_intermediate_executor("executor1")
     assert not workflow.is_terminal_executor("executor2")
+
+
+def test_output_validation_fails_for_designation_overlap():
+    """Test that an executor cannot be both terminal and intermediate."""
+    executor1 = OutputExecutor(id="executor1")
+
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        WorkflowBuilder(
+            start_executor=executor1,
+            output_executors=[executor1],
+            intermediate_executors=[executor1],
+        ).build()
+
+    assert "both output and intermediate" in str(exc_info.value)
+    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+
+
+def test_output_validation_fails_for_duplicate_designation():
+    """Test that duplicate output or intermediate designation entries are rejected."""
+    executor1 = OutputExecutor(id="executor1")
+
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        WorkflowBuilder(start_executor=executor1, output_executors=[executor1, executor1]).build()
+
+    assert "Duplicate output executor designation" in str(exc_info.value)
+    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
+
+
+def test_output_validation_fails_for_unknown_intermediate_executor():
+    """Test that intermediate designation rejects executors outside the workflow graph."""
+    executor1 = OutputExecutor(id="executor1")
+    executor2 = OutputExecutor(id="executor2")
+    missing = OutputExecutor(id="missing")
+
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        (
+            WorkflowBuilder(start_executor=executor1, intermediate_executors=[missing])
+            .add_edge(executor1, executor2)
+            .build()
+        )
+
+    assert "not present in the workflow graph" in str(exc_info.value)
+    assert "missing" in str(exc_info.value)
+    assert exc_info.value.validation_type == ValidationTypeEnum.OUTPUT_VALIDATION
 
 
 def test_output_validation_with_direct_validate_workflow_graph():

@@ -234,17 +234,21 @@ class SequentialBuilder:
         # Resolve participants and participant factories to executors
         participants: list[Executor] = self._resolve_participants()
 
-        # Default: only the terminator is designated; earlier participants' yields
+        # Default: only the terminator is terminal; earlier participants' yields
         # surface as type='intermediate'. With intermediate_outputs=True, every
         # participant is designated so all yields surface as type='output' — preserving
         # the legacy contract for callers who opt in to seeing per-participant outputs.
         designated: list[Executor | SupportsAgentRun] = (
             list(participants) if self._intermediate_outputs else [participants[-1]]
         )
+        intermediate_designated: list[Executor | SupportsAgentRun] = (
+            [] if self._intermediate_outputs else [p for p in participants[:-1] if p.workflow_output_types]
+        )
         builder = WorkflowBuilder(
             start_executor=input_conv,
             checkpoint_storage=self._checkpoint_storage,
             output_executors=designated,
+            intermediate_executors=intermediate_designated,
         )
 
         prior: Executor | SupportsAgentRun = input_conv

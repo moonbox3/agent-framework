@@ -287,8 +287,8 @@ class WorkflowEvent(Generic[DataT]):
     def intermediate(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
         """Create an 'intermediate' event for a non-terminal emission.
 
-        The runner labels yields automatically based on the workflow's ``output_executors``;
-        this factory exists for cases that need to construct events directly.
+        The runner labels yields automatically based on the workflow's output/intermediate
+        designation; this factory exists for cases that need to construct events directly.
         """
         return cls("intermediate", executor_id=executor_id, data=data)
 
@@ -302,8 +302,8 @@ class WorkflowEvent(Generic[DataT]):
         """
         warnings.warn(
             "WorkflowEvent.emit() / type='data' are deprecated; use WorkflowEvent.intermediate() "
-            "(or ctx.yield_output() from a non-designated executor). Will be removed in a future "
-            "major release.",
+            "(or ctx.yield_output() from an intermediate-designated executor). Will be removed "
+            "in a future major release.",
             DeprecationWarning,
             stacklevel=2,
         )

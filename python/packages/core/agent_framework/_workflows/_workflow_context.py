@@ -347,16 +347,13 @@ class WorkflowContext(Generic[OutT, W_OutT]):
     async def yield_output(self, output: W_OutT) -> None:
         """Yield an output from this executor.
 
-        The framework labels the resulting workflow event based on whether this executor
-        is designated as an output executor (see ``WorkflowBuilder.output_executors``):
+        The framework labels the resulting workflow event based on the workflow's explicit
+        output designation:
 
-        - **Strict mode** (``output_executors`` was passed explicitly to ``WorkflowBuilder``):
-
-          - If this executor is designated → ``WorkflowEvent`` with ``type='output'``.
-          - If not designated → ``WorkflowEvent`` with ``type='intermediate'``.
-
-        - **Legacy mode** (``output_executors`` unset; deprecated): every yield produces
-          ``type='output'`` regardless of executor.
+        - Legacy mode: every yield produces ``type='output'``.
+        - Explicit mode: output-designated executors produce ``type='output'``,
+          intermediate-designated executors produce ``type='intermediate'``, and
+          unlisted executor yields are hidden from caller-facing events.
 
         Args:
             output: The output to yield. This must conform to the workflow output type(s)
@@ -366,8 +363,12 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         # (deepcopy to capture state at yield time)
         self._yielded_outputs.append(copy.deepcopy(output))
 
+        event_type = self._output_designation.classify(self._executor_id)
+        if event_type is None:
+            return
+
         with _framework_event_origin():
-            if self._output_designation.is_terminal(self._executor_id):
+            if event_type == "output":
                 event = WorkflowEvent.output(self._executor_id, output)
             else:
                 event = WorkflowEvent.intermediate(self._executor_id, output)

@@ -3,10 +3,10 @@
 """Tests for the ``OutputDesignation`` value type and the ``Workflow.is_terminal_executor``
 public predicate that delegates to it.
 
-The three states the value type encodes:
-- Legacy: ``designated=None`` -> every executor is terminal.
-- Strict-empty: ``designated=frozenset()`` -> no executor is terminal.
-- Strict-list: ``designated=frozenset({...})`` -> only listed executors are terminal.
+The states the value type encodes:
+- Legacy: ``outputs=None`` -> every executor is terminal.
+- Explicit: disjoint ``outputs`` and ``intermediates`` sets classify listed executors,
+  and hide unlisted executors.
 """
 
 from __future__ import annotations
@@ -29,31 +29,37 @@ from agent_framework._workflows._workflow import OutputDesignation
 
 def test_legacy_designation_marks_every_executor_as_terminal() -> None:
     designation = OutputDesignation()  # designated defaults to None
-    assert designation.designated is None
+    assert designation.outputs is None
     assert designation.is_terminal("anything")
     assert designation.is_terminal("else")
+    assert designation.classify("anything") == "output"
 
 
 def test_strict_empty_designation_marks_no_executor_as_terminal() -> None:
-    designation = OutputDesignation(designated=frozenset())
-    assert designation.designated == frozenset()
+    designation = OutputDesignation(outputs=frozenset())
+    assert designation.outputs == frozenset()
     assert not designation.is_terminal("anything")
     assert not designation.is_terminal("else")
+    assert designation.classify("anything") is None
 
 
 def test_strict_designated_set_only_terminal_for_members() -> None:
-    designation = OutputDesignation(designated=frozenset({"alpha", "beta"}))
+    designation = OutputDesignation(outputs=frozenset({"alpha", "beta"}), intermediates=frozenset({"gamma"}))
     assert designation.is_terminal("alpha")
     assert designation.is_terminal("beta")
     assert not designation.is_terminal("gamma")
+    assert designation.is_intermediate("gamma")
+    assert designation.classify("alpha") == "output"
+    assert designation.classify("gamma") == "intermediate"
+    assert designation.classify("delta") is None
 
 
 def test_designation_is_frozen() -> None:
     from dataclasses import FrozenInstanceError
 
-    designation = OutputDesignation(designated=frozenset({"alpha"}))
+    designation = OutputDesignation(outputs=frozenset({"alpha"}))
     with pytest.raises(FrozenInstanceError):
-        designation.designated = frozenset({"beta"})  # type: ignore[misc]
+        designation.outputs = frozenset({"beta"})  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +88,13 @@ def test_is_terminal_executor_legacy_mode_returns_true_for_any_id() -> None:
     assert workflow.is_terminal_executor("anything-else")
 
 
-def test_is_terminal_executor_strict_empty_returns_false_for_every_id() -> None:
-    """Strict mode with empty list: no executor is terminal."""
-    workflow = WorkflowBuilder(start_executor=_emit_one, output_executors=[]).build()
+def test_is_intermediate_executor_explicit_list_returns_true_only_for_designated() -> None:
+    """Explicit mode tracks intermediate-designated executors separately."""
+    workflow = WorkflowBuilder(start_executor=_emit_one, intermediate_executors=[_emit_one]).build()
     assert not workflow.is_terminal_executor(_emit_one.id)
     assert not workflow.is_terminal_executor("nope")
+    assert workflow.is_intermediate_executor(_emit_one.id)
+    assert not workflow.is_intermediate_executor("nope")
 
 
 def test_is_terminal_executor_strict_list_returns_true_only_for_designated() -> None:

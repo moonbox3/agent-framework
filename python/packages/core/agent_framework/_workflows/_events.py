@@ -280,7 +280,11 @@ class WorkflowEvent(Generic[DataT]):
 
     @classmethod
     def output(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
-        """Create an 'output' event when an executor yields final terminal output."""
+        """Create an 'output' event for a final terminal emission.
+
+        The runner labels yields automatically based on the workflow's output/intermediate
+        designation; this factory exists for cases that need to construct events directly.
+        """
         return cls("output", executor_id=executor_id, data=data)
 
     @classmethod

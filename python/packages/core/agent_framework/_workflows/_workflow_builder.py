@@ -29,7 +29,11 @@ from ._edge import (
 from ._executor import Executor
 from ._runner_context import InProcRunnerContext
 from ._validation import ValidationTypeEnum, WorkflowValidationError, validate_workflow_graph
-from ._workflow import _MISSING, Workflow, _coalesce_renamed_kwarg
+from ._workflow import (
+    _MISSING,  # pyright: ignore[reportPrivateUsage]
+    Workflow,
+    _coalesce_renamed_kwarg,  # pyright: ignore[reportPrivateUsage]
+)
 
 if sys.version_info >= (3, 11):
     from typing import Self  # type: ignore # pragma: no cover

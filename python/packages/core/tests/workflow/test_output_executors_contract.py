@@ -5,6 +5,7 @@
 State A: output_executors=None and intermediate_executors=None -> DeprecationWarning at build
 State B: explicit designation with at least one executor -> no warning
 State C: explicit designation with no executors -> validation error
+State D: deprecated alias and new canonical kwarg both supplied -> TypeError at construction
 """
 
 from __future__ import annotations
@@ -63,3 +64,23 @@ def test_empty_explicit_designation_fails(final_output_from, intermediate_output
             final_output_from=final_output_from,
             intermediate_output_from=intermediate_output_from,
         ).build()
+
+
+def test_passing_both_output_executors_and_final_output_from_raises_type_error() -> None:
+    """State D: supplying both the deprecated alias and the new canonical kwarg is unambiguous user error."""
+    with pytest.raises(TypeError, match="Cannot pass both `output_executors`.*and `final_output_from`"):
+        WorkflowBuilder(
+            start_executor=_emit_one,
+            output_executors=[_emit_one],
+            final_output_from=[_emit_one],
+        )
+
+
+def test_passing_both_intermediate_executors_and_intermediate_output_from_raises_type_error() -> None:
+    """State D: same rule for the intermediate pair."""
+    with pytest.raises(TypeError, match="Cannot pass both `intermediate_executors`.*and `intermediate_output_from`"):
+        WorkflowBuilder(
+            start_executor=_emit_one,
+            intermediate_executors=[_emit_one],
+            intermediate_output_from=[_emit_one],
+        )

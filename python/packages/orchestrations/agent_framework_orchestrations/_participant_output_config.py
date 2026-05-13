@@ -28,16 +28,6 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
     participants_by_id = {participant.id: participant for participant in participants}
     known_participants = sorted(participants_by_id)
 
-    output_designated = (
-        _resolve_designated_participants(
-            final_output_from,
-            kind="output",
-            participants_by_id=participants_by_id,
-            known_participants=known_participants,
-        )
-        if final_output_from is not None
-        else list(default_final_output_from)
-    )
     intermediate_designated = (
         _resolve_designated_participants(
             intermediate_output_from,
@@ -48,6 +38,24 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
         if intermediate_output_from is not None
         else []
     )
+
+    if final_output_from is not None:
+        output_designated = _resolve_designated_participants(
+            final_output_from,
+            kind="output",
+            participants_by_id=participants_by_id,
+            known_participants=known_participants,
+        )
+    else:
+        # The caller-supplied default applies only to participants not explicitly designated as
+        # intermediate. Without this subtraction, builders that pre-populate a default-final list
+        # (Handoff defaults to all participants, Sequential defaults to the last) would force
+        # an overlap error whenever a user passed `intermediate_output_from=[X]` for an X in
+        # the default set, contradicting the public docstring contract.
+        intermediate_ids = {participant.id for participant in intermediate_designated}
+        output_designated = [
+            participant for participant in default_final_output_from if participant.id not in intermediate_ids
+        ]
 
     overlap = sorted(
         {participant.id for participant in output_designated}.intersection(

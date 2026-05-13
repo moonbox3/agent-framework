@@ -6,6 +6,7 @@ from agent_framework import (
     Message,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowExecutor,
     executor,
 )
 from typing_extensions import Never
@@ -23,6 +24,9 @@ What this sample shows
 - How the same workflow wrapped via ``workflow.as_agent()`` translates intermediate
   events to ``text_reasoning`` content so existing ``.text`` accessors keep
   returning terminal-only output.
+- How a sub-workflow embedded via ``WorkflowExecutor`` bubbles its intermediate
+  emissions up through the parent's event stream, attributed to the
+  ``WorkflowExecutor`` id rather than the child's internal executor ids.
 
 The output designation contract:
 - Compatibility mode: when neither ``final_output_from`` nor ``intermediate_output_from``
@@ -98,12 +102,36 @@ async def main() -> None:
     # surface as ``text_reasoning`` content; the terminal event surfaces as
     # ``text`` content. Existing callers reading ``response.text`` get only
     # the terminal answer because ``.text`` filters to text content.
-    print("\n=== workflow.as_agent() — intermediate → text_reasoning content ===")
+    print("\n=== workflow.as_agent() -- intermediate -> text_reasoning content ===")
     agent = workflow.as_agent("planner-agent")
     response = await agent.run("life, the universe, and everything")
     print(f"  response.text (terminal only): {response.text!r}")
     reasoning = " | ".join(c.text for m in response.messages for c in m.contents if c.type == "text_reasoning")
     print(f"  reasoning content (intermediates): {reasoning!r}")
+
+    # Embed the same workflow as a node inside a larger workflow via WorkflowExecutor.
+    # Child intermediate emissions are forwarded to the parent's event stream with the
+    # WorkflowExecutor's id as the source, so outer callers don't have to know the
+    # child's internal executor layout. The 'intermediate' label is preserved across
+    # the boundary regardless of how the parent designates the WorkflowExecutor.
+    print("\n=== Embedding as a sub-workflow -- intermediates bubble up ===")
+    sub = WorkflowExecutor(workflow, id="sub")
+
+    @executor(id="parent_sink")
+    async def parent_sink(message: str, ctx: WorkflowContext[Never, str]) -> None:
+        await ctx.yield_output(message)
+
+    parent_workflow = (
+        WorkflowBuilder(start_executor=sub, final_output_from=[parent_sink])
+        .add_edge(sub, parent_sink)
+        .build()
+    )
+
+    async for event in parent_workflow.run(initial, stream=True):
+        if event.type == "intermediate":
+            print(f"  [intermediate] {event.executor_id}: {event.data}")
+        elif event.type == "output":
+            print(f"  [output]       {event.executor_id}: {event.data}")
 
     """
     Sample output:
@@ -116,9 +144,14 @@ async def main() -> None:
     === Non-streaming run().get_outputs() ===
       outputs: ["final answer to 'life, the universe, and everything': 42"]
 
-    === workflow.as_agent() — intermediate → text_reasoning content ===
+    === workflow.as_agent() -- intermediate -> text_reasoning content ===
       response.text (terminal only): "final answer to 'life, the universe, and everything': 42"
       reasoning content (intermediates): "plan: starting work on ... | research: gathering data for ..."
+
+    === Embedding as a sub-workflow -- intermediates bubble up ===
+      [intermediate] sub: plan: starting work on 'life, the universe, and everything'
+      [intermediate] sub: research: gathering data for 'life, the universe, and everything'
+      [output]       parent_sink: final answer to 'life, the universe, and everything': 42
     """
 
 

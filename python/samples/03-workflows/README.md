@@ -123,12 +123,12 @@ Orchestration-focused samples (Sequential, Concurrent, Handoff, GroupChat, Magen
 
 Workflow output designation controls which `ctx.yield_output(...)` calls are visible to callers:
 
-- Compatibility mode applies when neither `output_executors` nor `intermediate_executors` is provided. Every
+- Compatibility mode applies when neither `final_output_from` nor `intermediate_output_from` is provided. Every
   executor yield is emitted as a terminal `type='output'` event.
-- Explicit designation mode applies when either list is provided. `output_executors` emit terminal `output`
-  events, `intermediate_executors` emit visible `intermediate` events, and unlisted executor yields are hidden from
-  caller-facing output accessors and streams.
-- Validation rejects empty explicit designation, duplicate executors, overlap between output and intermediate
+- Explicit designation mode applies when either list is provided. Executors in `final_output_from` emit terminal
+  `output` events, executors in `intermediate_output_from` emit visible `intermediate` events, and unlisted executor
+  yields are hidden from caller-facing output accessors and streams.
+- Validation rejects empty explicit designation, duplicate executors, overlap between final-output and intermediate
   executors, unknown executors, and designated executors that do not yield workflow output.
 
 When a workflow is wrapped with `workflow.as_agent()`, terminal workflow output becomes normal agent text content.

@@ -150,6 +150,36 @@ async def test_sequential_intermediate_output_from_surface_as_intermediate() -> 
 
 
 @pytest.mark.asyncio
+async def test_sequential_intermediate_can_demote_default_terminator() -> None:
+    """Regression: marking the default-final terminator as intermediate must not raise an overlap error.
+
+    Sequential's default-final list is `[participants[-1]]`. Before the fix, designating that
+    same participant via `intermediate_output_from` triggered the
+    "Participants cannot be both output and intermediate designated" overlap rejection in
+    `_participant_output_config`, contradicting the public contract that
+    `intermediate_output_from` can be used independently of `final_output_from`.
+    """
+    a = _EchoAgent(name="A")
+    b = _EchoAgent(name="B")
+    c = _EchoAgent(name="C")
+
+    workflow = SequentialBuilder(participants=[a, b, c], intermediate_output_from=["C"]).build()
+
+    output_executors: set[str] = set()
+    intermediate_executors: set[str] = set()
+    async for event in workflow.run("hello", stream=True):
+        if event.type == "output" and event.executor_id is not None:
+            output_executors.add(event.executor_id)
+        elif event.type == "intermediate" and event.executor_id is not None:
+            intermediate_executors.add(event.executor_id)
+
+    # The default-final list ([C]) is implicitly narrowed by the intermediate designation,
+    # so no participant surfaces as terminal output and C surfaces as intermediate.
+    assert output_executors == set()
+    assert intermediate_executors == {"C"}
+
+
+@pytest.mark.asyncio
 async def test_sequential_get_outputs_returns_terminator_only() -> None:
     """WorkflowRunResult.get_outputs() returns only the terminator's yield."""
     a = _EchoAgent(name="A")
@@ -484,6 +514,42 @@ def test_handoff_builder_final_output_from_can_select_terminal_participants() ->
     workflow = HandoffBuilder(participants=[alpha, beta], final_output_from=["alpha"]).with_start_agent(alpha).build()
 
     assert {ex.id for ex in workflow.get_output_executors()} == {"alpha"}
+
+
+def test_handoff_builder_intermediate_output_from_demotes_from_default_final() -> None:
+    """Regression: `intermediate_output_from` alone must not collide with the default-final list.
+
+    Handoff defaults `final_output_from` to every participant. Before the fix, supplying
+    `intermediate_output_from=["alpha"]` without restating `final_output_from` triggered
+    "Participants cannot be both output and intermediate designated: ['alpha']" because
+    alpha was simultaneously in the default-final list and the explicit intermediate list.
+    The contract documented at `_handoff.py:619-622` promises `intermediate_output_from` is
+    usable on its own.
+    """
+    from agent_framework import Agent
+    from agent_framework._clients import BaseChatClient
+    from agent_framework._middleware import ChatMiddlewareLayer
+    from agent_framework._tools import FunctionInvocationLayer
+
+    class _StubClient(FunctionInvocationLayer[Any], ChatMiddlewareLayer[Any], BaseChatClient[Any]):
+        def __init__(self) -> None:
+            ChatMiddlewareLayer.__init__(self)
+            FunctionInvocationLayer.__init__(self)
+            BaseChatClient.__init__(self)
+
+        def _inner_get_response(self, **kwargs: Any) -> Any:  # pragma: no cover - never called
+            raise NotImplementedError
+
+    alpha = Agent(name="alpha", id="alpha", client=_StubClient(), require_per_service_call_history_persistence=True)
+    beta = Agent(name="beta", id="beta", client=_StubClient(), require_per_service_call_history_persistence=True)
+
+    workflow = (
+        HandoffBuilder(participants=[alpha, beta], intermediate_output_from=["alpha"]).with_start_agent(alpha).build()
+    )
+
+    # alpha is implicitly removed from the default-final set; beta remains final.
+    assert {ex.id for ex in workflow.get_output_executors()} == {"beta"}
+    assert {ex.id for ex in workflow.get_intermediate_executors()} == {"alpha"}
 
 
 # ---------------------------------------------------------------------------

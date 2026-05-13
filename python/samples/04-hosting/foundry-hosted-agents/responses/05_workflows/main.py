@@ -54,7 +54,7 @@ def main():
             start_executor=writer_executor,
             # Limiting the output to only the final formatted result.
             # If this is not set, all intermediate results will be included in the output.
-            output_executors=[format_executor],
+            final_output_from=[format_executor],
         )
         .add_edge(writer_executor, legal_executor)
         .add_edge(legal_executor, format_executor)

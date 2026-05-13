@@ -254,8 +254,8 @@ class SequentialBuilder:
         builder = WorkflowBuilder(
             start_executor=input_conv,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=designated,
-            intermediate_executors=intermediate_designated,
+            final_output_from=designated,
+            intermediate_output_from=intermediate_designated,
         )
 
         prior: Executor | SupportsAgentRun = input_conv

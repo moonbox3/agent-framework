@@ -10,6 +10,7 @@ import json
 import logging
 import types
 import uuid
+import warnings
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -40,6 +41,31 @@ if TYPE_CHECKING:
     from ._agent import WorkflowAgent
 
 logger = logging.getLogger(__name__)
+
+
+_MISSING: Any = object()
+
+
+def _coalesce_renamed_kwarg(old_name: str, old_value: Any, new_name: str, new_value: Any) -> Any:
+    """Resolve a renamed keyword argument while keeping the deprecated name working.
+
+    Pass ``_MISSING`` (not ``None``) for the value that was not supplied — ``None`` is
+    a legitimate user-supplied value for these kwargs.
+    """
+    old_supplied = old_value is not _MISSING
+    new_supplied = new_value is not _MISSING
+    if old_supplied and new_supplied:
+        raise TypeError(f"Cannot pass both `{old_name}` (deprecated) and `{new_name}`; use `{new_name}` only.")
+    if old_supplied:
+        warnings.warn(
+            f"`{old_name}` is deprecated and will be removed in a future version; use `{new_name}` instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return old_value
+    if new_supplied:
+        return new_value
+    return None
 
 
 class WorkflowRunResult(list[WorkflowEvent]):
@@ -227,8 +253,11 @@ class Workflow(DictConvertible):
         name: str,
         description: str | None = None,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
-        output_executors: list[str] | None = None,
-        intermediate_executors: list[str] | None = None,
+        final_output_from: list[str] | None = _MISSING,
+        intermediate_output_from: list[str] | None = _MISSING,
+        *,
+        output_executors: list[str] | None = _MISSING,
+        intermediate_executors: list[str] | None = _MISSING,
     ):
         """Initialize the workflow with a list of edges.
 
@@ -244,12 +273,22 @@ class Workflow(DictConvertible):
                 better observability and management.
             description: Optional description of what the workflow does. If the workflow is built using
                 WorkflowBuilder, this will be the description of the builder.
-            output_executors: List of executor IDs designated as terminal outputs, or
-                ``None`` for legacy mode when ``intermediate_executors`` is also ``None``.
-            intermediate_executors: List of executor IDs designated as intermediate outputs.
+            final_output_from: List of executor IDs designated as terminal outputs, or
+                ``None`` for legacy mode when ``intermediate_output_from`` is also ``None``.
+            intermediate_output_from: List of executor IDs designated as intermediate outputs.
                 In explicit designation mode, unlisted executor yields are hidden from
                 caller-facing output/intermediate events.
+            output_executors: Deprecated alias for ``final_output_from``. Will be removed
+                in a future version.
+            intermediate_executors: Deprecated alias for ``intermediate_output_from``. Will be
+                removed in a future version.
         """
+        final_output_from = _coalesce_renamed_kwarg(
+            "output_executors", output_executors, "final_output_from", final_output_from
+        )
+        intermediate_output_from = _coalesce_renamed_kwarg(
+            "intermediate_executors", intermediate_executors, "intermediate_output_from", intermediate_output_from
+        )
         self.edge_groups = list(edge_groups)
         self.executors = dict(executors)
         self.start_executor_id = start_executor.id
@@ -267,13 +306,13 @@ class Workflow(DictConvertible):
         # Single value type encodes legacy vs explicit output-designation policy;
         # threaded as a parameter into executor invocations.
         output_designation_ids = (
-            frozenset(output_executors)
-            if output_executors is not None
-            else (frozenset[str]() if intermediate_executors is not None else None)
+            frozenset(final_output_from)
+            if final_output_from is not None
+            else (frozenset[str]() if intermediate_output_from is not None else None)
         )
         self._output_designation: OutputDesignation = OutputDesignation(
             outputs=output_designation_ids,
-            intermediates=frozenset(intermediate_executors or []),
+            intermediates=frozenset(intermediate_output_from or []),
         )
 
         # Store non-serializable runtime objects as private attributes

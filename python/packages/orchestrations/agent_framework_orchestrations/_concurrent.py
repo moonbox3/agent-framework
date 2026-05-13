@@ -416,8 +416,8 @@ class ConcurrentBuilder:
         builder = WorkflowBuilder(
             start_executor=dispatcher,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=designated,
-            intermediate_executors=intermediate_designated,
+            final_output_from=designated,
+            intermediate_output_from=intermediate_designated,
         )
         # Fan-out for parallel execution
         builder.add_fan_out_edges(dispatcher, participants)

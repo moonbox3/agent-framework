@@ -1022,8 +1022,8 @@ class GroupChatBuilder:
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=designated,
-            intermediate_executors=intermediate_designated,
+            final_output_from=designated,
+            intermediate_output_from=intermediate_designated,
         )
         for participant in participants:
             # Orchestrator and participant bi-directional edges

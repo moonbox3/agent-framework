@@ -14,9 +14,9 @@ from typing_extensions import Never
 Sample: Intermediate vs terminal output labeling
 
 What this sample shows
-- How ``WorkflowBuilder(output_executors=[...])`` designates which executors emit
+- How ``WorkflowBuilder(final_output_from=[...])`` designates which executors emit
   the workflow's terminal output.
-- How ``WorkflowBuilder(intermediate_executors=[...])`` designates which executor
+- How ``WorkflowBuilder(intermediate_output_from=[...])`` designates which executor
   yields surface as ``type='intermediate'`` events.
 - How unlisted executor yields are hidden from caller-facing output/intermediate
   events in explicit designation mode.
@@ -25,10 +25,10 @@ What this sample shows
   returning terminal-only output.
 
 The output designation contract:
-- Compatibility mode: when neither ``output_executors`` nor ``intermediate_executors``
+- Compatibility mode: when neither ``final_output_from`` nor ``intermediate_output_from``
   is provided, every ``yield_output`` produces ``type='output'``.
-- Explicit designation mode: provide either ``output_executors`` or
-  ``intermediate_executors``. Designated output executors emit terminal
+- Explicit designation mode: provide either ``final_output_from`` or
+  ``intermediate_output_from``. Designated output executors emit terminal
   ``type='output'`` events; designated intermediate executors emit
   ``type='intermediate'`` events; unlisted executor yields are hidden from the
   stream and ``WorkflowRunResult`` output accessors.
@@ -71,8 +71,8 @@ async def main() -> None:
     workflow = (
         WorkflowBuilder(
             start_executor=planner,
-            output_executors=[answerer],
-            intermediate_executors=[planner, researcher],
+            final_output_from=[answerer],
+            intermediate_output_from=[planner, researcher],
         )
         .add_edge(planner, researcher)
         .add_edge(researcher, answerer)

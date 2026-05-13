@@ -972,7 +972,7 @@ class HandoffBuilder:
         # Handoff has no separate terminator: every participant's reply is a primary
         # output by default. Explicit participant designation can narrow or reclassify
         # selected speakers.
-        output_executors, intermediate_executors = _resolve_participant_output_config(
+        final_output, intermediate_output = _resolve_participant_output_config(
             participants=list(executors.values()),
             final_output_from=self._final_output_from,
             intermediate_output_from=self._intermediate_output_from,
@@ -983,8 +983,8 @@ class HandoffBuilder:
             description=self._description,
             start_executor=start_executor,
             checkpoint_storage=self._checkpoint_storage,
-            output_executors=output_executors,
-            intermediate_executors=intermediate_executors,
+            final_output_from=final_output,
+            intermediate_output_from=intermediate_output,
         )
 
         # Add the appropriate edges

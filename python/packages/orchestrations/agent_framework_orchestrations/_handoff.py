@@ -598,7 +598,6 @@ class HandoffBuilder:
         termination_condition: TerminationCondition | None = None,
         output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None = cast(Any, _MISSING),
         intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None = None,
-        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = cast(Any, _MISSING),
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 
@@ -626,7 +625,6 @@ class HandoffBuilder:
             intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as workflow ``intermediate`` events. Pass ``"all_other"`` to select every participant
                 not selected by ``output_from``. Unlisted participant outputs are hidden.
-            final_output_from: Deprecated alias for ``output_from``.
         """
         self._name = name
         self._description = description
@@ -652,7 +650,7 @@ class HandoffBuilder:
 
         # Termination related members
         self._termination_condition: Callable[[list[Message]], bool | Awaitable[bool]] | None = termination_condition
-        self._output_from = _coalesce_output_from(output_from=output_from, final_output_from=final_output_from)
+        self._output_from = _coalesce_output_from(output_from=output_from)
         self._intermediate_output_from = _coerce_intermediate_output_from(intermediate_output_from)
 
     def participants(self, participants: Sequence[Agent]) -> "HandoffBuilder":
@@ -977,18 +975,18 @@ class HandoffBuilder:
         # Handoff has no separate terminator: every participant's reply is a primary
         # output by default. Explicit participant designation can narrow or reclassify
         # selected speakers.
-        final_output, intermediate_output = _resolve_participant_output_config(
+        output, intermediate_output = _resolve_participant_output_config(
             participants=list(executors.values()),
             output_from=self._output_from,
             intermediate_output_from=self._intermediate_output_from,
-            default_final_output_from=list(executors.values()),
+            default_output_from=list(executors.values()),
         )
         builder = WorkflowBuilder(
             name=self._name,
             description=self._description,
             start_executor=start_executor,
             checkpoint_storage=self._checkpoint_storage,
-            output_from=final_output,
+            output_from=output,
             intermediate_output_from=intermediate_output,
         )
 

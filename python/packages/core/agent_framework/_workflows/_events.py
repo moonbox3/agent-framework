@@ -109,7 +109,7 @@ WorkflowEventType = Literal[
     # Data events
     "output",  # Executor yielded final terminal output (use .executor_id, .data)
     "intermediate",  # Executor emitted intermediate (non-terminal) output (use .executor_id, .data)
-    "data",  # DEPRECATED — legacy alias for intermediate emissions; use type='intermediate' instead.
+    "data",  # DEPRECATED — compatibility alias for intermediate emissions; use type='intermediate' instead.
     # Request events (human-in-the-loop)
     "request_info",  # Executor requests external info (use .request_id, .source_executor_id)
     # Diagnostic events (warnings/errors from user code)
@@ -149,15 +149,15 @@ class WorkflowEvent(Generic[DataT]):
     This single generic class handles all workflow events through a `type` discriminator,
     following the same pattern as the `Content` class.
 
-    Use factory methods for convenient construction:
+    Use factory methods for convenient construction of lifecycle, diagnostic, request,
+    and executor bookkeeping events. Workflow ``output`` and ``intermediate`` events
+    are emitted by ``ctx.yield_output(...)`` based on workflow output selection.
 
     - `WorkflowEvent.started()` - workflow run began
     - `WorkflowEvent.status(state)` - workflow state changed
     - `WorkflowEvent.failed(details)` - workflow terminated with error
     - `WorkflowEvent.warning(message)` - warning from user code
     - `WorkflowEvent.error(exception)` - error from user code
-    - `WorkflowEvent.output(executor_id, data)` - executor yielded final terminal output
-    - `WorkflowEvent.intermediate(executor_id, data)` - executor emitted intermediate (non-terminal) data
     - `WorkflowEvent.request_info(...)` - executor requests external info
     - `WorkflowEvent.superstep_started(iteration)` - superstep began
     - `WorkflowEvent.superstep_completed(iteration)` - superstep ended
@@ -173,14 +173,13 @@ class WorkflowEvent(Generic[DataT]):
     Examples:
         .. code-block:: python
 
-            # Create events via factory methods
+            # Create lifecycle events via factory methods
             started = WorkflowEvent.started()
             status = WorkflowEvent.status(WorkflowRunState.IN_PROGRESS)
-            output = WorkflowEvent.output("agent1", result_data)
 
-            # Emit typed data from executor
-            event: WorkflowEvent[AgentResponse] = WorkflowEvent.data("agent1", response)
-            data: AgentResponse = event.data  # Type-safe access
+            # Type-safe access to event data
+            event: WorkflowEvent[AgentResponse] = WorkflowEvent("data", executor_id="agent1", data=response)
+            data: AgentResponse = event.data
 
             # Check event type
             if event.type == "status":
@@ -279,35 +278,16 @@ class WorkflowEvent(Generic[DataT]):
         return WorkflowEvent("error", data=exception)
 
     @classmethod
-    def output(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
-        """Create an 'output' event for a final terminal emission.
-
-        The runner labels yields automatically based on the workflow's output/intermediate
-        designation; this factory exists for cases that need to construct events directly.
-        """
-        return cls("output", executor_id=executor_id, data=data)
-
-    @classmethod
-    def intermediate(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
-        """Create an 'intermediate' event for a non-terminal emission.
-
-        The runner labels yields automatically based on the workflow's output/intermediate
-        designation; this factory exists for cases that need to construct events directly.
-        """
-        return cls("intermediate", executor_id=executor_id, data=data)
-
-    @classmethod
     def emit(cls, executor_id: str, data: DataT) -> WorkflowEvent[DataT]:
         """Create a 'data' event (deprecated alias for intermediate emissions).
 
         .. deprecated::
-            Use :meth:`WorkflowEvent.intermediate` instead. Will be removed in a future
-            major release along with the ``type='data'`` event variant.
+            Use ``ctx.yield_output(...)`` and configure ``intermediate_output_from`` instead.
+            Will be removed in a future major release along with the ``type='data'`` event variant.
         """
         warnings.warn(
-            "WorkflowEvent.emit() / type='data' are deprecated; use WorkflowEvent.intermediate() "
-            "(or ctx.yield_output() from an intermediate-designated executor). Will be removed "
-            "in a future major release.",
+            "WorkflowEvent.emit() / type='data' are deprecated; use ctx.yield_output() from an "
+            "intermediate-designated executor. Will be removed in a future major release.",
             DeprecationWarning,
             stacklevel=2,
         )

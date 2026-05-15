@@ -85,8 +85,7 @@ from agent_framework.orchestrations import (
 Use `output_from=[...]` when participant responses should be Workflow Output (`type='output'` events), and
 `intermediate_output_from=[...]` when participant responses should be Intermediate Output (`type='intermediate'`
 events). `output_from` is an allow-list for Workflow Output, not a routing rule for every other participant output.
-Unselected participant responses are hidden unless `intermediate_output_from` selects them. The deprecated
-`final_output_from` alias is compatibility-only.
+Unselected participant responses are hidden unless `intermediate_output_from` selects them.
 
 | Selection | Workflow Output | Intermediate Output | Hidden payloads |
 | --- | --- | --- | --- |

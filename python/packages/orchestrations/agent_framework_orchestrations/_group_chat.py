@@ -627,7 +627,6 @@ class GroupChatBuilder:
         checkpoint_storage: CheckpointStorage | None = None,
         output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None = cast(Any, _MISSING),
         intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None = None,
-        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = cast(Any, _MISSING),
     ) -> None:
         """Initialize the GroupChatBuilder.
 
@@ -650,7 +649,6 @@ class GroupChatBuilder:
             intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
                 surface as workflow ``intermediate`` events. Pass ``"all_other"`` to select every participant
                 not selected by ``output_from``. Unlisted participant outputs are hidden.
-            final_output_from: Deprecated alias for ``output_from``.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
         self._participant_factories: list[Callable[[], SupportsAgentRun | Executor]] = []
@@ -671,7 +669,7 @@ class GroupChatBuilder:
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] = set()
 
-        self._output_from = _coalesce_output_from(output_from=output_from, final_output_from=final_output_from)
+        self._output_from = _coalesce_output_from(output_from=output_from)
         self._intermediate_output_from = _coerce_intermediate_output_from(intermediate_output_from)
 
         if participants is None and participant_factories is None:

@@ -5,7 +5,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from ..observability import EdgeGroupDeliveryStatus, OtelAttr, create_edge_group_processing_span
 from ._edge import (
@@ -20,9 +20,6 @@ from ._edge import (
 from ._executor import Executor
 from ._runner_context import RunnerContext, WorkflowMessage
 from ._state import State
-
-if TYPE_CHECKING:
-    from ._workflow import OutputDesignation
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +43,6 @@ class EdgeRunner(ABC):
         message: WorkflowMessage,
         state: State,
         ctx: RunnerContext,
-        output_designation: "OutputDesignation | None" = None,
     ) -> bool:
         """Send a message through the edge group.
 
@@ -54,8 +50,6 @@ class EdgeRunner(ABC):
             message: The message to send.
             state: The workflow state.
             ctx: The context for the runner.
-            output_designation: Snapshot of the workflow's output designation policy. Defaults
-                to legacy mode (every yield is type='output') for direct callers.
 
         Returns:
             bool: True if the message was processed successfully,
@@ -76,7 +70,6 @@ class EdgeRunner(ABC):
         message: WorkflowMessage,
         state: State,
         ctx: RunnerContext,
-        output_designation: "OutputDesignation | None" = None,
     ) -> None:
         """Execute a message on a target executor with trace context."""
         if target_id not in self._executors:
@@ -90,7 +83,6 @@ class EdgeRunner(ABC):
             source_ids,  # source_executor_ids
             state,  # state
             ctx,  # runner_context
-            output_designation=output_designation,
             trace_contexts=message.trace_contexts,  # Pass trace contexts
             source_span_ids=message.source_span_ids,  # Pass source span IDs for linking
         )
@@ -108,7 +100,6 @@ class SingleEdgeRunner(EdgeRunner):
         message: WorkflowMessage,
         state: State,
         ctx: RunnerContext,
-        output_designation: "OutputDesignation | None" = None,
     ) -> bool:
         """Send a message through the single edge."""
         should_execute = False
@@ -163,7 +154,7 @@ class SingleEdgeRunner(EdgeRunner):
 
         # Execute outside the span
         if should_execute and target_id and source_id:
-            await self._execute_on_target(target_id, [source_id], message, state, ctx, output_designation)
+            await self._execute_on_target(target_id, [source_id], message, state, ctx)
             return True
 
         return False
@@ -186,7 +177,6 @@ class FanOutEdgeRunner(EdgeRunner):
         message: WorkflowMessage,
         state: State,
         ctx: RunnerContext,
-        output_designation: "OutputDesignation | None" = None,
     ) -> bool:
         """Send a message through all edges in the fan-out edge group."""
         deliverable_edges: list[Edge] = []
@@ -283,14 +273,13 @@ class FanOutEdgeRunner(EdgeRunner):
                 message,
                 state,
                 ctx,
-                output_designation,
             )
             return True
 
         if deliverable_edges:
 
             async def send_to_edge(edge: Edge) -> bool:
-                await self._execute_on_target(edge.target_id, [edge.source_id], message, state, ctx, output_designation)
+                await self._execute_on_target(edge.target_id, [edge.source_id], message, state, ctx)
                 return True
 
             tasks = [send_to_edge(edge) for edge in deliverable_edges]
@@ -320,7 +309,6 @@ class FanInEdgeRunner(EdgeRunner):
         message: WorkflowMessage,
         state: State,
         ctx: RunnerContext,
-        output_designation: "OutputDesignation | None" = None,
     ) -> bool:
         """Send a message through all edges in the fan-in edge group."""
         execution_data: dict[str, Any] | None = None
@@ -403,7 +391,6 @@ class FanInEdgeRunner(EdgeRunner):
                 execution_data["message"],
                 state,
                 ctx,
-                output_designation,
             )
             return True
 

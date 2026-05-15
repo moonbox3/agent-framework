@@ -87,7 +87,6 @@ payloads are hidden unless `intermediate_output_from` explicitly selects them as
 
 - `output_from` designates participant emissions as Workflow Output (`type='output'` events).
 - `intermediate_output_from` designates participant emissions as Intermediate Output (`type='intermediate'` events).
-- `final_output_from` is a deprecated compatibility alias for `output_from`.
 
 If neither list is provided, each builder uses its documented default Workflow Output contract. Sequential emits the
 last participant; Concurrent, GroupChat, and Magentic emit their aggregator/orchestrator/manager output; Handoff emits

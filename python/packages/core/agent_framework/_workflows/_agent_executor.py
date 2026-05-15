@@ -478,7 +478,7 @@ class AgentExecutor(Executor):
 
         # Prefer stream finalization when available so result hooks run
         # (e.g., thread conversation updates). Fall back to reconstructing from updates
-        # for legacy/custom agents that return a plain async iterable.
+        # for compatibility/custom agents that return a plain async iterable.
         # TODO(evmattso): Integrate workflow agent run handling around ResponseStream so
         # AgentExecutor does not need this conditional stream-finalization branch.
         maybe_get_final_response = getattr(stream, "get_final_response", None)

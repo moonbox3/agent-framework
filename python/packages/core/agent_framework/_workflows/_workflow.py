@@ -36,6 +36,7 @@ from ._runner import Runner
 from ._runner_context import RunnerContext
 from ._state import State
 from ._typing_utils import is_instance_of, try_coerce_to_type
+from ._validation import ValidationTypeEnum, WorkflowValidationError
 
 if TYPE_CHECKING:
     from ._agent import WorkflowAgent
@@ -71,7 +72,6 @@ def _coalesce_renamed_kwarg(old_name: str, old_value: Any, new_name: str, new_va
 def _coalesce_output_from_kwarg(
     output_from: Any,
     output_executors: Any,
-    final_output_from: Any,
 ) -> Any:
     """Resolve output-selection aliases to canonical ``output_from``."""
     supplied = [
@@ -79,7 +79,6 @@ def _coalesce_output_from_kwarg(
         for name, value in (
             ("output_from", output_from),
             ("output_executors", output_executors),
-            ("final_output_from", final_output_from),
         )
         if value is not _MISSING
     ]
@@ -94,13 +93,6 @@ def _coalesce_output_from_kwarg(
             stacklevel=3,
         )
         return output_executors
-    if final_output_from is not _MISSING:
-        warnings.warn(
-            "`final_output_from` is deprecated and will be removed in a future version; use `output_from` instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return final_output_from
     if output_from is not _MISSING:
         return output_from
     return None
@@ -179,7 +171,7 @@ class WorkflowRunResult(list[WorkflowEvent]):
 class OutputDesignation:
     """Immutable rule for labeling executor yields as terminal, intermediate, or hidden outputs.
 
-    ``outputs`` is ``None`` in legacy mode (every yield is terminal). In explicit mode,
+    ``outputs`` is ``None`` in omitted-selection compatibility mode (every yield is terminal). In explicit mode,
     ``outputs`` and ``intermediates`` are disjoint executor ID sets; unlisted executor
     yields are hidden from caller-facing output/intermediate events.
     Package-internal value type owned by ``Workflow``; not exported from ``agent_framework``.
@@ -295,7 +287,6 @@ class Workflow(DictConvertible):
         intermediate_output_from: list[str] | None = _MISSING,
         *,
         output_executors: list[str] | None = _MISSING,
-        final_output_from: list[str] | None = _MISSING,
         intermediate_executors: list[str] | None = _MISSING,
     ):
         """Initialize the workflow with a list of edges.
@@ -313,18 +304,17 @@ class Workflow(DictConvertible):
             description: Optional description of what the workflow does. If the workflow is built using
                 WorkflowBuilder, this will be the description of the builder.
             output_from: List of executor IDs designated as workflow outputs, or
-                ``None`` for legacy mode when ``intermediate_output_from`` is also ``None``.
+                ``None`` for omitted-selection compatibility behavior when ``intermediate_output_from`` is also
+                ``None``.
             intermediate_output_from: List of executor IDs designated as intermediate outputs.
                 In explicit designation mode, unlisted executor yields are hidden from
                 caller-facing output/intermediate events.
             output_executors: Deprecated alias for ``output_from``. Will be removed
                 in a future version.
-            final_output_from: Deprecated alias for ``output_from``. Will be removed
-                in a future version.
             intermediate_executors: Deprecated alias for ``intermediate_output_from``. Will be
                 removed in a future version.
         """
-        output_from = _coalesce_output_from_kwarg(output_from, output_executors, final_output_from)
+        output_from = _coalesce_output_from_kwarg(output_from, output_executors)
         intermediate_output_from = _coalesce_renamed_kwarg(
             "intermediate_executors", intermediate_executors, "intermediate_output_from", intermediate_output_from
         )
@@ -342,8 +332,7 @@ class Workflow(DictConvertible):
         self.graph_signature = self._compute_graph_signature()
         self.graph_signature_hash = self._hash_graph_signature(self.graph_signature)
 
-        # Single value type encodes legacy vs explicit output-designation policy;
-        # threaded as a parameter into executor invocations.
+        # Single value type encodes omitted-selection compatibility vs explicit output-designation policy.
         output_designation_ids = (
             frozenset(output_from)
             if output_from is not None
@@ -356,6 +345,7 @@ class Workflow(DictConvertible):
 
         # Store non-serializable runtime objects as private attributes
         self._runner_context = runner_context
+        self._runner_context.set_yield_output_classifier(self._output_designation.classify)
         self._state = State()
         self._runner: Runner = Runner(
             self.edge_groups,
@@ -364,7 +354,6 @@ class Workflow(DictConvertible):
             runner_context,
             self.name,
             self.graph_signature_hash,
-            self._output_designation,
             max_iterations=max_iterations,
         )
 
@@ -432,21 +421,29 @@ class Workflow(DictConvertible):
     def get_output_executors(self) -> list[Executor]:
         """Get the list of output executors in the workflow.
 
-        In legacy mode (no explicit ``output_from``), returns every executor in the
-        workflow. In strict mode, returns only the designated output executors.
+        In omitted-selection compatibility mode (no explicit ``output_from``), returns every
+        executor in the workflow. In explicit mode, returns only the designated output executors.
         """
         designated = self._output_designation.outputs
         if designated is None:
             return list(self.executors.values())
-        return [self.executors[executor_id] for executor_id in designated if executor_id in self.executors]
+        return [self._get_designated_executor(executor_id, kind="Output") for executor_id in designated]
 
     def get_intermediate_executors(self) -> list[Executor]:
         """Get the list of intermediate executors in the workflow."""
         return [
-            self.executors[executor_id]
+            self._get_designated_executor(executor_id, kind="Intermediate")
             for executor_id in self._output_designation.intermediates
-            if executor_id in self.executors
         ]
+
+    def _get_designated_executor(self, executor_id: str, *, kind: str) -> Executor:
+        try:
+            return self.executors[executor_id]
+        except KeyError as exc:
+            raise WorkflowValidationError(
+                f"{kind} executor '{executor_id}' is not present in the workflow graph",
+                validation_type=ValidationTypeEnum.OUTPUT_VALIDATION,
+            ) from exc
 
     def is_terminal_executor(self, executor_id: str) -> bool:
         """Return True when ``executor_id``'s yields are labeled type='output'.
@@ -649,7 +646,6 @@ class Workflow(DictConvertible):
                 [self.__class__.__name__],
                 self._state,
                 self._runner.context,
-                output_designation=self._output_designation,
                 trace_contexts=None,
                 source_span_ids=None,
             )
@@ -801,12 +797,6 @@ class Workflow(DictConvertible):
             function_invocation_kwargs=function_invocation_kwargs,
             client_kwargs=client_kwargs,
         ):
-            if (
-                event.type == "output"
-                and event.executor_id is not None
-                and not self._output_designation.is_terminal(event.executor_id)
-            ):
-                continue
             if event.type == "request_info" and event.request_id in (responses or {}):
                 # Don't yield request_info events for which we have responses to send -
                 # these are considered "handled". This prevents the caller from seeing

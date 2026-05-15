@@ -16,6 +16,7 @@ from ._const import GLOBAL_KWARGS_KEY, WORKFLOW_RUN_KWARGS_KEY
 from ._events import (
     WorkflowEvent,
     WorkflowRunState,
+    _framework_event_origin,  # type: ignore[reportPrivateUsage]
 )
 from ._executor import Executor, handler
 from ._request_info_mixin import response_handler
@@ -569,13 +570,17 @@ class WorkflowExecutor(Executor):
             await asyncio.gather(*[ctx.send_message(output) for output in outputs])
 
         # Pipe sub-workflow intermediate emissions up through the parent's event stream.
-        # Bypasses the parent's OutputDesignation so the 'intermediate' label is preserved
+        # Bypasses the parent's yield-output classifier so the 'intermediate' label is preserved
         # across the encapsulation boundary; uses this WorkflowExecutor's id as the source
         # so outer callers don't need to know the sub-workflow's internal executor layout.
         if intermediate_outputs:
-            await asyncio.gather(*[
-                ctx.add_event(WorkflowEvent.intermediate(self.id, output)) for output in intermediate_outputs
-            ])
+
+            async def _forward_intermediate_output(output: Any) -> None:
+                with _framework_event_origin():
+                    event = WorkflowEvent("intermediate", executor_id=self.id, data=output)
+                await ctx.add_event(event)
+
+            await asyncio.gather(*[_forward_intermediate_output(output) for output in intermediate_outputs])
 
         # Process request info events
         for event in request_info_events:

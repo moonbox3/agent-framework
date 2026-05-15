@@ -4,7 +4,7 @@
 public predicate that delegates to it.
 
 The states the value type encodes:
-- Legacy: ``outputs=None`` -> every executor is terminal.
+- Omitted-selection compatibility: ``outputs=None`` -> every executor is terminal.
 - Explicit: disjoint ``outputs`` and ``intermediates`` sets classify listed executors,
   and hide unlisted executors.
 """
@@ -18,16 +18,18 @@ from agent_framework import (
     Message,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowValidationError,
     executor,
 )
-from agent_framework._workflows._workflow import OutputDesignation
+from agent_framework._workflows._runner_context import InProcRunnerContext
+from agent_framework._workflows._workflow import OutputDesignation, Workflow
 
 # ---------------------------------------------------------------------------
 # OutputDesignation value type
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_designation_marks_every_executor_as_terminal() -> None:
+def test_omitted_selection_designation_marks_every_executor_as_terminal() -> None:
     designation = OutputDesignation()  # designated defaults to None
     assert designation.outputs is None
     assert designation.is_terminal("anything")
@@ -77,8 +79,8 @@ async def _downstream(message: str, ctx: WorkflowContext[Never, str]) -> None:
     await ctx.yield_output("downstream")
 
 
-def test_is_terminal_executor_legacy_mode_returns_true_for_any_id() -> None:
-    """Legacy mode (output_executors unset): every executor is terminal."""
+def test_is_terminal_executor_omitted_selection_returns_true_for_any_id() -> None:
+    """Omitted-selection compatibility behavior: every executor is terminal."""
     import warnings
 
     with warnings.catch_warnings():
@@ -104,3 +106,32 @@ def test_is_terminal_executor_strict_list_returns_true_only_for_designated() -> 
     )
     assert workflow.is_terminal_executor(_emit_one.id)
     assert not workflow.is_terminal_executor(_downstream.id)
+
+
+def test_get_output_executors_throws_when_designation_references_missing_executor() -> None:
+    workflow = Workflow(
+        [],
+        {_emit_one.id: _emit_one},
+        _emit_one,
+        InProcRunnerContext(),
+        "test",
+        output_from=["missing"],
+    )
+
+    with pytest.raises(WorkflowValidationError, match="Output executor 'missing' is not present"):
+        workflow.get_output_executors()
+
+
+def test_get_intermediate_executors_throws_when_designation_references_missing_executor() -> None:
+    workflow = Workflow(
+        [],
+        {_emit_one.id: _emit_one},
+        _emit_one,
+        InProcRunnerContext(),
+        "test",
+        output_from=[],
+        intermediate_output_from=["missing"],
+    )
+
+    with pytest.raises(WorkflowValidationError, match="Intermediate executor 'missing' is not present"):
+        workflow.get_intermediate_executors()

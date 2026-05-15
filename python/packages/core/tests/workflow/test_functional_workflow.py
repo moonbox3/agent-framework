@@ -165,7 +165,7 @@ class TestEventEmission:
 
         @workflow
         async def pipeline(x: int, ctx: RunContext) -> int:
-            await ctx.add_event(WorkflowEvent.intermediate("pipeline", "custom_data"))
+            await ctx.add_event(WorkflowEvent("intermediate", executor_id="pipeline", data="custom_data"))
             return x
 
         result = await pipeline.run(1)

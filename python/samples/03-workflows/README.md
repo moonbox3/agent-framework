@@ -149,9 +149,8 @@ Invalid selections fail at construction or build time:
 | Unknown executor selections | Typos and missing participants are rejected |
 | `output_from=[], intermediate_output_from=[]` | Both explicit selections are empty |
 
-Legacy aliases `final_output_from`, `output_executors`, and `intermediate_executors` remain compatibility-only and emit
-deprecation warnings where supported. New samples and applications should use `output_from` and
-`intermediate_output_from`.
+Compatibility aliases such as `output_executors` emit deprecation warnings where supported. New samples and
+applications should use `output_from` and `intermediate_output_from`.
 
 When a workflow is wrapped with `workflow.as_agent()`, Workflow Output becomes normal agent text content. Intermediate
 Output becomes `text_reasoning` content, so `AgentResponse.text` remains focused on the caller-facing answer while

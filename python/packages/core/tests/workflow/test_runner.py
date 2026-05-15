@@ -772,7 +772,7 @@ async def test_runner_with_pre_loop_events():
     runner = Runner([], {}, state, ctx, "test_name", graph_signature_hash="test_hash")
 
     # Add an event before running
-    await ctx.add_event(WorkflowEvent.output(executor_id="test_executor", data="pre-loop-output"))
+    await ctx.add_event(WorkflowEvent("output", executor_id="test_executor", data="pre-loop-output"))
 
     events: list[WorkflowEvent] = []
     async for event in runner.run_until_convergence():
@@ -897,7 +897,7 @@ class ExecutorThatFailsWithEvents(Executor):
         # First emit an output event to the workflow context
         await ctx.yield_output(f"output-before-failure-{message.data}")
         # Add some events directly to the runner context
-        await self._runner_ctx.add_event(WorkflowEvent.output(executor_id=self.id, data="pending-event"))
+        await self._runner_ctx.add_event(WorkflowEvent("output", executor_id=self.id, data="pending-event"))
         # Fail on the specified iteration
         if self._iteration_count >= self._fail_on_iteration:
             raise RuntimeError("Executor failed with pending events")

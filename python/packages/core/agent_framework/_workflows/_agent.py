@@ -49,26 +49,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _to_text_reasoning(contents: Sequence[Content]) -> list[Content]:
-    """Rewrite text items as text_reasoning; non-text content passes through unchanged."""
-    rewritten: list[Content] = []
-    for c in contents:
-        if c.type == "text":
-            rewritten.append(
-                Content.from_text_reasoning(
-                    id=c.id,
-                    text=c.text,
-                    protected_data=c.protected_data,
-                    annotations=c.annotations,
-                    additional_properties=c.additional_properties,
-                    raw_representation=c.raw_representation,
-                )
-            )
-        else:
-            rewritten.append(c)
-    return rewritten
-
-
 class WorkflowAgent(BaseAgent):
     """An `Agent` subclass that wraps a workflow and exposes it as an agent."""
 
@@ -537,11 +517,8 @@ class WorkflowAgent(BaseAgent):
     ) -> AgentResponse:
         """Convert a list of workflow events to an AgentResponse.
 
-        Terminal events (``type='output'``) keep their text content as ``text``.
-        Intermediate events (``type='intermediate'`` and the legacy/orchestration
-        variants) have their text content rewritten to ``text_reasoning`` so
-        ``response.text`` returns terminal-only by virtue of the existing
-        ``Message.text`` filter.
+        Caller-facing workflow events are forwarded as agent messages. Terminal and
+        intermediate event payloads keep their original content types.
         """
         messages: list[Message] = []
         raw_representations: list[object] = []
@@ -567,16 +544,6 @@ class WorkflowAgent(BaseAgent):
                 # events that already passed the lifecycle filter and weren't request_info.
                 is_intermediate = output_event.type != "output"
 
-                def _mark_msg(msg: Message) -> Message:
-                    return Message(
-                        contents=_to_text_reasoning(msg.contents),
-                        role=msg.role,
-                        author_name=msg.author_name,
-                        message_id=msg.message_id,
-                        additional_properties=msg.additional_properties,
-                        raw_representation=msg.raw_representation,
-                    )
-
                 if isinstance(data, AgentResponseUpdate):
                     # AgentResponseUpdate is a streaming-only payload. Accepting it
                     # in non-streaming runs would make message ordering depend on
@@ -589,8 +556,7 @@ class WorkflowAgent(BaseAgent):
                     )
 
                 if isinstance(data, AgentResponse):
-                    inner_msgs = [_mark_msg(m) for m in data.messages] if is_intermediate else list(data.messages)
-                    messages.extend(inner_msgs)
+                    messages.extend(data.messages)
                     raw_representations.append(data.raw_representation)
                     merged_usage = add_usage_details(merged_usage, data.usage_details)
                     latest_created_at = (
@@ -601,19 +567,16 @@ class WorkflowAgent(BaseAgent):
                         else latest_created_at
                     )
                 elif isinstance(data, Message):
-                    messages.append(_mark_msg(data) if is_intermediate else data)
+                    messages.append(data)
                     raw_representations.append(data.raw_representation)
                 elif is_instance_of(data, list[Message]):
                     chat_messages = cast(list[Message], data)
-                    inner_msgs = [_mark_msg(m) for m in chat_messages] if is_intermediate else list(chat_messages)
-                    messages.extend(inner_msgs)
+                    messages.extend(chat_messages)
                     raw_representations.append(data)
                 else:
                     contents = self._extract_contents(data)
                     if not contents:
                         continue
-                    if is_intermediate:
-                        contents = _to_text_reasoning(contents)
 
                     messages.append(
                         Message(
@@ -677,32 +640,26 @@ class WorkflowAgent(BaseAgent):
 
         - ``type='output'`` — terminal user-facing emission. Forwarded as-is.
         - ``type='intermediate'`` (and the deprecated ``type='data'``) — forwarded
-          as intermediate. Text payloads are rewritten to ``text_reasoning`` content;
-          non-text content types (function_call, function_result, data, uri, …)
-          pass through unchanged since their ``Content.type`` already discriminates
-          them.
+          as-is.
         - ``type='request_info'`` — request-info translation (unchanged).
         - Everything else (lifecycle, diagnostics, executor bookkeeping,
           orchestration-internal events like ``group_chat``/``handoff_sent``/
           ``magentic_orchestrator``) is dropped.
         """
+        # TODO(evmattso): https://github.com/microsoft/agent-framework/issues/5885
         if event.type not in AGENT_FORWARDED_EVENT_TYPES:
             return []
 
         if event.type != "request_info":
             data = event.data
             executor_id = event.executor_id
-            is_intermediate = event.type != "output"
-
-            def _maybe_mark(contents: list[Content]) -> list[Content]:
-                return _to_text_reasoning(contents) if is_intermediate else contents
 
             if isinstance(data, AgentResponseUpdate):
                 # Construct a fresh AgentResponseUpdate so we don't mutate a payload
                 # that AgentExecutor still holds a reference to in its `updates` list.
                 return [
                     AgentResponseUpdate(
-                        contents=_maybe_mark(list(data.contents)),
+                        contents=list(data.contents),
                         role=data.role,
                         author_name=data.author_name or executor_id,
                         response_id=data.response_id,
@@ -717,7 +674,7 @@ class WorkflowAgent(BaseAgent):
                 for msg in data.messages:
                     updates.append(
                         AgentResponseUpdate(
-                            contents=_maybe_mark(list(msg.contents)),
+                            contents=list(msg.contents),
                             role=msg.role,
                             author_name=msg.author_name or executor_id,
                             response_id=data.response_id or response_id,
@@ -731,7 +688,7 @@ class WorkflowAgent(BaseAgent):
             if isinstance(data, Message):
                 return [
                     AgentResponseUpdate(
-                        contents=_maybe_mark(list(data.contents)),
+                        contents=list(data.contents),
                         role=data.role,
                         author_name=data.author_name or executor_id,
                         response_id=response_id,
@@ -747,7 +704,7 @@ class WorkflowAgent(BaseAgent):
                 for msg in chat_messages:
                     updates.append(
                         AgentResponseUpdate(
-                            contents=_maybe_mark(list(msg.contents)),
+                            contents=list(msg.contents),
                             role=msg.role,
                             author_name=msg.author_name or executor_id,
                             response_id=response_id,
@@ -760,10 +717,6 @@ class WorkflowAgent(BaseAgent):
             contents = self._extract_contents(data)
             if not contents:
                 return []
-            if is_intermediate:
-                # _extract_contents returned text content for fallback str()-coercion of
-                # arbitrary payloads; reroute to text_reasoning for intermediate events.
-                contents = _maybe_mark(contents)
             return [
                 AgentResponseUpdate(
                     contents=contents,

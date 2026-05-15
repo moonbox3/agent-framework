@@ -7,9 +7,8 @@ Verifies that under the strict-output model:
     aggregator, orchestrator, or manager as the sole output executor; per-step
     yields from non-designated executors emit `type='intermediate'` events.
   - Handoff designates ALL participants — every reply is `type='output'`.
-  - When wrapped via `workflow.as_agent()`, intermediate events surface as
-    `text_reasoning` content; terminal events as `text` content; existing
-    `.text` accessors return terminal-only.
+  - When wrapped via `workflow.as_agent()`, caller-facing workflow events surface
+    with their original content types.
 """
 
 from __future__ import annotations
@@ -151,13 +150,13 @@ async def test_sequential_intermediate_output_from_surface_as_intermediate() -> 
 
 @pytest.mark.asyncio
 async def test_sequential_intermediate_can_demote_default_terminator() -> None:
-    """Regression: marking the default-final terminator as intermediate must not raise an overlap error.
+    """Regression: marking the default output terminator as intermediate must not raise an overlap error.
 
-    Sequential's default-final list is `[participants[-1]]`. Before the fix, designating that
+    Sequential's default output list is `[participants[-1]]`. Before the fix, designating that
     same participant via `intermediate_output_from` triggered the
     "Participants cannot be both output and intermediate designated" overlap rejection in
     `_participant_output_config`, contradicting the public contract that
-    `intermediate_output_from` can be used independently of `final_output_from`.
+    `intermediate_output_from` can be used independently of `output_from`.
     """
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
@@ -250,13 +249,13 @@ async def test_concurrent_intermediate_output_from_surface_as_intermediate() -> 
 
 
 # ---------------------------------------------------------------------------
-# Sequential wrapped as_agent — text_reasoning mapping
+# Sequential wrapped as_agent
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sequential_default_as_agent_intermediates_are_text_reasoning() -> None:
-    """Default Sequential wrapped as_agent returns only the terminator's terminal content."""
+async def test_sequential_default_as_agent_forwards_original_content_types() -> None:
+    """Default Sequential wrapped as_agent forwards original content types."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
@@ -266,15 +265,11 @@ async def test_sequential_default_as_agent_intermediates_are_text_reasoning() ->
 
     response = await agent.run("hi")
 
-    # .text returns terminal content only — only C's reply.
-    assert response.text == "C reply"
-
     text_contents = [c for m in response.messages for c in m.contents if c.type == "text"]
     reasoning_contents = [c for m in response.messages for c in m.contents if c.type == "text_reasoning"]
 
     assert any("C reply" in c.text for c in text_contents)
-    assert not any("A reply" in c.text for c in reasoning_contents)
-    assert not any("B reply" in c.text for c in reasoning_contents)
+    assert not reasoning_contents
 
 
 @pytest.mark.asyncio
@@ -296,8 +291,8 @@ async def test_sequential_as_agent_output_from_all_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sequential_as_agent_intermediate_output_from_are_text_reasoning() -> None:
-    """intermediate_output_from maps selected participant replies to reasoning content."""
+async def test_sequential_as_agent_intermediate_output_from_keeps_text_content() -> None:
+    """intermediate_output_from keeps selected participant replies as their original content type."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
     c = _EchoAgent(name="C")
@@ -310,8 +305,9 @@ async def test_sequential_as_agent_intermediate_output_from_are_text_reasoning()
     text_contents = [c for m in response.messages for c in m.contents if c.type == "text"]
     reasoning_contents = [c for m in response.messages for c in m.contents if c.type == "text_reasoning"]
     assert any("C reply" in c.text for c in text_contents)
-    assert any("A reply" in c.text for c in reasoning_contents)
-    assert any("B reply" in c.text for c in reasoning_contents)
+    assert any("A reply" in c.text for c in text_contents)
+    assert any("B reply" in c.text for c in text_contents)
+    assert not reasoning_contents
 
 
 # ---------------------------------------------------------------------------
@@ -320,9 +316,8 @@ async def test_sequential_as_agent_intermediate_output_from_are_text_reasoning()
 
 
 @pytest.mark.asyncio
-async def test_concurrent_default_as_agent_participants_are_text_reasoning() -> None:
-    """Default Concurrent wrapped as_agent: participant replies are text_reasoning;
-    aggregator's yield is text content."""
+async def test_concurrent_default_as_agent_participants_keep_text_content() -> None:
+    """Default Concurrent wrapped as_agent keeps original participant content types."""
     a = _EchoAgent(name="A")
     b = _EchoAgent(name="B")
 
@@ -516,13 +511,13 @@ def test_handoff_builder_output_from_can_select_workflow_output_participants() -
     assert {ex.id for ex in workflow.get_output_executors()} == {"alpha"}
 
 
-def test_handoff_builder_intermediate_output_from_demotes_from_default_final() -> None:
-    """Regression: `intermediate_output_from` alone must not collide with the default-final list.
+def test_handoff_builder_intermediate_output_from_demotes_from_default_output() -> None:
+    """Regression: `intermediate_output_from` alone must not collide with the default output list.
 
-    Handoff defaults `final_output_from` to every participant. Before the fix, supplying
-    `intermediate_output_from=["alpha"]` without restating `final_output_from` triggered
+    Handoff defaults workflow output to every participant. Before the fix, supplying
+    `intermediate_output_from=["alpha"]` without restating `output_from` triggered
     "Participants cannot be both output and intermediate designated: ['alpha']" because
-    alpha was simultaneously in the default-final list and the explicit intermediate list.
+    alpha was simultaneously in the default output list and the explicit intermediate list.
     The contract documented at `_handoff.py:619-622` promises `intermediate_output_from` is
     usable on its own.
     """
@@ -727,7 +722,6 @@ def _build_handoff_with_designation(**kwargs: Any) -> None:
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"final_output_from": [], "intermediate_output_from": []}, "cannot both be empty"),
         ({"output_from": [], "intermediate_output_from": []}, "cannot both be empty"),
         ({"output_from": ["alpha", "alpha"]}, "Duplicate output participant"),
         ({"output_from": ["alpha"], "intermediate_output_from": ["alpha"]}, "cannot be both output"),
@@ -751,6 +745,6 @@ def test_participant_output_config_validation(build: Callable[..., None], kwargs
         _build_handoff_with_designation,
     ],
 )
-def test_participant_output_config_rejects_output_from_alias_conflict(build: Callable[..., None]) -> None:
-    with pytest.raises(TypeError, match="output_from.*final_output_from"):
-        build(output_from=["alpha"], final_output_from=["beta"])
+def test_participant_output_config_rejects_final_output_from_parameter(build: Callable[..., None]) -> None:
+    with pytest.raises(TypeError, match="final_output_from"):
+        build(final_output_from=["beta"])

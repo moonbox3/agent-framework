@@ -801,8 +801,8 @@ def test_comprehensive_edge_groups_workflow_serialization() -> None:
         assert len(single_group["edges"]) == 1, "Each SingleEdgeGroup should have exactly 1 edge"
 
 
-def test_to_dict_preserves_legacy_wire_keys_for_output_designation() -> None:
-    """to_dict() must emit the legacy wire keys regardless of the Python kwarg names.
+def test_to_dict_preserves_compatibility_wire_keys_for_output_designation() -> None:
+    """to_dict() must emit the compatibility wire keys regardless of the Python kwarg names.
 
     The Python API renamed ``output_executors`` -> ``output_from`` and
     uses ``intermediate_output_from`` for intermediate selection, but the serialized

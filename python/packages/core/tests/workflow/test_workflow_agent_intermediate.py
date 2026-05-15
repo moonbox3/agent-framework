@@ -1,11 +1,10 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Tests for WorkflowAgent translation of intermediate events to text_reasoning content.
+"""Tests for WorkflowAgent forwarding of intermediate workflow events.
 
 Covers:
-- type='intermediate' surfaces as AgentResponseUpdate with text_reasoning content
-- type='data' (legacy via WorkflowEvent.emit) surfaces the same way (fixes F7)
-- update.text returns terminal-only by virtue of the existing content-type filter
+- type='intermediate' surfaces as AgentResponseUpdate without content-type rewriting
+- type='data' (compatibility alias via WorkflowEvent.emit) is forwarded
 - Message.additional_properties survives the intermediate translation path
 - Terminal yields keep using regular text content (backward compat)
 """
@@ -31,9 +30,9 @@ from agent_framework.exceptions import AgentInvalidRequestException
 
 
 @pytest.mark.asyncio
-async def test_workflow_agent_forwards_intermediate_events_as_text_reasoning() -> None:
+async def test_workflow_agent_forwards_intermediate_events_without_content_rewrite() -> None:
     """An intermediate yield from an intermediate-designated executor surfaces through as_agent
-    as an AgentResponseUpdate carrying text_reasoning content."""
+    as an AgentResponseUpdate carrying its original content type."""
 
     @executor
     async def emit(messages: list[Message], ctx: WorkflowContext[str, str]) -> None:
@@ -59,22 +58,17 @@ async def test_workflow_agent_forwards_intermediate_events_as_text_reasoning() -
     async for update in agent.run("hi", stream=True):
         updates.append(update)
 
-    # Find the intermediate progress: it has text_reasoning content.
-    intermediate_updates = [u for u in updates if any(c.type == "text_reasoning" for c in u.contents)]
-    terminal_updates = [u for u in updates if any(c.type == "text" for c in u.contents)]
+    text = " ".join(c.text for u in updates for c in u.contents if c.type == "text")
+    reasoning_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text_reasoning")
 
-    intermediate_text = " ".join(c.text for u in intermediate_updates for c in u.contents if c.type == "text_reasoning")
-    terminal_text = " ".join(u.text for u in terminal_updates)
-
-    assert "intermediate progress" in intermediate_text
-    assert "FINAL" in terminal_text
+    assert "intermediate progress" in text
+    assert "FINAL" in text
+    assert reasoning_text == ""
 
 
 @pytest.mark.asyncio
-async def test_workflow_agent_text_accessor_returns_terminal_only() -> None:
-    """update.text excludes text_reasoning content automatically. The non-streaming
-    AgentResponse.text returns only terminal text — intermediate progress is invisible
-    to existing callers using .text."""
+async def test_workflow_agent_text_accessor_includes_forwarded_intermediate_text() -> None:
+    """Intermediate text is forwarded as text until issue 5885 defines the final mapping."""
 
     @executor
     async def emit(messages: list[Message], ctx: WorkflowContext[str, str]) -> None:
@@ -98,8 +92,8 @@ async def test_workflow_agent_text_accessor_returns_terminal_only() -> None:
 
     response = await agent.run("hi")
     assert isinstance(response, AgentResponse)
-    # .text filters to content.type == "text" — intermediate text_reasoning is excluded.
-    assert response.text == "the-answer"
+    assert "invisible-progress" in response.text
+    assert "the-answer" in response.text
 
 
 @pytest.mark.asyncio
@@ -152,35 +146,33 @@ async def test_workflow_agent_hidden_yields_do_not_surface_streaming() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_agent_legacy_data_event_emit_factory_still_forwarded() -> None:
-    """Even the deprecated WorkflowEvent.emit() / type='data' path is forwarded as
-    text_reasoning content (was previously dropped — F7 fix)."""
+async def test_workflow_agent_data_event_emit_factory_still_forwarded() -> None:
+    """Even the deprecated WorkflowEvent.emit() / type='data' path is forwarded."""
 
     @executor
-    async def emit_legacy(messages: list[Message], ctx: WorkflowContext[Never, str]) -> None:
+    async def emit_data_alias(messages: list[Message], ctx: WorkflowContext[Never, str]) -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
-            await ctx.add_event(WorkflowEvent.emit("emit_legacy", "legacy-payload"))
+            await ctx.add_event(WorkflowEvent.emit("emit_data_alias", "data-alias-payload"))
         await ctx.yield_output("DONE")
 
-    workflow = WorkflowBuilder(start_executor=emit_legacy, output_from=[emit_legacy]).build()
+    workflow = WorkflowBuilder(start_executor=emit_data_alias, output_from=[emit_data_alias]).build()
     agent = workflow.as_agent("test")
 
     updates: list[AgentResponseUpdate] = []
     async for update in agent.run("hi", stream=True):
         updates.append(update)
 
-    reasoning_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text_reasoning")
-    assert "legacy-payload" in reasoning_text
+    text = " ".join(c.text for u in updates for c in u.contents if c.type == "text")
+    assert "data-alias-payload" in text
 
 
 @pytest.mark.asyncio
 async def test_workflow_agent_intermediate_message_preserves_additional_properties() -> None:
-    """Message.additional_properties survives the intermediate translation path.
+    """Message.additional_properties survives intermediate forwarding.
 
-    Regression test for the omitted field in _mark_msg — without forwarding
-    additional_properties, producer-attached metadata (tracking_id, conversation_id, etc.)
-    silently disappears for messages flowing through intermediate-designated executors.
+    Producer-attached metadata (tracking_id, conversation_id, etc.) must not disappear
+    for messages flowing through intermediate-designated executors.
     """
 
     @executor
@@ -209,15 +201,14 @@ async def test_workflow_agent_intermediate_message_preserves_additional_properti
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")
-    intermediate_msgs = [m for m in response.messages if any(c.type == "text_reasoning" for c in m.contents)]
+    intermediate_msgs = [m for m in response.messages if any(c.type == "text" and c.text == "hi" for c in m.contents)]
     assert intermediate_msgs, "expected at least one intermediate message in the response"
     assert intermediate_msgs[0].additional_properties.get("tracking_id") == "abc-123"
 
 
 @pytest.mark.asyncio
 async def test_workflow_agent_terminal_text_stays_text_not_reasoning() -> None:
-    """Backward compat — a designated executor's text yield surfaces as Content.text,
-    not text_reasoning. Existing consumers reading .text on the response work unchanged."""
+    """A designated executor's text yield surfaces as Content.text."""
 
     @executor
     async def only(messages: list[Message], ctx: WorkflowContext[Never, str]) -> None:
@@ -277,7 +268,7 @@ async def test_workflow_agent_non_streaming_rejects_intermediate_update() -> Non
 
 @pytest.mark.asyncio
 async def test_workflow_agent_streaming_update_payloads_preserve_classification() -> None:
-    """Streaming AgentResponseUpdate payloads keep output as text and intermediate as reasoning."""
+    """Streaming AgentResponseUpdate payloads preserve original content types."""
 
     @executor
     async def emit(messages: list[Message], ctx: WorkflowContext[str, AgentResponseUpdate]) -> None:
@@ -307,11 +298,12 @@ async def test_workflow_agent_streaming_update_payloads_preserve_classification(
     async for update in agent.run("hi", stream=True):
         updates.append(update)
 
+    text = " ".join(c.text for u in updates for c in u.contents if c.type == "text")
     reasoning_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text_reasoning")
-    terminal_text = " ".join(c.text for u in updates for c in u.contents if c.type == "text")
 
-    assert "intermediate-chunk" in reasoning_text
-    assert "terminal-chunk" in terminal_text
+    assert "intermediate-chunk" in text
+    assert "terminal-chunk" in text
+    assert reasoning_text == ""
 
 
 @pytest.mark.asyncio

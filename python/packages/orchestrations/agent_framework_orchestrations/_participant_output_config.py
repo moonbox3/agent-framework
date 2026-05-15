@@ -2,7 +2,6 @@
 
 """Participant-oriented workflow output configuration helpers."""
 
-import warnings
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -22,26 +21,8 @@ _WorkflowExecutorSpecifier = Executor | SupportsAgentRun
 def _coalesce_output_from(  # pyright: ignore[reportUnusedFunction]
     *,
     output_from: Any = _MISSING,
-    final_output_from: Any = _MISSING,
 ) -> _ParticipantOutputSelection:
-    """Resolve deprecated orchestration output-selection aliases to ``output_from``."""
-    provided = [
-        name
-        for name, value in (("output_from", output_from), ("final_output_from", final_output_from))
-        if value is not _MISSING
-    ]
-    if len(provided) > 1:
-        raise TypeError(
-            f"Cannot pass multiple orchestration output selection parameters ({', '.join(provided)}); "
-            "use `output_from`."
-        )
-    if final_output_from is not _MISSING:
-        warnings.warn(
-            "`final_output_from` is deprecated and will be removed in a future version; use `output_from` instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return _coerce_output_from(final_output_from)
+    """Resolve orchestration output selection to ``output_from``."""
     if output_from is not _MISSING:
         return _coerce_output_from(output_from)
     return None
@@ -83,7 +64,7 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
     participants: Sequence[Executor],
     output_from: _ParticipantOutputSelection,
     intermediate_output_from: _ParticipantIntermediateOutputSelection,
-    default_final_output_from: Sequence[Executor] = (),
+    default_output_from: Sequence[Executor] = (),
     extra_output_executors: Sequence[Executor] = (),
 ) -> tuple[list[_WorkflowExecutorSpecifier], list[_WorkflowExecutorSpecifier]]:
     """Resolve public participant output config into workflow executor config."""
@@ -117,13 +98,13 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
             else []
         )
         # The caller-supplied default applies only to participants not explicitly designated as
-        # intermediate. Without this subtraction, builders that pre-populate a default-final list
+        # intermediate. Without this subtraction, builders that pre-populate a default output list
         # (Handoff defaults to all participants, Sequential defaults to the last) would force
         # an overlap error whenever a user passed `intermediate_output_from=[X]` for an X in
         # the default set, contradicting the public docstring contract.
         intermediate_ids = {participant.id for participant in intermediate_designated}
         output_designated = [
-            participant for participant in default_final_output_from if participant.id not in intermediate_ids
+            participant for participant in default_output_from if participant.id not in intermediate_ids
         ]
 
     if intermediate_output_from == _ALL_OTHER_OUTPUTS:

@@ -24,7 +24,6 @@ from ._state import State
 
 if TYPE_CHECKING:
     from ._executor import Executor
-    from ._workflow import OutputDesignation
 
 OutT = TypeVar("OutT", default=Never)
 W_OutT = TypeVar("W_OutT", default=Never)
@@ -202,6 +201,7 @@ def validate_workflow_context_annotation(
 
 # Event types reserved for framework lifecycle (not allowed from user code)
 _FRAMEWORK_LIFECYCLE_EVENT_TYPES: frozenset[str] = frozenset({"started", "status", "failed"})
+_OUTPUT_SELECTION_EVENT_TYPES: frozenset[str] = frozenset({"output", "intermediate"})
 
 
 class WorkflowContext(Generic[OutT, W_OutT]):
@@ -257,7 +257,6 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         source_executor_ids: list[str],
         state: State,
         runner_context: RunnerContext,
-        output_designation: OutputDesignation | None = None,
         trace_contexts: list[dict[str, str]] | None = None,
         source_span_ids: list[str] | None = None,
         request_id: str | None = None,
@@ -271,21 +270,15 @@ class WorkflowContext(Generic[OutT, W_OutT]):
                 messages to the same executor.
             state: The workflow state.
             runner_context: The runner context that provides methods to send messages and events.
-            output_designation: Snapshot of the workflow's output designation policy used by
-                ``yield_output`` to label events as terminal vs intermediate. Defaults to legacy
-                mode (every yield is type='output') when omitted.
             trace_contexts: Optional trace contexts from multiple sources for OpenTelemetry propagation.
             source_span_ids: Optional source span IDs from multiple sources for linking (not for nesting).
             request_id: Optional request ID if this context is for a `handle_response` handler.
         """
-        from ._workflow import OutputDesignation
-
         self._executor = executor
         self._executor_id = executor.id
         self._source_executor_ids = source_executor_ids
         self._runner_context = runner_context
         self._state = state
-        self._output_designation: OutputDesignation = output_designation or OutputDesignation()
 
         # Track messages sent via send_message() for executor_completed event (type='executor_completed')
         self._sent_messages: list[Any] = []
@@ -350,7 +343,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         The framework labels the resulting workflow event based on the workflow's explicit
         output designation:
 
-        - Legacy mode: every yield produces ``type='output'``.
+        - Omitted-selection compatibility behavior: every yield produces ``type='output'``.
         - Explicit mode: output-designated executors produce ``type='output'``,
           intermediate-designated executors produce ``type='intermediate'``, and
           unlisted executor yields are hidden from caller-facing events.
@@ -368,19 +361,24 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         # (deepcopy to capture state at yield time)
         self._yielded_outputs.append(copy.deepcopy(output))
 
-        event_type = self._output_designation.classify(self._executor_id)
+        event_type = self._runner_context.classify_yielded_output(self._executor_id)
         if event_type is None:
             return
 
         with _framework_event_origin():
-            if event_type == "output":
-                event = WorkflowEvent.output(self._executor_id, output)
-            else:
-                event = WorkflowEvent.intermediate(self._executor_id, output)
+            event = WorkflowEvent(event_type, executor_id=self._executor_id, data=output)
         await self._runner_context.add_event(event)
 
     async def add_event(self, event: WorkflowEvent[Any]) -> None:
         """Add an event to the workflow context."""
+        if event.origin == WorkflowEventSource.EXECUTOR and event.type in _OUTPUT_SELECTION_EVENT_TYPES:
+            warning_msg = (
+                f"Executor '{self._executor_id}' attempted to emit a '{event.type}' event directly, "
+                "which is reserved for ctx.yield_output(). The event was ignored."
+            )
+            logger.warning(warning_msg)
+            await self._runner_context.add_event(WorkflowEvent.warning(warning_msg))
+            return
         if event.origin == WorkflowEventSource.EXECUTOR and event.type in _FRAMEWORK_LIFECYCLE_EVENT_TYPES:
             warning_msg = (
                 f"Executor '{self._executor_id}' attempted to emit a '{event.type}' event, "

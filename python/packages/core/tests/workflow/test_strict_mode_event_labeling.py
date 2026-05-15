@@ -71,8 +71,8 @@ async def test_intermediate_designated_executor_emits_intermediate_events() -> N
 
 
 @pytest.mark.asyncio
-async def test_legacy_mode_unset_keeps_all_yields_as_output() -> None:
-    """Legacy mode (output_executors unset) preserves today's behavior — all yields are type='output'."""
+async def test_omitted_selection_keeps_all_yields_as_output() -> None:
+    """Omitted output selection preserves today's behavior: all yields are type='output'."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         workflow = WorkflowBuilder(start_executor=_start).add_edge(_start, _downstream).build()

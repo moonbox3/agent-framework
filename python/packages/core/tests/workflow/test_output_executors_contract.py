@@ -37,13 +37,19 @@ async def _downstream(message: str, ctx: WorkflowContext[Never, str]) -> None:
 
 def test_designation_unset_emits_deprecation_warning() -> None:
     """State A: WorkflowBuilder built without explicit designation warns."""
-    with pytest.warns(DeprecationWarning, match="output_from or intermediate_output_from"):
+    with pytest.warns(DeprecationWarning, match="output_from or intermediate_output_from") as warning_info:
         WorkflowBuilder(start_executor=_emit_one).build()
+    assert str(warning_info[0].message) == (
+        "WorkflowBuilder built without explicit output_from or intermediate_output_from; "
+        "every yield_output produces type='output' for compatibility. Pass output_from='all', "
+        "output_from=[...], or intermediate_output_from=[...] to opt into explicit designation - "
+        "explicit designation will be required in a future version."
+    )
 
 
 @pytest.mark.asyncio
-async def test_designation_unset_preserves_legacy_all_output_behavior() -> None:
-    """Omitted designation keeps legacy all-output behavior while warning."""
+async def test_designation_unset_preserves_compatibility_all_output_behavior() -> None:
+    """Omitted designation keeps compatibility all-output behavior while warning."""
     with pytest.warns(DeprecationWarning, match="output_from or intermediate_output_from"):
         workflow = WorkflowBuilder(start_executor=_start).add_edge(_start, _downstream).build()
 
@@ -54,8 +60,8 @@ async def test_designation_unset_preserves_legacy_all_output_behavior() -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_from_all_emits_all_outputs_without_legacy_warning() -> None:
-    """Explicit all-output designation emits every executor payload without legacy warning."""
+async def test_output_from_all_emits_all_outputs_without_omitted_selection_warning() -> None:
+    """Explicit all-output designation emits every executor payload without omitted-selection warning."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         workflow = WorkflowBuilder(start_executor=_start, output_from="all").add_edge(_start, _downstream).build()
@@ -147,7 +153,7 @@ def test_all_other_expands_to_concrete_intermediate_executor_selection_at_build_
 
 @pytest.mark.asyncio
 async def test_all_other_with_omitted_output_from_emits_only_intermediate_outputs() -> None:
-    """All-other intermediate designation opts out of legacy all-output mode."""
+    """All-other intermediate designation opts out of omitted-selection all-output behavior."""
     workflow = (
         WorkflowBuilder(
             start_executor=_start,
@@ -261,4 +267,14 @@ def test_intermediate_executors_builder_parameter_is_not_public() -> None:
         builder_type(
             start_executor=_emit_one,
             intermediate_executors=[_emit_one],
+        )
+
+
+def test_final_output_from_builder_parameter_is_not_public() -> None:
+    """The branch-only final_output_from builder parameter is not supported."""
+    builder_type: Any = WorkflowBuilder
+    with pytest.raises(TypeError, match="unexpected keyword argument 'final_output_from'"):
+        builder_type(
+            start_executor=_emit_one,
+            final_output_from=[_emit_one],
         )

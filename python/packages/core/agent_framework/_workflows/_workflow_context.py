@@ -356,7 +356,7 @@ class WorkflowContext(Generic[OutT, W_OutT]):
           unlisted executor yields are hidden from caller-facing events.
 
         Whether a given executor produces ``output`` or ``intermediate`` events is fixed at
-        workflow-build time via ``final_output_from`` / ``intermediate_output_from`` on
+        workflow-build time via ``output_from`` / ``intermediate_output_from`` on
         :class:`WorkflowBuilder`; an executor cannot vary the label per yield. To change an
         executor's role, list it under a different designation when building the workflow.
 

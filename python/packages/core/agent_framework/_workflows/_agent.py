@@ -125,7 +125,7 @@ class WorkflowAgent(BaseAgent):
         Note:
             Only output events (type='output') and request_info events (type='request_info') from
             the workflow are considered and converted to agent responses of the WorkflowAgent.
-            Other workflow events are ignored. Use `with_output_from` in WorkflowBuilder to control
+            Other workflow events are ignored. Use `output_from` in WorkflowBuilder to control
             which executors' outputs are surfaced as agent responses.
         """
         if id is None:

@@ -123,7 +123,7 @@ class AgentExecutor(Executor):
     - run(stream=True): Emits incremental output events (type='output') as the agent produces tokens
     - run(): Emits a single output event (type='output') containing the complete response
 
-    Use `with_output_from` in WorkflowBuilder to control whether the AgentResponse
+    Use `output_from` in WorkflowBuilder to control whether the AgentResponse
     or AgentResponseUpdate objects are yielded as workflow outputs.
 
     Messages sent to downstream executors will always be the complete AgentResponse. In

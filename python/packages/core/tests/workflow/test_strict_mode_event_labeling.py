@@ -1,16 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Tests for the runner's strict-mode event labeling.
-
-Explicit designation mode = WorkflowBuilder built with explicit output_executors
-or intermediate_executors.
-- Yields from output executors -> type='output'.
-- Yields from intermediate executors -> type='intermediate'.
-- Yields from unlisted executors -> hidden from caller-facing output/intermediate events.
-
-Legacy mode (output_executors unset) preserves today's behavior:
-every yield -> type='output'.
-"""
+"""Tests for the runner's explicit output selection event labeling."""
 
 from __future__ import annotations
 
@@ -46,7 +36,7 @@ def _input_msg() -> list[Message]:
 @pytest.mark.asyncio
 async def test_strict_mode_designated_executor_emits_output_events() -> None:
     """Output-designated executor yields produce type='output' events."""
-    workflow = WorkflowBuilder(start_executor=_start, output_executors=[_start]).add_edge(_start, _downstream).build()
+    workflow = WorkflowBuilder(start_executor=_start, output_from=[_start]).add_edge(_start, _downstream).build()
     output_events: list[Any] = []
     intermediate_events: list[Any] = []
     async for event in workflow.run(_input_msg(), stream=True):
@@ -64,7 +54,7 @@ async def test_strict_mode_designated_executor_emits_output_events() -> None:
 async def test_intermediate_designated_executor_emits_intermediate_events() -> None:
     """Intermediate-designated executor yields produce type='intermediate' events."""
     workflow = (
-        WorkflowBuilder(start_executor=_start, intermediate_executors=[_downstream])
+        WorkflowBuilder(start_executor=_start, intermediate_output_from=[_downstream])
         .add_edge(_start, _downstream)
         .build()
     )
@@ -104,8 +94,8 @@ async def test_strict_mode_get_outputs_returns_only_designated() -> None:
     workflow = (
         WorkflowBuilder(
             start_executor=_start,
-            output_executors=[_downstream],
-            intermediate_executors=[_start],
+            output_from=[_downstream],
+            intermediate_output_from=[_start],
         )
         .add_edge(_start, _downstream)
         .build()
@@ -118,9 +108,7 @@ async def test_strict_mode_get_outputs_returns_only_designated() -> None:
 @pytest.mark.asyncio
 async def test_hidden_yields_remain_in_executor_completion_events() -> None:
     """Hidden yield_output payloads stay available through executor_completed observability."""
-    workflow = (
-        WorkflowBuilder(start_executor=_start, output_executors=[_downstream]).add_edge(_start, _downstream).build()
-    )
+    workflow = WorkflowBuilder(start_executor=_start, output_from=[_downstream]).add_edge(_start, _downstream).build()
     result = await workflow.run(_input_msg())
     assert result.get_outputs() == ["from-downstream"]
     assert result.get_intermediate_outputs() == []

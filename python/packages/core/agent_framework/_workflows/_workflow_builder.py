@@ -32,7 +32,7 @@ from ._validation import ValidationTypeEnum, WorkflowValidationError, validate_w
 from ._workflow import (
     _MISSING,  # pyright: ignore[reportPrivateUsage]
     Workflow,
-    _coalesce_renamed_kwarg,  # pyright: ignore[reportPrivateUsage]
+    _coalesce_output_from_kwarg,  # pyright: ignore[reportPrivateUsage]
 )
 
 if sys.version_info >= (3, 11):
@@ -88,10 +88,10 @@ class WorkflowBuilder:
         *,
         start_executor: Executor | SupportsAgentRun,
         checkpoint_storage: CheckpointStorage | None = None,
-        final_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
+        output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
         intermediate_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
         output_executors: list[Executor | SupportsAgentRun] | None = _MISSING,
-        intermediate_executors: list[Executor | SupportsAgentRun] | None = _MISSING,
+        final_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
     ):
         """Initialize the WorkflowBuilder.
 
@@ -106,25 +106,22 @@ class WorkflowBuilder:
             start_executor: The starting executor for the workflow. Can be an Executor instance
                 or SupportsAgentRun instance.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            final_output_from: Designates which executors emit terminal output
+            output_from: Designates which executors emit workflow output
                 (``type='output'`` workflow events).
             intermediate_output_from: Designates which executors emit intermediate output
-                (``type='intermediate'`` workflow events). If neither ``final_output_from`` nor
+                (``type='intermediate'`` workflow events). If neither ``output_from`` nor
                 ``intermediate_output_from`` is provided, legacy mode applies and every
                 ``yield_output`` produces ``type='output'``. If either is provided, explicit
-                mode applies: listed final-output executors emit ``output``, listed intermediate
+                mode applies: listed workflow-output executors emit ``output``, listed intermediate
                 executors emit ``intermediate``, and unlisted executor yields are hidden.
-            output_executors: Deprecated alias for ``final_output_from``. Will be removed in a
+            output_executors: Deprecated alias for ``output_from``. Will be removed in a
                 future version.
-            intermediate_executors: Deprecated alias for ``intermediate_output_from``. Will be
-                removed in a future version.
+            final_output_from: Deprecated alias for ``output_from``. Will be removed in a
+                future version.
         """
-        final_output_from = _coalesce_renamed_kwarg(
-            "output_executors", output_executors, "final_output_from", final_output_from
-        )
-        intermediate_output_from = _coalesce_renamed_kwarg(
-            "intermediate_executors", intermediate_executors, "intermediate_output_from", intermediate_output_from
-        )
+        output_from = _coalesce_output_from_kwarg(output_from, output_executors, final_output_from)
+        if intermediate_output_from is _MISSING:
+            intermediate_output_from = None
         self._edge_groups: list[EdgeGroup] = []
         self._executors: dict[str, Executor] = {}
         self._start_executor: Executor | None = None
@@ -139,8 +136,8 @@ class WorkflowBuilder:
 
         # ``None`` for both means legacy mode (every yield_output produces type='output').
         # If either is provided, explicit mode applies and unlisted executor yields are hidden.
-        self._final_output_from: list[Executor | SupportsAgentRun] | None = (
-            list(final_output_from) if final_output_from is not None else None
+        self._output_from: list[Executor | SupportsAgentRun] | None = (
+            list(output_from) if output_from is not None else None
         )
         self._intermediate_output_from: list[Executor | SupportsAgentRun] | None = (
             list(intermediate_output_from) if intermediate_output_from is not None else None
@@ -728,10 +725,10 @@ class WorkflowBuilder:
                         "Starting executor must be set via the start_executor constructor parameter before building."
                     )
 
-                if self._final_output_from is None and self._intermediate_output_from is None:
+                if self._output_from is None and self._intermediate_output_from is None:
                     warnings.warn(
-                        "WorkflowBuilder built without explicit final_output_from or intermediate_output_from; "
-                        "every yield_output produces type='output' (legacy default). Pass final_output_from=[...] "
+                        "WorkflowBuilder built without explicit output_from or intermediate_output_from; "
+                        "every yield_output produces type='output' (legacy default). Pass output_from=[...] "
                         "or intermediate_output_from=[...] to opt into explicit designation — explicit designation "
                         "will be required in a future version.",
                         DeprecationWarning,
@@ -741,7 +738,7 @@ class WorkflowBuilder:
                 start_executor = self._start_executor
                 executors = self._executors
                 edge_groups = self._edge_groups
-                final_output_ids = self._resolve_designated_executor_ids(self._final_output_from)
+                final_output_ids = self._resolve_designated_executor_ids(self._output_from)
                 intermediate_output_ids = self._resolve_designated_executor_ids(self._intermediate_output_from)
                 self._validate_designation_lists(final_output_ids, intermediate_output_ids)
 
@@ -776,7 +773,7 @@ class WorkflowBuilder:
                     self._name,
                     description=self._description,
                     max_iterations=self._max_iterations,
-                    final_output_from=final_output_for_workflow,
+                    output_from=final_output_for_workflow,
                     intermediate_output_from=intermediate_output_for_workflow,
                 )
                 build_attributes: dict[str, Any] = {

@@ -804,8 +804,8 @@ def test_comprehensive_edge_groups_workflow_serialization() -> None:
 def test_to_dict_preserves_legacy_wire_keys_for_output_designation() -> None:
     """to_dict() must emit the legacy wire keys regardless of the Python kwarg names.
 
-    The Python API renamed ``output_executors`` -> ``final_output_from`` and
-    ``intermediate_executors`` -> ``intermediate_output_from``, but the serialized
+    The Python API renamed ``output_executors`` -> ``output_from`` and
+    uses ``intermediate_output_from`` for intermediate selection, but the serialized
     dict must keep the old keys so existing checkpoints stay readable. This is a
     regression guard against accidental renames of the wire format.
     """
@@ -828,7 +828,7 @@ def test_to_dict_preserves_legacy_wire_keys_for_output_designation() -> None:
     workflow = (
         WorkflowBuilder(
             start_executor=start,
-            final_output_from=[final],
+            output_from=[final],
             intermediate_output_from=[progress],
         )
         .add_edge(start, progress)
@@ -840,7 +840,7 @@ def test_to_dict_preserves_legacy_wire_keys_for_output_designation() -> None:
 
     assert "output_executors" in d, "wire key 'output_executors' must be preserved"
     assert "intermediate_executors" in d, "wire key 'intermediate_executors' must be preserved"
-    assert "final_output_from" not in d, "new Python kwarg name must NOT leak into the wire format"
+    assert "output_from" not in d, "new Python kwarg name must NOT leak into the wire format"
     assert "intermediate_output_from" not in d, "new Python kwarg name must NOT leak into the wire format"
     assert d["output_executors"] == ["final"]
     assert d["intermediate_executors"] == ["progress"]

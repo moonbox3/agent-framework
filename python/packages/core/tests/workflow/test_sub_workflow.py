@@ -651,7 +651,7 @@ async def test_sub_workflow_intermediate_outputs_propagate_to_parent() -> None:
     child = (
         WorkflowBuilder(
             start_executor=progress,
-            final_output_from=[finalizer],
+            output_from=[finalizer],
             intermediate_output_from=[progress],
         )
         .add_edge(progress, finalizer)
@@ -671,7 +671,7 @@ async def test_sub_workflow_intermediate_outputs_propagate_to_parent() -> None:
             await ctx.yield_output(message)
 
     sink = _ParentSink()
-    parent = WorkflowBuilder(start_executor=sub, final_output_from=[sink]).add_edge(sub, sink).build()
+    parent = WorkflowBuilder(start_executor=sub, output_from=[sink]).add_edge(sub, sink).build()
 
     intermediate_events: list[WorkflowEvent[Any]] = []
     output_events: list[WorkflowEvent[Any]] = []

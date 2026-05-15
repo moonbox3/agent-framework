@@ -47,8 +47,8 @@ async def test_workflow_agent_forwards_intermediate_events_as_text_reasoning() -
     workflow = (
         WorkflowBuilder(
             start_executor=emit,
-            output_executors=[terminal],
-            intermediate_executors=[emit],
+            output_from=[terminal],
+            intermediate_output_from=[emit],
         )
         .add_edge(emit, terminal)
         .build()
@@ -88,8 +88,8 @@ async def test_workflow_agent_text_accessor_returns_terminal_only() -> None:
     workflow = (
         WorkflowBuilder(
             start_executor=emit,
-            output_executors=[terminal],
-            intermediate_executors=[emit],
+            output_from=[terminal],
+            intermediate_output_from=[emit],
         )
         .add_edge(emit, terminal)
         .build()
@@ -115,7 +115,7 @@ async def test_workflow_agent_hidden_yields_do_not_surface_non_streaming() -> No
     async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("visible-answer")
 
-    workflow = WorkflowBuilder(start_executor=hidden, output_executors=[terminal]).add_edge(hidden, terminal).build()
+    workflow = WorkflowBuilder(start_executor=hidden, output_from=[terminal]).add_edge(hidden, terminal).build()
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")
@@ -138,7 +138,7 @@ async def test_workflow_agent_hidden_yields_do_not_surface_streaming() -> None:
     async def terminal(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("visible-answer")
 
-    workflow = WorkflowBuilder(start_executor=hidden, output_executors=[terminal]).add_edge(hidden, terminal).build()
+    workflow = WorkflowBuilder(start_executor=hidden, output_from=[terminal]).add_edge(hidden, terminal).build()
     agent = workflow.as_agent("test")
 
     updates: list[AgentResponseUpdate] = []
@@ -163,7 +163,7 @@ async def test_workflow_agent_legacy_data_event_emit_factory_still_forwarded() -
             await ctx.add_event(WorkflowEvent.emit("emit_legacy", "legacy-payload"))
         await ctx.yield_output("DONE")
 
-    workflow = WorkflowBuilder(start_executor=emit_legacy, output_executors=[emit_legacy]).build()
+    workflow = WorkflowBuilder(start_executor=emit_legacy, output_from=[emit_legacy]).build()
     agent = workflow.as_agent("test")
 
     updates: list[AgentResponseUpdate] = []
@@ -200,8 +200,8 @@ async def test_workflow_agent_intermediate_message_preserves_additional_properti
     workflow = (
         WorkflowBuilder(
             start_executor=emit,
-            output_executors=[terminal],
-            intermediate_executors=[emit],
+            output_from=[terminal],
+            intermediate_output_from=[emit],
         )
         .add_edge(emit, terminal)
         .build()
@@ -223,7 +223,7 @@ async def test_workflow_agent_terminal_text_stays_text_not_reasoning() -> None:
     async def only(messages: list[Message], ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output("the-answer")
 
-    workflow = WorkflowBuilder(start_executor=only, output_executors=[only]).build()
+    workflow = WorkflowBuilder(start_executor=only, output_from=[only]).build()
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")
@@ -240,7 +240,7 @@ async def test_workflow_agent_non_streaming_rejects_terminal_update() -> None:
     async def emit(messages: list[Message], ctx: WorkflowContext[Never, AgentResponseUpdate]) -> None:
         await ctx.yield_output(AgentResponseUpdate(contents=[Content.from_text(text="partial")], role="assistant"))
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[emit]).build()
+    workflow = WorkflowBuilder(start_executor=emit, output_from=[emit]).build()
     agent = workflow.as_agent("test")
 
     with pytest.raises(AgentInvalidRequestException, match="AgentResponseUpdate"):
@@ -263,8 +263,8 @@ async def test_workflow_agent_non_streaming_rejects_intermediate_update() -> Non
     workflow = (
         WorkflowBuilder(
             start_executor=emit,
-            output_executors=[terminal],
-            intermediate_executors=[emit],
+            output_from=[terminal],
+            intermediate_output_from=[emit],
         )
         .add_edge(emit, terminal)
         .build()
@@ -295,8 +295,8 @@ async def test_workflow_agent_streaming_update_payloads_preserve_classification(
     workflow = (
         WorkflowBuilder(
             start_executor=emit,
-            output_executors=[terminal],
-            intermediate_executors=[emit],
+            output_from=[terminal],
+            intermediate_output_from=[emit],
         )
         .add_edge(emit, terminal)
         .build()
@@ -329,7 +329,7 @@ async def test_workflow_agent_drops_orchestration_internal_events() -> None:
         await ctx.add_event(WorkflowEvent("magentic_orchestrator", data={"plan": "..."}))  # type: ignore[arg-type]
         await ctx.yield_output("FINAL")
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[emit]).build()
+    workflow = WorkflowBuilder(start_executor=emit, output_from=[emit]).build()
     agent = workflow.as_agent("test")
 
     response = await agent.run("hi")
@@ -349,7 +349,7 @@ async def test_workflow_agent_drops_orchestration_internal_events_streaming() ->
         await ctx.add_event(WorkflowEvent("group_chat", data={"orchestrator": "details"}))  # type: ignore[arg-type]
         await ctx.yield_output("FINAL")
 
-    workflow = WorkflowBuilder(start_executor=emit, output_executors=[emit]).build()
+    workflow = WorkflowBuilder(start_executor=emit, output_from=[emit]).build()
     agent = workflow.as_agent("test")
 
     updates: list[AgentResponseUpdate] = []

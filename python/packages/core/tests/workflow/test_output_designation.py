@@ -90,7 +90,7 @@ def test_is_terminal_executor_legacy_mode_returns_true_for_any_id() -> None:
 
 def test_is_intermediate_executor_explicit_list_returns_true_only_for_designated() -> None:
     """Explicit mode tracks intermediate-designated executors separately."""
-    workflow = WorkflowBuilder(start_executor=_emit_one, intermediate_executors=[_emit_one]).build()
+    workflow = WorkflowBuilder(start_executor=_emit_one, intermediate_output_from=[_emit_one]).build()
     assert not workflow.is_terminal_executor(_emit_one.id)
     assert not workflow.is_terminal_executor("nope")
     assert workflow.is_intermediate_executor(_emit_one.id)
@@ -100,7 +100,7 @@ def test_is_intermediate_executor_explicit_list_returns_true_only_for_designated
 def test_is_terminal_executor_strict_list_returns_true_only_for_designated() -> None:
     """Strict mode with a designated list: only listed executors are terminal."""
     workflow = (
-        WorkflowBuilder(start_executor=_emit_one, output_executors=[_emit_one]).add_edge(_emit_one, _downstream).build()
+        WorkflowBuilder(start_executor=_emit_one, output_from=[_emit_one]).add_edge(_emit_one, _downstream).build()
     )
     assert workflow.is_terminal_executor(_emit_one.id)
     assert not workflow.is_terminal_executor(_downstream.id)

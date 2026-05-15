@@ -1085,9 +1085,7 @@ async def test_output_executors_filters_outputs_non_streaming() -> None:
 
     # Build workflow with a -> b
     workflow = (
-        WorkflowBuilder(start_executor=executor_a, output_executors=[executor_b])
-        .add_edge(executor_a, executor_b)
-        .build()
+        WorkflowBuilder(start_executor=executor_a, output_from=[executor_b]).add_edge(executor_a, executor_b).build()
     )
 
     result = await workflow.run(NumberMessage(data=0))
@@ -1110,9 +1108,7 @@ async def test_output_executors_filters_outputs_streaming() -> None:
 
     # Build workflow with a -> b
     workflow = (
-        WorkflowBuilder(start_executor=executor_a, output_executors=[executor_a])
-        .add_edge(executor_a, executor_b)
-        .build()
+        WorkflowBuilder(start_executor=executor_a, output_from=[executor_a]).add_edge(executor_a, executor_b).build()
     )
 
     # Collect outputs from streaming
@@ -1136,7 +1132,7 @@ async def test_output_executors_with_multiple_specified_executors() -> None:
 
     # Build workflow with a -> b -> c
     workflow = (
-        WorkflowBuilder(start_executor=executor_a, output_executors=[executor_a, executor_c])
+        WorkflowBuilder(start_executor=executor_a, output_from=[executor_a, executor_c])
         .add_edge(executor_a, executor_b)
         .add_edge(executor_b, executor_c)
         .build()
@@ -1201,7 +1197,7 @@ async def test_output_executors_filtering_with_fan_in() -> None:
 
     # Build fan-in workflow: start -> [a, b] -> aggregator
     workflow = (
-        WorkflowBuilder(start_executor=executor_start, output_executors=[aggregator])
+        WorkflowBuilder(start_executor=executor_start, output_from=[aggregator])
         .add_fan_out_edges(executor_start, [executor_a, executor_b])
         .add_fan_in_edges([executor_a, executor_b], aggregator)
         .build()
@@ -1220,7 +1216,7 @@ async def test_output_executors_filtering_with_run_responses() -> None:
     """Test output filtering works correctly with run(responses=...) method."""
     executor = MockExecutorRequestApproval(id="approval_executor")
 
-    workflow = WorkflowBuilder(start_executor=executor, output_executors=[executor]).build()
+    workflow = WorkflowBuilder(start_executor=executor, output_from=[executor]).build()
 
     # Run workflow which will request approval
     result = await workflow.run(NumberMessage(data=42))

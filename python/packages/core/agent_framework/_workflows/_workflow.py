@@ -68,6 +68,44 @@ def _coalesce_renamed_kwarg(old_name: str, old_value: Any, new_name: str, new_va
     return None
 
 
+def _coalesce_output_from_kwarg(
+    output_from: Any,
+    output_executors: Any,
+    final_output_from: Any,
+) -> Any:
+    """Resolve output-selection aliases to canonical ``output_from``."""
+    supplied = [
+        name
+        for name, value in (
+            ("output_from", output_from),
+            ("output_executors", output_executors),
+            ("final_output_from", final_output_from),
+        )
+        if value is not _MISSING
+    ]
+    if len(supplied) > 1:
+        formatted = ", ".join(f"`{name}`" for name in supplied)
+        raise TypeError(f"Cannot pass multiple workflow output selection parameters ({formatted}); use `output_from`.")
+
+    if output_executors is not _MISSING:
+        warnings.warn(
+            "`output_executors` is deprecated and will be removed in a future version; use `output_from` instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return output_executors
+    if final_output_from is not _MISSING:
+        warnings.warn(
+            "`final_output_from` is deprecated and will be removed in a future version; use `output_from` instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return final_output_from
+    if output_from is not _MISSING:
+        return output_from
+    return None
+
+
 class WorkflowRunResult(list[WorkflowEvent]):
     """Container for events generated during non-streaming workflow execution.
 
@@ -253,10 +291,11 @@ class Workflow(DictConvertible):
         name: str,
         description: str | None = None,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
-        final_output_from: list[str] | None = _MISSING,
+        output_from: list[str] | None = _MISSING,
         intermediate_output_from: list[str] | None = _MISSING,
         *,
         output_executors: list[str] | None = _MISSING,
+        final_output_from: list[str] | None = _MISSING,
         intermediate_executors: list[str] | None = _MISSING,
     ):
         """Initialize the workflow with a list of edges.
@@ -273,19 +312,19 @@ class Workflow(DictConvertible):
                 better observability and management.
             description: Optional description of what the workflow does. If the workflow is built using
                 WorkflowBuilder, this will be the description of the builder.
-            final_output_from: List of executor IDs designated as terminal outputs, or
+            output_from: List of executor IDs designated as workflow outputs, or
                 ``None`` for legacy mode when ``intermediate_output_from`` is also ``None``.
             intermediate_output_from: List of executor IDs designated as intermediate outputs.
                 In explicit designation mode, unlisted executor yields are hidden from
                 caller-facing output/intermediate events.
-            output_executors: Deprecated alias for ``final_output_from``. Will be removed
+            output_executors: Deprecated alias for ``output_from``. Will be removed
+                in a future version.
+            final_output_from: Deprecated alias for ``output_from``. Will be removed
                 in a future version.
             intermediate_executors: Deprecated alias for ``intermediate_output_from``. Will be
                 removed in a future version.
         """
-        final_output_from = _coalesce_renamed_kwarg(
-            "output_executors", output_executors, "final_output_from", final_output_from
-        )
+        output_from = _coalesce_output_from_kwarg(output_from, output_executors, final_output_from)
         intermediate_output_from = _coalesce_renamed_kwarg(
             "intermediate_executors", intermediate_executors, "intermediate_output_from", intermediate_output_from
         )
@@ -306,8 +345,8 @@ class Workflow(DictConvertible):
         # Single value type encodes legacy vs explicit output-designation policy;
         # threaded as a parameter into executor invocations.
         output_designation_ids = (
-            frozenset(final_output_from)
-            if final_output_from is not None
+            frozenset(output_from)
+            if output_from is not None
             else (frozenset[str]() if intermediate_output_from is not None else None)
         )
         self._output_designation: OutputDesignation = OutputDesignation(
@@ -393,7 +432,7 @@ class Workflow(DictConvertible):
     def get_output_executors(self) -> list[Executor]:
         """Get the list of output executors in the workflow.
 
-        In legacy mode (no explicit ``output_executors``), returns every executor in the
+        In legacy mode (no explicit ``output_from``), returns every executor in the
         workflow. In strict mode, returns only the designated output executors.
         """
         designated = self._output_designation.outputs

@@ -83,10 +83,134 @@ async def test_output_from_all_with_empty_intermediate_list_is_valid() -> None:
     assert result.get_intermediate_outputs() == []
 
 
+@pytest.mark.asyncio
+async def test_intermediate_output_from_all_other_marks_non_outputs_as_intermediate() -> None:
+    """All-other intermediate designation classifies every non-output executor yield as intermediate."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            output_from=[_downstream],
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == ["from-downstream"]
+    assert result.get_intermediate_outputs() == ["from-start"]
+
+
+@pytest.mark.asyncio
+async def test_all_other_streaming_events_mark_non_outputs_as_intermediate() -> None:
+    """All-other emits intermediate events while streaming, not just in collected results."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            output_from=[_downstream],
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+    outputs: list[str] = []
+    intermediates: list[str] = []
+
+    async for event in workflow.run([Message(role="user", contents=["hi"])], stream=True):
+        if event.type == "output":
+            outputs.append(event.data)
+        elif event.type == "intermediate":
+            intermediates.append(event.data)
+
+    assert outputs == ["from-downstream"]
+    assert intermediates == ["from-start"]
+
+
+def test_all_other_expands_to_concrete_intermediate_executor_selection_at_build_time() -> None:
+    """The runner receives concrete executor IDs after all-other expansion."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            output_from=[_downstream],
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+
+    assert {executor.id for executor in workflow.get_output_executors()} == {_downstream.id}
+    assert {executor.id for executor in workflow.get_intermediate_executors()} == {_start.id}
+    assert workflow.is_intermediate_executor(_start.id)
+    assert not workflow.is_intermediate_executor(_downstream.id)
+
+
+@pytest.mark.asyncio
+async def test_all_other_with_omitted_output_from_emits_only_intermediate_outputs() -> None:
+    """All-other intermediate designation opts out of legacy all-output mode."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == []
+    assert result.get_intermediate_outputs() == ["from-start", "from-downstream"]
+
+
+@pytest.mark.asyncio
+async def test_all_other_with_empty_output_from_emits_only_intermediate_outputs() -> None:
+    """All-other intermediate designation treats an empty output list as selecting no workflow outputs."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            output_from=[],
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == []
+    assert result.get_intermediate_outputs() == ["from-start", "from-downstream"]
+
+
+@pytest.mark.asyncio
+async def test_all_other_with_output_from_all_expands_to_empty_intermediate_selection() -> None:
+    """All-other is empty when every output-capable executor is already selected as workflow output."""
+    workflow = (
+        WorkflowBuilder(
+            start_executor=_start,
+            output_from="all",
+            intermediate_output_from="all_other",
+        )
+        .add_edge(_start, _downstream)
+        .build()
+    )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == ["from-start", "from-downstream"]
+    assert result.get_intermediate_outputs() == []
+
+
 def test_intermediate_output_from_all_is_rejected() -> None:
     """The all-output literal is only valid for workflow output selection."""
     with pytest.raises(ValueError, match="intermediate_output_from.*all.*output_from"):
         WorkflowBuilder(start_executor=_emit_one, intermediate_output_from="all")  # type: ignore[arg-type]
+
+
+def test_output_from_all_other_is_rejected() -> None:
+    """The all-other literal is only valid for intermediate output selection."""
+    with pytest.raises(ValueError, match="output_from.*all_other"):
+        WorkflowBuilder(start_executor=_emit_one, output_from="all_other")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

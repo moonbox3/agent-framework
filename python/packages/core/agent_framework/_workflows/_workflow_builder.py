@@ -44,8 +44,10 @@ else:
 logger = logging.getLogger(__name__)
 
 _ALL_OUTPUTS: Literal["all"] = "all"
+_ALL_OTHER_OUTPUTS: Literal["all_other"] = "all_other"
 _OutputSelection = list[Executor | SupportsAgentRun] | Literal["all"] | None
-_IntermediateOutputSelection = list[Executor | SupportsAgentRun] | None
+_IntermediateOutputSelection = list[Executor | SupportsAgentRun] | Literal["all_other"] | None
+_AnyOutputSelection = _OutputSelection | _IntermediateOutputSelection
 
 
 class WorkflowBuilder:
@@ -93,7 +95,7 @@ class WorkflowBuilder:
         start_executor: Executor | SupportsAgentRun,
         checkpoint_storage: CheckpointStorage | None = None,
         output_from: list[Executor | SupportsAgentRun] | Literal["all"] | None = _MISSING,
-        intermediate_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
+        intermediate_output_from: list[Executor | SupportsAgentRun] | Literal["all_other"] | None = _MISSING,
         output_executors: list[Executor | SupportsAgentRun] | None = _MISSING,
         final_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
     ):
@@ -114,11 +116,13 @@ class WorkflowBuilder:
                 (``type='output'`` workflow events). Pass ``"all"`` to explicitly select every
                 executor with declared workflow output types.
             intermediate_output_from: Designates which executors emit intermediate output
-                (``type='intermediate'`` workflow events). If neither ``output_from`` nor
-                ``intermediate_output_from`` is provided, legacy mode applies and every
-                ``yield_output`` produces ``type='output'``. If either is provided, explicit
-                mode applies: listed workflow-output executors emit ``output``, listed intermediate
-                executors emit ``intermediate``, and unlisted executor yields are hidden.
+                (``type='intermediate'`` workflow events). Pass ``"all_other"`` to select every
+                executor with declared workflow output types that is not selected by ``output_from``.
+                If neither ``output_from`` nor ``intermediate_output_from`` is provided, legacy
+                mode applies and every ``yield_output`` produces ``type='output'``. If either is
+                provided, explicit mode applies: listed workflow-output executors emit ``output``,
+                listed intermediate executors emit ``intermediate``, and unlisted executor yields
+                are hidden.
             output_executors: Deprecated alias for ``output_from``. Will be removed in a
                 future version.
             final_output_from: Deprecated alias for ``output_from``. Will be removed in a
@@ -631,20 +635,25 @@ class WorkflowBuilder:
         if isinstance(intermediate_output_from, str):
             if intermediate_output_from == _ALL_OUTPUTS:
                 raise ValueError("intermediate_output_from='all' is invalid; use output_from='all' instead.")
+            if intermediate_output_from == _ALL_OTHER_OUTPUTS:
+                return _ALL_OTHER_OUTPUTS
             raise ValueError(
-                f"Unsupported intermediate_output_from literal {intermediate_output_from!r}; use a list of executors."
+                f"Unsupported intermediate_output_from literal {intermediate_output_from!r}; "
+                "use 'all_other' or a list of executors."
             )
         return list(intermediate_output_from)
 
     def _resolve_designated_executor_ids(
         self,
-        designated: _OutputSelection,
+        designated: _AnyOutputSelection,
     ) -> list[str] | None:
         """Resolve an optional designation list into executor IDs without mutating the graph."""
         if designated is None:
             return None
         if designated == _ALL_OUTPUTS:
             return [executor_id for executor_id, executor in self._executors.items() if executor.workflow_output_types]
+        if designated == _ALL_OTHER_OUTPUTS:
+            raise ValueError("intermediate_output_from='all_other' must be expanded relative to output_from.")
         ids: list[str] = []
         for item in designated:
             if isinstance(item, Executor):
@@ -766,7 +775,15 @@ class WorkflowBuilder:
                 executors = self._executors
                 edge_groups = self._edge_groups
                 final_output_ids = self._resolve_designated_executor_ids(self._output_from)
-                intermediate_output_ids = self._resolve_designated_executor_ids(self._intermediate_output_from)
+                if self._intermediate_output_from == _ALL_OTHER_OUTPUTS:
+                    output_ids_for_all_other = final_output_ids or []
+                    intermediate_output_ids = [
+                        executor_id
+                        for executor_id, executor in self._executors.items()
+                        if executor.workflow_output_types and executor_id not in output_ids_for_all_other
+                    ]
+                else:
+                    intermediate_output_ids = self._resolve_designated_executor_ids(self._intermediate_output_from)
                 self._validate_designation_lists(final_output_ids, intermediate_output_ids)
 
                 explicit_mode = final_output_ids is not None or intermediate_output_ids is not None

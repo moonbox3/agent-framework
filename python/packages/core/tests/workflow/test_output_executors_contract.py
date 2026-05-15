@@ -24,10 +24,69 @@ async def _emit_one(messages: list[Message], ctx: WorkflowContext[Never, str]) -
     await ctx.yield_output("hello")
 
 
+@executor
+async def _start(messages: list[Message], ctx: WorkflowContext[str, str]) -> None:
+    await ctx.yield_output("from-start")
+    await ctx.send_message("downstream")
+
+
+@executor
+async def _downstream(message: str, ctx: WorkflowContext[Never, str]) -> None:
+    await ctx.yield_output("from-downstream")
+
+
 def test_designation_unset_emits_deprecation_warning() -> None:
     """State A: WorkflowBuilder built without explicit designation warns."""
     with pytest.warns(DeprecationWarning, match="output_from or intermediate_output_from"):
         WorkflowBuilder(start_executor=_emit_one).build()
+
+
+@pytest.mark.asyncio
+async def test_designation_unset_preserves_legacy_all_output_behavior() -> None:
+    """Omitted designation keeps legacy all-output behavior while warning."""
+    with pytest.warns(DeprecationWarning, match="output_from or intermediate_output_from"):
+        workflow = WorkflowBuilder(start_executor=_start).add_edge(_start, _downstream).build()
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == ["from-start", "from-downstream"]
+    assert result.get_intermediate_outputs() == []
+
+
+@pytest.mark.asyncio
+async def test_output_from_all_emits_all_outputs_without_legacy_warning() -> None:
+    """Explicit all-output designation emits every executor payload without legacy warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        workflow = WorkflowBuilder(start_executor=_start, output_from="all").add_edge(_start, _downstream).build()
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == ["from-start", "from-downstream"]
+    assert result.get_intermediate_outputs() == []
+
+
+@pytest.mark.asyncio
+async def test_output_from_all_with_empty_intermediate_list_is_valid() -> None:
+    """Explicit all-output plus an empty intermediate list is a concrete no-intermediate selection."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        workflow = (
+            WorkflowBuilder(start_executor=_start, output_from="all", intermediate_output_from=[])
+            .add_edge(_start, _downstream)
+            .build()
+        )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == ["from-start", "from-downstream"]
+    assert result.get_intermediate_outputs() == []
+
+
+def test_intermediate_output_from_all_is_rejected() -> None:
+    """The all-output literal is only valid for workflow output selection."""
+    with pytest.raises(ValueError, match="intermediate_output_from.*all.*output_from"):
+        WorkflowBuilder(start_executor=_emit_one, intermediate_output_from="all")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

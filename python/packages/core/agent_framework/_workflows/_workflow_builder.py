@@ -5,7 +5,7 @@ import sys
 import uuid
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from .._agents import SupportsAgentRun
 from ..observability import OtelAttr, capture_exception, create_workflow_span
@@ -42,6 +42,10 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+_ALL_OUTPUTS: Literal["all"] = "all"
+_OutputSelection = list[Executor | SupportsAgentRun] | Literal["all"] | None
+_IntermediateOutputSelection = list[Executor | SupportsAgentRun] | None
 
 
 class WorkflowBuilder:
@@ -88,7 +92,7 @@ class WorkflowBuilder:
         *,
         start_executor: Executor | SupportsAgentRun,
         checkpoint_storage: CheckpointStorage | None = None,
-        output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
+        output_from: list[Executor | SupportsAgentRun] | Literal["all"] | None = _MISSING,
         intermediate_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
         output_executors: list[Executor | SupportsAgentRun] | None = _MISSING,
         final_output_from: list[Executor | SupportsAgentRun] | None = _MISSING,
@@ -107,7 +111,8 @@ class WorkflowBuilder:
                 or SupportsAgentRun instance.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
             output_from: Designates which executors emit workflow output
-                (``type='output'`` workflow events).
+                (``type='output'`` workflow events). Pass ``"all"`` to explicitly select every
+                executor with declared workflow output types.
             intermediate_output_from: Designates which executors emit intermediate output
                 (``type='intermediate'`` workflow events). If neither ``output_from`` nor
                 ``intermediate_output_from`` is provided, legacy mode applies and every
@@ -136,11 +141,9 @@ class WorkflowBuilder:
 
         # ``None`` for both means legacy mode (every yield_output produces type='output').
         # If either is provided, explicit mode applies and unlisted executor yields are hidden.
-        self._output_from: list[Executor | SupportsAgentRun] | None = (
-            list(output_from) if output_from is not None else None
-        )
-        self._intermediate_output_from: list[Executor | SupportsAgentRun] | None = (
-            list(intermediate_output_from) if intermediate_output_from is not None else None
+        self._output_from: _OutputSelection = self._coerce_output_from(output_from)
+        self._intermediate_output_from: _IntermediateOutputSelection = self._coerce_intermediate_output_from(
+            intermediate_output_from
         )
 
         # Set the start executor
@@ -611,13 +614,37 @@ class WorkflowBuilder:
         if existing is not wrapped:
             self._add_executor(wrapped)
 
+    def _coerce_output_from(self, output_from: Any) -> _OutputSelection:
+        """Coerce workflow-output selection while preserving the explicit ``"all"`` literal."""
+        if output_from is None:
+            return None
+        if output_from == _ALL_OUTPUTS:
+            return _ALL_OUTPUTS
+        if isinstance(output_from, str):
+            raise ValueError(f"Unsupported output_from literal {output_from!r}; use 'all' or a list of executors.")
+        return list(output_from)
+
+    def _coerce_intermediate_output_from(self, intermediate_output_from: Any) -> _IntermediateOutputSelection:
+        """Coerce intermediate-output selection and reject output-only literals."""
+        if intermediate_output_from is None:
+            return None
+        if isinstance(intermediate_output_from, str):
+            if intermediate_output_from == _ALL_OUTPUTS:
+                raise ValueError("intermediate_output_from='all' is invalid; use output_from='all' instead.")
+            raise ValueError(
+                f"Unsupported intermediate_output_from literal {intermediate_output_from!r}; use a list of executors."
+            )
+        return list(intermediate_output_from)
+
     def _resolve_designated_executor_ids(
         self,
-        designated: list[Executor | SupportsAgentRun] | None,
+        designated: _OutputSelection,
     ) -> list[str] | None:
         """Resolve an optional designation list into executor IDs without mutating the graph."""
         if designated is None:
             return None
+        if designated == _ALL_OUTPUTS:
+            return [executor_id for executor_id, executor in self._executors.items() if executor.workflow_output_types]
         ids: list[str] = []
         for item in designated:
             if isinstance(item, Executor):
@@ -728,9 +755,9 @@ class WorkflowBuilder:
                 if self._output_from is None and self._intermediate_output_from is None:
                     warnings.warn(
                         "WorkflowBuilder built without explicit output_from or intermediate_output_from; "
-                        "every yield_output produces type='output' (legacy default). Pass output_from=[...] "
-                        "or intermediate_output_from=[...] to opt into explicit designation — explicit designation "
-                        "will be required in a future version.",
+                        "every yield_output produces type='output' (legacy default). Pass output_from='all', "
+                        "output_from=[...], or intermediate_output_from=[...] to opt into explicit designation — "
+                        "explicit designation will be required in a future version.",
                         DeprecationWarning,
                         stacklevel=2,
                     )

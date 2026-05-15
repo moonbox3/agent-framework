@@ -824,6 +824,7 @@ class WorkflowBuilder:
                 executors = self._executors
                 edge_groups = self._edge_groups
                 output_ids = self._resolve_designated_executor_ids(self._output_from)
+                intermediate_output_ids: list[str] | None
                 if self._intermediate_output_from == _ALL_OTHER_OUTPUTS:
                     output_ids_for_all_other = output_ids or []
                     intermediate_output_ids = [

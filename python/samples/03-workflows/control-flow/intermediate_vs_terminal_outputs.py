@@ -122,11 +122,7 @@ async def main() -> None:
     async def parent_sink(message: str, ctx: WorkflowContext[Never, str]) -> None:
         await ctx.yield_output(message)
 
-    parent_workflow = (
-        WorkflowBuilder(start_executor=sub, output_from=[parent_sink])
-        .add_edge(sub, parent_sink)
-        .build()
-    )
+    parent_workflow = WorkflowBuilder(start_executor=sub, output_from=[parent_sink]).add_edge(sub, parent_sink).build()
 
     async for event in parent_workflow.run(initial, stream=True):
         if event.type == "intermediate":

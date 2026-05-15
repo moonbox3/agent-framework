@@ -429,7 +429,8 @@ async def test_magentic_executor_event_with_agent_delta_metadata(
     """Test that WorkflowEvent[AgentResponseUpdate] with magentic_event_type='agent_delta' is handled correctly.
 
     This tests the ACTUAL event format Magentic emits - not a fake MagenticAgentDeltaEvent class.
-    Magentic uses WorkflowEvent.intermediate() with additional_properties containing magentic_event_type.
+    Magentic emits type='intermediate' WorkflowEvent instances with additional_properties
+    containing magentic_event_type.
     """
     from agent_framework._types import AgentResponseUpdate
     from agent_framework._workflows._events import WorkflowEvent
@@ -444,7 +445,7 @@ async def test_magentic_executor_event_with_agent_delta_metadata(
             "agent_id": "writer_agent",
         },
     )
-    event = WorkflowEvent.intermediate(executor_id="magentic_executor", data=update)
+    event = WorkflowEvent("intermediate", executor_id="magentic_executor", data=update)
 
     events = await mapper.convert_event(event, test_request)
 
@@ -459,8 +460,8 @@ async def test_magentic_executor_event_with_agent_delta_metadata(
 async def test_magentic_orchestrator_message_event(mapper: MessageMapper, test_request: AgentFrameworkRequest) -> None:
     """Test that WorkflowEvent[AgentResponseUpdate] with magentic_event_type='orchestrator_message' is handled.
 
-    Magentic emits orchestrator planning/instruction messages using WorkflowEvent.intermediate()
-    with additional_properties containing magentic_event_type='orchestrator_message'.
+    Magentic emits orchestrator planning/instruction messages using type='intermediate'
+    WorkflowEvent instances with additional_properties containing magentic_event_type='orchestrator_message'.
     """
     from agent_framework._types import AgentResponseUpdate
     from agent_framework._workflows._events import WorkflowEvent
@@ -476,7 +477,7 @@ async def test_magentic_orchestrator_message_event(mapper: MessageMapper, test_r
             "orchestrator_id": "magentic_orchestrator",
         },
     )
-    event = WorkflowEvent.intermediate(executor_id="magentic_orchestrator", data=update)
+    event = WorkflowEvent("intermediate", executor_id="magentic_orchestrator", data=update)
 
     events = await mapper.convert_event(event, test_request)
 
@@ -507,7 +508,7 @@ async def test_magentic_events_use_same_event_class_as_other_workflows(
         contents=[Content.from_text(text="Regular workflow response")],
         role="assistant",
     )
-    regular_event = WorkflowEvent.intermediate(executor_id="regular_executor", data=regular_update)
+    regular_event = WorkflowEvent("intermediate", executor_id="regular_executor", data=regular_update)
 
     # 2. Magentic workflow (with additional_properties)
     magentic_update = AgentResponseUpdate(
@@ -515,7 +516,7 @@ async def test_magentic_events_use_same_event_class_as_other_workflows(
         role="assistant",
         additional_properties={"magentic_event_type": "agent_delta"},
     )
-    magentic_event = WorkflowEvent.intermediate(executor_id="magentic_executor", data=magentic_update)
+    magentic_event = WorkflowEvent("intermediate", executor_id="magentic_executor", data=magentic_update)
 
     # Both should be the SAME class
     assert type(regular_event) is type(magentic_event)
@@ -565,7 +566,7 @@ async def test_workflow_output_event(mapper: MessageMapper, test_request: AgentF
     """Test output event (type='output') is converted to output_item.added."""
     from agent_framework._workflows._events import WorkflowEvent
 
-    event = WorkflowEvent.output(executor_id="final_executor", data="Final workflow output")
+    event = WorkflowEvent("output", executor_id="final_executor", data="Final workflow output")
     events = await mapper.convert_event(event, test_request)
 
     # output event (type='output') should emit output_item.added
@@ -590,7 +591,7 @@ async def test_workflow_output_event_with_list_data(mapper: MessageMapper, test_
         Message(role="user", contents=[Content.from_text(text="Hello")]),
         Message(role="assistant", contents=[Content.from_text(text="World")]),
     ]
-    event = WorkflowEvent.output(executor_id="complete", data=messages)
+    event = WorkflowEvent("output", executor_id="complete", data=messages)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1
@@ -609,7 +610,7 @@ async def test_workflow_intermediate_event_with_agent_response_update_dispatched
         role="assistant",
         author_name="non-designated-agent",
     )
-    event = WorkflowEvent.intermediate(executor_id="non_designated", data=update)
+    event = WorkflowEvent("intermediate", executor_id="non_designated", data=update)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) >= 1
@@ -636,7 +637,7 @@ async def test_workflow_intermediate_event_with_string_payload_renders_visible_t
     dropped in DevUI."""
     from agent_framework._workflows._events import WorkflowEvent
 
-    event = WorkflowEvent.intermediate(executor_id="planner", data="plan: starting work")
+    event = WorkflowEvent("intermediate", executor_id="planner", data="plan: starting work")
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1
@@ -657,7 +658,7 @@ async def test_workflow_intermediate_event_with_message_payload_renders_visible_
     from agent_framework._workflows._events import WorkflowEvent
 
     msg = Message(role="assistant", contents=[Content.from_text(text="research note")])
-    event = WorkflowEvent.intermediate(executor_id="researcher", data=msg)
+    event = WorkflowEvent("intermediate", executor_id="researcher", data=msg)
     events = await mapper.convert_event(event, test_request)
 
     assert len(events) == 1

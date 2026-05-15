@@ -16,7 +16,7 @@ produces — by convention an `AgentResponse` so downstream consumers see a unif
 
 import logging
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal, cast
 
 from agent_framework import Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import AgentExecutor
@@ -33,6 +33,9 @@ from agent_framework._workflows._workflow_context import WorkflowContext
 
 from ._orchestration_request_info import AgentApprovalExecutor
 from ._participant_output_config import (
+    _MISSING,  # pyright: ignore[reportPrivateUsage]
+    _coalesce_output_from,  # pyright: ignore[reportPrivateUsage]
+    _coerce_intermediate_output_from,  # pyright: ignore[reportPrivateUsage]
     _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
     _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
 )
@@ -95,8 +98,9 @@ class SequentialBuilder:
         participants: Sequence[SupportsAgentRun | Executor],
         checkpoint_storage: CheckpointStorage | None = None,
         chain_only_agent_responses: bool = False,
-        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
-        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
+        output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None = cast(Any, _MISSING),
+        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None = None,
+        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = cast(Any, _MISSING),
     ) -> None:
         """Initialize the SequentialBuilder.
 
@@ -106,20 +110,20 @@ class SequentialBuilder:
             chain_only_agent_responses: If True, only agent responses are chained between agents.
                 By default, the full conversation context is passed to the next agent. This also applies
                 to Executor -> Agent transitions if the executor sends `AgentExecutorResponse`.
-            final_output_from: Optional participant names or instances whose ``yield_output`` calls
-                surface as terminal workflow ``output`` events. Defaults to the final participant.
+            output_from: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``output`` events. Pass ``"all"`` to select every participant.
             intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
-                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
+                surface as workflow ``intermediate`` events. Pass ``"all_other"`` to select every participant
+                not selected by ``output_from``. Unlisted participant outputs are hidden.
+            final_output_from: Deprecated alias for ``output_from``.
         """
         self._participants: list[SupportsAgentRun | Executor] = []
         self._checkpoint_storage: CheckpointStorage | None = checkpoint_storage
         self._chain_only_agent_responses: bool = chain_only_agent_responses
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] | None = None
-        self._final_output_from = list(final_output_from) if final_output_from is not None else None
-        self._intermediate_output_from = (
-            list(intermediate_output_from) if intermediate_output_from is not None else None
-        )
+        self._output_from = _coalesce_output_from(output_from=output_from, final_output_from=final_output_from)
+        self._intermediate_output_from = _coerce_intermediate_output_from(intermediate_output_from)
 
         self._set_participants(participants)
 
@@ -247,14 +251,14 @@ class SequentialBuilder:
         # can surface selected earlier participant outputs as terminal or intermediate.
         designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
-            final_output_from=self._final_output_from,
+            output_from=self._output_from,
             intermediate_output_from=self._intermediate_output_from,
             default_final_output_from=[participants[-1]],
         )
         builder = WorkflowBuilder(
             start_executor=input_conv,
             checkpoint_storage=self._checkpoint_storage,
-            final_output_from=designated,
+            output_from=designated,
             intermediate_output_from=intermediate_designated,
         )
 

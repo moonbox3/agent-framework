@@ -226,7 +226,7 @@ class AgentApprovalExecutor(WorkflowExecutor):
         return (
             WorkflowBuilder(
                 start_executor=agent_executor,
-                final_output_from=[agent_executor, request_info_executor],
+                output_from=[agent_executor, request_info_executor],
             )
             # Create a loop between agent executor and request info executor
             .add_edge(agent_executor, request_info_executor)

@@ -27,7 +27,7 @@ import sys
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 
 from agent_framework import Agent, AgentResponse, AgentResponseUpdate, AgentSession, Message, SupportsAgentRun
 from agent_framework._workflows._agent_executor import AgentExecutor, AgentExecutorRequest, AgentExecutorResponse
@@ -52,6 +52,9 @@ from ._base_group_chat_orchestrator import (
 from ._orchestration_request_info import AgentApprovalExecutor
 from ._orchestrator_helpers import clean_conversation_for_handoff
 from ._participant_output_config import (
+    _MISSING,  # pyright: ignore[reportPrivateUsage]
+    _coalesce_output_from,  # pyright: ignore[reportPrivateUsage]
+    _coerce_intermediate_output_from,  # pyright: ignore[reportPrivateUsage]
     _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
     _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
 )
@@ -622,8 +625,9 @@ class GroupChatBuilder:
         termination_condition: TerminationCondition | None = None,
         max_rounds: int | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
-        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
-        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | None = None,
+        output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None = cast(Any, _MISSING),
+        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None = None,
+        final_output_from: Sequence[_ParticipantOutputSpecifier] | None = cast(Any, _MISSING),
     ) -> None:
         """Initialize the GroupChatBuilder.
 
@@ -640,10 +644,13 @@ class GroupChatBuilder:
                 True to terminate the conversation, False to continue.
             max_rounds: Optional maximum number of orchestrator rounds to prevent infinite conversations.
             checkpoint_storage: Optional checkpoint storage for enabling workflow state persistence.
-            final_output_from: Optional participant names or instances whose ``yield_output`` calls
-                surface as terminal workflow ``output`` events alongside the orchestrator.
+            output_from: Optional participant names or instances whose ``yield_output`` calls
+                surface as workflow ``output`` events alongside the orchestrator. Pass ``"all"`` to select every
+                participant.
             intermediate_output_from: Optional participant names or instances whose ``yield_output`` calls
-                surface as workflow ``intermediate`` events. Unlisted participant outputs are hidden.
+                surface as workflow ``intermediate`` events. Pass ``"all_other"`` to select every participant
+                not selected by ``output_from``. Unlisted participant outputs are hidden.
+            final_output_from: Deprecated alias for ``output_from``.
         """
         self._participants: dict[str, SupportsAgentRun | Executor] = {}
         self._participant_factories: list[Callable[[], SupportsAgentRun | Executor]] = []
@@ -664,10 +671,8 @@ class GroupChatBuilder:
         self._request_info_enabled: bool = False
         self._request_info_filter: set[str] = set()
 
-        self._final_output_from = list(final_output_from) if final_output_from is not None else None
-        self._intermediate_output_from = (
-            list(intermediate_output_from) if intermediate_output_from is not None else None
-        )
+        self._output_from = _coalesce_output_from(output_from=output_from, final_output_from=final_output_from)
+        self._intermediate_output_from = _coerce_intermediate_output_from(intermediate_output_from)
 
         if participants is None and participant_factories is None:
             raise ValueError("Either participants or participant_factories must be provided.")
@@ -1015,14 +1020,14 @@ class GroupChatBuilder:
         # `group_chat` orchestrator-progress events keep their dedicated event type.
         designated, intermediate_designated = _resolve_participant_output_config(
             participants=participants,
-            final_output_from=self._final_output_from,
+            output_from=self._output_from,
             intermediate_output_from=self._intermediate_output_from,
             extra_output_executors=[orchestrator],
         )
         workflow_builder = WorkflowBuilder(
             start_executor=orchestrator,
             checkpoint_storage=self._checkpoint_storage,
-            final_output_from=designated,
+            output_from=designated,
             intermediate_output_from=intermediate_designated,
         )
         for participant in participants:

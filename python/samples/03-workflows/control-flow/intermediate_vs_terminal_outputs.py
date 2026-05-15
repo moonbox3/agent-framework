@@ -12,33 +12,34 @@ from agent_framework import (
 from typing_extensions import Never
 
 """
-Sample: Intermediate vs terminal output labeling
+Sample: Workflow Output vs Intermediate Output labeling
 
 What this sample shows
-- How ``WorkflowBuilder(final_output_from=[...])`` designates which executors emit
-  the workflow's terminal output.
+- How ``WorkflowBuilder(output_from=[...])`` designates which executors emit
+  Workflow Output.
 - How ``WorkflowBuilder(intermediate_output_from=[...])`` designates which executor
-  yields surface as ``type='intermediate'`` events.
+  yields surface as Intermediate Output (``type='intermediate'`` events).
 - How unlisted executor yields are hidden from caller-facing output/intermediate
   events in explicit designation mode.
 - How the same workflow wrapped via ``workflow.as_agent()`` translates intermediate
   events to ``text_reasoning`` content so existing ``.text`` accessors keep
-  returning terminal-only output.
+  returning Workflow Output only.
 - How a sub-workflow embedded via ``WorkflowExecutor`` bubbles its intermediate
   emissions up through the parent's event stream, attributed to the
   ``WorkflowExecutor`` id rather than the child's internal executor ids.
 
-The output designation contract:
-- Compatibility mode: when neither ``final_output_from`` nor ``intermediate_output_from``
-  is provided, every ``yield_output`` produces ``type='output'``.
-- Explicit designation mode: provide either ``final_output_from`` or
-  ``intermediate_output_from``. Designated output executors emit terminal
-  ``type='output'`` events; designated intermediate executors emit
-  ``type='intermediate'`` events; unlisted executor yields are hidden from the
-  stream and ``WorkflowRunResult`` output accessors.
-- Validation: explicit designation must not be empty, duplicate executor entries
-  are rejected, an executor cannot be both output and intermediate, unknown
-  executors are rejected, and designated executors must yield workflow output.
+The output selection contract:
+- Compatibility mode: when neither ``output_from`` nor ``intermediate_output_from``
+  is provided, every ``yield_output`` produces Workflow Output and a deprecation
+  warning points to explicit selection.
+- Explicit selection mode: provide either ``output_from`` or
+  ``intermediate_output_from``. Executors selected by ``output_from`` emit Workflow Output
+  (``type='output'`` events); executors selected by ``intermediate_output_from`` emit
+  Intermediate Output (``type='intermediate'`` events); unselected executor yields are
+  hidden from the stream and ``WorkflowRunResult`` output accessors.
+- Validation: explicit selections must not both be empty; duplicate executor entries,
+  overlap between Workflow Output and Intermediate Output, unknown executors, invalid
+  literals, and selected executors without workflow output types are rejected.
 
 Prerequisites
 - No external services required.
@@ -63,19 +64,19 @@ async def researcher(messages: list[Message], ctx: WorkflowContext[list[Message]
 
 @executor(id="answerer")
 async def answerer(messages: list[Message], ctx: WorkflowContext[Never, str]) -> None:
-    """Designated terminal: emits the workflow's final answer."""
+    """Designated Workflow Output: emits the workflow's answer."""
     prompt = messages[0].text if messages else ""
     await ctx.yield_output(f"final answer to '{prompt}': 42")
 
 
 async def main() -> None:
-    # Build with explicit output and intermediate designations. `answerer`
-    # produces terminal type='output' events; planner and researcher produce
-    # visible type='intermediate' progress events.
+    # Build with explicit Workflow Output and Intermediate Output selections.
+    # `answerer` produces type='output' events; planner and researcher produce
+    # visible type='intermediate' events.
     workflow = (
         WorkflowBuilder(
             start_executor=planner,
-            final_output_from=[answerer],
+            output_from=[answerer],
             intermediate_output_from=[planner, researcher],
         )
         .add_edge(planner, researcher)
@@ -93,19 +94,19 @@ async def main() -> None:
             print(f"  [output]       {event.executor_id}: {event.data}")
 
     # WorkflowRunResult.get_outputs() filters to type='output' events, so it
-    # only returns the designated terminal yield.
+    # only returns the selected Workflow Output yield.
     print("\n=== Non-streaming run().get_outputs() ===")
     result = await workflow.run(initial)
     print(f"  outputs: {result.get_outputs()}")
 
     # When the same workflow is wrapped via as_agent(), intermediate events
-    # surface as ``text_reasoning`` content; the terminal event surfaces as
+    # surface as ``text_reasoning`` content; Workflow Output surfaces as
     # ``text`` content. Existing callers reading ``response.text`` get only
-    # the terminal answer because ``.text`` filters to text content.
+    # the selected Workflow Output because ``.text`` filters to text content.
     print("\n=== workflow.as_agent() -- intermediate -> text_reasoning content ===")
     agent = workflow.as_agent("planner-agent")
     response = await agent.run("life, the universe, and everything")
-    print(f"  response.text (terminal only): {response.text!r}")
+    print(f"  response.text (Workflow Output only): {response.text!r}")
     reasoning = " | ".join(c.text for m in response.messages for c in m.contents if c.type == "text_reasoning")
     print(f"  reasoning content (intermediates): {reasoning!r}")
 
@@ -122,7 +123,7 @@ async def main() -> None:
         await ctx.yield_output(message)
 
     parent_workflow = (
-        WorkflowBuilder(start_executor=sub, final_output_from=[parent_sink])
+        WorkflowBuilder(start_executor=sub, output_from=[parent_sink])
         .add_edge(sub, parent_sink)
         .build()
     )
@@ -145,7 +146,7 @@ async def main() -> None:
       outputs: ["final answer to 'life, the universe, and everything': 42"]
 
     === workflow.as_agent() -- intermediate -> text_reasoning content ===
-      response.text (terminal only): "final answer to 'life, the universe, and everything': 42"
+      response.text (Workflow Output only): "final answer to 'life, the universe, and everything': 42"
       reasoning content (intermediates): "plan: starting work on ... | research: gathering data for ..."
 
     === Embedding as a sub-workflow -- intermediates bubble up ===

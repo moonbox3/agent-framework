@@ -67,7 +67,7 @@ class SequentialBuilder:
     - The workflow wires participants in order, passing a list[Message] down the chain
     - Agents append their assistant messages to the conversation
     - Custom executors can transform/summarize and return a list[Message]
-    - The final output is the conversation produced by the last participant
+    - The default Workflow Output is the conversation produced by the last participant
 
     Usage:
 
@@ -238,8 +238,8 @@ class SequentialBuilder:
             - Custom `Executor`: receives `list[Message]` and forwards `list[Message]`.
               If used as the terminator, it must call `ctx.yield_output(AgentResponse(...))`
               instead of `ctx.send_message(...)` — its yield becomes the workflow's output.
-        - The last participant is registered as the workflow's `output_executor`, so the
-          terminator's own `yield_output` is the workflow's terminal output (`AgentResponse`,
+        - The last participant is selected as Workflow Output by default, so the
+          terminator's own `yield_output` is Workflow Output (`AgentResponse`,
           or per-chunk `AgentResponseUpdate` when streaming).
         """
         input_conv = _InputToConversation(id="input-conversation")

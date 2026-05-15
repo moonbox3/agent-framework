@@ -19,7 +19,7 @@ from agent_framework.orchestrations import SequentialBuilder
 
 workflow = SequentialBuilder(participants=[agent1, agent2, agent3]).build()
 
-# Preserve agent1 and agent2 as visible progress, while agent3 remains terminal output.
+# Preserve agent1 and agent2 as visible progress, while the default builder output remains Workflow Output.
 workflow = SequentialBuilder(
     participants=[agent1, agent2, agent3],
     intermediate_output_from=[agent1, agent2],
@@ -79,22 +79,43 @@ workflow = MagenticBuilder(
 ).build()
 ```
 
-## Output Designation
+## Output Selection
 
-Orchestration builders expose workflow output selection using participant names:
+Orchestration builders expose Workflow Output selection using participant names. The core rule is that `output_from`
+is an allow-list for Workflow Output, not a routing rule for every other participant output. Unselected participant
+payloads are hidden unless `intermediate_output_from` explicitly selects them as Intermediate Output.
 
-- `final_output_from` designates participant emissions as terminal workflow `output` events.
-- `intermediate_output_from` designates participant emissions as visible workflow `intermediate` events.
-- Unlisted participant emissions are hidden in explicit designation mode.
+- `output_from` designates participant emissions as Workflow Output (`type='output'` events).
+- `intermediate_output_from` designates participant emissions as Intermediate Output (`type='intermediate'` events).
+- `final_output_from` is a deprecated compatibility alias for `output_from`.
 
-If neither list is provided, each builder uses its default terminal contract. Sequential emits the final participant;
-Concurrent, GroupChat, and Magentic emit their final aggregator/orchestrator/manager output; Handoff emits
-participants. Explicit designation is validated for empty lists, duplicates, output/intermediate overlap, and unknown
+If neither list is provided, each builder uses its documented default Workflow Output contract. Sequential emits the
+last participant; Concurrent, GroupChat, and Magentic emit their aggregator/orchestrator/manager output; Handoff emits
 participants.
 
-When an orchestration is wrapped with `workflow.as_agent()`, terminal workflow output becomes normal response text.
-Intermediate workflow output becomes `text_reasoning` content so callers can inspect progress without changing
-terminal `.text` behavior.
+| Selection | Workflow Output | Intermediate Output | Hidden payloads |
+| --- | --- | --- | --- |
+| Omit both selections | Builder default Workflow Output contract | None | Builder-specific non-output participant payloads |
+| `output_from="all"` | Every output-capable participant | None | None |
+| `output_from=[writer]` | Only `writer` | None | All other participant payloads |
+| `output_from=[writer], intermediate_output_from="all_other"` | Only `writer` | Every output-capable participant not selected by `output_from` | None |
+| `intermediate_output_from="all_other"` | None, except builder-internal default output executors where applicable | Every output-capable participant | Builder-internal plumbing payloads |
+| `output_from=[], intermediate_output_from="all_other"` | None, except builder-internal default output executors where applicable | Every output-capable participant | Builder-internal plumbing payloads |
+| `output_from=[writer], intermediate_output_from=[researcher, reviewer]` | Only `writer` | `researcher` and `reviewer` | Any other participant payloads |
+
+Invalid selections fail at construction or build time:
+
+| Invalid selection | Why it fails |
+| --- | --- |
+| `output_from="all_other"` | `"all_other"` is only valid for `intermediate_output_from` |
+| `intermediate_output_from="all"` | `"all"` is only valid for `output_from` |
+| The same participant in both selections | One payload cannot be both Workflow Output and Intermediate Output |
+| Duplicate participant selections | Duplicates are treated as configuration errors |
+| Unknown participant selections | Typos and missing participants are rejected |
+| `output_from=[], intermediate_output_from=[]` | Both explicit selections are empty |
+
+When an orchestration is wrapped with `workflow.as_agent()`, Workflow Output becomes normal response text. Intermediate
+Output becomes `text_reasoning` content so callers can inspect progress without changing `.text` behavior.
 
 ## Documentation
 

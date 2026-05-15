@@ -384,7 +384,7 @@ class HandoffAgentExecutor(AgentExecutor):
 
         # Append the agent response to the full conversation history. This list removes
         # function call related content such that the result stays consistent regardless
-        # of which agent yields the final output.
+        # of which agent yields Workflow Output.
         self._full_conversation.extend(cleaned_response)
 
         # Broadcast only the cleaned response to other agents (without function_calls/results)
@@ -584,7 +584,7 @@ class HandoffBuilder:
 
     Note:
     1. Agents in handoff workflows must be ``Agent`` instances and support local tool calls.
-    2. Because each agent's response is itself a workflow output, handoff has no separate
+    2. Because each agent's response is itself Workflow Output, handoff has no separate
        "intermediate outputs" channel — every per-agent response is the primary output.
     """
 

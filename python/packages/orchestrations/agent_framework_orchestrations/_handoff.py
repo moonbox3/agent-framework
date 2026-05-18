@@ -57,6 +57,7 @@ from ._participant_output_config import (
     _MISSING,  # pyright: ignore[reportPrivateUsage]
     _coalesce_output_from,  # pyright: ignore[reportPrivateUsage]
     _coerce_intermediate_output_from,  # pyright: ignore[reportPrivateUsage]
+    _ParticipantIntermediateOutputSelection,  # pyright: ignore[reportPrivateUsage]
     _ParticipantOutputSpecifier,  # pyright: ignore[reportPrivateUsage]
     _resolve_participant_output_config,  # pyright: ignore[reportPrivateUsage]
 )
@@ -597,7 +598,7 @@ class HandoffBuilder:
         checkpoint_storage: CheckpointStorage | None = None,
         termination_condition: TerminationCondition | None = None,
         output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None = cast(Any, _MISSING),
-        intermediate_output_from: Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None = None,
+        intermediate_output_from: _ParticipantIntermediateOutputSelection = None,
     ) -> None:
         r"""Initialize a HandoffBuilder for creating conversational handoff workflows.
 

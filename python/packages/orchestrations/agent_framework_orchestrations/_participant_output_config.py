@@ -14,7 +14,7 @@ _ALL_OUTPUTS: Literal["all"] = "all"
 _ALL_OTHER_OUTPUTS: Literal["all_other"] = "all_other"
 _ParticipantOutputSpecifier = str | SupportsAgentRun | Executor
 _ParticipantOutputSelection = Sequence[_ParticipantOutputSpecifier] | Literal["all"] | None
-_ParticipantIntermediateOutputSelection = Sequence[_ParticipantOutputSpecifier] | Literal["all_other"] | None
+_ParticipantIntermediateOutputSelection = Sequence[_ParticipantOutputSpecifier] | Literal["all", "all_other"] | None
 _WorkflowExecutorSpecifier = Executor | SupportsAgentRun
 
 
@@ -49,12 +49,12 @@ def _coerce_intermediate_output_from(  # pyright: ignore[reportUnusedFunction]
         return None
     if isinstance(intermediate_output_from, str):
         if intermediate_output_from == _ALL_OUTPUTS:
-            raise ValueError("intermediate_output_from='all' is invalid; use output_from='all' instead.")
+            return _ALL_OUTPUTS
         if intermediate_output_from == _ALL_OTHER_OUTPUTS:
             return _ALL_OTHER_OUTPUTS
         raise ValueError(
             f"Unsupported intermediate_output_from literal {intermediate_output_from!r}; "
-            "use 'all_other' or a list of participants."
+            "use 'all', 'all_other', or a list of participants."
         )
     return list(intermediate_output_from)
 
@@ -84,7 +84,7 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
             participants_by_id=participants_by_id,
             known_participants=known_participants,
         )
-    elif intermediate_output_from == _ALL_OTHER_OUTPUTS:
+    elif intermediate_output_from in (_ALL_OTHER_OUTPUTS, _ALL_OUTPUTS):
         output_designated = []
     else:
         intermediate_designated = (
@@ -107,7 +107,9 @@ def _resolve_participant_output_config(  # pyright: ignore[reportUnusedFunction]
             participant for participant in default_output_from if participant.id not in intermediate_ids
         ]
 
-    if intermediate_output_from == _ALL_OTHER_OUTPUTS:
+    if intermediate_output_from == _ALL_OUTPUTS:
+        intermediate_designated = list(participants)
+    elif intermediate_output_from == _ALL_OTHER_OUTPUTS:
         output_ids = {participant.id for participant in output_designated}
         intermediate_designated = [participant for participant in participants if participant.id not in output_ids]
     elif intermediate_output_from is not None:

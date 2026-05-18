@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 _ALL_OUTPUTS: Literal["all"] = "all"
 _ALL_OTHER_OUTPUTS: Literal["all_other"] = "all_other"
 _OutputSelection = list[Executor | SupportsAgentRun] | Literal["all"] | None
-_IntermediateOutputSelection = list[Executor | SupportsAgentRun] | Literal["all_other"] | None
+_IntermediateOutputSelection = list[Executor | SupportsAgentRun] | Literal["all", "all_other"] | None
 _AnyOutputSelection = _OutputSelection | _IntermediateOutputSelection
 
 
@@ -95,7 +95,7 @@ class WorkflowBuilder:
         start_executor: Executor | SupportsAgentRun,
         checkpoint_storage: CheckpointStorage | None = None,
         output_from: list[Executor | SupportsAgentRun] | Literal["all"] | None = _MISSING,
-        intermediate_output_from: list[Executor | SupportsAgentRun] | Literal["all_other"] | None = _MISSING,
+        intermediate_output_from: _IntermediateOutputSelection = _MISSING,
         output_executors: list[Executor | SupportsAgentRun] | None = _MISSING,
     ):
         """Initialize the WorkflowBuilder.
@@ -115,8 +115,10 @@ class WorkflowBuilder:
                 (``type='output'`` workflow events). Pass ``"all"`` to explicitly select every
                 executor with declared workflow output types.
             intermediate_output_from: Designates which executors emit intermediate output
-                (``type='intermediate'`` workflow events). Pass ``"all_other"`` to select every
-                executor with declared workflow output types that is not selected by ``output_from``.
+                (``type='intermediate'`` workflow events). Pass ``"all"`` to select every executor
+                with declared workflow output types as intermediate (no executor emits ``output``).
+                Pass ``"all_other"`` to select every executor with declared workflow output types
+                that is not selected by ``output_from``.
                 If neither ``output_from`` nor ``intermediate_output_from`` is provided,
                 omitted-selection compatibility behavior applies and every ``yield_output`` produces
                 ``type='output'``. If either is provided, explicit mode applies: listed
@@ -646,12 +648,12 @@ class WorkflowBuilder:
             return None
         if isinstance(intermediate_output_from, str):
             if intermediate_output_from == _ALL_OUTPUTS:
-                raise ValueError("intermediate_output_from='all' is invalid; use output_from='all' instead.")
+                return _ALL_OUTPUTS
             if intermediate_output_from == _ALL_OTHER_OUTPUTS:
                 return _ALL_OTHER_OUTPUTS
             raise ValueError(
                 f"Unsupported intermediate_output_from literal {intermediate_output_from!r}; "
-                "use 'all_other' or a list of executors."
+                "use 'all', 'all_other', or a list of executors."
             )
         return list(intermediate_output_from)
 

@@ -207,10 +207,17 @@ async def test_all_other_with_output_from_all_expands_to_empty_intermediate_sele
     assert result.get_intermediate_outputs() == []
 
 
-def test_intermediate_output_from_all_is_rejected() -> None:
-    """The all-output literal is only valid for workflow output selection."""
-    with pytest.raises(ValueError, match="intermediate_output_from.*all.*output_from"):
-        WorkflowBuilder(start_executor=_emit_one, intermediate_output_from="all")  # type: ignore[arg-type]
+@pytest.mark.asyncio
+async def test_intermediate_output_from_all_routes_every_yield_to_intermediate() -> None:
+    """``intermediate_output_from="all"`` designates every output-capable executor as intermediate."""
+    workflow = (
+        WorkflowBuilder(start_executor=_start, intermediate_output_from="all").add_edge(_start, _downstream).build()
+    )
+
+    result = await workflow.run([Message(role="user", contents=["hi"])])
+
+    assert result.get_outputs() == []
+    assert result.get_intermediate_outputs() == ["from-start", "from-downstream"]
 
 
 def test_output_from_all_other_is_rejected() -> None:

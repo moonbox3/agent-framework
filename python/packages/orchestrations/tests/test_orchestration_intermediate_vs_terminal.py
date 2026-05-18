@@ -727,7 +727,6 @@ def _build_handoff_with_designation(**kwargs: Any) -> None:
         ({"output_from": ["alpha"], "intermediate_output_from": ["alpha"]}, "cannot be both output"),
         ({"output_from": ["missing"]}, "Unknown output participant"),
         ({"output_from": "all_other"}, "output_from='all_other'"),
-        ({"intermediate_output_from": "all"}, "intermediate_output_from='all'"),
     ],
 )
 def test_participant_output_config_validation(build: Callable[..., None], kwargs: dict[str, Any], match: str) -> None:

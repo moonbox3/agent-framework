@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **agent-framework-core**, **agent-framework-azurefunctions**, **agent-framework-devui**, **agent-framework-foundry**, **agent-framework-orchestrations**: Improve handling of intermediate outputs for workflows and orchestrations ([#5623](https://github.com/microsoft/agent-framework/pull/5623))
 - **agent-framework-core**: Drop `agent-framework-azurefunctions` and `agent-framework-durabletask` from the `[all]` extra; users must opt in explicitly.
+- **agent-framework-orchestrations**: Bumped package to release candidate stage.
 
 ### Fixed
 - **agent-framework-core**: Parse YAML block scalars in SKILL.md frontmatter ([#5863](https://github.com/microsoft/agent-framework/pull/5863))

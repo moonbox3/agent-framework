@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **agent-framework-core**, **agent-framework-azurefunctions**, **agent-framework-devui**, **agent-framework-foundry**, **agent-framework-orchestrations**: Improve handling of intermediate outputs for workflows and orchestrations ([#5623](https://github.com/microsoft/agent-framework/pull/5623))
-- **agent-framework-core**: Drop `agent-framework-azurefunctions` and `agent-framework-durabletask` from the `[all]` extra; users must opt in explicitly.
+- **agent-framework-durabletask**: Pin `durabletask` and `durabletask-azuremanaged` floors to `>=1.4.0` and exclude upstream `durabletask` 1.4.1, 1.4.2, and 1.4.3 from the supported version range.
 - **agent-framework-orchestrations**: Bumped package to release candidate stage.
 
 ### Fixed

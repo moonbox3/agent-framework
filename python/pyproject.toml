@@ -4,7 +4,7 @@ description = "Microsoft Agent Framework for building AI Agents with Python. Thi
 authors = [{ name = "Microsoft", email = "af-support@microsoft.com"}]
 readme = "README.md"
 requires-python = ">=3.10"
-version = "1.4.0"
+version = "1.5.0"
 license-files = ["LICENSE"]
 urls.homepage = "https://aka.ms/agent-framework"
 urls.source = "https://github.com/microsoft/agent-framework/tree/main/python"
@@ -23,7 +23,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-    "agent-framework-core[all]==1.4.0",
+    "agent-framework-core[all]==1.5.0",
 ]
 
 [dependency-groups]
@@ -63,6 +63,7 @@ environments = [
 
 [tool.uv.workspace]
 members = [ "packages/*" ]
+exclude = [ "packages/azurefunctions", "packages/durabletask" ]
 
 [tool.uv.sources]
 agent-framework = { workspace = true }
@@ -72,14 +73,12 @@ agent-framework-ag-ui = { workspace = true }
 agent-framework-azure-ai-search = { workspace = true }
 agent-framework-azure-cosmos = { workspace = true }
 agent-framework-anthropic = { workspace = true }
-agent-framework-azurefunctions = { workspace = true }
 agent-framework-bedrock = { workspace = true }
 agent-framework-chatkit = { workspace = true }
 agent-framework-claude = { workspace = true }
 agent-framework-copilotstudio = { workspace = true }
 agent-framework-declarative = { workspace = true }
 agent-framework-devui = { workspace = true }
-agent-framework-durabletask = { workspace = true }
 agent-framework-foundry = { workspace = true }
 agent-framework-foundry-hosting = { workspace = true }
 agent-framework-foundry-local = { workspace = true }
@@ -193,7 +192,6 @@ executionEnvironments = [
     { root = "packages/azure-ai-search/tests", reportPrivateUsage = "none" },
     { root = "packages/azure-contentunderstanding/tests", reportPrivateUsage = "none" },
     { root = "packages/azure-cosmos/tests", reportPrivateUsage = "none" },
-    { root = "packages/azurefunctions/tests", reportPrivateUsage = "none" },
     { root = "packages/bedrock/tests", reportPrivateUsage = "none" },
     { root = "packages/chatkit/tests", reportPrivateUsage = "none" },
     { root = "packages/claude/tests", reportPrivateUsage = "none" },
@@ -201,7 +199,6 @@ executionEnvironments = [
     { root = "packages/core/tests", reportPrivateUsage = "none" },
     { root = "packages/declarative/tests", reportPrivateUsage = "none" },
     { root = "packages/devui/tests", reportPrivateUsage = "none" },
-    { root = "packages/durabletask/tests", reportPrivateUsage = "none" },
     { root = "packages/foundry/tests", reportPrivateUsage = "none" },
     { root = "packages/foundry_local/tests", reportPrivateUsage = "none" },
     { root = "packages/github_copilot/tests", reportPrivateUsage = "none" },

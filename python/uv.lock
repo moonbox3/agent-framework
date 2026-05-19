@@ -33,6 +33,7 @@ members = [
     "agent-framework-azure-ai-search",
     "agent-framework-azure-contentunderstanding",
     "agent-framework-azure-cosmos",
+    "agent-framework-azurefunctions",
     "agent-framework-bedrock",
     "agent-framework-chatkit",
     "agent-framework-claude",
@@ -40,6 +41,7 @@ members = [
     "agent-framework-core",
     "agent-framework-declarative",
     "agent-framework-devui",
+    "agent-framework-durabletask",
     "agent-framework-foundry",
     "agent-framework-foundry-hosting",
     "agent-framework-foundry-local",
@@ -269,6 +271,28 @@ requires-dist = [
 ]
 
 [[package]]
+name = "agent-framework-azurefunctions"
+version = "1.0.0b260519"
+source = { editable = "packages/azurefunctions" }
+dependencies = [
+    { name = "agent-framework-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "agent-framework-durabletask", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "azure-functions", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "azure-functions-durable", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-framework-core", editable = "packages/core" },
+    { name = "agent-framework-durabletask", editable = "packages/durabletask" },
+    { name = "azure-functions", specifier = ">=1.24.0,<2" },
+    { name = "azure-functions-durable", specifier = ">=1.3.1,<2" },
+]
+
+[package.metadata.requires-dev]
+dev = []
+
+[[package]]
 name = "agent-framework-bedrock"
 version = "1.0.0b260519"
 source = { editable = "packages/bedrock" }
@@ -464,6 +488,33 @@ requires-dist = [
     { name = "watchdog", marker = "extra == 'dev'", specifier = "==6.0.0" },
 ]
 provides-extras = ["dev", "all"]
+
+[[package]]
+name = "agent-framework-durabletask"
+version = "1.0.0b260519"
+source = { editable = "packages/durabletask" }
+dependencies = [
+    { name = "agent-framework-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "durabletask", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "durabletask-azuremanaged", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "python-dateutil", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "types-python-dateutil", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-framework-core", editable = "packages/core" },
+    { name = "durabletask", specifier = ">=1.4.0,!=1.4.1,!=1.4.2,!=1.4.3,<2" },
+    { name = "durabletask-azuremanaged", specifier = ">=1.4.0,<2" },
+    { name = "python-dateutil", specifier = ">=2.8.0,<3" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "types-python-dateutil", specifier = "==2.9.0.20260402" }]
 
 [[package]]
 name = "agent-framework-foundry"
@@ -1045,6 +1096,15 @@ wheels = [
 ]
 
 [[package]]
+name = "asyncio"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/ea/26c489a11f7ca862d5705db67683a7361ce11c23a7b98fc6c2deaeccede2/asyncio-4.0.0.tar.gz", hash = "sha256:570cd9e50db83bc1629152d4d0b7558d6451bb1bfd5dfc2e935d96fc2f40329b", size = 5371, upload-time = "2025-08-05T02:51:46.605Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/64/eff2564783bd650ca25e15938d1c5b459cda997574a510f7de69688cb0b4/asyncio-4.0.0-py3-none-any.whl", hash = "sha256:c1eddb0659231837046809e68103969b2bef8b0400d59cfa6363f6b5ed8cc88b", size = 5555, upload-time = "2025-08-05T02:51:45.767Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1188,6 +1248,36 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c8/a3/0474e622bf9676e3206d61269461ed16a05958363c254ea3b15af16219b2/azure_cosmos-4.15.0.tar.gz", hash = "sha256:be1cf49837c197d9da880ec47fe020a24d679075b89e0e1e2aca8d376b3a5a24", size = 2100744, upload-time = "2026-02-23T16:01:52.293Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/5f/b6e3d3ae16fa121fdc17e62447800d378b7e716cd6103c3650977a6c4618/azure_cosmos-4.15.0-py3-none-any.whl", hash = "sha256:83c1da7386bcd0df9a15c52116cc35012225d8a72d4f1379938b83ea5eb19fff", size = 424870, upload-time = "2026-02-23T16:01:54.514Z" },
+]
+
+[[package]]
+name = "azure-functions"
+version = "1.24.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "werkzeug", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1d/be/5535830e0658e9668093941b3c33b0ea03eceadbf6bd6b7870aa37ef071a/azure_functions-1.24.0.tar.gz", hash = "sha256:18ea1607c7a7268b7a1e1bd0cc28c5cc57a9db6baaacddb39ba0e9f865728187", size = 134495, upload-time = "2025-10-06T19:08:08.612Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/76/e6c5809ee0295e882b6c9ad595896748e33989d353b67316a854f65fb754/azure_functions-1.24.0-py3-none-any.whl", hash = "sha256:32b12c2a219824525849dd92036488edeb70d306d164efd9e941f10f9ac0a91c", size = 108341, upload-time = "2025-10-06T19:08:07.128Z" },
+]
+
+[[package]]
+name = "azure-functions-durable"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "azure-functions", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "furl", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "opentelemetry-api", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "opentelemetry-sdk", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "python-dateutil", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "requests", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/7c/3654377e7000c4bd6b6edbb959efc4ad867005353843a4d810dfa8fbb72b/azure_functions_durable-1.5.0.tar.gz", hash = "sha256:131fbdf08fa1140d94dc3948fcf9000d8da58aaa5a0ffc4db0ea3be97d5551e2", size = 183733, upload-time = "2026-02-04T20:33:45.788Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/25/fb054d81c1fda64b229b04b4051657fedd4a72f53c51c59fcaca3a454d2f/azure_functions_durable-1.5.0-py3-none-any.whl", hash = "sha256:aea683193328924ae56eebb8f80647e186baf93e26c061f09ce532702c279ddc", size = 146619, upload-time = "2026-02-04T20:33:16.838Z" },
 ]
 
 [[package]]
@@ -2127,6 +2217,34 @@ wheels = [
 ]
 
 [[package]]
+name = "durabletask"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asyncio", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "grpcio", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "packaging", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "protobuf", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/25/11d70b07723587a0b95fb57b5817627c9e605554b874697e5aeee3e5466d/durabletask-1.4.0.tar.gz", hash = "sha256:639138c10e2687a485ee94d218c27f8dc193376367dce9617f1ca2ec1cc8f021", size = 97252, upload-time = "2026-04-08T18:49:26.348Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/3f/7250be7683aa6e9e89324db549e2b44cb6db7904cd315024933a23405e07/durabletask-1.4.0-py3-none-any.whl", hash = "sha256:75e11407bf24f045e32ef26b5e753f49f64fee822c8c9bfc5184a0911cb0969c", size = 107934, upload-time = "2026-04-08T18:49:24.856Z" },
+]
+
+[[package]]
+name = "durabletask-azuremanaged"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-identity", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "durabletask", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/a9/18501dc091867a9bb5a7d184c69f3fac14294f34dea2363aa9379eeeedc3/durabletask_azuremanaged-1.4.0.tar.gz", hash = "sha256:739cde74ecdacf732fa4a9a40c0afba5d3185c5e575a6883d303c5a112f2c34a", size = 5657, upload-time = "2026-04-08T19:22:27.732Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/95/00ef2b2e0dd62fee6dc411aa1c4071ac55e54bcbd47a1384722e0ba54f42/durabletask_azuremanaged-1.4.0-py3-none-any.whl", hash = "sha256:80a0255afa7b61c01886d82dc22b75188b786f2454ea9f1a09dac10888a3c131", size = 7852, upload-time = "2026-04-08T19:22:26.624Z" },
+]
+
+[[package]]
 name = "email-validator"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2526,6 +2644,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d5/8d/1c51c094345df128ca4a990d633fe1a0ff28726c9e6b3c41ba65087bba1d/fsspec-2026.4.0.tar.gz", hash = "sha256:301d8ac70ae90ef3ad05dcf94d6c3754a097f9b5fe4667d2787aa359ec7df7e4", size = 312760, upload-time = "2026-04-29T20:42:38.635Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/0c/043d5e551459da400957a1395e0febbf771446ff34291afcbe3d8be2a279/fsspec-2026.4.0-py3-none-any.whl", hash = "sha256:11ef7bb35dab8a394fde6e608221d5cf3e8499401c249bebaeaad760a1a8dec2", size = 203402, upload-time = "2026-04-29T20:42:36.842Z" },
+]
+
+[[package]]
+name = "furl"
+version = "2.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "orderedmultidict", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "six", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/e4/203a76fa2ef46cdb0a618295cc115220cbb874229d4d8721068335eb87f0/furl-2.1.4.tar.gz", hash = "sha256:877657501266c929269739fb5f5980534a41abd6bbabcb367c136d1d3b2a6015", size = 57526, upload-time = "2025-03-09T05:36:21.175Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/8c/dce3b1b7593858eba995b2dfdb833f872c7f863e3da92aab7128a6b11af4/furl-2.1.4-py2.py3-none-any.whl", hash = "sha256:da34d0b34e53ffe2d2e6851a7085a05d96922b5b578620a37377ff1dbeeb11c8", size = 27550, upload-time = "2025-03-09T05:36:19.928Z" },
 ]
 
 [[package]]
@@ -4682,6 +4813,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4c/ca/bfac8bc689799bcca4157e0e0ced07e70ce125193fc2e166d2e685b7e2fe/ordered-set-4.1.0.tar.gz", hash = "sha256:694a8e44c87657c59292ede72891eb91d34131f6531463aab3009191c77364a8", size = 12826, upload-time = "2022-01-26T14:38:56.6Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/55/af02708f230eb77084a299d7b08175cff006dea4f2721074b92cdb0296c0/ordered_set-4.1.0-py3-none-any.whl", hash = "sha256:046e1132c71fcf3330438a539928932caf51ddbc582496833e23de611de14562", size = 7634, upload-time = "2022-01-26T14:38:48.677Z" },
+]
+
+[[package]]
+name = "orderedmultidict"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/62/61ad51f6c19d495970230a7747147ce7ed3c3a63c2af4ebfdb1f6d738703/orderedmultidict-1.0.2.tar.gz", hash = "sha256:16a7ae8432e02cc987d2d6d5af2df5938258f87c870675c73ee77a0920e6f4a6", size = 13973, upload-time = "2025-11-18T08:00:42.649Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/6c/d8a02ffb24876b5f51fbd781f479fc6525a518553a4196bd0433dae9ff8e/orderedmultidict-1.0.2-py2.py3-none-any.whl", hash = "sha256:ab5044c1dca4226ae4c28524cfc5cc4c939f0b49e978efa46a6ad6468049f79b", size = 11897, upload-time = "2025-11-18T08:00:41.44Z" },
 ]
 
 [[package]]
@@ -7121,6 +7264,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/51/9aed62104cea109b820bbd6c14245af756112017d309da813ef107d42e7e/typer-0.25.1.tar.gz", hash = "sha256:9616eb8853a09ffeabab1698952f33c6f29ffdbceb4eaeecf571880e8d7664cc", size = 122276, upload-time = "2026-04-30T19:32:16.964Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/f9/2b3ff4e56e5fa7debfaf9eb135d0da96f3e9a1d5b27222223c7296336e5f/typer-0.25.1-py3-none-any.whl", hash = "sha256:75caa44ed46a03fb2dab8808753ffacdbfea88495e74c85a28c5eefcf5f39c89", size = 58409, upload-time = "2026-04-30T19:32:18.271Z" },
+]
+
+[[package]]
+name = "types-python-dateutil"
+version = "2.9.0.20260402"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/30/c5d9efbff5422b20c9551dc5af237d1ab0c3d33729a9b3239a876ca47dd4/types_python_dateutil-2.9.0.20260402.tar.gz", hash = "sha256:a980142b9966713acb382c467e35c5cc4208a2f91b10b8d785a0ae6765df6c0b", size = 16941, upload-time = "2026-04-02T04:18:35.834Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/d7/fe753bf8329c8c3c1addcba1d2bf716c33898216757abb24f8b80f82d040/types_python_dateutil-2.9.0.20260402-py3-none-any.whl", hash = "sha256:7827e6a9c93587cc18e766944254d1351a2396262e4abe1510cbbd7601c5e01f", size = 18436, upload-time = "2026-04-02T04:18:34.806Z" },
 ]
 
 [[package]]

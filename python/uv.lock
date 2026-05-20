@@ -200,7 +200,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0,<0.133.1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "==0.28.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.0.3" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<0.42.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<1" },
 ]
 provides-extras = ["dev"]
 
@@ -487,7 +487,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.39.0,<2" },
     { name = "pytest", marker = "extra == 'all'", specifier = "==9.0.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.0.3" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<0.42.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<1" },
     { name = "watchdog", marker = "extra == 'all'", specifier = "==6.0.0" },
     { name = "watchdog", marker = "extra == 'dev'", specifier = "==6.0.0" },
 ]

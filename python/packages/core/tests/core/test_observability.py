@@ -1746,6 +1746,39 @@ def test_to_otel_part_function_call_with_nested_object_arguments():
     assert parsed["payload"]["name"] == "target_agent"
 
 
+def test_make_json_safe_non_callable_method_attribute():
+    """Test make_json_safe handles objects where model_dump/to_dict/dict are non-callable attributes."""
+    import json
+
+    from agent_framework._serialization import make_json_safe
+
+    class ObjWithNonCallableModelDump:
+        model_dump = 42  # not callable
+
+    obj = ObjWithNonCallableModelDump()
+    result = make_json_safe(obj)
+    # Falls back to __dict__ or str — must not raise TypeError
+    assert json.dumps(result) is not None
+
+
+def test_make_json_safe_dict_with_non_string_keys():
+    """Test make_json_safe converts non-primitive dict keys to strings."""
+    import json
+    from datetime import datetime
+
+    from agent_framework._serialization import make_json_safe
+
+    dt_key = datetime(2024, 1, 1)
+    obj = {dt_key: "value", 42: "num_value", "str_key": "normal"}
+    result = make_json_safe(obj)
+    # json.dumps must not raise TypeError
+    serialized = json.dumps(result)
+    parsed = json.loads(serialized)
+    assert parsed[str(dt_key)] == "value"
+    assert parsed["42"] == "num_value"
+    assert parsed["str_key"] == "normal"
+
+
 def test_to_otel_part_function_result():
     """Test _to_otel_part with function_result content."""
     from agent_framework import Content

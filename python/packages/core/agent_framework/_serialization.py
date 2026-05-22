@@ -637,14 +637,23 @@ def make_json_safe(obj: Any) -> Any:
         return obj.isoformat()
     if is_dataclass(obj) and not isinstance(obj, type):
         return make_json_safe(asdict(obj))  # type: ignore[arg-type]
-    if hasattr(obj, "model_dump"):
-        return make_json_safe(obj.model_dump())  # type: ignore[no-any-return]
-    if hasattr(obj, "to_dict"):
-        return make_json_safe(obj.to_dict())  # type: ignore[no-any-return]
-    if hasattr(obj, "dict"):
-        return make_json_safe(obj.dict())  # type: ignore[no-any-return]
+    if callable(getattr(obj, "model_dump", None)):
+        try:
+            return make_json_safe(obj.model_dump())  # type: ignore[no-any-return]
+        except TypeError:
+            pass
+    if callable(getattr(obj, "to_dict", None)):
+        try:
+            return make_json_safe(obj.to_dict())  # type: ignore[no-any-return]
+        except TypeError:
+            pass
+    if callable(getattr(obj, "dict", None)):
+        try:
+            return make_json_safe(obj.dict())  # type: ignore[no-any-return]
+        except TypeError:
+            pass
     if isinstance(obj, dict):
-        return {key: make_json_safe(value) for key, value in obj.items()}  # type: ignore[misc]
+        return {str(key): make_json_safe(value) for key, value in obj.items()}  # type: ignore[misc]
     if isinstance(obj, (list, tuple)):
         return [make_json_safe(item) for item in obj]  # type: ignore[misc]
     if hasattr(obj, "__dict__"):

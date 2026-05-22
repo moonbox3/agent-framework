@@ -1691,7 +1691,6 @@ def test_to_otel_part_function_call():
     }
 
 
-
 def test_to_otel_part_function_call_with_dataclass_arguments():
     """Test _to_otel_part safely serializes dataclass instances in function_call arguments."""
     import dataclasses
@@ -1705,7 +1704,12 @@ def test_to_otel_part_function_call_with_dataclass_arguments():
         target: str
         value: int
 
-    content = Content(type="function_call", call_id="call_456", name="request_info", arguments={"payload": RequestPayload(target="agent", value=42)})
+    content = Content(
+        type="function_call",
+        call_id="call_456",
+        name="request_info",
+        arguments={"payload": RequestPayload(target="agent", value=42)},
+    )
     result = _to_otel_part(content)
 
     assert result is not None
@@ -1721,15 +1725,18 @@ def test_to_otel_part_function_call_with_dataclass_arguments():
 def test_to_otel_part_function_call_with_nested_object_arguments():
     """Test _to_otel_part safely serializes nested non-primitive objects in function_call arguments."""
     import json
+    from dataclasses import dataclass
 
     from agent_framework import Content
     from agent_framework.observability import _to_otel_part
 
+    @dataclass
     class CustomPayload:
-        def __init__(self, name: str):
-            self.name = name
+        name: str
 
-    content = Content(type="function_call", call_id="call_789", name="handoff", arguments={"payload": CustomPayload("target_agent")})
+    content = Content(
+        type="function_call", call_id="call_789", name="handoff", arguments={"payload": CustomPayload("target_agent")}
+    )
     result = _to_otel_part(content)
 
     assert result is not None
@@ -3067,7 +3074,6 @@ async def test_system_instructions_preserves_non_ascii_characters(span_exporter:
     assert [msg.get("role") for msg in input_messages] == ["user"]
 
 
-
 @pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
 def test_capture_messages_with_dataclass_function_call_arguments(span_exporter: InMemorySpanExporter):
     """Test that _capture_messages serializes dataclass payloads in function-call arguments without error."""
@@ -3083,7 +3089,14 @@ def test_capture_messages_with_dataclass_function_call_arguments(span_exporter: 
 
     msg = Message(
         role="assistant",
-        contents=[Content(type="function_call", call_id="call_dc", name="request_info", arguments={"payload": HandoffRequest(target_agent="helper", reason="overflow")})],
+        contents=[
+            Content(
+                type="function_call",
+                call_id="call_dc",
+                name="request_info",
+                arguments={"payload": HandoffRequest(target_agent="helper", reason="overflow")},
+            )
+        ],
     )
     span_exporter.clear()
     tracer = trace.get_tracer("test")

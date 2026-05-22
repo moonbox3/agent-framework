@@ -758,9 +758,7 @@ async def test_background_sets_return_immediately_on_request(
     assert mock_a2a_client.last_request.configuration.return_immediately is True
 
 
-async def test_foreground_does_not_set_return_immediately(
-    a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient
-) -> None:
+async def test_foreground_does_not_set_return_immediately(a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient) -> None:
     """Test that background=False (default) does not set configuration on SendMessageRequest."""
     mock_a2a_client.add_task_response("task-fg2", [{"id": "art-1", "content": "Done"}])
 

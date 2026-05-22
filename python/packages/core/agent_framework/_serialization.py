@@ -618,7 +618,7 @@ class SerializationMixin:
         return _CAMEL_TO_SNAKE_PATTERN.sub("_", cls.__name__).lower()
 
 
-def make_json_safe(obj: Any) -> Any:  # noqa: ANN401
+def make_json_safe(obj: Any) -> Any:
     """Recursively convert an object to a JSON-serializable form.
 
     Handles dataclasses, Pydantic models, objects with ``to_dict``/``dict``/``__dict__``,

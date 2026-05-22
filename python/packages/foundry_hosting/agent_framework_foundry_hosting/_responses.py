@@ -10,9 +10,8 @@ import os
 import tempfile
 import threading
 from collections.abc import AsyncIterable, AsyncIterator, Generator, Mapping, Sequence
-from contextlib import suppress
-from pathlib import Path
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
+from pathlib import Path
 from typing import Protocol, cast
 
 from agent_framework import (

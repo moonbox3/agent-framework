@@ -2211,7 +2211,9 @@ def _to_otel_part(content: Content) -> dict[str, Any] | None:
                 "modality": content.media_type.split("/")[0] if content.media_type else None,
             }
         case "function_call":
-            return {"type": "tool_call", "id": content.call_id, "name": content.name, "arguments": content.arguments}
+            from ._serialization import make_json_safe  # pyright: ignore[reportPrivateUsage]
+
+            return {"type": "tool_call", "id": content.call_id, "name": content.name, "arguments": make_json_safe(content.arguments)}
         case "function_result":
             return {
                 "type": "tool_call_response",

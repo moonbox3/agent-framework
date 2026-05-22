@@ -7,6 +7,8 @@ import json
 import logging
 import re
 from collections.abc import Mapping, MutableMapping
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
 from typing import Any, ClassVar, Protocol, TypeVar, runtime_checkable
 
 logger = logging.getLogger("agent_framework")
@@ -614,3 +616,37 @@ class SerializationMixin:
         # Fallback and default
         # Convert class name to snake_case
         return _CAMEL_TO_SNAKE_PATTERN.sub("_", cls.__name__).lower()
+
+
+def make_json_safe(obj: Any) -> Any:  # noqa: ANN401
+    """Recursively convert an object to a JSON-serializable form.
+
+    Handles dataclasses, Pydantic models, objects with ``to_dict``/``dict``/``__dict__``,
+    datetimes, lists, dicts, and primitives.  Falls back to ``str()`` for any remaining
+    non-serializable value so that ``json.dumps`` never raises a ``TypeError``.
+
+    Args:
+        obj: Object to make JSON safe.
+
+    Returns:
+        A JSON-serializable version of the object.
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return make_json_safe(asdict(obj))  # type: ignore[arg-type]
+    if hasattr(obj, "model_dump"):
+        return make_json_safe(obj.model_dump())  # type: ignore[no-any-return]
+    if hasattr(obj, "to_dict"):
+        return make_json_safe(obj.to_dict())  # type: ignore[no-any-return]
+    if hasattr(obj, "dict"):
+        return make_json_safe(obj.dict())  # type: ignore[no-any-return]
+    if isinstance(obj, dict):
+        return {key: make_json_safe(value) for key, value in obj.items()}  # type: ignore[misc]
+    if isinstance(obj, (list, tuple)):
+        return [make_json_safe(item) for item in obj]  # type: ignore[misc]
+    if hasattr(obj, "__dict__"):
+        return {key: make_json_safe(value) for key, value in vars(obj).items()}  # type: ignore[misc]
+    return str(obj)

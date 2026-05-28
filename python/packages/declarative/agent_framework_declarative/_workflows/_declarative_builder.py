@@ -316,8 +316,7 @@ class DeclarativeWorkflowBuilder:
                 for forbidden in ("else", "default"):
                     if forbidden in action_def:
                         raise ValueError(
-                            f"Action 'ConditionGroup' field '{forbidden}' is not supported; "
-                            "use 'elseActions' instead."
+                            f"Action 'ConditionGroup' field '{forbidden}' is not supported; use 'elseActions' instead."
                         )
                 conditions = action_def.get("conditions", [])
                 for condition_branch in conditions:

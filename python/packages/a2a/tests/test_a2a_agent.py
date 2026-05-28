@@ -760,9 +760,7 @@ async def test_background_sets_return_immediately_on_request(
     assert mock_a2a_client.last_request.configuration.return_immediately is True
 
 
-async def test_foreground_does_not_set_return_immediately(
-    a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient
-) -> None:
+async def test_foreground_does_not_set_return_immediately(a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient) -> None:
     """Test that background=False (default) does not set configuration on SendMessageRequest."""
     mock_a2a_client.add_task_response("task-fg2", [{"id": "art-1", "content": "Done"}])
 
@@ -1356,9 +1354,7 @@ async def test_streaming_status_update_event_yields_content(
 
 
 @mark.asyncio
-async def test_streaming_input_required_emits_content(
-    a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient
-) -> None:
+async def test_streaming_input_required_emits_content(a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient) -> None:
     """Test that input-required status updates emit content (gated states that pass through)."""
     update_event = TaskStatusUpdateEvent(
         task_id="task-status",
@@ -1383,9 +1379,7 @@ async def test_streaming_input_required_emits_content(
 
 
 @mark.asyncio
-async def test_streaming_working_status_gates_content(
-    a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient
-) -> None:
+async def test_streaming_working_status_gates_content(a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient) -> None:
     """Test that intermediate WORKING status updates do NOT emit content (gated like .NET)."""
     update_event = TaskStatusUpdateEvent(
         task_id="task-status",
@@ -1721,9 +1715,7 @@ async def test_non_streaming_terminal_status_update_surfaces_content(
     assert response.messages[0].text == "Done! Here is your answer."
 
 
-async def test_non_streaming_working_content_gated(
-    a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient
-) -> None:
+async def test_non_streaming_working_content_gated(a2a_agent: A2AAgent, mock_a2a_client: MockA2AClient) -> None:
     """Non-streaming: WORKING status content is gated and not surfaced to callers."""
     # Intermediate WORKING event with content — should be gated
     working_msg = A2AMessage(

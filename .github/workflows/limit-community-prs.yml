@@ -15,6 +15,7 @@ concurrency:
 
 env:
   MAX_OPEN_PULL_REQUESTS: '10'
+  PR_LIMIT_EXEMPT_LABEL: pr-limit-exempt
   TOO_MANY_PRS_LABEL: too-many-prs
 
 jobs:
@@ -68,9 +69,6 @@ jobs:
 
       - name: Enforce open PR limit
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        env:
-          MAX_OPEN_PULL_REQUESTS: ${{ env.MAX_OPEN_PULL_REQUESTS }}
-          TOO_MANY_PRS_LABEL: ${{ env.TOO_MANY_PRS_LABEL }}
         with:
           github-token: ${{ secrets.GH_ACTIONS_PR_WRITE }}
           script: |
@@ -79,6 +77,7 @@ jobs:
               github,
               context,
               core,
+              exemptLabelName: process.env.PR_LIMIT_EXEMPT_LABEL,
               maxOpenPrs: Number.parseInt(process.env.MAX_OPEN_PULL_REQUESTS, 10),
               labelName: process.env.TOO_MANY_PRS_LABEL,
             });

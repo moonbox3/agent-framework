@@ -8,6 +8,7 @@ function getPullRequest(context) {
 
   return {
     author: pullRequest.user.login,
+    labels: pullRequest.labels?.map((label) => label.name).filter(Boolean) ?? [],
     number: pullRequest.number,
   };
 }
@@ -40,7 +41,15 @@ async function ensureLabel({ github, owner, repo, labelName }) {
   }
 }
 
-function buildLimitMessage({ author, maxOpenPrs, openPrCount }) {
+function hasLabel(labels, labelName) {
+  if (!labelName) {
+    return false;
+  }
+
+  return labels.some((label) => label.toLowerCase() === labelName.toLowerCase());
+}
+
+function buildLimitMessage({ author, exemptLabelName, maxOpenPrs, openPrCount }) {
   return [
     `Thank you for your contribution, @${author}.`,
     '',
@@ -49,7 +58,7 @@ function buildLimitMessage({ author, maxOpenPrs, openPrCount }) {
       + 'so we are closing it automatically.',
     '',
     'Please focus on getting your existing PRs reviewed, merged, or closed before opening another one. '
-      + 'If a maintainer asked you to open this PR, a maintainer can reopen it.',
+      + `If a maintainer asked you to open this PR, they can apply the \`${exemptLabelName}\` label and reopen it.`,
   ].join('\n');
 }
 
@@ -62,12 +71,27 @@ async function getOpenPrCount({ github, owner, repo, author, pullRequestNumber }
 
   const indexedPrNumbers = response.data.items.map((item) => item.number);
   const currentPrIsIndexed = indexedPrNumbers.includes(pullRequestNumber);
-  return currentPrIsIndexed ? response.data.total_count : response.data.total_count + 1;
+  if (currentPrIsIndexed || response.data.total_count >= 100) {
+    return response.data.total_count;
+  }
+
+  return response.data.total_count + 1;
 }
 
-async function enforcePrLimit({ github, context, core, maxOpenPrs, labelName }) {
+async function enforcePrLimit({ github, context, core, exemptLabelName, maxOpenPrs, labelName }) {
   const { owner, repo } = context.repo;
-  const { author, number } = getPullRequest(context);
+  const { author, labels, number } = getPullRequest(context);
+
+  if (hasLabel(labels, exemptLabelName)) {
+    core.info(`PR #${number} has the ${exemptLabelName} label; skipping open PR limit enforcement.`);
+    return {
+      author,
+      closed: false,
+      exempt: true,
+      openPrCount: null,
+    };
+  }
+
   const openPrCount = await getOpenPrCount({
     github,
     owner,
@@ -107,6 +131,7 @@ async function enforcePrLimit({ github, context, core, maxOpenPrs, labelName }) 
     issue_number: number,
     body: buildLimitMessage({
       author,
+      exemptLabelName,
       maxOpenPrs,
       openPrCount,
     }),

@@ -1691,65 +1691,21 @@ def test_to_otel_part_function_call():
     }
 
 
-def test_to_otel_part_function_call_with_dataclass_arguments():
-    """Test _to_otel_part safely serializes dataclass instances in function_call arguments."""
-    import dataclasses
-    import json
-
+def test_to_otel_part_function_call_reuses_prepared_arguments():
+    """Test _to_otel_part does not re-serialize function-call arguments in the observability hot path."""
     from agent_framework import Content
     from agent_framework.observability import _to_otel_part
 
-    @dataclasses.dataclass
-    class RequestPayload:
-        target: str
-        value: int
-
-    content = Content(
-        type="function_call",
-        call_id="call_456",
-        name="request_info",
-        arguments={"payload": RequestPayload(target="agent", value=42)},
-    )
+    arguments = {"payload": object()}
+    content = Content(type="function_call", call_id="call_789", name="handoff", arguments=arguments)
     result = _to_otel_part(content)
 
     assert result is not None
-    assert result["type"] == "tool_call"
-    assert result["id"] == "call_456"
-    assert result["name"] == "request_info"
-    # arguments must be JSON-serializable
-    serialized = json.dumps(result["arguments"])
-    parsed = json.loads(serialized)
-    assert parsed["payload"] == {"target": "agent", "value": 42}
-
-
-def test_to_otel_part_function_call_with_nested_object_arguments():
-    """Test _to_otel_part safely serializes nested non-primitive objects in function_call arguments."""
-    import json
-    from dataclasses import dataclass
-
-    from agent_framework import Content
-    from agent_framework.observability import _to_otel_part
-
-    @dataclass
-    class CustomPayload:
-        name: str
-
-    content = Content(
-        type="function_call", call_id="call_789", name="handoff", arguments={"payload": CustomPayload("target_agent")}
-    )
-    result = _to_otel_part(content)
-
-    assert result is not None
-    # arguments must be JSON-serializable — this would raise TypeError before the fix
-    serialized = json.dumps(result["arguments"])
-    parsed = json.loads(serialized)
-    assert parsed["payload"]["name"] == "target_agent"
+    assert result["arguments"] is arguments
 
 
 def test_make_json_safe_non_callable_method_attribute():
     """Test make_json_safe handles objects where model_dump/to_dict/dict are non-callable attributes."""
-    import json
-
     from agent_framework._serialization import make_json_safe
 
     class ObjWithNonCallableModelDump:
@@ -1757,8 +1713,23 @@ def test_make_json_safe_non_callable_method_attribute():
 
     obj = ObjWithNonCallableModelDump()
     result = make_json_safe(obj)
-    # Falls back to __dict__ or str — must not raise TypeError
-    assert json.dumps(result) is not None
+    assert result == {}
+
+
+def test_make_json_safe_callable_method_type_error_falls_through():
+    """Test make_json_safe falls through when serializer-like methods require arguments."""
+    from agent_framework._serialization import make_json_safe
+
+    class ObjWithRequiredArgModelDump:
+        def __init__(self) -> None:
+            self.value = "fallback"
+
+        def model_dump(self, required: str) -> dict[str, str]:
+            return {"required": required}
+
+    obj = ObjWithRequiredArgModelDump()
+    result = make_json_safe(obj)
+    assert result == {"value": "fallback"}
 
 
 def test_make_json_safe_dict_with_non_string_keys():
@@ -3108,18 +3079,24 @@ async def test_system_instructions_preserves_non_ascii_characters(span_exporter:
 
 
 @pytest.mark.parametrize("enable_sensitive_data", [True], indirect=True)
-def test_capture_messages_with_dataclass_function_call_arguments(span_exporter: InMemorySpanExporter):
-    """Test that _capture_messages serializes dataclass payloads in function-call arguments without error."""
+def test_capture_messages_with_prepared_request_info_function_call_arguments(span_exporter: InMemorySpanExporter):
+    """Test _capture_messages handles request-info function-call arguments prepared at Content creation."""
     import dataclasses
     import json
 
     from opentelemetry import trace
+
+    from agent_framework import WorkflowAgent
 
     @dataclasses.dataclass
     class HandoffRequest:
         target_agent: str
         reason: str
 
+    arguments = WorkflowAgent.RequestInfoFunctionArgs(
+        request_id="call_dc",
+        data=HandoffRequest(target_agent="helper", reason="overflow"),
+    ).to_dict()
     msg = Message(
         role="assistant",
         contents=[
@@ -3127,14 +3104,13 @@ def test_capture_messages_with_dataclass_function_call_arguments(span_exporter: 
                 type="function_call",
                 call_id="call_dc",
                 name="request_info",
-                arguments={"payload": HandoffRequest(target_agent="helper", reason="overflow")},
+                arguments=arguments,
             )
         ],
     )
     span_exporter.clear()
     tracer = trace.get_tracer("test")
     with tracer.start_as_current_span("test_span") as span:
-        # Must not raise TypeError for non-serializable dataclass argument
         _capture_messages(span=span, provider_name="test_provider", messages=[msg])
 
     spans = span_exporter.get_finished_spans()
@@ -3142,7 +3118,7 @@ def test_capture_messages_with_dataclass_function_call_arguments(span_exporter: 
     input_messages = json.loads(span.attributes[OtelAttr.INPUT_MESSAGES])
     tool_part = input_messages[0]["parts"][0]
     assert tool_part["type"] == "tool_call"
-    assert tool_part["arguments"]["payload"] == {"target_agent": "helper", "reason": "overflow"}
+    assert tool_part["arguments"]["data"] == {"target_agent": "helper", "reason": "overflow"}
 
 
 def test_capture_messages_keeps_framework_instructions_out_of_logs_and_span_messages(

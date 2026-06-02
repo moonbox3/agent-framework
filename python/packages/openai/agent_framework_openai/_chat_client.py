@@ -407,6 +407,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             env_file_path: Optional ``.env`` file that is checked before the process environment
                 for ``OPENAI_*`` values.
             env_file_encoding: Encoding for the ``.env`` file.
+            timeout: Optional timeout in seconds for requests.
         """
         ...
 
@@ -457,6 +458,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             env_file_path: Optional ``.env`` file that is checked before process environment
                 variables for ``AZURE_OPENAI_*`` values.
             env_file_encoding: Encoding for the ``.env`` file.
+            timeout: Optional timeout in seconds for requests.
         """
         ...
 

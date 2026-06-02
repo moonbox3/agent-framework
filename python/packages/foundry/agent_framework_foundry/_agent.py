@@ -265,7 +265,7 @@ class RawFoundryAgentChatClient(  # type: ignore[misc]
             openai_client_kwargs["agent_name"] = self.agent_name
         openai_client = self.project_client.get_openai_client(**openai_client_kwargs)
         if timeout is not None:
-            openai_client.timeout = timeout
+            openai_client = openai_client.with_options(timeout=timeout)
         super().__init__(
             async_client=openai_client,
             default_headers=default_headers,

@@ -114,7 +114,7 @@ def test_raw_foundry_agent_chat_client_init_uses_explicit_parameters() -> None:
 
 
 def test_raw_foundry_agent_chat_client_init_applies_timeout_to_openai_client() -> None:
-    """Test that timeout is applied to the underlying OpenAI client when specified."""
+    """Test that timeout is applied via with_options without mutating the shared OpenAI client."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -127,11 +127,12 @@ def test_raw_foundry_agent_chat_client_init_applies_timeout_to_openai_client() -
         timeout=60.0,
     )
 
-    assert openai_client_mock.timeout == 60.0
+    openai_client_mock.with_options.assert_called_once_with(timeout=60.0)
+    assert openai_client_mock.timeout == 5.0, "Original shared client must not be mutated"
 
 
 def test_raw_foundry_agent_chat_client_init_timeout_none_leaves_client_unchanged() -> None:
-    """Test that timeout=None does not modify the OpenAI client timeout."""
+    """Test that timeout=None does not call with_options and leaves the shared client intact."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -144,11 +145,12 @@ def test_raw_foundry_agent_chat_client_init_timeout_none_leaves_client_unchanged
         timeout=None,
     )
 
+    openai_client_mock.with_options.assert_not_called()
     assert openai_client_mock.timeout == 5.0
 
 
 def test_raw_foundry_agent_chat_client_init_applies_timeout_with_preview_enabled() -> None:
-    """Test that timeout is applied even when allow_preview=True (hosted agent path)."""
+    """Test that timeout uses with_options even when allow_preview=True (hosted agent path)."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -162,7 +164,8 @@ def test_raw_foundry_agent_chat_client_init_applies_timeout_with_preview_enabled
         timeout=120.0,
     )
 
-    assert openai_client_mock.timeout == 120.0
+    openai_client_mock.with_options.assert_called_once_with(timeout=120.0)
+    assert openai_client_mock.timeout == 5.0, "Original shared client must not be mutated"
 
 
 def test_raw_foundry_agent_chat_client_as_agent_preserves_client_type() -> None:
@@ -544,7 +547,7 @@ def test_foundry_agent_chat_client_init_uses_explicit_parameters() -> None:
 
 
 def test_foundry_agent_chat_client_init_propagates_timeout() -> None:
-    """Test that _FoundryAgentChatClient passes timeout down to the underlying client."""
+    """Test that _FoundryAgentChatClient calls with_options instead of mutating the shared client."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -557,7 +560,8 @@ def test_foundry_agent_chat_client_init_propagates_timeout() -> None:
         timeout=45.0,
     )
 
-    assert openai_client_mock.timeout == 45.0
+    openai_client_mock.with_options.assert_called_once_with(timeout=45.0)
+    assert openai_client_mock.timeout == 5.0, "Original shared client must not be mutated"
 
 
 def test_raw_foundry_agent_init_creates_client() -> None:
@@ -652,7 +656,7 @@ def test_foundry_agent_init_uses_explicit_parameters() -> None:
 
 
 def test_foundry_agent_init_propagates_timeout_to_openai_client() -> None:
-    """Test that FoundryAgent passes timeout all the way to the underlying AsyncOpenAI client."""
+    """Test that FoundryAgent uses with_options instead of mutating the shared OpenAI client."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -665,11 +669,12 @@ def test_foundry_agent_init_propagates_timeout_to_openai_client() -> None:
         timeout=90.0,
     )
 
-    assert openai_client_mock.timeout == 90.0
+    openai_client_mock.with_options.assert_called_once_with(timeout=90.0)
+    assert openai_client_mock.timeout == 5.0, "Original shared client must not be mutated"
 
 
 def test_foundry_agent_init_timeout_none_leaves_client_default() -> None:
-    """Test that FoundryAgent with timeout=None leaves the OpenAI client timeout unchanged."""
+    """Test that FoundryAgent with timeout=None does not call with_options or mutate the client."""
 
     mock_project = MagicMock()
     openai_client_mock = MagicMock()
@@ -682,6 +687,7 @@ def test_foundry_agent_init_timeout_none_leaves_client_default() -> None:
         timeout=None,
     )
 
+    openai_client_mock.with_options.assert_not_called()
     assert openai_client_mock.timeout == 5.0
 
 

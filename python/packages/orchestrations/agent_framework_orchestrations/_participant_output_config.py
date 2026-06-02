@@ -5,11 +5,13 @@
 from collections.abc import Sequence
 from typing import Any, Literal
 
+from typing_extensions import Sentinel
+
 from agent_framework import SupportsAgentRun
 from agent_framework._workflows._agent_utils import resolve_agent_id
 from agent_framework._workflows._executor import Executor
 
-_MISSING = object()
+_MISSING = Sentinel("_MISSING")
 _ALL_OUTPUTS: Literal["all"] = "all"
 _ALL_OTHER_OUTPUTS: Literal["all_other"] = "all_other"
 _ParticipantOutputSpecifier = str | SupportsAgentRun | Executor

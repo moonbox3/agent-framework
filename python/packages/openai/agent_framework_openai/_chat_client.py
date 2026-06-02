@@ -385,6 +385,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         additional_properties: dict[str, Any] | None = None,
         env_file_path: str | None = None,
         env_file_encoding: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize a raw OpenAI Chat client.
 
@@ -427,6 +428,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         additional_properties: dict[str, Any] | None = None,
         env_file_path: str | None = None,
         env_file_encoding: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize a raw OpenAI Chat client.
 
@@ -476,6 +478,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
         additional_properties: dict[str, Any] | None = None,
         env_file_path: str | None = None,
         env_file_encoding: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize a raw OpenAI Chat client.
 
@@ -511,6 +514,8 @@ class RawOpenAIChatClient(  # type: ignore[misc]
                 variables. The same file is used for both ``OPENAI_*`` and ``AZURE_OPENAI_*``
                 lookups.
             env_file_encoding: Encoding for the ``.env`` file.
+            timeout: HTTP timeout in seconds for requests. When not provided, the
+                OpenAI SDK default is used (connect: 5s, total: 600s).
 
         Notes:
             Environment resolution and routing precedence are:
@@ -541,6 +546,7 @@ class RawOpenAIChatClient(  # type: ignore[misc]
             openai_model_fields=("chat_model", "model"),
             azure_model_fields=("chat_model", "model"),
             responses_mode=True,
+            timeout=timeout,
         )
 
         self.client = client

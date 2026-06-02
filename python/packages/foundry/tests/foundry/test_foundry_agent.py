@@ -109,7 +109,60 @@ def test_raw_foundry_agent_chat_client_init_uses_explicit_parameters() -> None:
     assert "compaction_strategy" in signature.parameters
     assert "tokenizer" in signature.parameters
     assert "additional_properties" in signature.parameters
+    assert "timeout" in signature.parameters
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def test_raw_foundry_agent_chat_client_init_applies_timeout_to_openai_client() -> None:
+    """Test that timeout is applied to the underlying OpenAI client when specified."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    RawFoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="test-agent",
+        timeout=60.0,
+    )
+
+    assert openai_client_mock.timeout == 60.0
+
+
+def test_raw_foundry_agent_chat_client_init_timeout_none_leaves_client_unchanged() -> None:
+    """Test that timeout=None does not modify the OpenAI client timeout."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    RawFoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="test-agent",
+        timeout=None,
+    )
+
+    assert openai_client_mock.timeout == 5.0
+
+
+def test_raw_foundry_agent_chat_client_init_applies_timeout_with_preview_enabled() -> None:
+    """Test that timeout is applied even when allow_preview=True (hosted agent path)."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    RawFoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="hosted-agent",
+        allow_preview=True,
+        timeout=120.0,
+    )
+
+    assert openai_client_mock.timeout == 120.0
 
 
 def test_raw_foundry_agent_chat_client_as_agent_preserves_client_type() -> None:
@@ -486,7 +539,25 @@ def test_foundry_agent_chat_client_init_uses_explicit_parameters() -> None:
     assert "compaction_strategy" in signature.parameters
     assert "tokenizer" in signature.parameters
     assert "additional_properties" in signature.parameters
+    assert "timeout" in signature.parameters
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def test_foundry_agent_chat_client_init_propagates_timeout() -> None:
+    """Test that _FoundryAgentChatClient passes timeout down to the underlying client."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    _FoundryAgentChatClient(
+        project_client=mock_project,
+        agent_name="test-agent",
+        timeout=45.0,
+    )
+
+    assert openai_client_mock.timeout == 45.0
 
 
 def test_raw_foundry_agent_init_creates_client() -> None:
@@ -563,6 +634,7 @@ def test_raw_foundry_agent_init_uses_explicit_parameters() -> None:
     assert "compaction_strategy" in signature.parameters
     assert "tokenizer" in signature.parameters
     assert "additional_properties" in signature.parameters
+    assert "timeout" in signature.parameters
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
 
 
@@ -575,7 +647,42 @@ def test_foundry_agent_init_uses_explicit_parameters() -> None:
     assert "compaction_strategy" in signature.parameters
     assert "tokenizer" in signature.parameters
     assert "additional_properties" in signature.parameters
+    assert "timeout" in signature.parameters
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def test_foundry_agent_init_propagates_timeout_to_openai_client() -> None:
+    """Test that FoundryAgent passes timeout all the way to the underlying AsyncOpenAI client."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    FoundryAgent(
+        project_client=mock_project,
+        agent_name="test-agent",
+        timeout=90.0,
+    )
+
+    assert openai_client_mock.timeout == 90.0
+
+
+def test_foundry_agent_init_timeout_none_leaves_client_default() -> None:
+    """Test that FoundryAgent with timeout=None leaves the OpenAI client timeout unchanged."""
+
+    mock_project = MagicMock()
+    openai_client_mock = MagicMock()
+    openai_client_mock.timeout = 5.0
+    mock_project.get_openai_client.return_value = openai_client_mock
+
+    FoundryAgent(
+        project_client=mock_project,
+        agent_name="test-agent",
+        timeout=None,
+    )
+
+    assert openai_client_mock.timeout == 5.0
 
 
 def test_raw_foundry_agent_init_rejects_invalid_client_type() -> None:

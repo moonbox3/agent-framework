@@ -36,7 +36,7 @@ from agent_framework.exceptions import (
     ChatClientInvalidRequestException,
     SettingNotFoundError,
 )
-from openai import BadRequestError
+from openai import AsyncOpenAI, BadRequestError
 from openai.types.responses.response_reasoning_item import Summary
 from openai.types.responses.response_reasoning_summary_text_delta_event import (
     ResponseReasoningSummaryTextDeltaEvent,
@@ -55,7 +55,7 @@ from pydantic import BaseModel
 from pytest import param
 
 from agent_framework_openai import OpenAIChatClient
-from agent_framework_openai._chat_client import OPENAI_LOCAL_SHELL_CALL_ITEM_ID_KEY
+from agent_framework_openai._chat_client import OPENAI_LOCAL_SHELL_CALL_ITEM_ID_KEY, RawOpenAIChatClient
 from agent_framework_openai._exceptions import OpenAIContentFilterException
 
 skip_if_openai_integration_tests_disabled = pytest.mark.skipif(
@@ -192,6 +192,26 @@ def test_init_uses_explicit_parameters() -> None:
     assert "compaction_strategy" in signature.parameters
     assert "tokenizer" in signature.parameters
     assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def test_raw_openai_chat_client_init_uses_explicit_parameters() -> None:
+    signature = inspect.signature(RawOpenAIChatClient.__init__)
+
+    assert "additional_properties" in signature.parameters
+    assert "compaction_strategy" in signature.parameters
+    assert "tokenizer" in signature.parameters
+    assert "timeout" in signature.parameters
+    assert all(parameter.kind != inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def test_raw_openai_chat_client_accepts_preconfigured_client_with_timeout() -> None:
+    """Test that timeout is accepted without error when async_client is pre-provided."""
+
+    mock_client = MagicMock(spec=AsyncOpenAI)
+    mock_client.timeout = 5.0
+
+    client = RawOpenAIChatClient(async_client=mock_client, timeout=30.0)
+    assert client is not None
 
 
 def test_openai_chat_client_supports_all_tool_protocols() -> None:

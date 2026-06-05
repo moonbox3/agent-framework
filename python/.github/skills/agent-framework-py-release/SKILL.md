@@ -55,8 +55,8 @@ If the user states target versions or a date explicitly, use exactly what they s
 ### 1. Orient and create branch
 
 ```bash
-git fetch origin main --quiet
-git fetch upstream main --quiet 2>/dev/null || true
+git fetch origin main --tags --quiet
+git fetch upstream main --tags --quiet 2>/dev/null || true
 git status
 ```
 
@@ -77,7 +77,10 @@ Watch for: new packages added since the last release, lifecycle transitions (alp
 Use the LATEST released tag as the compare base:
 
 ```bash
-LAST_RELEASED_TAG=$(git tag -l 'python-[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+LAST_RELEASED_TAG=$(
+  git tag -l 'python-[0-9]*.[0-9]*.[0-9]*' \
+    | uv run --directory python python -c 'import sys; tags=[t.strip() for t in sys.stdin if t.strip()]; print(max(tags, key=lambda t: tuple(map(int, t[7:].split(".")))))'
+)
 echo "Compare base: $LAST_RELEASED_TAG"
 ```
 
@@ -116,7 +119,7 @@ git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main -- python/pack
 
 # Root-level files (drive a root agent-framework entry if substantive)
 git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main \
-  -- python/pyproject.toml python/agent_framework/ python/README.md \
+  -- python/pyproject.toml python/agent_framework_meta/ python/README.md \
   2>/dev/null | grep -v '^$' | sort -u
 ```
 
@@ -132,7 +135,7 @@ git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main \
 | Package-local samples (alpha packages only, before promotion) | **Yes** for alpha; samples ship with the alpha package |
 | Repo infra touching the package dir (CI config, lint config) | No — record under `- **tests**:`, `- **samples**:`, or `- **docs**:` instead |
 
-Root `agent-framework` is touched when `python/pyproject.toml`, `python/agent_framework/` (if present), or root `README.md` substantive content changed.
+Root `agent-framework` is touched when `python/pyproject.toml`, `python/agent_framework_meta/`, or root `README.md` substantive content changed.
 
 ### 4. Draft CHANGELOG entries (THIS DRIVES THE BUMP LIST)
 
@@ -167,25 +170,40 @@ Locate `## [Unreleased]` and the top existing release header. INSERT a new secti
 - Root package changes: use `- **agent-framework**: ...`
 - Test/sample/repo infra: `- **tests**: ...`, `- **samples**: ...`, `- **docs**: ...` (these do not drive package bumps)
 
-**Once entries are drafted, the set of `**agent-framework-<pkg>**` mentions IS the bump list.** Anything not mentioned does not bump.
+**Once entries are drafted, the set of `**agent-framework-<pkg>**` and root `**agent-framework**` mentions IS the bump list.** Anything not mentioned does not bump.
 
 #### 4a. Reconcile mentions against the touched-package set (DO NOT SKIP)
 
 Before moving on, prove that every ship-affecting touched package has at least one CHANGELOG entry. A package whose code changed but is missing from CHANGELOG will NOT bump — and the fix will not ship to PyPI consumers.
 
 ```bash
-# 1. Touched ship-affecting packages (from step 3a)
-TOUCHED=$(git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main -- python/packages/ \
+# 1. Touched ship-affecting packages and root package files (from step 3a)
+TOUCHED_PACKAGES=$(git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main -- python/packages/ \
   | grep '^python/packages/' \
   | sed 's|^python/packages/||' \
   | awk -F/ '{print $1}' \
   | sort -u)
 
+ROOT_TOUCHED=$(git log --name-only --format='' ${LAST_RELEASED_TAG}..origin/main \
+  -- python/pyproject.toml python/agent_framework_meta/ python/README.md \
+  2>/dev/null | grep -v '^$' | sort -u)
+
+TOUCHED=$(
+  {
+    if [ -n "$TOUCHED_PACKAGES" ]; then echo "$TOUCHED_PACKAGES"; fi
+    if [ -n "$ROOT_TOUCHED" ]; then echo "agent-framework"; fi
+  } | sort -u
+)
+
 # 2. Packages mentioned in the new CHANGELOG section
 # (Extract from the section you just drafted — adjust the awk range to the new section's bounds)
-MENTIONED=$(awk '/^## \[<release-label>\]/,/^## \[/' python/CHANGELOG.md \
-  | grep -oE '\*\*agent-framework-[a-z0-9_-]+\*\*' \
-  | sed 's/\*\*agent-framework-//;s/\*\*//' \
+MENTIONED=$(awk '
+  /^## \[<release-label>\]/ { in_section=1; next }
+  in_section && /^## \[/ { exit }
+  in_section { print }
+' python/CHANGELOG.md \
+  | grep -oE '\*\*agent-framework(-[a-z0-9_-]+)?\*\*' \
+  | sed 's/\*\*//g;s/^agent-framework-//' \
   | sort -u)
 
 # 3. Diff — anything in TOUCHED but missing from MENTIONED is a gap
@@ -213,28 +231,31 @@ For prerelease-only releases (no released-tier bump this cycle), footer links do
 
 ### 5. Apply bumps per tier
 
-For each package in the bump list, choose the rule for its current tier. Use anchored `sed` (`^version = "..."$`) so only the project's own version matches.
+For each package in the bump list, choose the rule for its current tier. Use anchored `sed` (`^version = "..."$`) so only the project's own version matches. Use `sed -i.bak` plus backup cleanup for portable in-place edits across macOS/BSD sed and GNU sed.
 
 **Released tier (per-package semver):**
 
 ```bash
 # Example: openai goes 1.6.0 -> 1.6.1 (PATCH); core stays
-sed -i '' 's/^version = "1.6.0"$/version = "1.6.1"/' python/packages/openai/pyproject.toml
+sed -i.bak 's/^version = "1.6.0"$/version = "1.6.1"/' python/packages/openai/pyproject.toml
+rm python/packages/openai/pyproject.toml.bak
 ```
 
 **Root `agent-framework` (only when `core` bumps, OR for its own changes):**
 
 ```bash
-sed -i '' 's/^version = "${OLD_ROOT}"$/version = "${NEW_ROOT}"/' python/pyproject.toml
+sed -i.bak "s/^version = \"${OLD_ROOT}\"$/version = \"${NEW_ROOT}\"/" python/pyproject.toml
 # AND keep the exact pin in sync with core
-sed -i '' "s/agent-framework-core\\[all\\]==${OLD_CORE}/agent-framework-core[all]==${NEW_CORE}/" python/pyproject.toml
+sed -i.bak "s/agent-framework-core\\[all\\]==${OLD_CORE}/agent-framework-core[all]==${NEW_CORE}/" python/pyproject.toml
+rm python/pyproject.toml.bak
 ```
 
 **RC tier (counter increment):**
 
 ```bash
 # ag-ui goes 1.0.0rc3 -> 1.0.0rc4 only because it has a CHANGELOG entry
-sed -i '' 's/^version = "1.0.0rc3"$/version = "1.0.0rc4"/' python/packages/ag-ui/pyproject.toml
+sed -i.bak 's/^version = "1.0.0rc3"$/version = "1.0.0rc4"/' python/packages/ag-ui/pyproject.toml
+rm python/packages/ag-ui/pyproject.toml.bak
 ```
 
 **Alpha/Beta tier (new date stamp):**
@@ -246,7 +267,9 @@ NEW_DATE=260528
 # Only the packages with CHANGELOG entries get the new stamp.
 # Example: anthropic and bedrock had entries, others did not.
 for pkg in anthropic bedrock; do
-  sed -i '' "s/1\\.0\\.0b${OLD_DATE}/1.0.0b${NEW_DATE}/g" "python/packages/$pkg/pyproject.toml"
+  file="python/packages/$pkg/pyproject.toml"
+  sed -i.bak "s/1\\.0\\.0b${OLD_DATE}/1.0.0b${NEW_DATE}/g" "$file"
+  rm "${file}.bak"
 done
 ```
 
@@ -264,8 +287,9 @@ Only relevant when `core` itself bumped this cycle. Two policies, pick one expli
 Preserve `gemini`'s `<2.0` cosmetic upper bound — replace ONLY the `>=OLD` half:
 
 ```bash
-sed -i '' "s/agent-framework-core>=${OLD_CORE}/agent-framework-core>=${NEW_CORE}/" \
-  python/packages/<pkg>/pyproject.toml
+file="python/packages/<pkg>/pyproject.toml"
+sed -i.bak "s/agent-framework-core>=${OLD_CORE}/agent-framework-core>=${NEW_CORE}/" "$file"
+rm "${file}.bak"
 ```
 
 If `core` did not bump this cycle, do not touch floors.

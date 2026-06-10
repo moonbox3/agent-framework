@@ -12,6 +12,7 @@ from ag_ui.core import (
     BaseEvent,
     MessagesSnapshotEvent,
     RunErrorEvent,
+    RunFinishedEvent,
     RunStartedEvent,
     StateSnapshotEvent,
     TextMessageContentEvent,
@@ -50,6 +51,7 @@ class _WorkflowSnapshotBuilder:
         self._tool_call_message: dict[str, Any] | None = None
         self._tool_calls_by_id: dict[str, dict[str, Any]] = {}
         self.state: dict[str, Any] | None = None
+        self.interrupt: list[dict[str, Any]] | None = None
 
     def observe(self, event: BaseEvent) -> None:
         """Fold one replayable AG-UI event into the latest snapshot state."""
@@ -61,6 +63,12 @@ class _WorkflowSnapshotBuilder:
 
         if isinstance(event, MessagesSnapshotEvent):
             self._emitted_messages = _event_messages_to_snapshot_dicts(list(event.messages))
+            return
+
+        if isinstance(event, RunFinishedEvent):
+            interrupt = make_json_safe(getattr(event, "interrupt", None))
+            if isinstance(interrupt, list):
+                self.interrupt = [cast(dict[str, Any], item) for item in interrupt if isinstance(item, dict)]
             return
 
         if self._emitted_messages is not None:
@@ -83,7 +91,7 @@ class _WorkflowSnapshotBuilder:
         """Return the replayable thread snapshot."""
         self._flush_open_text_message()
         messages = self._emitted_messages if self._emitted_messages is not None else self._synthesized_messages
-        return AGUIThreadSnapshot(messages=messages, state=self.state)
+        return AGUIThreadSnapshot(messages=messages, state=self.state, interrupt=self.interrupt)
 
     def _observe_text_start(self, event: TextMessageStartEvent) -> None:
         if self._open_text_message is not None and self._open_text_message.get("id") != event.message_id:

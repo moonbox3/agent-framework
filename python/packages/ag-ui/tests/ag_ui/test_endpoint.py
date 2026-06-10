@@ -877,6 +877,117 @@ async def test_agent_endpoint_deduplicates_full_history_and_merges_fresh_state(s
     assert third_state_snapshots[0]["snapshot"] == {"recipe": "salad", "theme": "dark"}
 
 
+async def test_agent_endpoint_hydrates_interrupted_thread_without_invoking_agent(streaming_chat_client_stub):
+    """Hydrating an interrupted agent replays state, messages, and interrupt metadata without resuming it."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(
+            contents=[
+                Content.from_function_call(
+                    name="draft_steps",
+                    call_id="draft-call",
+                    arguments=json.dumps({"steps": [{"description": "Draft outline"}]}),
+                )
+            ],
+            role="assistant",
+        )
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"steps": {"type": "array", "items": {"type": "object"}}},
+        predict_state_config={"steps": {"tool": "draft_steps", "tool_argument": "steps"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "agent-thread",
+            "messages": [{"role": "user", "content": "Draft the plan"}],
+            "state": {"steps": []},
+        },
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+    first_events = _decode_sse_events(first_response)
+    first_finished = [event for event in first_events if event.get("type") == "RUN_FINISHED"]
+    assert first_finished[-1]["interrupt"][0]["value"]["function_call"]["call_id"] == "draft-call"
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "agent-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    assert [event.get("type") for event in events] == [
+        "RUN_STARTED",
+        "STATE_SNAPSHOT",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+    ]
+    assert events[1]["snapshot"] == {"steps": [{"description": "Draft outline"}]}
+    assert events[-1]["interrupt"][0]["value"]["function_call"]["name"] == "draft_steps"
+
+
+async def test_agent_endpoint_run_error_does_not_overwrite_previous_snapshot(streaming_chat_client_stub):
+    """A failing agent turn leaves the last good AG-UI Thread Snapshot available for hydration."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        if call_count == 1:
+            yield ChatResponseUpdate(contents=[Content.from_text(text="Stable reply")])
+            return
+        raise RuntimeError("agent exploded")
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={"thread_id": "agent-thread", "messages": [{"role": "user", "content": "Start"}]},
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    error_response = client.post(
+        "/snapshots",
+        json={"thread_id": "agent-thread", "messages": [{"role": "user", "content": "Break the run"}]},
+    )
+    assert error_response.status_code == 200
+    assert call_count == 2
+    assert "RUN_ERROR" in [event.get("type") for event in _decode_sse_events(error_response)]
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "agent-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 2
+    messages = _latest_messages_snapshot(hydrate_response)
+    assert any(message.get("role") == "assistant" and message.get("content") == "Stable reply" for message in messages)
+    assert not any(message.get("content") == "Break the run" for message in messages)
+
+
 async def test_workflow_endpoint_hydrates_emitted_snapshots_without_invoking_workflow():
     """A workflow Hydrate Request replays emitted snapshots without invoking the wrapped workflow."""
     app = FastAPI()
@@ -995,6 +1106,111 @@ async def test_workflow_endpoint_hydrates_synthesized_text_and_tool_snapshot():
         message.get("role") == "tool" and message.get("toolCallId") == "call-1" and message.get("content") == "72F"
         for message in messages
     )
+
+
+async def test_workflow_endpoint_hydrates_interrupted_thread_without_invoking_workflow():
+    """Hydrating an interrupted workflow replays state, messages, and interrupt metadata without resuming it."""
+    app = FastAPI()
+    call_count = 0
+
+    @executor(id="requester")
+    async def requester(message: Any, ctx: WorkflowContext) -> None:
+        nonlocal call_count
+        del message
+        call_count += 1
+        await ctx.yield_output(StateSnapshotEvent(snapshot={"step": "approval"}))
+        await ctx.request_info(
+            {"message": "Approve workflow step", "options": ["Approve", "Reject"]},
+            dict,
+            request_id="workflow-approval",
+        )
+
+    workflow = WorkflowBuilder(start_executor=requester).build()
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        workflow,
+        path="/workflow-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/workflow-snapshots",
+        json={"thread_id": "workflow-thread", "messages": [{"role": "user", "content": "Start workflow"}]},
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+    first_finished = [event for event in _decode_sse_events(first_response) if event.get("type") == "RUN_FINISHED"]
+    assert first_finished[-1]["interrupt"][0]["id"] == "workflow-approval"
+
+    hydrate_response = client.post("/workflow-snapshots", json={"thread_id": "workflow-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    assert [event.get("type") for event in events] == [
+        "RUN_STARTED",
+        "STATE_SNAPSHOT",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+    ]
+    assert events[1]["snapshot"] == {"step": "approval"}
+    assert events[-1]["interrupt"][0]["id"] == "workflow-approval"
+    assert events[-1]["interrupt"][0]["value"]["message"] == "Approve workflow step"
+
+
+async def test_workflow_endpoint_run_error_does_not_overwrite_previous_snapshot():
+    """A failing workflow turn leaves the last good AG-UI Thread Snapshot available for hydration."""
+    app = FastAPI()
+    call_count = 0
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext) -> None:
+        nonlocal call_count
+        del message
+        call_count += 1
+        if call_count == 1:
+            await ctx.yield_output("Stable workflow reply")
+            return
+        raise RuntimeError("workflow exploded")
+
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        workflow,
+        path="/workflow-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/workflow-snapshots",
+        json={"thread_id": "workflow-thread", "messages": [{"role": "user", "content": "Start workflow"}]},
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    error_response = client.post(
+        "/workflow-snapshots",
+        json={"thread_id": "workflow-thread", "messages": [{"role": "user", "content": "Break workflow"}]},
+    )
+    assert error_response.status_code == 200
+    assert call_count == 2
+    assert "RUN_ERROR" in [event.get("type") for event in _decode_sse_events(error_response)]
+
+    hydrate_response = client.post("/workflow-snapshots", json={"thread_id": "workflow-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 2
+    messages = _latest_messages_snapshot(hydrate_response)
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == "Stable workflow reply" for message in messages
+    )
+    assert not any(message.get("content") == "Break workflow" for message in messages)
 
 
 async def test_endpoint_encoding_failure_emits_run_error():

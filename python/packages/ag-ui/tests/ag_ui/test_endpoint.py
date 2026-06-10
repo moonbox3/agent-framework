@@ -30,6 +30,14 @@ def _decode_sse_events(response: Any) -> list[dict[str, Any]]:
     return [json.loads(line[6:]) for line in content.splitlines() if line.startswith("data: ")]
 
 
+def _latest_messages_snapshot(response: Any) -> list[dict[str, Any]]:
+    snapshots = [
+        event["messages"] for event in _decode_sse_events(response) if event.get("type") == "MESSAGES_SNAPSHOT"
+    ]
+    assert snapshots
+    return snapshots[-1]
+
+
 @pytest.fixture
 def build_chat_client(streaming_chat_client_stub, stream_from_updates_fixture):
     """Create a typed chat client stub for endpoint tests."""
@@ -729,6 +737,144 @@ async def test_agent_endpoint_hydrates_snapshots_by_scope_and_thread(streaming_c
     ]
     assert tenant_a_events[1]["snapshot"] == {"tenant": "tenant-a"}
     assert any(message.get("content") == "Tenant A reply" for message in tenant_a_events[2]["messages"])
+
+
+async def test_agent_endpoint_prepends_stored_snapshot_for_new_user_turn(streaming_chat_client_stub):
+    """A normal agent turn with a known thread id prepends stored history and keeps the new user input."""
+    app = FastAPI()
+    captured_messages: list[list[tuple[str, str]]] = []
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del options, kwargs
+        captured_messages.append([(message.role, message.text) for message in messages])
+        yield ChatResponseUpdate(contents=[Content.from_text(text=f"Reply {len(captured_messages)}")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"recipe": {"type": "string"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"id": "user-1", "role": "user", "content": "Plan dinner"}],
+            "state": {"recipe": "pasta"},
+        },
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"id": "user-2", "role": "user", "content": "Add dessert"}],
+        },
+    )
+
+    assert second_response.status_code == 200
+    assert len(captured_messages) == 2
+    assert captured_messages[1] == [
+        ("user", "Plan dinner"),
+        ("assistant", "Reply 1"),
+        (
+            "system",
+            (
+                "Current state of the application:\n"
+                '{\n  "recipe": "pasta"\n}\n\n'
+                "When modifying state, you MUST include ALL existing data plus your changes.\n"
+                "For example, if adding one new item to a list, include ALL existing items PLUS the new item.\n"
+                "Never replace existing data - always preserve and append or merge."
+            ),
+        ),
+        ("user", "Add dessert"),
+    ]
+    events = _decode_sse_events(second_response)
+    state_snapshots = [event for event in events if event.get("type") == "STATE_SNAPSHOT"]
+    assert state_snapshots[0]["snapshot"] == {"recipe": "pasta"}
+
+
+async def test_agent_endpoint_deduplicates_full_history_and_merges_fresh_state(streaming_chat_client_stub):
+    """Stored prior history is authoritative while incoming full history and fresh state remain supported."""
+    app = FastAPI()
+    captured_messages: list[list[tuple[str, str]]] = []
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del options, kwargs
+        captured_messages.append([(message.role, message.text) for message in messages])
+        yield ChatResponseUpdate(contents=[Content.from_text(text=f"Reply {len(captured_messages)}")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"recipe": {"type": "string"}, "theme": {"type": "string"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"id": "user-1", "role": "user", "content": "Plan dinner"}],
+            "state": {"recipe": "pasta", "theme": "dark"},
+        },
+    )
+    assert first_response.status_code == 200
+    first_snapshot = _latest_messages_snapshot(first_response)
+
+    second_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [*first_snapshot, {"id": "user-2", "role": "user", "content": "Add dessert"}],
+            "state": {"recipe": "salad"},
+        },
+    )
+    assert second_response.status_code == 200
+
+    second_non_system_messages = [message for message in captured_messages[1] if message[0] != "system"]
+    assert second_non_system_messages == [
+        ("user", "Plan dinner"),
+        ("assistant", "Reply 1"),
+        ("user", "Add dessert"),
+    ]
+    second_events = _decode_sse_events(second_response)
+    second_state_snapshots = [event for event in second_events if event.get("type") == "STATE_SNAPSHOT"]
+    assert second_state_snapshots[0]["snapshot"] == {"recipe": "salad", "theme": "dark"}
+
+    second_snapshot = _latest_messages_snapshot(second_response)
+    conflicting_history = [message.copy() for message in second_snapshot]
+    conflicting_history[0]["content"] = "Tampered dinner plan"
+    conflicting_history[1]["content"] = "Tampered reply"
+    third_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [*conflicting_history, {"id": "user-3", "role": "user", "content": "Pick wine"}],
+        },
+    )
+    assert third_response.status_code == 200
+
+    third_texts = [text for role, text in captured_messages[2] if role != "system"]
+    assert third_texts == ["Plan dinner", "Reply 1", "Add dessert", "Reply 2", "Pick wine"]
+    assert "Tampered dinner plan" not in third_texts
+    assert "Tampered reply" not in third_texts
+    third_state_snapshots = [
+        event for event in _decode_sse_events(third_response) if event.get("type") == "STATE_SNAPSHOT"
+    ]
+    assert third_state_snapshots[0]["snapshot"] == {"recipe": "salad", "theme": "dark"}
 
 
 async def test_endpoint_encoding_failure_emits_run_error():

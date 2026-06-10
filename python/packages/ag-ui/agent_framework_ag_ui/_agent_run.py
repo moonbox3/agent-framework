@@ -4,6 +4,7 @@
 
 from __future__ import annotations  # noqa: I001
 
+import copy
 import json
 import logging
 import uuid
@@ -40,7 +41,7 @@ from agent_framework._tools import (
 from agent_framework._types import ResponseStream
 from agent_framework.exceptions import AgentInvalidResponseException
 
-from ._message_adapters import normalize_agui_input_messages
+from ._message_adapters import agui_messages_to_snapshot_format, normalize_agui_input_messages
 from ._orchestration._predictive_state import PredictiveStateHandler
 from ._orchestration._tooling import collect_server_tools, merge_tools, register_additional_client_tools
 from ._run_common import (
@@ -719,6 +720,56 @@ def _event_messages_to_snapshot_dicts(messages: list[Any]) -> list[dict[str, Any
     return [cast(dict[str, Any], message) for message in safe_messages if isinstance(message, dict)]
 
 
+def _canonical_snapshot_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an AG-UI message for identity comparison without generated ids."""
+    normalized_message = agui_messages_to_snapshot_format([copy.deepcopy(message)])[0]
+    normalized_message.pop("id", None)
+    return cast(dict[str, Any], make_json_safe(normalized_message))
+
+
+def _snapshot_messages_match(stored_message: dict[str, Any], incoming_message: dict[str, Any]) -> bool:
+    """Return whether an incoming message already represents the stored snapshot message."""
+    stored_id = stored_message.get("id")
+    incoming_id = incoming_message.get("id")
+    if stored_id and incoming_id:
+        return str(stored_id) == str(incoming_id)
+    return _canonical_snapshot_message(stored_message) == _canonical_snapshot_message(incoming_message)
+
+
+def _latest_user_message_index(messages: list[dict[str, Any]]) -> int | None:
+    """Find the newest incoming user message index."""
+    for index in range(len(messages) - 1, -1, -1):
+        if normalize_agui_role(messages[index].get("role", "user")) == "user":
+            return index
+    return None
+
+
+def _reconstruct_messages_from_thread_snapshot(
+    *,
+    stored_messages: list[dict[str, Any]],
+    incoming_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Combine backend-owned prior history with the request-owned new user turn."""
+    if not stored_messages or not incoming_messages:
+        return incoming_messages
+
+    incoming_suffix: list[dict[str, Any]]
+    if len(incoming_messages) >= len(stored_messages) and all(
+        _snapshot_messages_match(stored_message, incoming_message)
+        for stored_message, incoming_message in zip(stored_messages, incoming_messages)
+    ):
+        incoming_suffix = incoming_messages[len(stored_messages) :]
+    else:
+        latest_user_index = _latest_user_message_index(incoming_messages)
+        if latest_user_index is None:
+            return incoming_messages
+        incoming_suffix = incoming_messages[latest_user_index:]
+
+    return [copy.deepcopy(message) for message in stored_messages] + [
+        copy.deepcopy(message) for message in incoming_suffix
+    ]
+
+
 async def _hydrate_thread_snapshot(
     *,
     config: AgentConfig,
@@ -792,13 +843,41 @@ async def run_agent_stream(
     run_id = input_data.get("run_id") or input_data.get("runId") or str(uuid.uuid4())
     snapshot_scope = cast(str | None, input_data.get(_SNAPSHOT_SCOPE_INPUT_KEY))
 
-    # Initialize flow state with schema defaults
-    flow = FlowState()
-    if input_data.get("state"):
-        flow.current_state = dict(input_data["state"])
-
     state_schema = cast(dict[str, Any], getattr(config, "state_schema", {}) or {})
     predict_state_config = cast(dict[str, dict[str, str]], getattr(config, "predict_state_config", {}) or {})
+
+    # Normalize messages
+    available_interrupts = input_data.get("available_interrupts") or input_data.get("availableInterrupts")
+    raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
+    resume_payload = _extract_resume_payload(input_data)
+    if config.snapshot_store is not None and snapshot_scope is not None and not raw_messages and resume_payload is None:
+        async for event in _hydrate_thread_snapshot(
+            config=config,
+            scope=snapshot_scope,
+            thread_id=thread_id,
+            run_id=run_id,
+        ):
+            yield event
+        return
+
+    stored_snapshot: AGUIThreadSnapshot | None = None
+    if config.snapshot_store is not None and snapshot_scope is not None and resume_payload is None:
+        stored_snapshot = await config.snapshot_store.get(scope=snapshot_scope, thread_id=thread_id)
+        if stored_snapshot is not None:
+            raw_messages = _reconstruct_messages_from_thread_snapshot(
+                stored_messages=stored_snapshot.messages,
+                incoming_messages=raw_messages,
+            )
+
+    # Initialize flow state with stored state plus request-provided overrides.
+    flow = FlowState()
+    request_state = input_data.get("state")
+    if stored_snapshot is not None and stored_snapshot.state is not None:
+        flow.current_state = dict(stored_snapshot.state)
+        if isinstance(request_state, dict):
+            flow.current_state.update(request_state)
+    elif isinstance(request_state, dict):
+        flow.current_state = dict(request_state)
 
     # Apply schema defaults for missing state keys
     if state_schema:
@@ -817,20 +896,6 @@ async def run_agent_stream(
             predict_state_config=predict_state_config,
             current_state=flow.current_state,
         )
-
-    # Normalize messages
-    available_interrupts = input_data.get("available_interrupts") or input_data.get("availableInterrupts")
-    raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
-    resume_payload = _extract_resume_payload(input_data)
-    if config.snapshot_store is not None and snapshot_scope is not None and not raw_messages and resume_payload is None:
-        async for event in _hydrate_thread_snapshot(
-            config=config,
-            scope=snapshot_scope,
-            thread_id=thread_id,
-            run_id=run_id,
-        ):
-            yield event
-        return
 
     resume_messages = _resume_to_tool_messages(resume_payload)
     if available_interrupts:

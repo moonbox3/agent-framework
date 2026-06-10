@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 import pytest
-from ag_ui.core import RunStartedEvent
+from ag_ui.core import MessagesSnapshotEvent, RunStartedEvent, StateSnapshotEvent
 from agent_framework import (
     Agent,
     ChatResponseUpdate,
@@ -875,6 +875,126 @@ async def test_agent_endpoint_deduplicates_full_history_and_merges_fresh_state(s
         event for event in _decode_sse_events(third_response) if event.get("type") == "STATE_SNAPSHOT"
     ]
     assert third_state_snapshots[0]["snapshot"] == {"recipe": "salad", "theme": "dark"}
+
+
+async def test_workflow_endpoint_hydrates_emitted_snapshots_without_invoking_workflow():
+    """A workflow Hydrate Request replays emitted snapshots without invoking the wrapped workflow."""
+    app = FastAPI()
+    call_count = 0
+
+    @executor(id="snapshotter")
+    async def snapshotter(message: Any, ctx: WorkflowContext) -> None:
+        nonlocal call_count
+        del message
+        call_count += 1
+        await ctx.yield_output(StateSnapshotEvent(snapshot={"active_agent": "flights"}))
+        await ctx.yield_output(
+            MessagesSnapshotEvent(
+                messages=[{"id": "assistant-snapshot", "role": "assistant", "content": "Stored workflow reply"}]
+            )
+        )
+
+    workflow = WorkflowBuilder(start_executor=snapshotter).build()
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        workflow,
+        path="/workflow-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/workflow-snapshots",
+        json={"thread_id": "workflow-thread", "messages": [{"role": "user", "content": "Start workflow"}]},
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    hydrate_response = client.post("/workflow-snapshots", json={"thread_id": "workflow-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    assert [event.get("type") for event in events] == [
+        "RUN_STARTED",
+        "STATE_SNAPSHOT",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+    ]
+    assert events[1]["snapshot"] == {"active_agent": "flights"}
+    assert events[2]["messages"] == [
+        {"id": "assistant-snapshot", "role": "assistant", "content": "Stored workflow reply"}
+    ]
+
+
+async def test_workflow_endpoint_hydrates_synthesized_text_and_tool_snapshot():
+    """Workflow text and tool output are synthesized into replayable snapshot messages."""
+    app = FastAPI()
+    call_count = 0
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext) -> None:
+        nonlocal call_count
+        del message
+        call_count += 1
+        await ctx.yield_output("Workflow answer")
+        await ctx.yield_output(
+            [
+                Content.from_function_call(
+                    name="lookup_weather",
+                    call_id="call-1",
+                    arguments='{"city":"SF"}',
+                ),
+                Content.from_function_result(call_id="call-1", result="72F"),
+            ]
+        )
+        await ctx.yield_output({"diagnostic": "not persisted"})
+
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        workflow,
+        path="/workflow-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/workflow-snapshots",
+        json={
+            "thread_id": "workflow-thread",
+            "messages": [{"id": "user-1", "role": "user", "content": "Start workflow"}],
+        },
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    hydrate_response = client.post("/workflow-snapshots", json={"thread_id": "workflow-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    assert [event.get("type") for event in events] == ["RUN_STARTED", "MESSAGES_SNAPSHOT", "RUN_FINISHED"]
+    messages = events[1]["messages"]
+    assert any(message.get("role") == "user" and message.get("content") == "Start workflow" for message in messages)
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == "Workflow answer" for message in messages
+    )
+    tool_call_messages = [
+        message for message in messages if message.get("role") == "assistant" and message.get("toolCalls")
+    ]
+    assert len(tool_call_messages) == 1
+    tool_call = tool_call_messages[0]["toolCalls"][0]
+    assert tool_call["id"] == "call-1"
+    assert tool_call["function"] == {"name": "lookup_weather", "arguments": '{"city":"SF"}'}
+    assert any(
+        message.get("role") == "tool" and message.get("toolCallId") == "call-1" and message.get("content") == "72F"
+        for message in messages
+    )
 
 
 async def test_endpoint_encoding_failure_emits_run_error():

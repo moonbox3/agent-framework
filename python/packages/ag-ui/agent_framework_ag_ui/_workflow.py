@@ -6,15 +6,172 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Callable
-from typing import Any
+from typing import Any, cast
 
-from ag_ui.core import BaseEvent
+from ag_ui.core import (
+    BaseEvent,
+    MessagesSnapshotEvent,
+    RunErrorEvent,
+    RunStartedEvent,
+    StateSnapshotEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
+)
 from agent_framework import Workflow
 
-from ._snapshots import AGUIThreadSnapshotStore
+from ._message_adapters import agui_messages_to_snapshot_format
+from ._run_common import _build_run_finished_event, _extract_resume_payload
+from ._snapshots import _SNAPSHOT_SCOPE_INPUT_KEY, AGUIThreadSnapshot, AGUIThreadSnapshotStore
+from ._utils import generate_event_id, make_json_safe
 from ._workflow_run import run_workflow_stream
 
 WorkflowFactory = Callable[[str], Workflow]
+
+
+def _event_messages_to_snapshot_dicts(messages: list[Any]) -> list[dict[str, Any]]:
+    """Convert AG-UI message event models to plain snapshot dictionaries."""
+    safe_messages = make_json_safe(messages)
+    if not isinstance(safe_messages, list):
+        return []
+    return [cast(dict[str, Any], message) for message in safe_messages if isinstance(message, dict)]
+
+
+class _WorkflowSnapshotBuilder:
+    """Capture replayable workflow protocol output without retaining raw events."""
+
+    def __init__(self, raw_messages: list[dict[str, Any]]) -> None:
+        self._synthesized_messages = agui_messages_to_snapshot_format(raw_messages)
+        self._emitted_messages: list[dict[str, Any]] | None = None
+        self._open_text_message: dict[str, Any] | None = None
+        self._tool_call_message: dict[str, Any] | None = None
+        self._tool_calls_by_id: dict[str, dict[str, Any]] = {}
+        self.state: dict[str, Any] | None = None
+
+    def observe(self, event: BaseEvent) -> None:
+        """Fold one replayable AG-UI event into the latest snapshot state."""
+        if isinstance(event, StateSnapshotEvent):
+            state = make_json_safe(event.snapshot)
+            if isinstance(state, dict):
+                self.state = cast(dict[str, Any], state)
+            return
+
+        if isinstance(event, MessagesSnapshotEvent):
+            self._emitted_messages = _event_messages_to_snapshot_dicts(list(event.messages))
+            return
+
+        if self._emitted_messages is not None:
+            return
+
+        if isinstance(event, TextMessageStartEvent):
+            self._observe_text_start(event)
+        elif isinstance(event, TextMessageContentEvent):
+            self._observe_text_content(event)
+        elif isinstance(event, TextMessageEndEvent):
+            self._observe_text_end(event)
+        elif isinstance(event, ToolCallStartEvent):
+            self._observe_tool_call_start(event)
+        elif isinstance(event, ToolCallArgsEvent):
+            self._observe_tool_call_args(event)
+        elif isinstance(event, ToolCallResultEvent):
+            self._observe_tool_call_result(event)
+
+    def build(self) -> AGUIThreadSnapshot:
+        """Return the replayable thread snapshot."""
+        self._flush_open_text_message()
+        messages = self._emitted_messages if self._emitted_messages is not None else self._synthesized_messages
+        return AGUIThreadSnapshot(messages=messages, state=self.state)
+
+    def _observe_text_start(self, event: TextMessageStartEvent) -> None:
+        if self._open_text_message is not None and self._open_text_message.get("id") != event.message_id:
+            self._flush_open_text_message()
+        self._open_text_message = {"id": event.message_id, "role": event.role, "content": ""}
+
+    def _observe_text_content(self, event: TextMessageContentEvent) -> None:
+        if self._open_text_message is None or self._open_text_message.get("id") != event.message_id:
+            self._open_text_message = {"id": event.message_id, "role": "assistant", "content": ""}
+        self._open_text_message["content"] = f"{self._open_text_message.get('content', '')}{event.delta}"
+
+    def _observe_text_end(self, event: TextMessageEndEvent) -> None:
+        if self._open_text_message is None or self._open_text_message.get("id") != event.message_id:
+            return
+        self._flush_open_text_message()
+
+    def _observe_tool_call_start(self, event: ToolCallStartEvent) -> None:
+        parent_message_id = event.parent_message_id
+        if (
+            self._open_text_message is not None
+            and parent_message_id is not None
+            and self._open_text_message.get("id") == parent_message_id
+            and self._open_text_message.get("content")
+        ):
+            self._open_text_message["id"] = generate_event_id()
+        self._flush_open_text_message()
+        if self._tool_call_message is None or (
+            parent_message_id is not None and self._tool_call_message.get("id") != parent_message_id
+        ):
+            self._tool_call_message = {
+                "id": parent_message_id or generate_event_id(),
+                "role": "assistant",
+                "tool_calls": [],
+            }
+            self._synthesized_messages.append(self._tool_call_message)
+
+        tool_call = {
+            "id": event.tool_call_id,
+            "type": "function",
+            "function": {"name": event.tool_call_name, "arguments": ""},
+        }
+        cast(list[dict[str, Any]], self._tool_call_message["tool_calls"]).append(tool_call)
+        self._tool_calls_by_id[event.tool_call_id] = tool_call
+
+    def _observe_tool_call_args(self, event: ToolCallArgsEvent) -> None:
+        tool_call = self._tool_calls_by_id.get(event.tool_call_id)
+        if tool_call is None:
+            return
+        function_payload = cast(dict[str, Any], tool_call["function"])
+        function_payload["arguments"] = f"{function_payload.get('arguments', '')}{event.delta}"
+
+    def _observe_tool_call_result(self, event: ToolCallResultEvent) -> None:
+        self._synthesized_messages.append(
+            {
+                "id": event.message_id,
+                "role": "tool",
+                "toolCallId": event.tool_call_id,
+                "content": event.content,
+            }
+        )
+
+    def _flush_open_text_message(self) -> None:
+        if self._open_text_message is None:
+            return
+        if self._open_text_message.get("content"):
+            self._synthesized_messages.append(self._open_text_message)
+        self._open_text_message = None
+
+
+async def _hydrate_workflow_thread_snapshot(
+    *,
+    snapshot_store: AGUIThreadSnapshotStore,
+    scope: str,
+    thread_id: str,
+    run_id: str,
+) -> AsyncGenerator[BaseEvent]:
+    """Replay the latest stored workflow AG-UI Thread Snapshot without invoking the workflow."""
+    yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+    snapshot = await snapshot_store.get(scope=scope, thread_id=thread_id)
+    if snapshot is None:
+        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
+        return
+
+    if snapshot.state is not None:
+        yield StateSnapshotEvent(snapshot=snapshot.state)
+    if snapshot.messages:
+        yield MessagesSnapshotEvent(messages=snapshot.messages)  # type: ignore[arg-type]
+    yield _build_run_finished_event(run_id=run_id, thread_id=thread_id, interrupts=snapshot.interrupt)
 
 
 class AgentFrameworkWorkflow:
@@ -90,6 +247,44 @@ class AgentFrameworkWorkflow:
         Subclasses may override this to provide custom AG-UI streams.
         """
         thread_id = self._thread_id_from_input(input_data)
+        run_id = str(input_data.get("run_id") or input_data.get("runId") or uuid.uuid4())
+        snapshot_scope = cast(str | None, input_data.get(_SNAPSHOT_SCOPE_INPUT_KEY))
+        raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
+        resume_payload = _extract_resume_payload(input_data)
+        snapshot_store = self.snapshot_store
+
+        if snapshot_store is not None and snapshot_scope is not None and not raw_messages and resume_payload is None:
+            async for event in _hydrate_workflow_thread_snapshot(
+                snapshot_store=snapshot_store,
+                scope=snapshot_scope,
+                thread_id=thread_id,
+                run_id=run_id,
+            ):
+                yield event
+            return
+
         workflow = self._resolve_workflow(thread_id)
+        snapshot_builder = (
+            _WorkflowSnapshotBuilder(raw_messages)
+            if snapshot_store is not None and snapshot_scope is not None
+            else None
+        )
+        run_error_emitted = False
         async for event in run_workflow_stream(input_data, workflow):
+            if snapshot_builder is not None:
+                snapshot_builder.observe(event)
+            if isinstance(event, RunErrorEvent):
+                run_error_emitted = True
             yield event
+
+        if (
+            snapshot_builder is not None
+            and not run_error_emitted
+            and snapshot_store is not None
+            and snapshot_scope is not None
+        ):
+            await snapshot_store.save(
+                scope=snapshot_scope,
+                thread_id=thread_id,
+                snapshot=snapshot_builder.build(),
+            )

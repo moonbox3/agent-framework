@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import AsyncGenerator, Sequence
+from inspect import isawaitable
 from typing import Any
 
 from ag_ui.core import RunErrorEvent
@@ -17,7 +18,7 @@ from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
-from ._snapshots import AGUIThreadSnapshotStore, SnapshotScopeResolver
+from ._snapshots import _SNAPSHOT_SCOPE_INPUT_KEY, AGUIThreadSnapshotStore, SnapshotScopeResolver
 from ._types import AGUIRequest
 from ._workflow import AgentFrameworkWorkflow
 
@@ -130,6 +131,11 @@ def add_agent_framework_fastapi_endpoint(
         """
         try:
             input_data = request_body.model_dump(exclude_none=True)
+            if snapshot_scope_resolver is not None and _get_snapshot_store(protocol_runner) is not None:
+                snapshot_scope = snapshot_scope_resolver(request_body)
+                if isawaitable(snapshot_scope):
+                    snapshot_scope = await snapshot_scope
+                input_data[_SNAPSHOT_SCOPE_INPUT_KEY] = snapshot_scope
             if default_state:
                 state = input_data.setdefault("state", {})
                 for key, value in default_state.items():

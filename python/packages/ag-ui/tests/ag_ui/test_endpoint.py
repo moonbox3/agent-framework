@@ -25,6 +25,11 @@ from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
 
+def _decode_sse_events(response: Any) -> list[dict[str, Any]]:
+    content = response.content.decode("utf-8")
+    return [json.loads(line[6:]) for line in content.splitlines() if line.startswith("data: ")]
+
+
 @pytest.fixture
 def build_chat_client(streaming_chat_client_stub, stream_from_updates_fixture):
     """Create a typed chat client stub for endpoint tests."""
@@ -287,10 +292,18 @@ async def test_endpoint_response_headers(build_chat_client):
     assert response.headers["cache-control"] == "no-cache"
 
 
-async def test_endpoint_empty_messages(build_chat_client):
-    """Test endpoint with empty messages list."""
+async def test_endpoint_empty_messages(streaming_chat_client_stub):
+    """Empty messages keep the existing no-op run behavior when snapshot persistence is not configured."""
     app = FastAPI()
-    agent = Agent(name="test", instructions="Test agent", client=build_chat_client())
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Should not run")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
 
     add_agent_framework_fastapi_endpoint(app, agent, path="/empty")
 
@@ -298,6 +311,8 @@ async def test_endpoint_empty_messages(build_chat_client):
     response = client.post("/empty", json={"messages": []})
 
     assert response.status_code == 200
+    assert call_count == 0
+    assert [event.get("type") for event in _decode_sse_events(response)] == ["RUN_STARTED", "RUN_FINISHED"]
 
 
 async def test_endpoint_complex_input(build_chat_client):
@@ -602,6 +617,118 @@ async def test_endpoint_accepts_snapshot_store_with_scope_resolver(build_chat_cl
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+
+async def test_agent_endpoint_hydrates_stored_thread_snapshot_without_invoking_agent(streaming_chat_client_stub):
+    """A Hydrate Request replays stored agent messages and state without invoking the wrapped agent."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Stored reply")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"recipe": {"type": "string"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "state": {"recipe": "pasta"},
+        },
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "thread-1", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    event_types = [event.get("type") for event in events]
+    assert event_types == ["RUN_STARTED", "STATE_SNAPSHOT", "MESSAGES_SNAPSHOT", "RUN_FINISHED"]
+    assert events[1]["snapshot"] == {"recipe": "pasta"}
+    assert any(message.get("role") == "user" and message.get("content") == "Hello" for message in events[2]["messages"])
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == "Stored reply"
+        for message in events[2]["messages"]
+    )
+
+
+async def test_agent_endpoint_hydrates_snapshots_by_scope_and_thread(streaming_chat_client_stub):
+    """Hydration uses Snapshot Scope and AG-UI Thread id together when reading stored snapshots."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Tenant A reply")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"tenant": {"type": "string"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda request: request.forwarded_props["tenant"],
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"role": "user", "content": "Hello tenant A"}],
+            "state": {"tenant": "tenant-a"},
+            "forwardedProps": {"tenant": "tenant-a"},
+        },
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+
+    tenant_b_response = client.post(
+        "/snapshots",
+        json={"thread_id": "thread-1", "messages": [], "forwardedProps": {"tenant": "tenant-b"}},
+    )
+    assert tenant_b_response.status_code == 200
+    assert call_count == 1
+    assert [event.get("type") for event in _decode_sse_events(tenant_b_response)] == [
+        "RUN_STARTED",
+        "RUN_FINISHED",
+    ]
+
+    tenant_a_response = client.post(
+        "/snapshots",
+        json={"thread_id": "thread-1", "messages": [], "forwardedProps": {"tenant": "tenant-a"}},
+    )
+    assert tenant_a_response.status_code == 200
+    assert call_count == 1
+    tenant_a_events = _decode_sse_events(tenant_a_response)
+    assert [event.get("type") for event in tenant_a_events] == [
+        "RUN_STARTED",
+        "STATE_SNAPSHOT",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+    ]
+    assert tenant_a_events[1]["snapshot"] == {"tenant": "tenant-a"}
+    assert any(message.get("content") == "Tenant A reply" for message in tenant_a_events[2]["messages"])
 
 
 async def test_endpoint_encoding_failure_emits_run_error():

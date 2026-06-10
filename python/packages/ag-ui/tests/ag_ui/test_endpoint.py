@@ -20,7 +20,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.params import Depends
 from fastapi.testclient import TestClient
 
-from agent_framework_ag_ui import add_agent_framework_fastapi_endpoint
+from agent_framework_ag_ui import InMemoryAGUIThreadSnapshotStore, add_agent_framework_fastapi_endpoint
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
@@ -558,6 +558,50 @@ async def test_endpoint_invalid_agent_type_raises_typeerror():
 
     with pytest.raises(TypeError, match="must be SupportsAgentRun"):
         add_agent_framework_fastapi_endpoint(app, agent="not_an_agent")  # type: ignore[arg-type]
+
+
+async def test_endpoint_requires_snapshot_scope_resolver_when_store_configured(build_chat_client):
+    """Snapshot persistence setup must require an explicit Snapshot Scope resolver."""
+    app = FastAPI()
+    agent = Agent(name="test", instructions="Test agent", client=build_chat_client())
+    store = InMemoryAGUIThreadSnapshotStore()
+
+    with pytest.raises(ValueError, match="snapshot_scope_resolver is required"):
+        add_agent_framework_fastapi_endpoint(app, agent, path="/snapshots", snapshot_store=store)
+
+
+async def test_endpoint_requires_snapshot_scope_resolver_when_wrapped_runner_has_store(build_chat_client):
+    """Pre-wrapped runners with snapshot stores must also provide a Snapshot Scope resolver."""
+    app = FastAPI()
+    agent = Agent(name="test", instructions="Test agent", client=build_chat_client())
+    wrapped_agent = AgentFrameworkAgent(agent=agent, snapshot_store=InMemoryAGUIThreadSnapshotStore())
+
+    with pytest.raises(ValueError, match="snapshot_scope_resolver is required"):
+        add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/snapshots")
+
+
+async def test_endpoint_accepts_snapshot_store_with_scope_resolver(build_chat_client):
+    """Endpoint behavior remains the normal event stream when snapshot persistence is explicitly configured."""
+    app = FastAPI()
+    agent = Agent(name="test", instructions="Test agent", client=build_chat_client())
+    store = InMemoryAGUIThreadSnapshotStore()
+
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/snapshots",
+        json={"messages": [{"role": "user", "content": "Hello"}], "thread_id": "thread-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
 
 async def test_endpoint_encoding_failure_emits_run_error():

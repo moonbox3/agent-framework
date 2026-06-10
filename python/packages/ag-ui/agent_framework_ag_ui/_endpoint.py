@@ -17,10 +17,51 @@ from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
+from ._snapshots import AGUIThreadSnapshotStore, SnapshotScopeResolver
 from ._types import AGUIRequest
 from ._workflow import AgentFrameworkWorkflow
 
 logger = logging.getLogger(__name__)
+
+
+def _get_snapshot_store(
+    protocol_runner: AgentFrameworkAgent | AgentFrameworkWorkflow,
+) -> AGUIThreadSnapshotStore | None:
+    if isinstance(protocol_runner, AgentFrameworkAgent):
+        return protocol_runner.config.snapshot_store
+    return protocol_runner.snapshot_store
+
+
+def _set_snapshot_store(
+    protocol_runner: AgentFrameworkAgent | AgentFrameworkWorkflow,
+    snapshot_store: AGUIThreadSnapshotStore,
+) -> None:
+    if isinstance(protocol_runner, AgentFrameworkAgent):
+        protocol_runner.config.snapshot_store = snapshot_store
+        return
+    protocol_runner.snapshot_store = snapshot_store
+
+
+def _configure_snapshot_persistence(
+    protocol_runner: AgentFrameworkAgent | AgentFrameworkWorkflow,
+    *,
+    snapshot_store: AGUIThreadSnapshotStore | None,
+    snapshot_scope_resolver: SnapshotScopeResolver | None,
+) -> None:
+    existing_snapshot_store = _get_snapshot_store(protocol_runner)
+    if snapshot_store is not None:
+        if existing_snapshot_store is not None and existing_snapshot_store is not snapshot_store:
+            raise ValueError("snapshot_store is already configured on the AG-UI runner.")
+        if existing_snapshot_store is None:
+            _set_snapshot_store(protocol_runner, snapshot_store)
+        existing_snapshot_store = snapshot_store
+
+    if existing_snapshot_store is not None and snapshot_scope_resolver is None:
+        raise ValueError(
+            "snapshot_scope_resolver is required when snapshot_store is configured. "
+            "AG-UI Thread ids identify threads but do not authorize snapshot access; "
+            "provide a resolver that returns an explicit Snapshot Scope."
+        )
 
 
 def add_agent_framework_fastapi_endpoint(
@@ -33,6 +74,8 @@ def add_agent_framework_fastapi_endpoint(
     default_state: dict[str, Any] | None = None,
     tags: list[str] | None = None,
     dependencies: Sequence[Depends] | None = None,
+    snapshot_store: AGUIThreadSnapshotStore | None = None,
+    snapshot_scope_resolver: SnapshotScopeResolver | None = None,
 ) -> None:
     """Add an AG-UI endpoint to a FastAPI app.
 
@@ -50,6 +93,10 @@ def add_agent_framework_fastapi_endpoint(
             These dependencies run before the endpoint handler. Use this to add
             authentication checks, rate limiting, or other middleware-like behavior.
             Example: `dependencies=[Depends(verify_api_key)]`
+        snapshot_store: Optional AG-UI Thread Snapshot store. Snapshot persistence is opt-in and requires an
+            explicit Snapshot Scope resolver.
+        snapshot_scope_resolver: Optional resolver for the application-defined Snapshot Scope. Required whenever
+            a snapshot store is configured because an AG-UI Thread id is not an authorization boundary.
     """
     protocol_runner: AgentFrameworkAgent | AgentFrameworkWorkflow
     if isinstance(agent, AgentFrameworkWorkflow):
@@ -63,9 +110,16 @@ def add_agent_framework_fastapi_endpoint(
             agent=agent,
             state_schema=state_schema,
             predict_state_config=predict_state_config,
+            snapshot_store=snapshot_store,
         )
     else:
         raise TypeError("agent must be SupportsAgentRun, Workflow, AgentFrameworkAgent, or AgentFrameworkWorkflow.")
+
+    _configure_snapshot_persistence(
+        protocol_runner,
+        snapshot_store=snapshot_store,
+        snapshot_scope_resolver=snapshot_scope_resolver,
+    )
 
     @app.post(path, tags=tags or ["AG-UI"], dependencies=dependencies, response_model=None)  # type: ignore[arg-type]
     async def agent_endpoint(request_body: AGUIRequest) -> StreamingResponse:

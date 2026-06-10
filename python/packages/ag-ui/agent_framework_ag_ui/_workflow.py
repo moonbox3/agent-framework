@@ -11,6 +11,7 @@ from typing import Any
 from ag_ui.core import BaseEvent
 from agent_framework import Workflow
 
+from ._snapshots import AGUIThreadSnapshotStore
 from ._workflow_run import run_workflow_stream
 
 WorkflowFactory = Callable[[str], Workflow]
@@ -29,7 +30,18 @@ class AgentFrameworkWorkflow:
         workflow_factory: WorkflowFactory | None = None,
         name: str | None = None,
         description: str | None = None,
+        snapshot_store: AGUIThreadSnapshotStore | None = None,
     ) -> None:
+        """Initialize the AG-UI workflow wrapper.
+
+        Args:
+            workflow: Optional workflow instance to expose.
+            workflow_factory: Optional factory for thread-scoped workflow instances.
+            name: Optional workflow name.
+            description: Optional workflow description.
+            snapshot_store: Optional AG-UI Thread Snapshot store. Snapshot persistence remains inactive unless
+                endpoint setup also provides an explicit Snapshot Scope resolver.
+        """
         if workflow is not None and workflow_factory is not None:
             raise ValueError("Pass either workflow= or workflow_factory=, not both.")
 
@@ -38,6 +50,7 @@ class AgentFrameworkWorkflow:
         self._workflow_by_thread: dict[str, Workflow] = {}
         self.name = name if name is not None else getattr(workflow, "name", "workflow")
         self.description = description if description is not None else getattr(workflow, "description", "")
+        self.snapshot_store = snapshot_store
 
     @staticmethod
     def _thread_id_from_input(input_data: dict[str, Any]) -> str:

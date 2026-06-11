@@ -26,6 +26,7 @@ _SnapshotKey: TypeAlias = tuple[SnapshotScope, AGUIThreadID]
 
 DEFAULT_MAX_THREAD_SNAPSHOTS = 1_000
 _SNAPSHOT_SCOPE_INPUT_KEY = "__ag_ui_snapshot_scope"
+_DEFAULT_STATE_INPUT_KEY = "__ag_ui_default_state"
 
 
 @dataclass(slots=True)

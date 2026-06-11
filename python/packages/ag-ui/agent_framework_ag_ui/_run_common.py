@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from collections.abc import Mapping
@@ -33,7 +34,7 @@ from agent_framework import Content
 
 from ._orchestration._predictive_state import PredictiveStateHandler
 from ._state import TOOL_RESULT_DISPLAY_KEY, TOOL_RESULT_STATE_KEY
-from ._utils import generate_event_id, make_json_safe
+from ._utils import generate_event_id, make_json_safe, normalize_agui_role
 
 logger = logging.getLogger(__name__)
 
@@ -733,3 +734,55 @@ def _emit_content(
         return _emit_text_reasoning(content, flow)
     logger.debug("Skipping unsupported content type in AG-UI emitter: %s", content_type)
     return events
+
+
+def _canonical_snapshot_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an AG-UI message for identity comparison without generated ids."""
+    from ._message_adapters import agui_messages_to_snapshot_format
+
+    normalized_message = agui_messages_to_snapshot_format([copy.deepcopy(message)])[0]
+    normalized_message.pop("id", None)
+    return cast(dict[str, Any], make_json_safe(normalized_message))
+
+
+def _snapshot_messages_match(stored_message: dict[str, Any], incoming_message: dict[str, Any]) -> bool:
+    """Return whether an incoming message already represents the stored snapshot message."""
+    stored_id = stored_message.get("id")
+    incoming_id = incoming_message.get("id")
+    if stored_id and incoming_id:
+        return str(stored_id) == str(incoming_id)
+    return _canonical_snapshot_message(stored_message) == _canonical_snapshot_message(incoming_message)
+
+
+def _latest_user_message_index(messages: list[dict[str, Any]]) -> int | None:
+    """Find the newest incoming user message index."""
+    for index in range(len(messages) - 1, -1, -1):
+        if normalize_agui_role(messages[index].get("role", "user")) == "user":
+            return index
+    return None
+
+
+def _reconstruct_messages_from_thread_snapshot(
+    *,
+    stored_messages: list[dict[str, Any]],
+    incoming_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Combine backend-owned prior history with the request-owned new user turn."""
+    if not stored_messages or not incoming_messages:
+        return incoming_messages
+
+    incoming_suffix: list[dict[str, Any]]
+    if len(incoming_messages) >= len(stored_messages) and all(
+        _snapshot_messages_match(stored_message, incoming_message)
+        for stored_message, incoming_message in zip(stored_messages, incoming_messages)
+    ):
+        incoming_suffix = incoming_messages[len(stored_messages) :]
+    else:
+        latest_user_index = _latest_user_message_index(incoming_messages)
+        if latest_user_index is None:
+            return incoming_messages
+        incoming_suffix = incoming_messages[latest_user_index:]
+
+    return [copy.deepcopy(message) for message in stored_messages] + [
+        copy.deepcopy(message) for message in incoming_suffix
+    ]

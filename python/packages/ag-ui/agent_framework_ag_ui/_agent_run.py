@@ -41,7 +41,7 @@ from agent_framework._tools import (
 from agent_framework._types import ResponseStream
 from agent_framework.exceptions import AgentInvalidResponseException
 
-from ._message_adapters import agui_messages_to_snapshot_format, normalize_agui_input_messages
+from ._message_adapters import normalize_agui_input_messages
 from ._orchestration._predictive_state import PredictiveStateHandler
 from ._orchestration._tooling import collect_server_tools, merge_tools, register_additional_client_tools
 from ._run_common import (
@@ -53,10 +53,11 @@ from ._run_common import (
     _extract_tool_result_display,  # type: ignore
     _has_only_tool_calls,  # type: ignore
     _normalize_resume_interrupts,  # type: ignore
+    _reconstruct_messages_from_thread_snapshot,  # type: ignore
     _resolve_ui_payload,  # type: ignore
     _stringify_tool_result,  # type: ignore
 )
-from ._snapshots import AGUIThreadSnapshot, _SNAPSHOT_SCOPE_INPUT_KEY
+from ._snapshots import AGUIThreadSnapshot, _DEFAULT_STATE_INPUT_KEY, _SNAPSHOT_SCOPE_INPUT_KEY
 from ._utils import (
     canonical_function_arguments,
     convert_agui_tools_to_agent_framework,
@@ -758,54 +759,20 @@ def _event_messages_to_snapshot_dicts(messages: list[Any]) -> list[dict[str, Any
     return [cast(dict[str, Any], message) for message in safe_messages if isinstance(message, dict)]
 
 
-def _canonical_snapshot_message(message: dict[str, Any]) -> dict[str, Any]:
-    """Normalize an AG-UI message for identity comparison without generated ids."""
-    normalized_message = agui_messages_to_snapshot_format([copy.deepcopy(message)])[0]
-    normalized_message.pop("id", None)
-    return cast(dict[str, Any], make_json_safe(normalized_message))
-
-
-def _snapshot_messages_match(stored_message: dict[str, Any], incoming_message: dict[str, Any]) -> bool:
-    """Return whether an incoming message already represents the stored snapshot message."""
-    stored_id = stored_message.get("id")
-    incoming_id = incoming_message.get("id")
-    if stored_id and incoming_id:
-        return str(stored_id) == str(incoming_id)
-    return _canonical_snapshot_message(stored_message) == _canonical_snapshot_message(incoming_message)
-
-
-def _latest_user_message_index(messages: list[dict[str, Any]]) -> int | None:
-    """Find the newest incoming user message index."""
-    for index in range(len(messages) - 1, -1, -1):
-        if normalize_agui_role(messages[index].get("role", "user")) == "user":
-            return index
-    return None
-
-
-def _reconstruct_messages_from_thread_snapshot(
-    *,
-    stored_messages: list[dict[str, Any]],
-    incoming_messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Combine backend-owned prior history with the request-owned new user turn."""
-    if not stored_messages or not incoming_messages:
-        return incoming_messages
-
-    incoming_suffix: list[dict[str, Any]]
-    if len(incoming_messages) >= len(stored_messages) and all(
-        _snapshot_messages_match(stored_message, incoming_message)
-        for stored_message, incoming_message in zip(stored_messages, incoming_messages)
-    ):
-        incoming_suffix = incoming_messages[len(stored_messages) :]
-    else:
-        latest_user_index = _latest_user_message_index(incoming_messages)
-        if latest_user_index is None:
-            return incoming_messages
-        incoming_suffix = incoming_messages[latest_user_index:]
-
-    return [copy.deepcopy(message) for message in stored_messages] + [
-        copy.deepcopy(message) for message in incoming_suffix
-    ]
+def _text_events_to_snapshot_messages(events: list[BaseEvent]) -> list[dict[str, Any]]:
+    """Convert streamed text-message events into snapshot message dictionaries."""
+    messages: list[dict[str, Any]] = []
+    messages_by_id: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if isinstance(event, TextMessageStartEvent):
+            message: dict[str, Any] = {"id": event.message_id, "role": event.role, "content": ""}
+            messages.append(message)
+            messages_by_id[event.message_id] = message
+        elif isinstance(event, TextMessageContentEvent):
+            open_message = messages_by_id.get(event.message_id)
+            if open_message is not None:
+                open_message["content"] = f"{open_message['content']}{event.delta}"
+    return [message for message in messages if message.get("content")]
 
 
 async def _hydrate_thread_snapshot(
@@ -899,9 +866,9 @@ async def run_agent_stream(
         return
 
     stored_snapshot: AGUIThreadSnapshot | None = None
-    if config.snapshot_store is not None and snapshot_scope is not None and resume_payload is None:
+    if config.snapshot_store is not None and snapshot_scope is not None:
         stored_snapshot = await config.snapshot_store.get(scope=snapshot_scope, thread_id=thread_id)
-        if stored_snapshot is not None:
+        if stored_snapshot is not None and resume_payload is None:
             raw_messages = _reconstruct_messages_from_thread_snapshot(
                 stored_messages=stored_snapshot.messages,
                 incoming_messages=raw_messages,
@@ -916,6 +883,14 @@ async def run_agent_stream(
             flow.current_state.update(request_state)
     elif isinstance(request_state, dict):
         flow.current_state = dict(request_state)
+
+    # Apply endpoint-deferred defaults only for keys missing from both the stored
+    # snapshot state and the request state, so defaults never reset persisted state.
+    deferred_default_state = cast(dict[str, Any] | None, input_data.get(_DEFAULT_STATE_INPUT_KEY))
+    if deferred_default_state:
+        for key, value in deferred_default_state.items():
+            if key not in flow.current_state:
+                flow.current_state[key] = copy.deepcopy(value)
 
     # Apply schema defaults for missing state keys
     if state_schema:
@@ -1023,8 +998,24 @@ async def run_agent_stream(
         # Emit approved state snapshot before confirmation message
         if approved_state_snapshot_emitted:
             yield StateSnapshotEvent(snapshot=flow.current_state)
-        for event in _handle_step_based_approval(messages):
+        confirmation_events = _handle_step_based_approval(messages)
+        for event in confirmation_events:
             yield event
+        # Persist the completed confirmation turn with interrupt=None so hydration
+        # does not replay the stale pending interrupt after the user responded.
+        persisted_messages = snapshot_messages + _text_events_to_snapshot_messages(confirmation_events)
+        if resume_payload is not None and stored_snapshot is not None:
+            # Resume requests carry only the synthesized interrupt response, so prepend
+            # the stored thread history to avoid persisting a truncated thread.
+            persisted_messages = [copy.deepcopy(message) for message in stored_snapshot.messages] + persisted_messages
+        await _save_thread_snapshot(
+            config=config,
+            scope=snapshot_scope,
+            thread_id=thread_id,
+            messages=persisted_messages,
+            state=cast(dict[str, Any], make_json_safe(flow.current_state)) if flow.current_state else None,
+            interrupt=None,
+        )
         yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
         return
 
@@ -1277,6 +1268,10 @@ async def run_agent_stream(
     )
     latest_messages_snapshot = snapshot_messages
     if should_emit_snapshot:
+        # Always fold this turn's output into the persisted snapshot, even when the
+        # outbound MESSAGES_SNAPSHOT event is suppressed for predictive tools.
+        snapshot_event = _build_messages_snapshot(flow, snapshot_messages)
+        latest_messages_snapshot = _event_messages_to_snapshot_dicts(list(snapshot_event.messages))
         # Check if we should suppress for predictive tool
         last_tool_name = None
         if flow.tool_results:
@@ -1286,8 +1281,6 @@ async def run_agent_stream(
         if not _should_suppress_intermediate_snapshot(
             last_tool_name, predict_state_config, config.require_confirmation
         ):
-            snapshot_event = _build_messages_snapshot(flow, snapshot_messages)
-            latest_messages_snapshot = _event_messages_to_snapshot_dicts(list(snapshot_event.messages))
             yield snapshot_event
 
     # Always emit RunFinished - confirm_changes tool call is complete (Start -> Args -> End)

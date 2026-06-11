@@ -1256,3 +1256,271 @@ async def test_endpoint_double_encoding_failure_terminates():
 
     # Should still get 200 (SSE stream), just with no events
     assert response.status_code == 200
+
+
+async def test_agent_endpoint_confirm_changes_clears_persisted_interrupt(streaming_chat_client_stub):
+    """A confirm_changes response persists the completed turn and clears the stored interrupt."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(
+            contents=[
+                Content.from_function_call(
+                    name="draft_steps",
+                    call_id="draft-call",
+                    arguments=json.dumps({"steps": [{"description": "Draft outline"}]}),
+                )
+            ],
+            role="assistant",
+        )
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"steps": {"type": "array", "items": {"type": "object"}}},
+        predict_state_config={"steps": {"tool": "draft_steps", "tool_argument": "steps"}},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "agent-thread",
+            "messages": [{"id": "user-1", "role": "user", "content": "Draft the plan"}],
+            "state": {"steps": []},
+        },
+    )
+    assert first_response.status_code == 200
+    assert call_count == 1
+    first_events = _decode_sse_events(first_response)
+    first_finished = [event for event in first_events if event.get("type") == "RUN_FINISHED"]
+    assert first_finished[-1]["interrupt"]
+    confirm_call_id = first_finished[-1]["interrupt"][0]["id"]
+
+    confirm_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "agent-thread",
+            "messages": [],
+            "resume": {"interrupts": [{"id": confirm_call_id, "value": json.dumps({"accepted": True, "steps": []})}]},
+        },
+    )
+    assert confirm_response.status_code == 200
+    assert call_count == 1
+    confirm_event_types = [event.get("type") for event in _decode_sse_events(confirm_response)]
+    assert "TEXT_MESSAGE_CONTENT" in confirm_event_types
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "agent-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    events = _decode_sse_events(hydrate_response)
+    assert not events[-1].get("interrupt")
+    messages = _latest_messages_snapshot(hydrate_response)
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == "Changes confirmed and applied successfully!"
+        for message in messages
+    )
+    assert any(message.get("role") == "user" and message.get("content") == "Draft the plan" for message in messages)
+
+
+async def test_agent_endpoint_default_state_does_not_reset_persisted_state(streaming_chat_client_stub):
+    """Endpoint defaults fill missing keys but never override persisted Shared State."""
+    app = FastAPI()
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del messages, options, kwargs
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Reply")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        state_schema={"recipe": {"type": "string"}},
+        default_state={"recipe": ""},
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    fresh_response = client.post(
+        "/snapshots",
+        json={"thread_id": "thread-fresh", "messages": [{"id": "user-0", "role": "user", "content": "Hi"}]},
+    )
+    assert fresh_response.status_code == 200
+    fresh_state_snapshots = [
+        event for event in _decode_sse_events(fresh_response) if event.get("type") == "STATE_SNAPSHOT"
+    ]
+    assert fresh_state_snapshots[0]["snapshot"] == {"recipe": ""}
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"id": "user-1", "role": "user", "content": "Plan dinner"}],
+            "state": {"recipe": "pasta"},
+        },
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "thread-1",
+            "messages": [{"id": "user-2", "role": "user", "content": "Add dessert"}],
+        },
+    )
+    assert second_response.status_code == 200
+    second_state_snapshots = [
+        event for event in _decode_sse_events(second_response) if event.get("type") == "STATE_SNAPSHOT"
+    ]
+    assert second_state_snapshots[0]["snapshot"] == {"recipe": "pasta"}
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "thread-1", "messages": []})
+    assert hydrate_response.status_code == 200
+    hydrate_events = _decode_sse_events(hydrate_response)
+    hydrate_state_snapshots = [event for event in hydrate_events if event.get("type") == "STATE_SNAPSHOT"]
+    assert hydrate_state_snapshots[0]["snapshot"] == {"recipe": "pasta"}
+
+
+async def test_agent_endpoint_persists_turn_output_when_intermediate_snapshot_suppressed(streaming_chat_client_stub):
+    """A no-confirmation predictive turn persists tool output even when the outbound snapshot is suppressed."""
+    app = FastAPI()
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del messages, options, kwargs
+        yield ChatResponseUpdate(
+            contents=[
+                Content.from_function_call(
+                    name="write_doc",
+                    call_id="doc-call",
+                    arguments=json.dumps({"document": "Draft text"}),
+                )
+            ],
+            role="assistant",
+        )
+        yield ChatResponseUpdate(
+            contents=[Content.from_function_result(call_id="doc-call", result="ok")],
+            role="tool",
+        )
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Done writing")], role="assistant")
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    wrapped = AgentFrameworkAgent(
+        agent=agent,
+        state_schema={"document": {"type": "string"}},
+        predict_state_config={"document": {"tool": "write_doc", "tool_argument": "document"}},
+        require_confirmation=False,
+    )
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        wrapped,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "doc-thread",
+            "messages": [{"id": "user-1", "role": "user", "content": "Write the doc"}],
+        },
+    )
+    assert first_response.status_code == 200
+    first_event_types = [event.get("type") for event in _decode_sse_events(first_response)]
+    assert "MESSAGES_SNAPSHOT" not in first_event_types
+
+    hydrate_response = client.post("/snapshots", json={"thread_id": "doc-thread", "messages": []})
+
+    assert hydrate_response.status_code == 200
+    messages = _latest_messages_snapshot(hydrate_response)
+    assert any(message.get("role") == "assistant" and message.get("content") == "Done writing" for message in messages)
+    assert any(message.get("role") == "tool" and message.get("toolCallId") == "doc-call" for message in messages)
+
+
+async def test_workflow_preserves_history_across_turns():
+    """Workflow follow-up turns merge stored history so persisted snapshots keep earlier turns.
+
+    Uses async runner.run() directly instead of HTTP TestClient because the sync
+    TestClient runs each request in a different event loop, which conflicts with
+    the workflow's asyncio Queue across turns.
+    """
+    from agent_framework_ag_ui._snapshots import _SNAPSHOT_SCOPE_INPUT_KEY
+
+    call_count = 0
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext) -> None:
+        nonlocal call_count
+        del message
+        call_count += 1
+        await ctx.yield_output(f"Workflow reply {call_count}")
+
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    store = InMemoryAGUIThreadSnapshotStore()
+    runner = AgentFrameworkWorkflow(workflow=workflow, snapshot_store=store)
+
+    first_events = [
+        event
+        async for event in runner.run(
+            {
+                "thread_id": "workflow-thread",
+                "run_id": "run-1",
+                "messages": [{"id": "user-1", "role": "user", "content": "First question"}],
+                _SNAPSHOT_SCOPE_INPUT_KEY: "tenant-a",
+            }
+        )
+    ]
+    assert first_events
+    assert call_count == 1
+
+    second_events = [
+        event
+        async for event in runner.run(
+            {
+                "thread_id": "workflow-thread",
+                "run_id": "run-2",
+                "messages": [{"id": "user-2", "role": "user", "content": "Second question"}],
+                _SNAPSHOT_SCOPE_INPUT_KEY: "tenant-a",
+            }
+        )
+    ]
+    assert second_events
+    assert call_count == 2
+
+    snapshot = await store.get(scope="tenant-a", thread_id="workflow-thread")
+    assert snapshot is not None
+    contents = [message.get("content") for message in snapshot.messages]
+    assert "First question" in contents
+    assert "Workflow reply 1" in contents
+    assert "Second question" in contents
+    assert "Workflow reply 2" in contents
+
+    hydrate_events = [
+        event
+        async for event in runner.run(
+            {
+                "thread_id": "workflow-thread",
+                "run_id": "run-3",
+                "messages": [],
+                _SNAPSHOT_SCOPE_INPUT_KEY: "tenant-a",
+            }
+        )
+    ]
+    assert call_count == 2
+    hydrated_snapshots = [event for event in hydrate_events if isinstance(event, MessagesSnapshotEvent)]
+    assert hydrated_snapshots

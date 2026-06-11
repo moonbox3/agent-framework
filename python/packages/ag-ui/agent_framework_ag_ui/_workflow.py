@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
@@ -25,8 +26,17 @@ from ag_ui.core import (
 from agent_framework import Workflow
 
 from ._message_adapters import agui_messages_to_snapshot_format
-from ._run_common import _build_run_finished_event, _extract_resume_payload
-from ._snapshots import _SNAPSHOT_SCOPE_INPUT_KEY, AGUIThreadSnapshot, AGUIThreadSnapshotStore
+from ._run_common import (
+    _build_run_finished_event,
+    _extract_resume_payload,
+    _reconstruct_messages_from_thread_snapshot,
+)
+from ._snapshots import (
+    _DEFAULT_STATE_INPUT_KEY,
+    _SNAPSHOT_SCOPE_INPUT_KEY,
+    AGUIThreadSnapshot,
+    AGUIThreadSnapshotStore,
+)
 from ._utils import generate_event_id, make_json_safe
 from ._workflow_run import run_workflow_stream
 
@@ -271,12 +281,46 @@ class AgentFrameworkWorkflow:
                 yield event
             return
 
+        # Load the stored snapshot for follow-up turns so the workflow runs with the
+        # full persisted thread history instead of just the latest request messages.
+        stored_snapshot: AGUIThreadSnapshot | None = None
+        if snapshot_store is not None and snapshot_scope is not None and resume_payload is None:
+            stored_snapshot = await snapshot_store.get(scope=snapshot_scope, thread_id=thread_id)
+            if stored_snapshot is not None:
+                raw_messages = _reconstruct_messages_from_thread_snapshot(
+                    stored_messages=stored_snapshot.messages,
+                    incoming_messages=raw_messages,
+                )
+                input_data["messages"] = raw_messages
+
+        # Merge stored state with request overrides, then fill endpoint-deferred
+        # defaults only for keys missing from both.
+        request_state = input_data.get("state")
+        deferred_default_state = cast(dict[str, Any] | None, input_data.get(_DEFAULT_STATE_INPUT_KEY))
+        effective_state: dict[str, Any] = {}
+        if stored_snapshot is not None and stored_snapshot.state is not None:
+            effective_state.update(stored_snapshot.state)
+        if isinstance(request_state, dict):
+            effective_state.update(cast(dict[str, Any], request_state))
+        if deferred_default_state:
+            for key, value in deferred_default_state.items():
+                if key not in effective_state:
+                    effective_state[key] = copy.deepcopy(value)
+        if effective_state:
+            input_data["state"] = effective_state
+
         workflow = self._resolve_workflow(thread_id)
         snapshot_builder = (
             _WorkflowSnapshotBuilder(raw_messages)
             if snapshot_store is not None and snapshot_scope is not None
             else None
         )
+        if snapshot_builder is not None and effective_state:
+            # Seed builder state so a run that emits no StateSnapshotEvent still
+            # persists the latest known Shared State instead of dropping it.
+            state_snapshot = make_json_safe(effective_state)
+            if isinstance(state_snapshot, dict):
+                snapshot_builder.state = cast(dict[str, Any], state_snapshot)
         run_error_emitted = False
         async for event in run_workflow_stream(input_data, workflow):
             if snapshot_builder is not None:

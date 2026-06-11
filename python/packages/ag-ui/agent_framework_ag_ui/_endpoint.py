@@ -18,7 +18,12 @@ from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
 
 from ._agent import AgentFrameworkAgent
-from ._snapshots import _SNAPSHOT_SCOPE_INPUT_KEY, AGUIThreadSnapshotStore, SnapshotScopeResolver
+from ._snapshots import (
+    _DEFAULT_STATE_INPUT_KEY,
+    _SNAPSHOT_SCOPE_INPUT_KEY,
+    AGUIThreadSnapshotStore,
+    SnapshotScopeResolver,
+)
 from ._types import AGUIRequest
 from ._workflow import AgentFrameworkWorkflow
 
@@ -131,16 +136,23 @@ def add_agent_framework_fastapi_endpoint(
         """
         try:
             input_data = request_body.model_dump(exclude_none=True)
+            snapshot_persistence_active = False
             if snapshot_scope_resolver is not None and _get_snapshot_store(protocol_runner) is not None:
                 snapshot_scope = snapshot_scope_resolver(request_body)
                 if isawaitable(snapshot_scope):
                     snapshot_scope = await snapshot_scope
                 input_data[_SNAPSHOT_SCOPE_INPUT_KEY] = snapshot_scope
+                snapshot_persistence_active = True
             if default_state:
-                state = input_data.setdefault("state", {})
-                for key, value in default_state.items():
-                    if key not in state:
-                        state[key] = copy.deepcopy(value)
+                if snapshot_persistence_active:
+                    # Defer default application to the runner so defaults only fill keys
+                    # missing from both the stored snapshot state and the request state.
+                    input_data[_DEFAULT_STATE_INPUT_KEY] = copy.deepcopy(default_state)
+                else:
+                    state = input_data.setdefault("state", {})
+                    for key, value in default_state.items():
+                        if key not in state:
+                            state[key] = copy.deepcopy(value)
             logger.debug(
                 f"[{path}] Received request - Run ID: {input_data.get('run_id', 'no-run-id')}, "
                 f"Thread ID: {input_data.get('thread_id', 'no-thread-id')}, "

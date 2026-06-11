@@ -97,3 +97,43 @@ async def test_in_memory_snapshot_store_evicts_oldest_snapshot_when_bounded() ->
     assert await store.get(scope="tenant-a", thread_id="thread-1") is None
     assert await store.get(scope="tenant-a", thread_id="thread-2") is not None
     assert await store.get(scope="tenant-a", thread_id="thread-3") is not None
+
+
+def test_workflow_snapshot_builder_splits_tool_call_groups() -> None:
+    """Tool calls separated by results or text synthesize provider-valid message groups."""
+    from ag_ui.core import (
+        TextMessageContentEvent,
+        TextMessageEndEvent,
+        TextMessageStartEvent,
+        ToolCallArgsEvent,
+        ToolCallResultEvent,
+        ToolCallStartEvent,
+    )
+
+    from agent_framework_ag_ui._workflow import _WorkflowSnapshotBuilder
+
+    builder = _WorkflowSnapshotBuilder([])
+    builder.observe(ToolCallStartEvent(tool_call_id="call-a", tool_call_name="toolA"))
+    builder.observe(ToolCallArgsEvent(tool_call_id="call-a", delta='{"x": 1}'))
+    builder.observe(ToolCallResultEvent(message_id="result-a", tool_call_id="call-a", content="resA"))
+    builder.observe(TextMessageStartEvent(message_id="text-1", role="assistant"))
+    builder.observe(TextMessageContentEvent(message_id="text-1", delta="thinking"))
+    builder.observe(TextMessageEndEvent(message_id="text-1"))
+    builder.observe(ToolCallStartEvent(tool_call_id="call-b", tool_call_name="toolB"))
+    builder.observe(ToolCallResultEvent(message_id="result-b", tool_call_id="call-b", content="resB"))
+
+    messages = builder.build().messages
+    shapes = [
+        (
+            message.get("role"),
+            [tool_call["id"] for tool_call in message.get("tool_calls", [])] or message.get("toolCallId"),
+        )
+        for message in messages
+    ]
+    assert shapes == [
+        ("assistant", ["call-a"]),
+        ("tool", "call-a"),
+        ("assistant", None),
+        ("assistant", ["call-b"]),
+        ("tool", "call-b"),
+    ]

@@ -162,12 +162,18 @@ class _WorkflowSnapshotBuilder:
                 "content": event.content,
             }
         )
+        # A result closes the current tool-call group; later tool calls start a new
+        # assistant message so replayed transcripts keep results adjacent to their
+        # tool_calls message, which provider APIs require.
+        self._tool_call_message = None
 
     def _flush_open_text_message(self) -> None:
         if self._open_text_message is None:
             return
         if self._open_text_message.get("content"):
             self._synthesized_messages.append(self._open_text_message)
+            # Text between tool calls closes the current tool-call group as well.
+            self._tool_call_message = None
         self._open_text_message = None
 
 
@@ -284,12 +290,13 @@ class AgentFrameworkWorkflow:
         # Load the stored snapshot for follow-up turns so the workflow runs with the
         # full persisted thread history instead of just the latest request messages.
         stored_snapshot: AGUIThreadSnapshot | None = None
-        if snapshot_store is not None and snapshot_scope is not None and resume_payload is None:
+        if snapshot_store is not None and snapshot_scope is not None:
             stored_snapshot = await snapshot_store.get(scope=snapshot_scope, thread_id=thread_id)
-            if stored_snapshot is not None:
+            if stored_snapshot is not None and resume_payload is None:
                 raw_messages = _reconstruct_messages_from_thread_snapshot(
                     stored_messages=stored_snapshot.messages,
                     incoming_messages=raw_messages,
+                    stored_interrupt=stored_snapshot.interrupt,
                 )
                 input_data["messages"] = raw_messages
 
@@ -310,8 +317,15 @@ class AgentFrameworkWorkflow:
             input_data["state"] = effective_state
 
         workflow = self._resolve_workflow(thread_id)
+        builder_seed_messages = raw_messages
+        if resume_payload is not None and stored_snapshot is not None:
+            # Resume requests carry only the synthesized interrupt response, so seed
+            # the builder with stored history to avoid persisting a truncated thread.
+            builder_seed_messages = [
+                copy.deepcopy(message) for message in stored_snapshot.messages
+            ] + builder_seed_messages
         snapshot_builder = (
-            _WorkflowSnapshotBuilder(raw_messages)
+            _WorkflowSnapshotBuilder(builder_seed_messages)
             if snapshot_store is not None and snapshot_scope is not None
             else None
         )

@@ -35,6 +35,7 @@ def test_agent_framework_ag_ui_exports_state_update() -> None:
 def test_agent_framework_ag_ui_exports_snapshot_primitives() -> None:
     """Runtime package should export AG-UI Thread Snapshot primitives."""
     from agent_framework_ag_ui import (
+        DEFAULT_MAX_THREAD_SNAPSHOTS,
         AGUIThreadSnapshot,
         AGUIThreadSnapshotStore,
         InMemoryAGUIThreadSnapshotStore,
@@ -43,6 +44,7 @@ def test_agent_framework_ag_ui_exports_snapshot_primitives() -> None:
     assert AGUIThreadSnapshot.__name__ == "AGUIThreadSnapshot"
     assert AGUIThreadSnapshotStore.__name__ == "AGUIThreadSnapshotStore"
     assert InMemoryAGUIThreadSnapshotStore.__name__ == "InMemoryAGUIThreadSnapshotStore"
+    assert DEFAULT_MAX_THREAD_SNAPSHOTS >= 1
 
 
 def test_core_ag_ui_lazy_exports_include_event_converter_and_http_service() -> None:
@@ -61,3 +63,4 @@ def test_core_ag_ui_lazy_exports_include_snapshot_primitives() -> None:
     assert hasattr(ag_ui, "AGUIThreadSnapshot")
     assert hasattr(ag_ui, "AGUIThreadSnapshotStore")
     assert hasattr(ag_ui, "InMemoryAGUIThreadSnapshotStore")
+    assert hasattr(ag_ui, "SnapshotScopeResolver")

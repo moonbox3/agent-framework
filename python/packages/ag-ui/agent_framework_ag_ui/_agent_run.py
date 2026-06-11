@@ -872,6 +872,7 @@ async def run_agent_stream(
             raw_messages = _reconstruct_messages_from_thread_snapshot(
                 stored_messages=stored_snapshot.messages,
                 incoming_messages=raw_messages,
+                stored_interrupt=stored_snapshot.interrupt,
             )
 
     # Initialize flow state with stored state plus request-provided overrides.
@@ -1285,11 +1286,16 @@ async def run_agent_stream(
 
     # Always emit RunFinished - confirm_changes tool call is complete (Start -> Args -> End)
     # The UI will show confirmation dialog and send a new request when user responds
+    persisted_messages = latest_messages_snapshot
+    if resume_payload is not None and stored_snapshot is not None:
+        # Resume requests carry only the synthesized interrupt response, so prepend
+        # the stored thread history to avoid persisting a truncated thread.
+        persisted_messages = [copy.deepcopy(message) for message in stored_snapshot.messages] + persisted_messages
     await _save_thread_snapshot(
         config=config,
         scope=snapshot_scope,
         thread_id=thread_id,
-        messages=latest_messages_snapshot,
+        messages=persisted_messages,
         state=latest_state_snapshot,
         interrupt=flow.interrupts or None,
     )

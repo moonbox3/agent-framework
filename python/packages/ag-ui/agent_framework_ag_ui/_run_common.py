@@ -762,10 +762,66 @@ def _latest_user_message_index(messages: list[dict[str, Any]]) -> int | None:
     return None
 
 
+def _known_tool_call_ids(
+    stored_messages: list[dict[str, Any]],
+    stored_interrupt: list[dict[str, Any]] | None,
+) -> set[str]:
+    """Collect tool call ids the backend previously issued for this thread."""
+    known_ids: set[str] = set()
+    for message in stored_messages:
+        tool_calls = message.get("tool_calls") or message.get("toolCalls") or []
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in cast(list[Any], tool_calls):
+            if isinstance(tool_call, dict):
+                tool_call_id = cast(dict[str, Any], tool_call).get("id")
+                if tool_call_id:
+                    known_ids.add(str(tool_call_id))
+    for interrupt in stored_interrupt or []:
+        interrupt_id = interrupt.get("id")
+        if interrupt_id:
+            known_ids.add(str(interrupt_id))
+    return known_ids
+
+
+def _filter_untrusted_suffix(
+    incoming_suffix: list[dict[str, Any]],
+    *,
+    stored_messages: list[dict[str, Any]],
+    stored_interrupt: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Drop client-forged non-user messages before promoting them to stored history.
+
+    Only the user's own turns and tool results answering backend-issued tool calls
+    (including pending interrupts) may extend the authoritative thread history.
+    """
+    known_ids: set[str] | None = None
+    filtered: list[dict[str, Any]] = []
+    for message in incoming_suffix:
+        raw_role = str(message.get("role", "")).lower()
+        if raw_role == "user":
+            filtered.append(message)
+            continue
+        if raw_role == "tool":
+            tool_call_id = message.get("toolCallId") or message.get("tool_call_id") or message.get("actionExecutionId")
+            if known_ids is None:
+                known_ids = _known_tool_call_ids(stored_messages, stored_interrupt)
+            if tool_call_id and str(tool_call_id) in known_ids:
+                filtered.append(message)
+                continue
+        logger.warning(
+            "Dropping client-supplied %r message from the incoming thread suffix; "
+            "only user turns and tool results for backend-issued tool calls extend stored history.",
+            raw_role or "unknown",
+        )
+    return filtered
+
+
 def _reconstruct_messages_from_thread_snapshot(
     *,
     stored_messages: list[dict[str, Any]],
     incoming_messages: list[dict[str, Any]],
+    stored_interrupt: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Combine backend-owned prior history with the request-owned new user turn."""
     if not stored_messages or not incoming_messages:
@@ -782,6 +838,12 @@ def _reconstruct_messages_from_thread_snapshot(
         if latest_user_index is None:
             return incoming_messages
         incoming_suffix = incoming_messages[latest_user_index:]
+
+    incoming_suffix = _filter_untrusted_suffix(
+        incoming_suffix,
+        stored_messages=stored_messages,
+        stored_interrupt=stored_interrupt,
+    )
 
     return [copy.deepcopy(message) for message in stored_messages] + [
         copy.deepcopy(message) for message in incoming_suffix

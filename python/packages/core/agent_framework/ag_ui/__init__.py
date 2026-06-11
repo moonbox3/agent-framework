@@ -14,6 +14,7 @@ Supported classes and functions:
 - AGUIThreadSnapshot
 - AGUIThreadSnapshotStore
 - InMemoryAGUIThreadSnapshotStore
+- SnapshotScopeResolver
 - add_agent_framework_fastapi_endpoint
 - state_update
 - __version__
@@ -34,6 +35,7 @@ _IMPORTS = [
     "AGUIThreadSnapshot",
     "AGUIThreadSnapshotStore",
     "InMemoryAGUIThreadSnapshotStore",
+    "SnapshotScopeResolver",
     "state_update",
     "__version__",
 ]

@@ -1717,3 +1717,128 @@ async def test_workflow_resume_preserves_persisted_history(monkeypatch):
     assert "Workflow reply 1" in contents
     assert "Resumed reply" in contents
     assert snapshot.interrupt is None
+
+
+class _FailingSaveStore(InMemoryAGUIThreadSnapshotStore):
+    """Store whose save always fails, simulating a transient backend outage."""
+
+    async def save(self, *, scope: str, thread_id: str, snapshot: Any) -> None:
+        raise RuntimeError("store down")
+
+
+async def test_agent_endpoint_snapshot_save_failure_does_not_fail_run(streaming_chat_client_stub):
+    """A failing snapshot save must not turn a completed agent run into RUN_ERROR."""
+    app = FastAPI()
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del messages, options, kwargs
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Reply")])
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=_FailingSaveStore(),
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/snapshots",
+        json={"thread_id": "thread-1", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+
+    assert response.status_code == 200
+    event_types = [event.get("type") for event in _decode_sse_events(response)]
+    assert "RUN_FINISHED" in event_types
+    assert "RUN_ERROR" not in event_types
+
+
+async def test_workflow_endpoint_snapshot_save_failure_does_not_emit_run_error():
+    """A failing snapshot save after RUN_FINISHED must not emit a second terminal RUN_ERROR."""
+
+    @executor(id="responder")
+    async def responder(message: Any, ctx: WorkflowContext) -> None:
+        del message
+        await ctx.yield_output("Workflow reply")
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=responder).build()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        workflow,
+        path="/workflow-snapshots",
+        snapshot_store=_FailingSaveStore(),
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/workflow-snapshots",
+        json={"thread_id": "workflow-thread", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+
+    assert response.status_code == 200
+    event_types = [event.get("type") for event in _decode_sse_events(response)]
+    assert "RUN_FINISHED" in event_types
+    assert "RUN_ERROR" not in event_types
+
+
+async def test_endpoint_supports_async_snapshot_scope_resolver(streaming_chat_client_stub):
+    """An async snapshot_scope_resolver is awaited before snapshots load or save."""
+    app = FastAPI()
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any):
+        del messages, options, kwargs
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Reply")])
+
+    async def resolve_scope(_request: Any) -> str:
+        return "tenant-async"
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=resolve_scope,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/snapshots",
+        json={"thread_id": "thread-1", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+
+    assert response.status_code == 200
+    snapshot = await store.get(scope="tenant-async", thread_id="thread-1")
+    assert snapshot is not None
+    assert any(message.get("content") == "Reply" for message in snapshot.messages)
+
+
+def test_workflow_factory_cache_is_scoped_by_snapshot_scope():
+    """The same thread id under different Snapshot Scopes must not share a workflow instance."""
+
+    @executor(id="noop")
+    async def noop(message: Any, ctx: WorkflowContext) -> None:
+        del message, ctx
+
+    def factory(thread_id: str) -> Any:
+        del thread_id
+        return WorkflowBuilder(start_executor=noop).build()
+
+    runner = AgentFrameworkWorkflow(workflow_factory=factory)
+
+    workflow_a = runner._resolve_workflow("thread-1", "tenant-a")
+    workflow_b = runner._resolve_workflow("thread-1", "tenant-b")
+    assert workflow_a is not workflow_b
+    assert runner._resolve_workflow("thread-1", "tenant-a") is workflow_a
+
+    runner.clear_thread_workflow("thread-1", snapshot_scope="tenant-a")
+    assert runner._resolve_workflow("thread-1", "tenant-a") is not workflow_a
+    assert runner._resolve_workflow("thread-1", "tenant-b") is workflow_b
+
+    runner.clear_thread_workflow("thread-1")
+    assert runner._resolve_workflow("thread-1", "tenant-b") is not workflow_b

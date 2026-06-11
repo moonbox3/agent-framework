@@ -813,11 +813,21 @@ async def _save_thread_snapshot(
     if config.snapshot_store is None or scope is None:
         return
 
-    await config.snapshot_store.save(
-        scope=scope,
-        thread_id=thread_id,
-        snapshot=AGUIThreadSnapshot(messages=messages, state=state, interrupt=interrupt),
-    )
+    try:
+        await config.snapshot_store.save(
+            scope=scope,
+            thread_id=thread_id,
+            snapshot=AGUIThreadSnapshot(messages=messages, state=state, interrupt=interrupt),
+        )
+    except Exception:
+        # The run itself already streamed successfully; a transient store failure
+        # must not surface as RUN_ERROR for a completed run. The previous snapshot
+        # stays available for hydration.
+        logger.exception(
+            "Failed to save AG-UI Thread Snapshot for scope=%s thread_id=%s; keeping previous snapshot.",
+            scope,
+            thread_id,
+        )
 
 
 async def run_agent_stream(

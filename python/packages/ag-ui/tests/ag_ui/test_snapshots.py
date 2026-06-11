@@ -137,3 +137,24 @@ def test_workflow_snapshot_builder_splits_tool_call_groups() -> None:
         ("assistant", ["call-b"]),
         ("tool", "call-b"),
     ]
+
+
+async def test_in_memory_snapshot_store_rejects_invalid_keys() -> None:
+    """Key parts must be non-empty strings for every store operation."""
+    import pytest
+
+    store = InMemoryAGUIThreadSnapshotStore()
+    snapshot = AGUIThreadSnapshot()
+
+    with pytest.raises(ValueError):
+        await store.save(scope="", thread_id="thread-1", snapshot=snapshot)
+    with pytest.raises(ValueError):
+        await store.save(scope="tenant-a", thread_id="", snapshot=snapshot)
+    with pytest.raises(TypeError):
+        await store.save(scope=123, thread_id="thread-1", snapshot=snapshot)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        await store.get(scope="tenant-a", thread_id="")
+    with pytest.raises(TypeError):
+        await store.delete(scope=None, thread_id="thread-1")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        await store.clear(scope="")

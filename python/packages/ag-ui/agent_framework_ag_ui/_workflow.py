@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
@@ -39,6 +40,8 @@ from ._snapshots import (
 )
 from ._utils import generate_event_id, make_json_safe
 from ._workflow_run import run_workflow_stream
+
+logger = logging.getLogger(__name__)
 
 WorkflowFactory = Callable[[str], Workflow]
 
@@ -228,7 +231,10 @@ class AgentFrameworkWorkflow:
 
         self.workflow = workflow
         self._workflow_factory = workflow_factory
-        self._workflow_by_thread: dict[str, Workflow] = {}
+        # Cache keyed by (snapshot_scope, thread_id): the Snapshot Scope is the
+        # authorization boundary, so the same thread id under different scopes
+        # must never share an in-memory workflow instance.
+        self._workflow_by_thread: dict[tuple[str | None, str], Workflow] = {}
         self.name = name if name is not None else getattr(workflow, "name", "workflow")
         self.description = description if description is not None else getattr(workflow, "description", "")
         self.snapshot_store = snapshot_store
@@ -241,7 +247,7 @@ class AgentFrameworkWorkflow:
             return str(thread_id)
         return str(uuid.uuid4())
 
-    def _resolve_workflow(self, thread_id: str) -> Workflow:
+    def _resolve_workflow(self, thread_id: str, snapshot_scope: str | None = None) -> Workflow:
         """Get the workflow instance for the current run."""
         if self.workflow is not None:
             return self.workflow
@@ -249,17 +255,22 @@ class AgentFrameworkWorkflow:
         if self._workflow_factory is None:
             raise NotImplementedError("No workflow is attached. Override run or pass workflow=/workflow_factory=.")
 
-        workflow = self._workflow_by_thread.get(thread_id)
+        cache_key = (snapshot_scope, thread_id)
+        workflow = self._workflow_by_thread.get(cache_key)
         if workflow is None:
             workflow = self._workflow_factory(thread_id)
             if not isinstance(workflow, Workflow):
                 raise TypeError("workflow_factory must return a Workflow instance.")
-            self._workflow_by_thread[thread_id] = workflow
+            self._workflow_by_thread[cache_key] = workflow
         return workflow
 
-    def clear_thread_workflow(self, thread_id: str) -> None:
-        """Drop a single cached thread workflow instance."""
-        self._workflow_by_thread.pop(thread_id, None)
+    def clear_thread_workflow(self, thread_id: str, snapshot_scope: str | None = None) -> None:
+        """Drop cached workflow instances for a thread, optionally limited to one Snapshot Scope."""
+        if snapshot_scope is not None:
+            self._workflow_by_thread.pop((snapshot_scope, thread_id), None)
+            return
+        for key in [key for key in self._workflow_by_thread if key[1] == thread_id]:
+            del self._workflow_by_thread[key]
 
     def clear_workflow_cache(self) -> None:
         """Drop all cached thread workflow instances."""
@@ -316,7 +327,7 @@ class AgentFrameworkWorkflow:
         if effective_state:
             input_data["state"] = effective_state
 
-        workflow = self._resolve_workflow(thread_id)
+        workflow = self._resolve_workflow(thread_id, snapshot_scope)
         builder_seed_messages = raw_messages
         if resume_payload is not None and stored_snapshot is not None:
             # Resume requests carry only the synthesized interrupt response, so seed
@@ -349,8 +360,18 @@ class AgentFrameworkWorkflow:
             and snapshot_store is not None
             and snapshot_scope is not None
         ):
-            await snapshot_store.save(
-                scope=snapshot_scope,
-                thread_id=thread_id,
-                snapshot=snapshot_builder.build(),
-            )
+            try:
+                await snapshot_store.save(
+                    scope=snapshot_scope,
+                    thread_id=thread_id,
+                    snapshot=snapshot_builder.build(),
+                )
+            except Exception:
+                # RUN_FINISHED has already been yielded; a store failure must not
+                # surface as a second terminal RUN_ERROR event. The previous
+                # snapshot stays available for hydration.
+                logger.exception(
+                    "Failed to save AG-UI Thread Snapshot for scope=%s thread_id=%s; keeping previous snapshot.",
+                    snapshot_scope,
+                    thread_id,
+                )

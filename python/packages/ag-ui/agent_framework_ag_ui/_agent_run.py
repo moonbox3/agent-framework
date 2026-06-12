@@ -863,7 +863,7 @@ async def run_agent_stream(
 
     # Normalize messages
     available_interrupts = input_data.get("available_interrupts") or input_data.get("availableInterrupts")
-    raw_messages = list(cast(list[dict[str, Any]], input_data.get("messages", []) or []))
+    raw_messages: list[dict[str, Any]] = input_data.get("messages", []) or []
     resume_payload = _extract_resume_payload(input_data)
     if config.snapshot_store is not None and snapshot_scope is not None and not raw_messages and resume_payload is None:
         async for event in _hydrate_thread_snapshot(

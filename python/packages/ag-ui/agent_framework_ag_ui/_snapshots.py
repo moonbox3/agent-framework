@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import copy
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
@@ -133,7 +132,7 @@ class InMemoryAGUIThreadSnapshotStore:
         if max_snapshots < 1:
             raise ValueError("max_snapshots must be greater than 0.")
         self._max_snapshots = max_snapshots
-        self._snapshots: OrderedDict[_SnapshotKey, AGUIThreadSnapshot] = OrderedDict()
+        self._snapshots: dict[_SnapshotKey, AGUIThreadSnapshot] = {}
 
     async def save(
         self,
@@ -200,4 +199,4 @@ class InMemoryAGUIThreadSnapshotStore:
 
     def _evict_oldest(self) -> None:
         while len(self._snapshots) > self._max_snapshots:
-            self._snapshots.popitem(last=False)
+            del self._snapshots[next(iter(self._snapshots))]

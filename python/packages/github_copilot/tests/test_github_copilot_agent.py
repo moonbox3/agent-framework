@@ -3475,11 +3475,37 @@ class TestGitHubCopilotAttachments:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — require COPILOT_GITHUB_TOKEN env var
+# Integration tests — require user-token or GitHub Actions authentication
 # ---------------------------------------------------------------------------
+def _copilot_integration_configured() -> bool:
+    return any(os.getenv(name, "").strip() for name in ("COPILOT_GITHUB_TOKEN", "GITHUB_TOKEN"))
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({}, False),
+        ({"COPILOT_GITHUB_TOKEN": "user-token"}, True),
+        ({"GITHUB_TOKEN": "actions-token"}, True),
+    ],
+)
+def test_copilot_integration_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: dict[str, str],
+    expected: bool,
+) -> None:
+    """Integration tests accept either user-token or GitHub Actions auth."""
+    monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    assert _copilot_integration_configured() is expected
+
+
 skip_if_copilot_integration_tests_disabled = pytest.mark.skipif(
-    os.getenv("COPILOT_GITHUB_TOKEN", "") == "",
-    reason="No COPILOT_GITHUB_TOKEN provided; skipping integration tests.",
+    not _copilot_integration_configured(),
+    reason="No COPILOT_GITHUB_TOKEN or GITHUB_TOKEN provided; skipping integration tests.",
 )
 
 

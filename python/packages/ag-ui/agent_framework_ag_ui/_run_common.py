@@ -34,7 +34,7 @@ from ag_ui.core import (
 )
 from agent_framework import Content
 
-from ._orchestration._predictive_state import PredictiveStateHandler
+from ._predictive_state import PredictiveStateHandler
 from ._state import TOOL_RESULT_DISPLAY_KEY, TOOL_RESULT_STATE_KEY
 from ._utils import generate_event_id, make_json_safe, normalize_agui_role
 

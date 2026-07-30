@@ -50,8 +50,8 @@ from agent_framework.exceptions import AgentInvalidResponseException
 
 from ._approval_state import _APPROVAL_SCOPE_INPUT_KEY, InMemoryAGUIApprovalStateStore, approval_state_thread_id
 from ._message_adapters import normalize_agui_input_messages
-from ._orchestration._predictive_state import PredictiveStateHandler
-from ._orchestration._tooling import collect_server_tools, merge_tools, register_additional_client_tools
+from ._predictive_state import PredictiveStateHandler
+from ._tooling import collect_server_tools, merge_tools, register_additional_client_tools
 from ._run_common import (
     FlowState,
     _approval_interrupt_for_function_call,  # type: ignore

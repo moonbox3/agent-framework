@@ -15,6 +15,7 @@ import pytest
 from ag_ui.core import MessagesSnapshotEvent, RunStartedEvent, StateSnapshotEvent
 from agent_framework import (
     Agent,
+    AgentContext,
     AgentResponseUpdate,
     AgentSession,
     ChatResponseUpdate,
@@ -3722,6 +3723,145 @@ async def test_agent_endpoint_prepends_stored_snapshot_for_new_user_turn(streami
     events = _decode_sse_events(second_response)
     state_snapshots = [event for event in events if event.get("type") == "STATE_SNAPSHOT"]
     assert state_snapshots[0]["snapshot"] == {"recipe": "pasta"}
+
+
+async def test_agent_endpoint_keeps_request_thread_key_when_provider_returns_conversation_id(
+    streaming_chat_client_stub: Any,
+) -> None:
+    """A provider conversation id must not move snapshots away from the requested AG-UI thread."""
+    app = FastAPI()
+    captured_messages: list[list[tuple[str, str]]] = []
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any) -> AsyncIterator[ChatResponseUpdate]:
+        del options, kwargs
+        captured_messages.append([(message.role, message.text) for message in messages])
+        yield ChatResponseUpdate(
+            contents=[Content.from_text(text=f"Reply {len(captured_messages)}")],
+            conversation_id="conv_foundry_123",
+            response_id=f"resp_foundry_{len(captured_messages)}",
+        )
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "ag-ui-thread-1",
+            "run_id": "run-1",
+            "messages": [{"id": "user-1", "role": "user", "content": "Remember LANTERN-482"}],
+        },
+    )
+    assert first_response.status_code == 200
+    first_events = _decode_sse_events(first_response)
+    assert (first_events[0]["threadId"], first_events[0]["runId"]) == ("ag-ui-thread-1", "run-1")
+    assert (first_events[-1]["threadId"], first_events[-1]["runId"]) == ("ag-ui-thread-1", "run-1")
+
+    second_response = client.post(
+        "/snapshots",
+        json={
+            "thread_id": "ag-ui-thread-1",
+            "run_id": "run-2",
+            "messages": [{"id": "user-2", "role": "user", "content": "What token?"}],
+        },
+    )
+
+    assert second_response.status_code == 200
+    second_events = _decode_sse_events(second_response)
+    assert (second_events[0]["threadId"], second_events[0]["runId"]) == ("ag-ui-thread-1", "run-2")
+    assert (second_events[-1]["threadId"], second_events[-1]["runId"]) == ("ag-ui-thread-1", "run-2")
+    assert captured_messages[1] == [
+        ("user", "Remember LANTERN-482"),
+        ("assistant", "Reply 1"),
+        ("user", "What token?"),
+    ]
+
+
+async def test_agent_endpoint_correlates_agent_spans_with_supplied_thread_id(
+    streaming_chat_client_stub: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent spans use the stable AG-UI thread id as their OTel conversation id."""
+    from types import SimpleNamespace
+
+    import agent_framework.observability as observability
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        observability,
+        "OBSERVABILITY_SETTINGS",
+        SimpleNamespace(ENABLED=True, SENSITIVE_DATA_ENABLED=False),
+    )
+    monkeypatch.setattr(observability, "get_tracer", lambda *args, **kwargs: tracer_provider.get_tracer("test"))
+
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(
+            contents=[Content.from_text(text=f"Reply {call_count}")],
+            conversation_id=f"resp_foundry_{call_count}",
+        )
+
+    app = FastAPI()
+
+    async def passthrough_middleware(_context: AgentContext, call_next: Any) -> None:
+        await call_next()
+
+    agent = Agent(
+        name="test",
+        instructions="Test agent",
+        client=streaming_chat_client_stub(stream_fn),
+        middleware=[passthrough_middleware],
+    )
+    add_agent_framework_fastapi_endpoint(app, agent, path="/agent")
+    client = TestClient(app)
+
+    for run_number in (1, 2):
+        response = client.post(
+            "/agent",
+            json={
+                "thread_id": "ag-ui-thread-1",
+                "run_id": f"run-{run_number}",
+                "messages": [{"role": "user", "content": f"Turn {run_number}"}],
+            },
+        )
+        assert response.status_code == 200
+
+    agent_spans = []
+    for span in exporter.get_finished_spans():
+        if span.attributes is not None and span.attributes.get("gen_ai.operation.name") == "invoke_agent":
+            agent_spans.append(span)
+
+    assert len(agent_spans) == 2
+    trace_ids: set[int] = set()
+    conversation_ids = []
+    for span in agent_spans:
+        assert span.context is not None
+        assert span.attributes is not None
+        trace_ids.add(span.context.trace_id)
+        conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
+
+    assert len(trace_ids) == 2
+    assert conversation_ids == [
+        "ag-ui-thread-1",
+        "ag-ui-thread-1",
+    ]
 
 
 async def test_agent_endpoint_deduplicates_full_history_and_merges_fresh_state(streaming_chat_client_stub):

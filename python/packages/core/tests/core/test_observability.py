@@ -608,6 +608,36 @@ def mock_chat_agent():
     return MockChatClientAgent
 
 
+async def test_agent_telemetry_conversation_override_is_scoped(
+    mock_chat_agent: SupportsAgentRun,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """An application-managed conversation id overrides provider continuation for one run only."""
+    from agent_framework import AgentSession
+    from agent_framework.observability import (
+        _use_telemetry_conversation_id,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    agent = mock_chat_agent()  # type: ignore[operator]  # pyrefly: ignore[not-callable]  # ty: ignore[call-non-callable]
+    session = AgentSession(service_session_id="provider-conversation")
+    span_exporter.clear()
+
+    with _use_telemetry_conversation_id("application-thread"):
+        await agent.run("First turn", session=session)
+    await agent.run("Second turn", session=session)
+
+    spans = span_exporter.get_finished_spans()
+    conversation_ids = []
+    for span in spans:
+        assert span.attributes is not None
+        conversation_ids.append(span.attributes.get(OtelAttr.CONVERSATION_ID))
+
+    assert conversation_ids == [
+        "application-thread",
+        "provider-conversation",
+    ]
+
+
 @pytest.mark.parametrize("enable_sensitive_data", [True, False], indirect=True)
 async def test_agent_span_captures_response_telemetry_without_inner_chat_span(
     mock_chat_agent: SupportsAgentRun, span_exporter: InMemorySpanExporter, enable_sensitive_data
@@ -2079,6 +2109,37 @@ def test_create_workflow_span(span_exporter):
     assert len(spans) == 1
     assert spans[0].name == "test_workflow"
     assert spans[0].attributes["key"] == "value"
+
+
+def test_create_workflow_span_uses_scoped_conversation_id(span_exporter: InMemorySpanExporter) -> None:
+    """An ambient conversation id is applied only within its workflow execution scope."""
+    from agent_framework.observability import (
+        OtelAttr,
+        _use_telemetry_conversation_id,  # pyright: ignore[reportPrivateUsage]
+        create_workflow_span,
+    )
+
+    span_exporter.clear()  # type: ignore[attr-defined]
+    with _use_telemetry_conversation_id("application-thread"):
+        with create_workflow_span(OtelAttr.WORKFLOW_RUN_SPAN):
+            pass
+        with create_workflow_span(
+            OtelAttr.WORKFLOW_RUN_SPAN,
+            attributes={OtelAttr.CONVERSATION_ID: "explicit-thread"},
+        ):
+            pass
+        with create_workflow_span(OtelAttr.MESSAGE_SEND_SPAN):
+            pass
+    with create_workflow_span(OtelAttr.WORKFLOW_RUN_SPAN):
+        pass
+
+    spans = span_exporter.get_finished_spans()  # type: ignore[attr-defined]
+    workflow_spans = [span for span in spans if span.name == OtelAttr.WORKFLOW_RUN_SPAN]
+    assert workflow_spans[0].attributes[OtelAttr.CONVERSATION_ID] == "application-thread"
+    assert workflow_spans[1].attributes[OtelAttr.CONVERSATION_ID] == "explicit-thread"
+    assert OtelAttr.CONVERSATION_ID not in workflow_spans[2].attributes
+    message_send_span = next(span for span in spans if span.name == OtelAttr.MESSAGE_SEND_SPAN)
+    assert OtelAttr.CONVERSATION_ID not in message_send_span.attributes
 
 
 def test_create_processing_span(span_exporter):

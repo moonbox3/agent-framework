@@ -14,15 +14,16 @@ and human-in-the-loop resumes, see [`../ag_ui_workflow_handoff`](../ag_ui_workfl
 ## Prerequisites
 
 - Python 3.10+
-- Node.js 18+
+- Node.js 20.19+ or 22.12+
 - npm 9+
 - Azure AI project + model deployment configured in environment variables:
   - `FOUNDRY_PROJECT_ENDPOINT`
   - `FOUNDRY_MODEL`
+- Azure CLI authenticated with `az login`
 
 ## 1) Run Backend
 
-From the Python repo root:
+From the repository root:
 
 ```bash
 cd python
@@ -34,6 +35,15 @@ Backend default URL:
 
 - `http://127.0.0.1:8892`
 - AG-UI endpoint: `POST http://127.0.0.1:8892/agent`
+
+To export traces to the Application Insights resource connected to the Foundry project, run the backend with:
+
+```bash
+ENABLE_AZURE_MONITOR=true uv run python samples/05-end-to-end/ag_ui_single_agent/backend/server.py
+```
+
+Each user turn is a separate run and trace. The stable AG-UI `thread_id` is recorded as
+`gen_ai.conversation.id`, which lets Foundry group those turns into one conversation.
 
 ## 2) Install Frontend Packages (npm)
 
@@ -83,3 +93,4 @@ The in-memory store is process-local and not durable. Swap in your own `AGUIThre
 - `add_agent_framework_fastapi_endpoint(...)` with a plain `Agent` (no `AgentFrameworkWorkflow` wrapper)
 - Streaming assistant text via `TEXT_MESSAGE_START` / `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_END` AG-UI events
 - Server-side conversation history keyed by `thread_id` via a snapshot store
+- Foundry trace correlation across runs using the stable AG-UI `thread_id`

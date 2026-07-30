@@ -78,13 +78,13 @@ export default function App() {
         setStatusText("Thinking");
         break;
       case "TEXT_MESSAGE_START": {
-        const messageId = typeof event.message_id === "string" ? event.message_id : randomId();
+        const messageId = typeof event.messageId === "string" ? event.messageId : randomId();
         streamingMessageIdRef.current = messageId;
         break;
       }
       case "TEXT_MESSAGE_CONTENT": {
         const messageId =
-          typeof event.message_id === "string" ? event.message_id : streamingMessageIdRef.current ?? randomId();
+          typeof event.messageId === "string" ? event.messageId : streamingMessageIdRef.current ?? randomId();
         const delta = typeof event.delta === "string" ? event.delta : "";
         if (delta.length > 0) {
           setStatusText("Responding");

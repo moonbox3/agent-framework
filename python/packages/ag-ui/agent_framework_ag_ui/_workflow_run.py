@@ -9,6 +9,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from functools import partial
 from typing import Any, cast, get_args, get_origin
 
 from ag_ui.core import (
@@ -25,6 +26,9 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from agent_framework import AgentResponse, AgentResponseUpdate, Content, Message, Workflow, WorkflowRunState
+from agent_framework.observability import (
+    _use_telemetry_conversation_id,  # pyright: ignore[reportPrivateUsage]
+)
 
 from ._message_adapters import normalize_agui_input_messages
 from ._run_common import (
@@ -33,6 +37,7 @@ from ._run_common import (
     _close_reasoning_block,
     _emit_content,
     _extract_resume_payload,
+    _iterate_with_context,
     _normalize_resume_interrupts,
     _resume_contract_error,
 )
@@ -890,12 +895,14 @@ async def run_workflow_stream(
             fwd_kwargs = {}
 
     try:
-        if responses:
-            event_stream = workflow.run(responses=responses, stream=True, **fwd_kwargs)
-        else:
-            event_stream = workflow.run(message=messages, stream=True, **fwd_kwargs)
+        telemetry_context = partial(_use_telemetry_conversation_id, str(thread_id))
+        with telemetry_context():
+            if responses:
+                event_stream = workflow.run(responses=responses, stream=True, **fwd_kwargs)
+            else:
+                event_stream = workflow.run(message=messages, stream=True, **fwd_kwargs)
 
-        async for event in event_stream:
+        async for event in _iterate_with_context(event_stream, telemetry_context):
             event_type = getattr(event, "type", None)
 
             if event_type == "started":

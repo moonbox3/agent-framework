@@ -8,9 +8,11 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any, cast
 
-from ag_ui.core import EventType, StateSnapshotEvent
+import pytest
+from ag_ui.core import EventType, RunFinishedEvent, RunStartedEvent, StateSnapshotEvent
 from agent_framework import (
     Agent,
+    AgentContext,
     AgentResponse,
     AgentResponseUpdate,
     ChatResponseUpdate,
@@ -112,6 +114,100 @@ async def test_workflow_run_maps_custom_and_text_events():
     custom_events = [event for event in events if event.type == "CUSTOM" and event.name == "custom_progress"]  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
     assert len(custom_events) == 1
     assert custom_events[0].value == {"progress": 10}  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
+
+
+async def test_workflow_and_agent_spans_use_supplied_agui_thread_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Workflow and nested agent spans use the stable AG-UI thread id as their OTel conversation id."""
+    import agent_framework.observability as observability
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        observability,
+        "OBSERVABILITY_SETTINGS",
+        SimpleNamespace(ENABLED=True, SENSITIVE_DATA_ENABLED=False),
+    )
+    monkeypatch.setattr(observability, "get_tracer", lambda *args, **kwargs: tracer_provider.get_tracer("test"))
+
+    call_count = 0
+
+    async def scripted_stream(
+        messages: Any,
+        options: Any,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(
+            contents=[Content.from_text(text=f"Reply {call_count}")],
+            conversation_id=f"resp_foundry_{call_count}",
+        )
+
+    async def passthrough_middleware(_context: AgentContext, call_next: Any) -> None:
+        await call_next()
+
+    participant = Agent(
+        client=StreamingChatClientStub(scripted_stream),
+        name="workflow-agent",
+        middleware=[passthrough_middleware],
+    )
+    workflow = WorkflowBuilder(start_executor=participant, output_from="all").build()
+
+    for run_number in (1, 2):
+        events = [
+            event
+            async for event in run_workflow_stream(
+                {
+                    "thread_id": "ag-ui-workflow-thread",
+                    "run_id": f"run-{run_number}",
+                    "messages": [{"role": "user", "content": f"Turn {run_number}"}],
+                },
+                workflow,
+            )
+        ]
+        run_started = next(event for event in events if isinstance(event, RunStartedEvent))
+        run_finished = next(event for event in events if isinstance(event, RunFinishedEvent))
+        assert (run_started.thread_id, run_started.run_id) == (
+            "ag-ui-workflow-thread",
+            f"run-{run_number}",
+        )
+        assert (run_finished.thread_id, run_finished.run_id) == (
+            "ag-ui-workflow-thread",
+            f"run-{run_number}",
+        )
+
+    agent_spans = []
+    for span in exporter.get_finished_spans():
+        if span.attributes is not None and span.attributes.get("gen_ai.operation.name") == "invoke_agent":
+            agent_spans.append(span)
+
+    assert len(agent_spans) == 2
+    conversation_ids = []
+    for span in agent_spans:
+        assert span.attributes is not None
+        conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
+
+    assert conversation_ids == [
+        "ag-ui-workflow-thread",
+        "ag-ui-workflow-thread",
+    ]
+
+    workflow_spans = [span for span in exporter.get_finished_spans() if span.name == "workflow.run"]
+    assert len(workflow_spans) == 2
+    workflow_conversation_ids = []
+    for span in workflow_spans:
+        assert span.attributes is not None
+        workflow_conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
+
+    assert workflow_conversation_ids == [
+        "ag-ui-workflow-thread",
+        "ag-ui-workflow-thread",
+    ]
 
 
 async def test_workflow_run_request_info_emits_interrupt_and_resume_works():

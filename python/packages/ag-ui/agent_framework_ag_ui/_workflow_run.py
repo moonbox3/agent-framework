@@ -782,7 +782,8 @@ async def run_workflow_stream(
     workflow: Workflow,
 ) -> AsyncGenerator[BaseEvent]:
     """Run a Workflow and emit AG-UI protocol events."""
-    thread_id = input_data.get("thread_id") or input_data.get("threadId") or str(uuid.uuid4())
+    supplied_thread_id = input_data.get("thread_id") or input_data.get("threadId")
+    thread_id = supplied_thread_id or str(uuid.uuid4())
     run_id = input_data.get("run_id") or input_data.get("runId") or str(uuid.uuid4())
     available_interrupts = input_data.get("available_interrupts") or input_data.get("availableInterrupts")
     if available_interrupts:
@@ -895,7 +896,8 @@ async def run_workflow_stream(
             fwd_kwargs = {}
 
     try:
-        telemetry_context = partial(_use_telemetry_conversation_id, str(thread_id))
+        telemetry_conversation_id = str(supplied_thread_id) if supplied_thread_id is not None else None
+        telemetry_context = partial(_use_telemetry_conversation_id, telemetry_conversation_id)
         with telemetry_context():
             if responses:
                 event_stream = workflow.run(responses=responses, stream=True, **fwd_kwargs)

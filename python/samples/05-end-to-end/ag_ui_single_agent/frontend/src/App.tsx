@@ -131,7 +131,7 @@ export default function App() {
 
     const processSseChunk = (rawChunk: string): void => {
       const dataLines = rawChunk
-        .split("\n")
+        .split(/\r?\n/)
         .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice(5).trim());
 
@@ -154,12 +154,13 @@ export default function App() {
       buffer += decoder.decode(value, { stream: true });
 
       while (true) {
-        const boundaryIndex = buffer.indexOf("\n\n");
-        if (boundaryIndex < 0) {
+        const boundary = /\r?\n\r?\n/.exec(buffer);
+        if (boundary === null) {
           break;
         }
+        const boundaryIndex = boundary.index;
         const rawEvent = buffer.slice(0, boundaryIndex);
-        buffer = buffer.slice(boundaryIndex + 2);
+        buffer = buffer.slice(boundaryIndex + boundary[0].length);
         processSseChunk(rawEvent);
       }
     }

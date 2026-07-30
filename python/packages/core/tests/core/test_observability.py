@@ -2135,11 +2135,20 @@ def test_create_workflow_span_uses_scoped_conversation_id(span_exporter: InMemor
 
     spans = span_exporter.get_finished_spans()  # type: ignore[attr-defined]
     workflow_spans = [span for span in spans if span.name == OtelAttr.WORKFLOW_RUN_SPAN]
-    assert workflow_spans[0].attributes[OtelAttr.CONVERSATION_ID] == "application-thread"
-    assert workflow_spans[1].attributes[OtelAttr.CONVERSATION_ID] == "explicit-thread"
-    assert OtelAttr.CONVERSATION_ID not in workflow_spans[2].attributes
+    assert len(workflow_spans) == 3
+    ambient_attributes = workflow_spans[0].attributes
+    explicit_attributes = workflow_spans[1].attributes
+    unscoped_attributes = workflow_spans[2].attributes
+    assert ambient_attributes is not None
+    assert explicit_attributes is not None
+    assert unscoped_attributes is not None
+    assert ambient_attributes[OtelAttr.CONVERSATION_ID] == "application-thread"
+    assert explicit_attributes[OtelAttr.CONVERSATION_ID] == "explicit-thread"
+    assert OtelAttr.CONVERSATION_ID not in unscoped_attributes
     message_send_span = next(span for span in spans if span.name == OtelAttr.MESSAGE_SEND_SPAN)
-    assert OtelAttr.CONVERSATION_ID not in message_send_span.attributes
+    message_send_attributes = message_send_span.attributes
+    assert message_send_attributes is not None
+    assert OtelAttr.CONVERSATION_ID not in message_send_attributes
 
 
 def test_create_processing_span(span_exporter):

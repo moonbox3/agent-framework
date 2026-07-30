@@ -117,7 +117,7 @@ async def test_workflow_run_maps_custom_and_text_events():
 
 
 async def test_workflow_and_agent_spans_use_supplied_agui_thread_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Workflow and nested agent spans use the stable AG-UI thread id as their OTel conversation id."""
+    """Workflow spans use supplied AG-UI threads without replacing provider fallback behavior."""
     import agent_framework.observability as observability
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -145,7 +145,7 @@ async def test_workflow_and_agent_spans_use_supplied_agui_thread_id(monkeypatch:
         call_count += 1
         yield ChatResponseUpdate(
             contents=[Content.from_text(text=f"Reply {call_count}")],
-            conversation_id=f"resp_foundry_{call_count}",
+            conversation_id="provider-conversation",
         )
 
     async def passthrough_middleware(_context: AgentContext, call_next: Any) -> None:
@@ -208,6 +208,28 @@ async def test_workflow_and_agent_spans_use_supplied_agui_thread_id(monkeypatch:
         "ag-ui-workflow-thread",
         "ag-ui-workflow-thread",
     ]
+
+    exporter.clear()
+    events = [
+        event
+        async for event in run_workflow_stream(
+            {"messages": [{"role": "user", "content": "Provider fallback"}]},
+            workflow,
+        )
+    ]
+    assert any(isinstance(event, RunFinishedEvent) for event in events)
+
+    fallback_agent_span = next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes is not None and span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    )
+    assert fallback_agent_span.attributes is not None
+    assert fallback_agent_span.attributes.get("gen_ai.conversation.id") == "provider-conversation"
+
+    fallback_workflow_span = next(span for span in exporter.get_finished_spans() if span.name == "workflow.run")
+    assert fallback_workflow_span.attributes is not None
+    assert "gen_ai.conversation.id" not in fallback_workflow_span.attributes
 
 
 async def test_workflow_run_request_info_emits_interrupt_and_resume_works():

@@ -13,6 +13,17 @@
 
 # Copyright (c) Microsoft. All rights reserved.
 
+"""AG-UI single-agent demo backend.
+
+This sample exposes one Foundry-backed Agent over AG-UI and pairs it with the
+React frontend in `../frontend`.
+
+Environment variables:
+    FOUNDRY_PROJECT_ENDPOINT: Microsoft Foundry project endpoint.
+    FOUNDRY_MODEL: Model deployment name.
+    ENABLE_AZURE_MONITOR: Set to true to export traces to the project's Application Insights resource.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,17 +45,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
-
-"""AG-UI single-agent demo backend.
-
-This sample exposes one Foundry-backed Agent over AG-UI and pairs it with the
-React frontend in `../frontend`.
-
-Environment variables:
-    FOUNDRY_PROJECT_ENDPOINT: Microsoft Foundry project endpoint.
-    FOUNDRY_MODEL: Model deployment name.
-    ENABLE_AZURE_MONITOR: Set to true to export traces to the project's Application Insights resource.
-"""
 
 logger = logging.getLogger(__name__)
 

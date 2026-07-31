@@ -164,6 +164,10 @@ def mock_chat_client():
     """Create a mock chat client for testing."""
 
     class MockChatClient(ChatTelemetryLayer, BaseChatClient[Any]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.observed_options: list[dict[str, Any]] = []
+
         def service_url(self):
             return "https://test.example.com"
 
@@ -175,6 +179,7 @@ def mock_chat_client():
             options: Mapping[str, Any],
             **kwargs: Any,  # type: ignore[override]
         ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+            self.observed_options.append(dict(options))
             if stream:
                 return self._get_streaming_response(messages=messages, options=options, **kwargs)
 
@@ -205,6 +210,61 @@ def mock_chat_client():
             return ResponseStream(_stream(), finalizer=_finalize)
 
     return MockChatClient
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_chat_telemetry_conversation_override_is_scoped_and_telemetry_only(
+    mock_chat_client: Any,
+    span_exporter: InMemorySpanExporter,
+    stream: bool,
+) -> None:
+    """An application conversation id changes telemetry without changing provider options."""
+    from agent_framework.observability import (
+        _use_telemetry_conversation_id,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    client = mock_chat_client()
+    messages = [Message(role="user", contents=["Test message"])]
+    provider_options = {
+        "model": "Test",
+        "conversation_id": "provider-conversation",
+        "metadata": {"sentinel": "unchanged"},
+    }
+    expected_options = {
+        "model": "Test",
+        "conversation_id": "provider-conversation",
+        "metadata": {"sentinel": "unchanged"},
+    }
+
+    async def invoke() -> None:
+        if stream:
+            response_stream = client.get_response(messages=messages, stream=True, options=provider_options)
+            async for _ in response_stream:
+                pass
+            await response_stream.get_final_response()
+            return
+        await client.get_response(messages=messages, stream=False, options=provider_options)
+
+    span_exporter.clear()
+    with _use_telemetry_conversation_id("application-thread"):
+        await invoke()
+
+    assert provider_options == expected_options
+    assert client.observed_options == [expected_options]
+    scoped_spans = span_exporter.get_finished_spans()
+    assert len(scoped_spans) == 1
+    assert scoped_spans[0].attributes is not None
+    assert scoped_spans[0].attributes.get(OtelAttr.CONVERSATION_ID) == "application-thread"
+
+    span_exporter.clear()
+    await invoke()
+
+    assert provider_options == expected_options
+    assert client.observed_options == [expected_options, expected_options]
+    unscoped_spans = span_exporter.get_finished_spans()
+    assert len(unscoped_spans) == 1
+    assert unscoped_spans[0].attributes is not None
+    assert unscoped_spans[0].attributes.get(OtelAttr.CONVERSATION_ID) != "application-thread"
 
 
 @pytest.mark.parametrize("enable_sensitive_data", [True, False], indirect=True)

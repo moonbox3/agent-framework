@@ -3785,11 +3785,11 @@ async def test_agent_endpoint_keeps_request_thread_key_when_provider_returns_con
     ]
 
 
-async def test_agent_endpoint_correlates_agent_spans_with_supplied_thread_id(
+async def test_agent_endpoint_correlates_gen_ai_spans_with_supplied_thread_id(
     streaming_chat_client_stub: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Agent spans use the stable AG-UI thread id as their OTel conversation id."""
+    """Agent and chat spans use the stable AG-UI thread id as their OTel conversation id."""
     from types import SimpleNamespace
 
     import agent_framework.observability as observability
@@ -3808,11 +3808,13 @@ async def test_agent_endpoint_correlates_agent_spans_with_supplied_thread_id(
     monkeypatch.setattr(observability, "get_tracer", lambda *args, **kwargs: tracer_provider.get_tracer("test"))
 
     call_count = 0
+    provider_conversation_ids: list[str | None] = []
 
     async def stream_fn(messages: Any, options: Any, **kwargs: Any) -> AsyncIterator[ChatResponseUpdate]:
         nonlocal call_count
-        del messages, options, kwargs
+        del messages, kwargs
         call_count += 1
+        provider_conversation_ids.append(options.get("conversation_id"))
         yield ChatResponseUpdate(
             contents=[Content.from_text(text=f"Reply {call_count}")],
             conversation_id=f"resp_foundry_{call_count}",
@@ -3843,25 +3845,43 @@ async def test_agent_endpoint_correlates_agent_spans_with_supplied_thread_id(
         )
         assert response.status_code == 200
 
-    agent_spans = []
+    spans_by_operation: dict[str, list[Any]] = {"invoke_agent": [], "chat": []}
     for span in exporter.get_finished_spans():
-        if span.attributes is not None and span.attributes.get("gen_ai.operation.name") == "invoke_agent":
-            agent_spans.append(span)
+        if span.attributes is None:
+            continue
+        operation = span.attributes.get("gen_ai.operation.name")
+        if isinstance(operation, str) and operation in spans_by_operation:
+            spans_by_operation[operation].append(span)
 
-    assert len(agent_spans) == 2
-    trace_ids: set[int] = set()
-    conversation_ids = []
-    for span in agent_spans:
-        assert span.context is not None
-        assert span.attributes is not None
-        trace_ids.add(span.context.trace_id)
-        conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
+    trace_ids_by_operation: dict[str, set[int]] = {}
+    for operation, spans in spans_by_operation.items():
+        assert len(spans) == 2
+        trace_ids: set[int] = set()
+        conversation_ids = []
+        for span in spans:
+            assert span.context is not None
+            assert span.attributes is not None
+            trace_ids.add(span.context.trace_id)
+            conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
+        trace_ids_by_operation[operation] = trace_ids
+        assert conversation_ids == [
+            "ag-ui-thread-1",
+            "ag-ui-thread-1",
+        ]
 
-    assert len(trace_ids) == 2
-    assert conversation_ids == [
-        "ag-ui-thread-1",
-        "ag-ui-thread-1",
-    ]
+    assert len(trace_ids_by_operation["invoke_agent"]) == 2
+    assert trace_ids_by_operation["chat"] == trace_ids_by_operation["invoke_agent"]
+    for chat_span in spans_by_operation["chat"]:
+        assert chat_span.context is not None
+        assert chat_span.parent is not None
+        matching_agent_span = next(
+            span
+            for span in spans_by_operation["invoke_agent"]
+            if span.context is not None and span.context.trace_id == chat_span.context.trace_id
+        )
+        assert matching_agent_span.context is not None
+        assert chat_span.parent.span_id == matching_agent_span.context.span_id
+    assert provider_conversation_ids == [None, None]
 
 
 async def test_agent_endpoint_deduplicates_full_history_and_merges_fresh_state(streaming_chat_client_stub):

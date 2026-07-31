@@ -181,21 +181,20 @@ async def test_workflow_and_agent_spans_use_supplied_agui_thread_id(monkeypatch:
             f"run-{run_number}",
         )
 
-    agent_spans = []
+    spans_by_operation: dict[str, list[Any]] = {"invoke_agent": [], "chat": []}
     for span in exporter.get_finished_spans():
-        if span.attributes is not None and span.attributes.get("gen_ai.operation.name") == "invoke_agent":
-            agent_spans.append(span)
+        if span.attributes is None:
+            continue
+        operation = span.attributes.get("gen_ai.operation.name")
+        if isinstance(operation, str) and operation in spans_by_operation:
+            spans_by_operation[operation].append(span)
 
-    assert len(agent_spans) == 2
-    conversation_ids = []
-    for span in agent_spans:
-        assert span.attributes is not None
-        conversation_ids.append(span.attributes.get("gen_ai.conversation.id"))
-
-    assert conversation_ids == [
-        "ag-ui-workflow-thread",
-        "ag-ui-workflow-thread",
-    ]
+    for spans in spans_by_operation.values():
+        assert len(spans) == 2
+        assert [span.attributes.get("gen_ai.conversation.id") for span in spans if span.attributes is not None] == [
+            "ag-ui-workflow-thread",
+            "ag-ui-workflow-thread",
+        ]
 
     workflow_spans = [span for span in exporter.get_finished_spans() if span.name == "workflow.run"]
     assert len(workflow_spans) == 2

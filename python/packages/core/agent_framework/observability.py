@@ -1551,6 +1551,10 @@ class ChatTelemetryLayer(Generic[OptionsCoT]):
             service_url=service_url,
             **merged_client_kwargs,
         )
+        if (telemetry_conversation_id := _TELEMETRY_CONVERSATION_ID.get()) is not None:
+            # Keep application-managed telemetry correlation separate from the
+            # provider-owned conversation_id forwarded through chat options.
+            attributes[OtelAttr.CONVERSATION_ID] = telemetry_conversation_id
 
         if stream:
             agent_span = trace.get_current_span()

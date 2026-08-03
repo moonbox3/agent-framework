@@ -305,6 +305,33 @@ async def test_cmc_ignores_control_only_approval_resume_message(
 
 
 @patch.object(AsyncClient, "chat", new_callable=AsyncMock)
+async def test_cmc_rejects_only_control_approval_resume_message(
+    mock_chat: AsyncMock,
+    ollama_unit_test_env: dict[str, str],
+) -> None:
+    """A transcript with no Ollama-representable messages is rejected before the SDK call."""
+    mock_chat.return_value = OllamaChatResponse(
+        message=OllamaMessage(content="unexpected", role="assistant"),
+        model="test",
+    )
+    function_call = Content.from_function_call(
+        call_id="call_123",
+        name="dangerous_action",
+        arguments={"target": "production"},
+    )
+    approval_response = Content.from_function_approval_response(
+        approved=True,
+        id="approval_123",
+        function_call=function_call,
+    )
+
+    with pytest.raises(ChatClientInvalidRequestException, match="Messages are required for chat completions"):
+        await OllamaChatClient().get_response(messages=[Message(role="user", contents=[approval_response])])
+
+    mock_chat.assert_not_awaited()
+
+
+@patch.object(AsyncClient, "chat", new_callable=AsyncMock)
 async def test_cmc_maps_done_reason_to_finish_reason(
     mock_chat: AsyncMock,
     ollama_unit_test_env: dict[str, str],

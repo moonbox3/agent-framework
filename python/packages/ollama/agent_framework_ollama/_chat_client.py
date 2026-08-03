@@ -439,7 +439,7 @@ class OllamaChatClient(
         # messages
         if messages and "messages" not in run_options:
             run_options["messages"] = self._prepare_messages_for_ollama(messages)
-        if "messages" not in run_options:
+        if not run_options.get("messages"):
             raise ChatClientInvalidRequestException("Messages are required for chat completions")
 
         # model

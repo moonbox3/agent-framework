@@ -3785,6 +3785,67 @@ async def test_agent_endpoint_keeps_request_thread_key_when_provider_returns_con
     ]
 
 
+async def test_agent_endpoint_uses_provider_thread_key_when_request_omits_thread_id(
+    streaming_chat_client_stub: Any,
+) -> None:
+    """A provider fallback ID becomes the lifecycle and snapshot key when AG-UI omits one."""
+    app = FastAPI()
+    call_count = 0
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        yield ChatResponseUpdate(
+            contents=[Content.from_text(text="Stored reply")],
+            conversation_id="conv_foundry_123",
+            response_id="resp_foundry_1",
+        )
+
+    agent = Agent(name="test", instructions="Test agent", client=streaming_chat_client_stub(stream_fn))
+    store = InMemoryAGUIThreadSnapshotStore()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        agent,
+        path="/snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/snapshots",
+        json={"messages": [{"id": "user-1", "role": "user", "content": "Remember LANTERN-482"}]},
+    )
+
+    assert first_response.status_code == 200
+    first_events = _decode_sse_events(first_response)
+    assert (first_events[0]["threadId"], first_events[0]["runId"]) == (
+        "conv_foundry_123",
+        "resp_foundry_1",
+    )
+    assert (first_events[-1]["threadId"], first_events[-1]["runId"]) == (
+        "conv_foundry_123",
+        "resp_foundry_1",
+    )
+
+    hydrate_response = client.post(
+        "/snapshots",
+        json={"thread_id": "conv_foundry_123", "run_id": "hydrate-run", "messages": []},
+    )
+
+    assert hydrate_response.status_code == 200
+    assert call_count == 1
+    hydrated_messages = _latest_messages_snapshot(hydrate_response)
+    assert any(
+        message.get("role") == "user" and message.get("content") == "Remember LANTERN-482"
+        for message in hydrated_messages
+    )
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == "Stored reply" for message in hydrated_messages
+    )
+
+
 async def test_agent_endpoint_correlates_gen_ai_spans_with_supplied_thread_id(
     streaming_chat_client_stub: Any,
     monkeypatch: pytest.MonkeyPatch,

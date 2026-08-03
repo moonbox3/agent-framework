@@ -9,7 +9,12 @@ that interface only; runner integration is covered by the existing suite.
 """
 
 import pytest
-from ag_ui.core import EventType
+from ag_ui.core import (
+    EventType,
+    MessagesSnapshotEvent,
+    RunStartedEvent,
+    StateSnapshotEvent,
+)
 
 from agent_framework_ag_ui import AGUIThreadSnapshot, InMemoryAGUIThreadSnapshotStore
 from agent_framework_ag_ui._snapshot_session import ThreadSnapshotSession
@@ -85,10 +90,14 @@ class TestHydrateEvents:
             EventType.MESSAGES_SNAPSHOT,
             EventType.RUN_FINISHED,
         ]
-        assert events[0].run_id == "r1"
-        assert events[0].thread_id == "t1"
-        assert events[1].snapshot == {"counter": 1}
-        assert [message.id for message in events[2].messages] == ["m1"]
+        run_started, state_snapshot, messages_snapshot = events[0], events[1], events[2]
+        assert isinstance(run_started, RunStartedEvent)
+        assert run_started.run_id == "r1"
+        assert run_started.thread_id == "t1"
+        assert isinstance(state_snapshot, StateSnapshotEvent)
+        assert state_snapshot.snapshot == {"counter": 1}
+        assert isinstance(messages_snapshot, MessagesSnapshotEvent)
+        assert [message.id for message in messages_snapshot.messages] == ["m1"]
         outcome = getattr(events[3], "outcome", None)
         assert getattr(outcome, "type", None) == "interrupt"
 

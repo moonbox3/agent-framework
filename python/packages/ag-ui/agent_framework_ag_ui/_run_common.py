@@ -108,6 +108,18 @@ def _normalize_resume_interrupts(resume_payload: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _cancelled_resume_interrupt_ids(resume_payload: Any) -> set[str]:
+    """Return cancelled canonical resume interrupt ids."""
+    interrupt_ids: set[str] = set()
+    for interrupt in _normalize_resume_interrupts(resume_payload):
+        if interrupt.get("status") != "cancelled":
+            continue
+        interrupt_id = interrupt.get("id")
+        if interrupt_id:
+            interrupt_ids.add(str(interrupt_id))
+    return interrupt_ids
+
+
 def _extract_resume_payload(input_data: dict[str, Any]) -> Any:
     """Extract resume payload from standard and forwarded-props request locations."""
     resume_payload = input_data.get("resume")

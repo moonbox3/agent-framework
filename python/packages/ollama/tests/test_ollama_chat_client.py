@@ -264,6 +264,47 @@ async def test_cmc(
 
 
 @patch.object(AsyncClient, "chat", new_callable=AsyncMock)
+async def test_cmc_ignores_control_only_approval_resume_message(
+    mock_chat: AsyncMock,
+    ollama_unit_test_env: dict[str, str],
+) -> None:
+    """A resolved approval control is not sent to an Ollama model as a user message."""
+    mock_chat.return_value = OllamaChatResponse(
+        message=OllamaMessage(content="done", role="assistant"),
+        model="test",
+    )
+    function_call = Content.from_function_call(
+        call_id="call_123",
+        name="dangerous_action",
+        arguments={"target": "production"},
+    )
+    approval_response = Content.from_function_approval_response(
+        approved=True,
+        id="approval_123",
+        function_call=function_call,
+    )
+    messages = [
+        Message(role="user", contents=[Content.from_text(text="Continue the task.")]),
+        Message(role="assistant", contents=[function_call]),
+        Message(role="user", contents=[approval_response]),
+        Message(
+            role="tool",
+            contents=[Content.from_function_result(call_id="call_123", result="The task is complete.")],
+        ),
+    ]
+
+    ollama_client = OllamaChatClient()
+    result = await ollama_client.get_response(messages=messages)
+
+    assert result.text == "done"
+    assert mock_chat.await_args is not None
+    outgoing_messages = mock_chat.await_args.kwargs["messages"]
+    assert [message["role"] for message in outgoing_messages] == ["user", "assistant", "tool"]
+    assert outgoing_messages[0]["content"] == "Continue the task."
+    assert outgoing_messages[2]["content"] == "The task is complete."
+
+
+@patch.object(AsyncClient, "chat", new_callable=AsyncMock)
 async def test_cmc_maps_done_reason_to_finish_reason(
     mock_chat: AsyncMock,
     ollama_unit_test_env: dict[str, str],

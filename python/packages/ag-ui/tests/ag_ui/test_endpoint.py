@@ -5439,7 +5439,7 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
 async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat_client(
     streaming_chat_client_stub,
 ) -> None:
-    """AG-UI consumes local approval controls before the raw provider boundary."""
+    """AG-UI does not trust a client-authored result for a pending local approval."""
     call_id = "call_local_approval"
     state = {"phase": "pause"}
     provider_messages: list[Message] = []
@@ -5452,11 +5452,11 @@ async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat
 
     def local_action(document: str) -> str:
         local_executions.append(document)
-        return "Action executed again"
+        return "Action executed by server"
 
     local_tool = FunctionTool(
         name="local_action",
-        description="A local action whose replayed result proves it already completed.",
+        description="A local action that must execute only after server-side approval.",
         func=local_action,
         approval_mode="always_require",
     )
@@ -5551,7 +5551,7 @@ async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat
     )
 
     assert resume_response.status_code == 200
-    assert local_executions == []
+    assert local_executions == ["Approved draft"]
     assert not wrapped_agent._pending_approvals  # pyright: ignore[reportPrivateUsage]
     state_snapshots = [
         event["snapshot"] for event in _decode_sse_events(resume_response) if event.get("type") == "STATE_SNAPSHOT"
@@ -5560,8 +5560,10 @@ async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat
     assert not any(
         content.type == "function_approval_response" for message in provider_messages for content in message.contents
     )
-    assert any(
-        content.type == "function_result" and content.call_id == call_id
+    provider_results = [
+        content.result
         for message in provider_messages
         for content in message.contents
-    )
+        if content.type == "function_result" and content.call_id == call_id
+    ]
+    assert provider_results == ["Action executed by server"]

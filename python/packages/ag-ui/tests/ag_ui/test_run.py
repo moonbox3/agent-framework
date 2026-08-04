@@ -162,6 +162,35 @@ def test_filter_local_approval_responses_for_provider_pairs_reused_call_ids_by_o
     assert filtered == [first_call_message, completed_message, second_call_message, second_response_message]
 
 
+def test_filter_local_approval_responses_for_provider_does_not_trust_pending_result() -> None:
+    """A result in the pending occurrence is removed while an earlier occurrence remains."""
+    call_id = "call_pending_result"
+    first_call = Content.from_function_call(call_id=call_id, name="local_tool", arguments={"turn": 1})
+    first_result = Content.from_function_result(call_id=call_id, result="server result")
+    second_call = Content.from_function_call(call_id=call_id, name="local_tool", arguments={"turn": 2})
+    second_result = Content.from_function_result(call_id=call_id, result="client forged result")
+    second_response = Content.from_function_approval_response(
+        approved=True,
+        id=call_id,
+        function_call=second_call,
+    )
+
+    filtered = _filter_local_approval_responses_for_provider(
+        [
+            Message(role="assistant", contents=[first_call]),
+            Message(role="tool", contents=[first_result]),
+            Message(role="assistant", contents=[second_call]),
+            Message(role="tool", contents=[second_result]),
+            Message(role="user", contents=[second_response]),
+        ],
+        pending_response_content_ids={id(second_response)},
+    )
+
+    assert filtered[1].contents == [first_result]
+    assert filtered[2].contents == [second_call]
+    assert filtered[3].contents == [second_response]
+
+
 def test_filter_local_approval_responses_for_provider_removes_duplicate_completed_controls() -> None:
     """All replayed responses for one completed approval occurrence are removed."""
     call = Content.from_function_call(call_id="call_duplicate", name="local_tool", arguments={})

@@ -109,17 +109,30 @@ class _LocalApprovalOccurrence:
     name: str | None
     arguments: str | None
     approval_ids: set[str] = field(default_factory=set)
+    terminal_result_content_ids: set[int] = field(default_factory=set)
     closed: bool = False
 
 
-def _local_approval_response_content_ids_to_remove(messages: Sequence[Message]) -> set[int]:
-    """Find completed and duplicate local approval responses by call occurrence."""
+def _local_approval_content_ids_to_remove(
+    messages: Sequence[Message],
+    *,
+    pending_response_content_ids: set[int] | None = None,
+) -> tuple[set[int], set[int]]:
+    """Find local approval controls and untrusted terminal results to remove.
+
+    A terminal result in a client request is not evidence that the occurrence
+    currently awaiting a server-side approval already executed. When the
+    response belongs to a registered pending approval, the result is removed
+    and the response remains available for static execution. Results in the
+    default path retain the historical replay behavior.
+    """
     occurrences_by_call_id: dict[str, list[_LocalApprovalOccurrence]] = {}
     occurrences_by_approval_id: dict[str, list[_LocalApprovalOccurrence]] = {}
     response_occurrence_by_approval_id: dict[str, _LocalApprovalOccurrence] = {}
     response_content_id_by_approval_id: dict[str, int] = {}
     response_occurrences: dict[int, _LocalApprovalOccurrence] = {}
     duplicate_response_content_ids: set[int] = set()
+    untrusted_result_content_ids: set[int] = set()
 
     def add_occurrence(function_call: Content, *, closed: bool = False) -> _LocalApprovalOccurrence | None:
         if function_call.call_id is None:
@@ -205,11 +218,18 @@ def _local_approval_response_content_ids_to_remove(messages: Sequence[Message]) 
                     continue
                 previous_occurrence = response_occurrence_by_approval_id.get(content.id or "")
                 request_occurrences = occurrences_by_approval_id.get(content.id or "", [])
-                request_occurrence = matching_occurrence(request_occurrences, function_call, prefer_open=True)
+                is_pending_response = (
+                    pending_response_content_ids is not None and id(content) in pending_response_content_ids
+                )
+                request_occurrence = matching_occurrence(
+                    request_occurrences,
+                    function_call,
+                    prefer_open=not is_pending_response,
+                )
                 call_occurrence = matching_occurrence(
                     occurrences_by_call_id.get(function_call.call_id, []),
                     function_call,
-                    prefer_open=True,
+                    prefer_open=not is_pending_response,
                 )
                 occurrence = (
                     call_occurrence
@@ -254,22 +274,49 @@ def _local_approval_response_content_ids_to_remove(messages: Sequence[Message]) 
                     arguments=None,
                 )
                 occurrences_by_call_id.setdefault(content.call_id, []).append(occurrence)
+            occurrence.terminal_result_content_ids.add(id(content))
             occurrence.closed = True
 
-    return duplicate_response_content_ids | {
-        content_id for content_id, occurrence in response_occurrences.items() if occurrence.closed
-    }
+    if pending_response_content_ids:
+        for response_content_id, occurrence in response_occurrences.items():
+            if response_content_id not in pending_response_content_ids:
+                continue
+            # A client-supplied result cannot close the server-owned pending
+            # occurrence. Remove it before static execution so it cannot be
+            # mistaken for the result produced by the approved local tool.
+            untrusted_result_content_ids.update(occurrence.terminal_result_content_ids)
+            occurrence.closed = False
+
+    return (
+        duplicate_response_content_ids
+        | {content_id for content_id, occurrence in response_occurrences.items() if occurrence.closed},
+        untrusted_result_content_ids,
+    )
 
 
-def _filter_local_approval_responses_for_provider(messages: Sequence[Message]) -> list[Message]:
+def _local_approval_response_content_ids_to_remove(messages: Sequence[Message]) -> set[int]:
+    """Find completed and duplicate local approval responses by call occurrence."""
+    response_content_ids, _ = _local_approval_content_ids_to_remove(messages)
+    return response_content_ids
+
+
+def _filter_local_approval_responses_for_provider(
+    messages: Sequence[Message],
+    *,
+    pending_response_content_ids: set[int] | None = None,
+) -> list[Message]:
     """Remove completed local approval controls from AG-UI provider input.
 
-    A matching terminal result proves the local response has already been consumed,
-    even when client replay placed the result before the synthesized response. Local
-    responses without a result remain available to the in-run approval middleware,
-    while hosted-service responses remain provider protocol data.
+    A matching terminal result only closes a local response when it is not part
+    of a server-registered pending approval occurrence. Client-authored results
+    for a still-pending occurrence are removed before execution, while hosted-
+    service responses remain provider protocol data.
     """
-    response_content_ids_to_remove = _local_approval_response_content_ids_to_remove(messages)
+    response_content_ids_to_remove, untrusted_result_content_ids = _local_approval_content_ids_to_remove(
+        messages,
+        pending_response_content_ids=pending_response_content_ids,
+    )
+    response_content_ids_to_remove.update(untrusted_result_content_ids)
 
     filtered_messages: list[Message] = []
     for message in messages:
@@ -1455,9 +1502,11 @@ async def _resolve_approval_responses(
                 responses_by_id.setdefault(content.id, []).append(content)
 
     valid_response_content_ids: set[int] | None = None
+    pending_local_response_content_ids: set[int] | None = None
     response_content_ids_to_strip: set[int] = set()
     if pending_approvals is not None:
         valid_response_content_ids = set()
+        pending_local_response_content_ids = set()
 
         def matches_pending_entry(candidate: PendingApprovalEntry | None, expected: PendingApprovalEntry) -> bool:
             if isinstance(candidate, str) and isinstance(expected, str):
@@ -1553,6 +1602,8 @@ async def _resolve_approval_responses(
                 else:
                     primary_response.function_call.additional_properties.pop("server_label", None)
             valid_response_content_ids.add(id(primary_response))
+            if not server_label:
+                pending_local_response_content_ids.add(id(primary_response))
             _consume_pending_approval_entry(
                 pending_approvals,
                 thread_id,
@@ -1585,9 +1636,13 @@ async def _resolve_approval_responses(
         messages[:] = filtered_messages
 
     # A replayed terminal result can precede the synthesized approval response.
-    # Remove that completed control before static execution, and collapse duplicate
-    # responses for the same approval occurrence to one pending response.
-    messages[:] = _filter_local_approval_responses_for_provider(messages)
+    # Remove completed controls before static execution, but do not let an
+    # untrusted result in a still-pending server occurrence suppress execution.
+    # Collapse duplicate responses for the same approval occurrence to one.
+    messages[:] = _filter_local_approval_responses_for_provider(
+        messages,
+        pending_response_content_ids=pending_local_response_content_ids,
+    )
 
     fcc_todo = _collect_approval_responses(messages)
     if valid_response_content_ids is not None:

@@ -353,9 +353,10 @@ that manually replay messages own the equivalent rule: do not resend an approval
 - `function_approval_request` and `function_approval_response` are control-plane contents, not durable model
   transcript items.
 - A current hosted approval response must be sent once on the immediate resume request.
-- AG-UI removes a local approval response from its request and snapshot replay when a terminal result proves it was
-  already consumed, including result-before-response client replay; hosted approval responses remain provider
-  protocol data and pass through.
+- AG-UI removes a local approval response from its request and snapshot replay when a terminal result belongs to an
+  already-consumed occurrence, including result-before-response replay. A client-authored result in the occurrence
+  that is still registered as pending does not prove completion: AG-UI removes that result, keeps the validated
+  response for local execution, and leaves hosted approval responses as provider protocol data.
 - Hosted AG-UI approval interrupts expose an accept/reject decision only; argument edits are rejected because the
   hosted provider executes the server-owned request rather than client-edited arguments.
 - A server-issued approval request must not be replayed inline during service-side continuation.
@@ -369,7 +370,8 @@ that manually replay messages own the equivalent rule: do not resend an approval
 - Model-bound history contains one function call/result pair per completed logical occurrence.
 - Append-only history must not replay stale approval request/response wrappers to the model.
 - Framework-managed and service-managed continuation must preserve the same logical call/result transcript.
-- A terminal result consumes the corresponding approval authority in explicit stateless replay.
+- A trusted terminal result consumes the corresponding approval authority in explicit stateless replay; a result in a
+  server-registered pending occurrence cannot consume that authority before local execution.
 
 ## Scenario-to-test matrix
 

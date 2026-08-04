@@ -439,7 +439,7 @@ class OllamaChatClient(
         # messages
         if messages and "messages" not in run_options:
             run_options["messages"] = self._prepare_messages_for_ollama(messages)
-        if not run_options.get("messages"):
+        if "messages" not in run_options:
             raise ChatClientInvalidRequestException("Messages are required for chat completions")
 
         # model
@@ -474,9 +474,6 @@ class OllamaChatClient(
 
     def _format_user_message(self, message: Message) -> list[OllamaMessage]:
         if not any(c.type in {"text", "data"} for c in message.contents) and not message.text:
-            if message.contents and all(content.type == "function_approval_response" for content in message.contents):
-                # AG-UI resolves approvals in-process; this control-only message has no Ollama representation.
-                return []
             raise ChatClientInvalidRequestException(
                 "Ollama connector currently only supports user messages with TextContent or DataContent."
             )

@@ -72,7 +72,10 @@ async def main():
     print(f"Pending request: {requests[0].request_id}")
     assert result1.continuation_token is not None
 
-    # Phase 2: Resume with the human's response
+    # Phase 2: Resume the retained in-memory run with the human's response.
+    # This response-only path requires the opaque token returned by Phase 1.
+    # Checkpoint restoration is a separate host-authorized path: checkpoint
+    # IDs locate persisted state but are not authorization credentials.
     print("\n=== Phase 2: Resume with feedback ===")
     print("(write_draft should NOT execute again — saved by @step)")
     result2 = await review_pipeline.run(

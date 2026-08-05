@@ -716,6 +716,68 @@ class TestStateManagement:
 
 
 class TestCheckpointing:
+    async def test_restored_checkpoint_issues_process_local_continuation_authority(self):
+        storage = InMemoryCheckpointStorage()
+
+        async def review(doc: str, ctx: RunContext) -> str:
+            first = await ctx.request_info({"draft": doc}, response_type=str)
+            second = await ctx.request_info({"first": first}, response_type=str, request_id="final-review")
+            return f"{doc}:{first}:{second}"
+
+        original_process = workflow(checkpoint_storage=storage)(review)
+        original_pause = await original_process.run("draft")
+        checkpoint = (await storage.list_checkpoints(workflow_name="review"))[-1]
+
+        restored_process = workflow(checkpoint_storage=storage)(review)
+        restored_pause = await restored_process.run(checkpoint_id=checkpoint.checkpoint_id)
+
+        assert restored_pause.get_request_info_events()[0].request_id == "auto::0"
+        assert restored_pause.continuation_token is not None
+        assert restored_pause.continuation_token != original_pause.continuation_token
+
+        for invalid_token in (None, original_pause.continuation_token):
+            with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+                await restored_process.run(
+                    responses={"auto::0": "approved"},
+                    continuation_token=invalid_token,
+                )
+
+        second_pause = await restored_process.run(
+            responses={"auto::0": "approved"},
+            continuation_token=restored_pause.continuation_token,
+        )
+        assert second_pause.get_request_info_events()[0].request_id == "final-review"
+        assert second_pause.continuation_token is not None
+        assert second_pause.continuation_token != restored_pause.continuation_token
+
+        completed = await restored_process.run(
+            responses={"auto::0": "approved", "final-review": "ship it"},
+            continuation_token=second_pause.continuation_token,
+        )
+        assert completed.get_outputs() == ["draft:approved:ship it"]
+        assert completed.continuation_token is None
+
+    async def test_runtime_storage_override_restores_checkpoint_with_responses_without_token(self):
+        storage = InMemoryCheckpointStorage()
+
+        async def review(doc: str, ctx: RunContext) -> str:
+            feedback = await ctx.request_info(doc, response_type=str, request_id="predictable-review")
+            return f"{doc}:{feedback}"
+
+        original_process = workflow(review)
+        await original_process.run("draft", checkpoint_storage=storage)
+        checkpoint = (await storage.list_checkpoints(workflow_name="review"))[-1]
+
+        restored_process = workflow(review)
+        completed = await restored_process.run(
+            checkpoint_id=checkpoint.checkpoint_id,
+            responses={"predictable-review": "approved"},
+            checkpoint_storage=storage,
+        )
+
+        assert completed.get_outputs() == ["draft:approved"]
+        assert completed.continuation_token is None
+
     async def test_checkpoint_save_and_restore(self):
         storage = InMemoryCheckpointStorage()
 

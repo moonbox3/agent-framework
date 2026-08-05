@@ -204,7 +204,10 @@ agent_framework/
   response-only resume. Each `FunctionalWorkflow` instance retains at most one in-memory continuation: callers must
   resume it or call `abandon_continuation(token)` before starting new input or restoring a checkpoint. Use separate
   workflow instances for independent in-memory runs; `FunctionalWorkflowAgent.abandon_continuation` delegates the
-  same operation.
+  same operation. Checkpoint restoration is a separate host-authorized path: checkpoint IDs only locate persisted
+  state, while the host or storage adapter owns authorization and tenant isolation. A restored functional workflow
+  that pauses returns fresh process-local continuation authority. This does not alter graph-workflow request-info
+  authoritative resolution from PR #7500.
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

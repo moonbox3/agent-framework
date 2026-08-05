@@ -665,6 +665,17 @@ class FunctionalWorkflow:
     or restoring a checkpoint on that instance.  Use separate workflow
     instances for independent in-memory runs.
 
+    Checkpoint restoration is a distinct, host-authorized continuation path
+    and does not require continuation authority from the process that created
+    the checkpoint.  The host or checkpoint-storage adapter must authorize
+    access and enforce tenant isolation; a checkpoint ID, including a UUID, is
+    only a locator.  If a restored run pauses, its result carries fresh
+    process-local continuation authority for later response-only runs.
+
+    These continuation rules apply only to functional workflows.  Graph
+    workflow request-info authoritative resolution remains a separate concern,
+    as hardened in PR #7500.
+
     Args:
         func: The async function that implements the workflow logic.
         name: Display name for the workflow.  Defaults to ``func.__name__``.
@@ -811,11 +822,14 @@ class FunctionalWorkflow:
                 resume a workflow that was suspended by
                 :meth:`RunContext.request_info`.
             continuation_token: Opaque token returned by the immediately
-                preceding response-only in-memory run. Required when
-                *responses* are provided without *checkpoint_id*.
+                preceding result for the pending in-memory continuation.
+                Required when *responses* are provided without *checkpoint_id*.
             checkpoint_id: Identifier of a checkpoint to restore from.
                 Requires *checkpoint_storage* to be set (here or on the
-                decorator).
+                decorator).  Checkpoint restoration does not use prior
+                process-local continuation authority; the host or storage
+                adapter is responsible for authorizing checkpoint access and
+                tenant isolation.
             checkpoint_storage: Override the default checkpoint storage
                 for this run.
             include_status_events: When ``True`` (non-streaming only),
@@ -1431,8 +1445,10 @@ class FunctionalWorkflowAgent:
     :class:`WorkflowAgent`), so HITL workflows are callable via this
     adapter.  Response-only callers resume via ``responses=`` and the prior
     response's ``continuation_token``; checkpoint restores use
-    ``checkpoint_id=``.  :meth:`abandon_continuation` delegates token-authorized
-    abandonment to the wrapped workflow.
+    ``checkpoint_id=`` after the host or storage adapter authorizes access.
+    A restored run that pauses returns fresh process-local authority through
+    the agent response's ``continuation_token``.  :meth:`abandon_continuation`
+    delegates token-authorized abandonment to the wrapped workflow.
 
     Args:
         workflow: The :class:`FunctionalWorkflow` to wrap.
@@ -1524,7 +1540,9 @@ class FunctionalWorkflowAgent:
                 the underlying workflow so HITL resumes work via this agent.
             continuation_token: Opaque continuation token returned by the
                 preceding agent response.
-            checkpoint_id: Optional checkpoint to restore from.
+            checkpoint_id: Optional host-authorized checkpoint to restore
+                from.  A checkpoint ID locates state; it is not an
+                authorization credential.
             checkpoint_storage: Override the workflow's default
                 :class:`CheckpointStorage` for this run.
             **kwargs: Extra keyword arguments forwarded to the workflow run.

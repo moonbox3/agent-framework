@@ -120,8 +120,9 @@ class WorkflowRunResult(list[WorkflowEvent]):
     - status_timeline(): Access the complete status event history
 
     Functional workflows set ``continuation_token`` when execution pauses for
-    external input. Callers must treat it as opaque and pass it back for the
-    next response-only in-memory resume.
+    external input. It is a process-local, single-use capability rather than a
+    durable polling token. Callers must treat it as opaque and pass it back
+    together with responses for the next in-memory resume.
     """
 
     def __init__(

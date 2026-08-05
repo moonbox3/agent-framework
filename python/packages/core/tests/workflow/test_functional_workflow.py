@@ -314,24 +314,98 @@ class TestHITL:
         assert outputs == ["Final: Looks great!"]
         assert result2.get_final_state() == WorkflowRunState.IDLE
 
-    async def test_fresh_message_while_pending_requests_warns(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A fresh message while request_info events are pending is allowed but logs a warning."""
-
+    async def test_fresh_message_while_pending_requests_is_rejected_without_losing_continuation(self) -> None:
         @workflow
         async def review_wf(doc: str, ctx: RunContext) -> str:
             feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
             return f"Final: {feedback}"
 
-        result1 = await review_wf.run("my doc")
-        assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
-
-        # Starting fresh input while a request is pending does not abandon it, but advances
-        # workflow state so a later response may apply to a moved-on workflow -> warn (but proceed).
-        with caplog.at_level(logging.WARNING):
+        paused = await review_wf.run("my doc")
+        with pytest.raises(RuntimeError, match="(?i)resume or abandon the pending continuation"):
             await review_wf.run("another doc")
 
-        assert "request_info event(s) are still pending" in caplog.text
-        assert "a fresh message" in caplog.text
+        completed = await review_wf.run(
+            responses={"req1": "approved"},
+            continuation_token=paused.continuation_token,
+        )
+        assert completed.get_outputs() == ["Final: approved"]
+
+    async def test_checkpoint_restore_while_pending_is_rejected_without_losing_continuation(self) -> None:
+        storage = InMemoryCheckpointStorage()
+
+        @workflow(checkpoint_storage=storage)
+        async def review_wf(doc: str, ctx: RunContext) -> str:
+            feedback = await ctx.request_info({"draft": doc}, response_type=str, request_id="req1")
+            return f"{doc}: {feedback}"
+
+        paused = await review_wf.run("original")
+        checkpoints = await storage.list_checkpoints(workflow_name="review_wf")
+
+        with pytest.raises(RuntimeError, match="(?i)resume or abandon the pending continuation"):
+            await review_wf.run(checkpoint_id=checkpoints[0].checkpoint_id)
+
+        completed = await review_wf.run(
+            responses={"req1": "approved"},
+            continuation_token=paused.continuation_token,
+        )
+        assert completed.get_outputs() == ["original: approved"]
+
+    async def test_abandon_continuation_requires_current_token_and_preserves_state_on_failure(self) -> None:
+        @workflow
+        async def review_wf(doc: str, ctx: RunContext) -> str:
+            feedback = await ctx.request_info(doc, response_type=str, request_id="req1")
+            return f"{doc}: {feedback}"
+
+        paused = await review_wf.run("original")
+        assert paused.continuation_token is not None
+        wrong_token = json.loads(json.dumps(paused.continuation_token))
+        wrong_token["token"] = "wrong"
+
+        for invalid_token in (None, json.loads("{}"), json.loads('"malformed"'), wrong_token):
+            with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+                review_wf.abandon_continuation(invalid_token)
+
+        completed = await review_wf.run(
+            responses={"req1": "approved"},
+            continuation_token=paused.continuation_token,
+        )
+        assert completed.get_outputs() == ["original: approved"]
+
+    async def test_abandon_continuation_clears_replay_state_and_allows_fresh_run(self) -> None:
+        step_calls = 0
+
+        @step
+        async def prepare(doc: str) -> str:
+            nonlocal step_calls
+            step_calls += 1
+            return f"prepared:{doc}"
+
+        @workflow
+        async def review_wf(doc: str, ctx: RunContext) -> str:
+            prepared = await prepare(doc)
+            feedback = await ctx.request_info(prepared, response_type=str)
+            return f"{prepared}: {feedback}"
+
+        abandoned = await review_wf.run("original")
+        assert abandoned.continuation_token is not None
+        assert abandoned.get_request_info_events()[0].request_id == "auto::0"
+        assert step_calls == 1
+
+        review_wf.abandon_continuation(abandoned.continuation_token)
+
+        with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+            review_wf.abandon_continuation(abandoned.continuation_token)
+        with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+            await review_wf.run(
+                responses={"auto::0": "stale"},
+                continuation_token=abandoned.continuation_token,
+            )
+
+        fresh = await review_wf.run("new")
+        fresh_request = fresh.get_request_info_events()[0]
+        assert fresh_request.request_id == "auto::0"
+        assert fresh_request.data == "prepared:new"
+        assert step_calls == 2
 
     async def test_responses_while_pending_requests_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
         """Delivering responses is the normal completion path and must not warn."""
@@ -376,7 +450,7 @@ class TestHITL:
         async def multi_hitl(data: str, ctx: RunContext) -> str:
             r1 = await ctx.request_info("step1", response_type=str, request_id="r1")
             r2 = await ctx.request_info("step2", response_type=str, request_id="r2")
-            return f"{r1}+{r2}"
+            return f"{data}:{r1}+{r2}"
 
         # Phase 1: first interrupt
         result1 = await multi_hitl.run("start")
@@ -405,7 +479,7 @@ class TestHITL:
             responses={"r1": "A", "r2": "B"},
             continuation_token=result2.continuation_token,
         )
-        assert result3.get_outputs() == ["A+B"]
+        assert result3.get_outputs() == ["start:A+B"]
         assert result3.continuation_token is None
 
     async def test_continuation_token_is_consumed_before_resumed_user_code_fails(self):
@@ -433,6 +507,10 @@ class TestHITL:
                 responses={"r1": "response"},
                 continuation_token=paused.continuation_token,
             )
+
+        fresh = await failing_resume.run("fresh")
+        assert fresh.continuation_token is not None
+        assert fresh.get_request_info_events()[0].data == "fresh"
 
     async def test_request_info_auto_generates_id(self):
         @workflow
@@ -712,6 +790,7 @@ class TestCheckpointing:
         # Phase 1: interrupt
         result1 = await hitl_wf.run("draft text")
         assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        hitl_wf.abandon_continuation(result1.continuation_token)
 
         # Get checkpoint
         checkpoints = await storage.list_checkpoints(workflow_name="hitl_wf")
@@ -742,6 +821,7 @@ class TestCheckpointing:
         # Phase 1
         result1 = await stateful_wf.run(1)
         assert result1.get_final_state() == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+        stateful_wf.abandon_continuation(result1.continuation_token)
 
         # Phase 2: restore and respond
         checkpoints = await storage.list_checkpoints(workflow_name="stateful_wf")
@@ -1918,6 +1998,34 @@ class TestFunctionalWorkflowAgentHITL:
         ).get_final_response()
         assert completed.text == "got:answered"
         assert completed.continuation_token is None
+
+    async def test_agent_can_abandon_pending_continuation(self) -> None:
+        @workflow
+        async def wf(x: str, ctx: RunContext) -> str:
+            answer = await ctx.request_info(x, response_type=str, request_id="rid-1")
+            return f"{x}:{answer}"
+
+        agent = wf.as_agent()
+        abandoned = await agent.run("original")
+        assert abandoned.continuation_token is not None
+
+        wrong_token = json.loads(json.dumps(abandoned.continuation_token))
+        wrong_token["token"] = "wrong"
+        with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+            agent.abandon_continuation(wrong_token)
+        assert "rid-1" in agent.pending_requests
+
+        agent.abandon_continuation(abandoned.continuation_token)
+        assert agent.pending_requests == {}
+
+        with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+            await agent.run(
+                responses={"rid-1": "stale"},
+                continuation_token=abandoned.continuation_token,
+            )
+        fresh = await agent.run("new")
+        assert fresh.continuation_token is not None
+        assert fresh.continuation_token != abandoned.continuation_token
 
 
 class TestRunDocstringAllowsResponsesAndCheckpoint:

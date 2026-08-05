@@ -201,7 +201,10 @@ agent_framework/
 - **`WorkflowRunResult`** - Non-streaming workflow result with Workflow Output `get_outputs()`
   and Intermediate Output `get_intermediate_outputs()` accessors. Functional workflows that pause for
   `request_info` also return an opaque, single-use `continuation_token`; pass it with `responses` for an in-memory
-  response-only resume.
+  response-only resume. Each `FunctionalWorkflow` instance retains at most one in-memory continuation: callers must
+  resume it or call `abandon_continuation(token)` before starting new input or restoring a checkpoint. Use separate
+  workflow instances for independent in-memory runs; `FunctionalWorkflowAgent.abandon_continuation` delegates the
+  same operation.
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

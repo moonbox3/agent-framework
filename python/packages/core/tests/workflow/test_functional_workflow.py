@@ -21,6 +21,7 @@ from agent_framework import (
     InMemoryCheckpointStorage,
     RunContext,
     StepWrapper,
+    WorkflowCheckpoint,
     WorkflowEvent,
     WorkflowRunResult,
     WorkflowRunState,
@@ -716,6 +717,38 @@ class TestStateManagement:
 
 
 class TestCheckpointing:
+    async def test_failed_pause_checkpoint_does_not_strand_in_memory_continuation(self):
+        class FailsFirstSaveStorage(InMemoryCheckpointStorage):
+            def __init__(self) -> None:
+                super().__init__()
+                self.save_attempts = 0
+
+            async def save(self, checkpoint: WorkflowCheckpoint) -> str:
+                self.save_attempts += 1
+                if self.save_attempts == 1:
+                    raise RuntimeError("checkpoint storage unavailable")
+                return await super().save(checkpoint)
+
+        storage = FailsFirstSaveStorage()
+
+        @workflow(checkpoint_storage=storage)
+        async def review(doc: str, ctx: RunContext) -> str:
+            feedback = await ctx.request_info(doc, response_type=str, request_id="review")
+            return f"{doc}:{feedback}"
+
+        with pytest.raises(RuntimeError, match="checkpoint storage unavailable"):
+            await review.run("first")
+
+        recovered = await review.run("second")
+
+        assert recovered.continuation_token is not None
+        assert recovered.get_request_info_events()[0].data == "second"
+        completed = await review.run(
+            responses={"review": "approved"},
+            continuation_token=recovered.continuation_token,
+        )
+        assert completed.get_outputs() == ["second:approved"]
+
     async def test_restored_checkpoint_issues_process_local_continuation_authority(self):
         storage = InMemoryCheckpointStorage()
 

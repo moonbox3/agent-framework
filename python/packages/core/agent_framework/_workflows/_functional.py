@@ -1101,11 +1101,20 @@ class FunctionalWorkflow:
                 span.add_event(OtelAttr.WORKFLOW_COMPLETED)
 
             except WorkflowInterrupted:
-                # Persist step cache for response-only replay
+                pending_step_cache = dict(ctx._step_cache)
+                pending_step_cache_auto_request_info_counts = dict(ctx._step_cache_auto_request_info_counts)
+                pending_request_ids = set(ctx._pending_requests)
+
+                # Persist before publishing in-memory continuation authority. If
+                # storage fails, the caller receives no token, so the workflow
+                # instance must remain free for a fresh run.
+                if storage is not None:
+                    await self._save_checkpoint(ctx, storage, message, ckpt_chain[0])
+
                 self._last_message = message
-                self._last_step_cache = dict(ctx._step_cache)
-                self._last_step_cache_auto_request_info_counts = dict(ctx._step_cache_auto_request_info_counts)
-                self._last_pending_request_ids = set(ctx._pending_requests)
+                self._last_step_cache = pending_step_cache
+                self._last_step_cache_auto_request_info_counts = pending_step_cache_auto_request_info_counts
+                self._last_pending_request_ids = pending_request_ids
                 self._rotate_continuation_authority()
                 result_continuation_token[0] = self._get_continuation_token()
 
@@ -1117,10 +1126,6 @@ class FunctionalWorkflow:
                     if event.type == "request_info":
                         with _framework_event_origin():
                             yield WorkflowEvent.status(WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS)
-
-                # Save checkpoint
-                if storage is not None:
-                    await self._save_checkpoint(ctx, storage, message, ckpt_chain[0])
 
                 with _framework_event_origin():
                     yield WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)

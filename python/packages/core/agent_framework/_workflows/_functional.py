@@ -36,6 +36,7 @@ from __future__ import annotations
 # pyright: reportPrivateUsage=false
 # Classes in this module (RunContext, StepWrapper, FunctionalWorkflow) form a
 # cohesive unit and intentionally access each other's underscore-prefixed members.
+import asyncio
 import functools
 import hashlib
 import inspect
@@ -1151,6 +1152,10 @@ class FunctionalWorkflow:
                     yield WorkflowEvent.status(WorkflowRunState.IDLE_WITH_PENDING_REQUESTS)
 
                 span.add_event(OtelAttr.WORKFLOW_COMPLETED)
+
+            except asyncio.CancelledError:
+                await self._run_cleanup()
+                raise
 
             except Exception as exc:
                 for event in self._failure_events(ctx, span, exc):

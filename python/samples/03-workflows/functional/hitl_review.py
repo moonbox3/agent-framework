@@ -66,11 +66,14 @@ async def main():
     # If request_info() was reached, the state is IDLE_WITH_PENDING_REQUESTS.
     # If the workflow completed without hitting request_info(), it would be IDLE.
     print(f"State: {(final_state := result1.get_final_state())}")
-    assert final_state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
+    if final_state != WorkflowRunState.IDLE_WITH_PENDING_REQUESTS:
+        raise RuntimeError(f"Expected pending review input, but workflow entered {final_state}.")
 
     requests = result1.get_request_info_events()
     print(f"Pending request: {requests[0].request_id}")
-    assert result1.continuation_token is not None
+    continuation_token = result1.continuation_token
+    if continuation_token is None:
+        raise RuntimeError("Expected a continuation token for the pending review.")
 
     # Phase 2: Resume the retained in-memory run with the human's response.
     # This response-only path requires the opaque token returned by Phase 1.
@@ -80,7 +83,7 @@ async def main():
     print("(write_draft should NOT execute again — saved by @step)")
     result2 = await review_pipeline.run(
         responses={"review_request": "Add more details about alignment research"},
-        continuation_token=result1.continuation_token,
+        continuation_token=continuation_token,
     )
 
     print(f"State: {result2.get_final_state()}")

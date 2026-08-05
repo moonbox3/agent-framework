@@ -600,6 +600,41 @@ class TestHITL:
         assert fresh.continuation_token is not None
         assert fresh.get_request_info_events()[0].data == "fresh"
 
+    async def test_cancellation_after_token_consumption_releases_workflow_instance(self):
+        resumed_user_code_started = asyncio.Event()
+        keep_running = asyncio.Event()
+
+        @workflow
+        async def cancellable_resume(data: str, ctx: RunContext) -> str:
+            answer = await ctx.request_info(data, response_type=str, request_id="r1")
+            resumed_user_code_started.set()
+            await keep_running.wait()
+            return f"{data}:{answer}"
+
+        paused = await cancellable_resume.run("input")
+
+        async def resume() -> None:
+            await cancellable_resume.run(
+                responses={"r1": "response"},
+                continuation_token=paused.continuation_token,
+            )
+
+        task = asyncio.create_task(resume())
+        await resumed_user_code_started.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        with pytest.raises(ValueError, match="Invalid functional workflow continuation authority"):
+            await cancellable_resume.run(
+                responses={"r1": "response"},
+                continuation_token=paused.continuation_token,
+            )
+
+        fresh = await cancellable_resume.run("fresh")
+        assert fresh.continuation_token is not None
+
     async def test_request_info_auto_generates_id(self):
         @workflow
         async def auto_id_wf(x: int, ctx: RunContext) -> None:

@@ -860,10 +860,12 @@ def _emit_approval_request(
     )
     interrupt_id = func_call_id or content.id
     if interrupt_id:
+        response_schema = _approval_response_schema() if func_call.additional_properties.get("server_label") else None
         flow.interrupts.append(
             _approval_interrupt_for_function_call(
                 interrupt_id=str(interrupt_id),
                 function_call=func_call,
+                response_schema=response_schema,
             )
         )
 

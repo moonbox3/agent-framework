@@ -662,7 +662,7 @@ def mock_chat_agent():
                 finalizer=AgentResponse.from_updates,
             )
 
-    class MockChatClientAgent(AgentTelemetryLayer, _MockChatClientAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class MockChatClientAgent(AgentTelemetryLayer, _MockChatClientAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     return MockChatClientAgent
@@ -2739,7 +2739,7 @@ async def test_agent_observability(span_exporter: InMemorySpanExporter, enable_s
 
             yield AgentResponseUpdate(contents=[Content.from_text("Test")], role="assistant")
 
-    class MockAgent(AgentTelemetryLayer, _MockAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class MockAgent(AgentTelemetryLayer, _MockAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = MockAgent()
@@ -2784,7 +2784,7 @@ async def test_agent_observability_with_exception(span_exporter: InMemorySpanExp
         async def run(self, messages=None, *, stream: bool = False, session=None, **kwargs):
             raise RuntimeError("Agent failed")
 
-    class FailingAgent(AgentTelemetryLayer, _FailingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class FailingAgent(AgentTelemetryLayer, _FailingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = FailingAgent()
@@ -2849,7 +2849,7 @@ async def test_agent_streaming_observability(span_exporter: InMemorySpanExporter
                 finalizer=AgentResponse.from_updates,
             )
 
-    class StreamingAgent(AgentTelemetryLayer, _StreamingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class StreamingAgent(AgentTelemetryLayer, _StreamingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = StreamingAgent()
@@ -2994,7 +2994,7 @@ async def test_agent_streaming_exception(span_exporter: InMemorySpanExporter, en
                 finalizer=AgentResponse.from_updates,
             )
 
-    class FailingStreamingAgent(AgentTelemetryLayer, _FailingStreamingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class FailingStreamingAgent(AgentTelemetryLayer, _FailingStreamingAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = FailingStreamingAgent()
@@ -3086,7 +3086,7 @@ async def test_agent_when_disabled(span_exporter: InMemorySpanExporter):
 
             yield AgentResponseUpdate(contents=[Content.from_text("test")], role="assistant")
 
-    class TestAgent(AgentTelemetryLayer, _TestAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class TestAgent(AgentTelemetryLayer, _TestAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = TestAgent()
@@ -3139,7 +3139,7 @@ async def test_agent_streaming_when_disabled(span_exporter: InMemorySpanExporter
         async def _run_stream(self, messages=None, *, session=None, **kwargs):
             yield AgentResponseUpdate(contents=[Content.from_text("test")], role="assistant")
 
-    class TestAgent(AgentTelemetryLayer, _TestAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]
+    class TestAgent(AgentTelemetryLayer, _TestAgent):  # type: ignore[misc]  # pyrefly: ignore[inconsistent-inheritance]  # ty: ignore[invalid-method-override]
         pass
 
     agent = TestAgent()
@@ -5637,7 +5637,7 @@ async def test_agent_streaming_execute_failure_closes_span_and_resets_contextvar
                 raise RuntimeError("execute failed")
             raise NotImplementedError
 
-    class FailingExecuteAgent(AgentTelemetryLayer, _FailingExecuteAgent):  # type: ignore[misc]
+    class FailingExecuteAgent(AgentTelemetryLayer, _FailingExecuteAgent):  # type: ignore[misc]  # ty: ignore[invalid-method-override]
         pass
 
     # Sentinel values to detect that contextvars were reset to their pre-call state.
@@ -5710,7 +5710,7 @@ async def test_agent_run_contextvars_safe_when_awaited_in_different_context(
 
             return _inner()
 
-    class SimpleAgent(AgentTelemetryLayer, _SimpleAgent):  # type: ignore[misc]
+    class SimpleAgent(AgentTelemetryLayer, _SimpleAgent):  # type: ignore[misc]  # ty: ignore[invalid-method-override]
         pass
 
     agent = SimpleAgent()
@@ -5773,7 +5773,7 @@ async def test_agent_run_error_path_contextvars_safe_when_awaited_in_different_c
 
             return _inner()
 
-    class FailingRunAgent(AgentTelemetryLayer, _FailingRunAgent):  # type: ignore[misc]
+    class FailingRunAgent(AgentTelemetryLayer, _FailingRunAgent):  # type: ignore[misc]  # ty: ignore[invalid-method-override]
         pass
 
     agent = FailingRunAgent()
@@ -5844,7 +5844,7 @@ async def test_agent_streaming_contextvars_safe_when_consumed_in_different_conte
                 return ResponseStream(_stream(), finalizer=AgentResponse.from_updates)
             raise NotImplementedError
 
-    class StreamingAgent(AgentTelemetryLayer, _StreamingAgent):  # type: ignore[misc]
+    class StreamingAgent(AgentTelemetryLayer, _StreamingAgent):  # type: ignore[misc]  # ty: ignore[invalid-method-override]
         pass
 
     agent = StreamingAgent()

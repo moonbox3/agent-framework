@@ -199,7 +199,9 @@ agent_framework/
   explicit all-output behavior and `intermediate_output_from="all_other"` for visible progress from
   every output-capable executor not selected by `output_from`.
 - **`WorkflowRunResult`** - Non-streaming workflow result with Workflow Output `get_outputs()`
-  and Intermediate Output `get_intermediate_outputs()` accessors
+  and Intermediate Output `get_intermediate_outputs()` accessors. Functional workflows that pause for
+  `request_info` also return an opaque, single-use `continuation_token`; pass it with `responses` for an in-memory
+  response-only resume.
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

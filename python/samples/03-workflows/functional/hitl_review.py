@@ -3,7 +3,7 @@
 """Human-in-the-loop review pipeline using functional workflows.
 
 Demonstrates ctx.request_info() for pausing the workflow to wait for
-external input and resuming with run(responses={...}).
+external input and resuming with the returned continuation token.
 
 HITL works with or without @step. The difference is what happens on resume:
 - Without @step: every function re-executes from the top (fine for cheap calls).
@@ -70,11 +70,15 @@ async def main():
 
     requests = result1.get_request_info_events()
     print(f"Pending request: {requests[0].request_id}")
+    assert result1.continuation_token is not None
 
     # Phase 2: Resume with the human's response
     print("\n=== Phase 2: Resume with feedback ===")
     print("(write_draft should NOT execute again — saved by @step)")
-    result2 = await review_pipeline.run(responses={"review_request": "Add more details about alignment research"})
+    result2 = await review_pipeline.run(
+        responses={"review_request": "Add more details about alignment research"},
+        continuation_token=result1.continuation_token,
+    )
 
     print(f"State: {result2.get_final_state()}")
     print(f"Output: {result2.get_outputs()[0]}")

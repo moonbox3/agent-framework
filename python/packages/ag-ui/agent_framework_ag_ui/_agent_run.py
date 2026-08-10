@@ -8,7 +8,6 @@ import copy
 import json
 import logging
 import uuid
-from collections import OrderedDict
 from collections.abc import AsyncIterable, Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -901,9 +900,7 @@ def _save_tool_approval_state(
     serialized_state = _serialized_tool_approval_state(raw_state)
     if serialized_state is None:
         return
-    approval_state_store.tool_approval_states[thread_id] = serialized_state
-    approval_state_store.tool_approval_states.move_to_end(thread_id)
-    approval_state_store.evict_oldest()
+    approval_state_store.set_tool_approval_state(thread_id, serialized_state)
 
 
 def _clear_tool_approval_state(
@@ -1676,19 +1673,6 @@ def _canonical_approval_resume_messages(
             )
 
     return messages, handled_ids, cancelled_ids, None
-
-
-def _evict_oldest_approvals(registry: dict[PendingApprovalKey, PendingApprovalEntry], max_size: int = 10_000) -> None:
-    """Evict the oldest entries from the pending-approvals registry (LRU).
-
-    Only effective when *registry* is an ``OrderedDict``;  plain dicts are
-    left untouched because insertion-order eviction is unreliable for them.
-    """
-    if len(registry) <= max_size or not isinstance(registry, OrderedDict):
-        return
-    while len(registry) > max_size:
-        oldest_key = next(iter(registry))
-        _remove_pending_approval(registry, oldest_key)
 
 
 async def _resolve_approval_responses(
@@ -2865,8 +2849,6 @@ async def run_agent_stream(
                             already_approved_requests=already_approved_requests,
                             server_label=server_label,
                         )
-                    # Evict oldest entries if the registry exceeds a safe bound (LRU)
-                    _evict_oldest_approvals(pending_approvals, max_size=10_000)
                 else:
                     logger.warning(
                         "Approval request not registered: missing id=%s, function_call=%s, or function name",

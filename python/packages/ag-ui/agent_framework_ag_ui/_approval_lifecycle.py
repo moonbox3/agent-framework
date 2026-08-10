@@ -4,17 +4,88 @@
 
 from __future__ import annotations
 
+import logging
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import wraps
+from threading import RLock
+from time import monotonic
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from agent_framework import Content
 
+logger = logging.getLogger(__name__)
+_ReturnT = TypeVar("_ReturnT")
+
+
+def _serialized_registration(method: Callable[..., _ReturnT]) -> Callable[..., _ReturnT]:
+    @wraps(method)
+    def wrapper(self: ApprovalLifecycle, *args: Any, **kwargs: Any) -> _ReturnT:
+        with self._index_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+def _serialized_by_batch(method: Callable[..., _ReturnT]) -> Callable[..., _ReturnT]:
+    @wraps(method)
+    def wrapper(self: ApprovalLifecycle, *args: Any, **kwargs: Any) -> _ReturnT:
+        thread_id = kwargs.get("thread_id")
+        if not isinstance(thread_id, str):
+            raise TypeError("Serialized approval transitions require a thread_id.")
+        decisions = kwargs.get("decisions")
+        interrupt_ids = (
+            [decision.interrupt_id for decision in decisions]
+            if isinstance(decisions, list) and all(isinstance(decision, ResumeDecision) for decision in decisions)
+            else kwargs.get("interrupt_ids")
+        )
+        if not isinstance(interrupt_ids, list) or not all(
+            isinstance(interrupt_id, str) for interrupt_id in interrupt_ids
+        ):
+            raise TypeError("Serialized approval transitions require interrupt identities.")
+        locks = self._locks_for_batch(thread_id=thread_id, interrupt_ids=interrupt_ids)
+        with ExitStack() as stack:
+            for lock in locks:
+                stack.enter_context(lock)
+            try:
+                return method(self, *args, **kwargs)
+            except (KeyError, ValueError) as exc:
+                self._emit_event("authority_failure", failure_type=type(exc).__name__)
+                raise
+
+    return wrapper
+
+
+def _serialized_by_occurrence(method: Callable[..., _ReturnT]) -> Callable[..., _ReturnT]:
+    @wraps(method)
+    def wrapper(self: ApprovalLifecycle, *args: Any, **kwargs: Any) -> _ReturnT:
+        intent = args[0] if args else kwargs.get("intent")
+        if not isinstance(intent, AuthorizedExecution):
+            raise TypeError("Serialized approval transitions require an authorized execution.")
+        with self._lock_for_identity(intent.identity):
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
 
 class ApprovalIndeterminateError(ValueError):
     """An approval may have executed but has no retained terminal outcome."""
+
+
+class ApprovalCapacityError(RuntimeError):
+    """Approval state capacity is exhausted by protected occurrences."""
+
+
+class ApprovalClaimConflictError(ValueError):
+    """Approval authority cannot be claimed in its current state."""
+
+
+class ApprovalSettlementConflictError(ValueError):
+    """An approval outcome cannot settle in its current state."""
 
 
 class ApprovalStatus(str, Enum):
@@ -104,6 +175,7 @@ class ApprovalOccurrence:
     replayable_results: list[ReplayableToolResult] = field(default_factory=list)
     decision: ResumeDecision | None = None
     outcome: ApprovalOutcome | None = None
+    terminal_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -148,9 +220,24 @@ class ApprovalBatchDecision:
 
 
 class ApprovalLifecycle:
-    """Own registration, authority transitions, and settlement for approvals."""
+    """Own process-local registration, authority transitions, and settlement for approvals."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_entries: int = 10_000,
+        terminal_retention_seconds: float = 900,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be greater than 0.")
+        if terminal_retention_seconds <= 0:
+            raise ValueError("terminal_retention_seconds must be greater than 0.")
+        self._max_entries = max_entries
+        self._terminal_retention_seconds = terminal_retention_seconds
+        self._clock = clock
+        self._index_lock = RLock()
+        self._locks_by_identity: dict[ApprovalOccurrenceIdentity, RLock] = {}
         self._occurrences: dict[ApprovalOccurrenceIdentity, ApprovalOccurrence] = {}
         self._pending_by_interrupt: dict[tuple[str, str], ApprovalOccurrenceIdentity] = {}
         self._terminal_by_interrupt: dict[tuple[str, str], ApprovalOccurrenceIdentity] = {}
@@ -315,6 +402,7 @@ class ApprovalLifecycle:
             owner=ApprovalExecutionOwner.UNAVAILABLE,
         )
 
+    @_serialized_registration
     def _register_aliases(
         self,
         *,
@@ -326,6 +414,7 @@ class ApprovalLifecycle:
         owner: ApprovalExecutionOwner,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
+        self._purge_expired_terminal()
         if idempotency_key == "":
             raise ValueError("An execution idempotency key cannot be empty.")
         unique_thread_ids = tuple(dict.fromkeys(thread_ids))
@@ -341,7 +430,7 @@ class ApprovalLifecycle:
         if existing_identities:
             occurrence = self._occurrences[next(iter(existing_identities))]
             if occurrence.status is not ApprovalStatus.PENDING:
-                raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
+                raise ApprovalClaimConflictError(f"Approval occurrence is not pending: {occurrence.status}.")
             if (
                 occurrence.identity.call_id != call_id
                 or occurrence.name != name
@@ -355,6 +444,9 @@ class ApprovalLifecycle:
                 self._pending_by_interrupt[(thread_id, interrupt_id)] = occurrence.identity
             return occurrence
 
+        if len(self._occurrences) >= self._max_entries:
+            self._emit_event("capacity_failure")
+            raise ApprovalCapacityError("Approval state capacity is exhausted by protected occurrences.")
         identity = ApprovalOccurrenceIdentity(
             thread_id=unique_thread_ids[0],
             occurrence_id=str(uuid4()),
@@ -372,14 +464,18 @@ class ApprovalLifecycle:
         self._occurrences[identity] = occurrence
         for thread_id in unique_thread_ids:
             self._pending_by_interrupt[(thread_id, interrupt_id)] = identity
+        self._locks_by_identity[identity] = RLock()
+        self._emit_event("registration", occurrence)
         return occurrence
 
     def get(self, identity: ApprovalOccurrenceIdentity) -> ApprovalOccurrence:
         """Return server-owned state for a registered occurrence."""
+        self._purge_expired_terminal()
         return self._occurrences[identity]
 
     def decision_context(self, *, thread_id: str, interrupt_id: str) -> tuple[str, str]:
         """Return canonical server-owned call data needed to normalize a typed retry."""
+        self._purge_expired_terminal()
         key = (thread_id, interrupt_id)
         identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt[key]
         occurrence = self._occurrences[identity]
@@ -392,6 +488,7 @@ class ApprovalLifecycle:
         interrupt_ids: list[str],
     ) -> tuple[ApprovalSnapshotReconciliation, ...]:
         """Describe which stored approval controls remain actionable."""
+        self._purge_expired_terminal()
         reconciliations: list[ApprovalSnapshotReconciliation] = []
         for interrupt_id in interrupt_ids:
             key = (thread_id, interrupt_id)
@@ -436,6 +533,7 @@ class ApprovalLifecycle:
             raise ValueError("A duplicate settled decision cannot authorize execution again.")
         return batch.authorized_executions[0]
 
+    @_serialized_by_batch
     def claim_batch(
         self,
         *,
@@ -443,6 +541,7 @@ class ApprovalLifecycle:
         decisions: list[ResumeDecision],
     ) -> ApprovalBatchDecision:
         """Validate a complete decision batch before reserving accepted occurrences."""
+        self._purge_expired_terminal()
         resolved: list[tuple[ResumeDecision, ApprovalOccurrence, bool]] = []
         seen_interrupt_ids: set[str] = set()
         for decision in decisions:
@@ -479,7 +578,7 @@ class ApprovalLifecycle:
                 resolved.append((decision, occurrence, True))
                 continue
             if occurrence.status is not ApprovalStatus.PENDING:
-                raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
+                raise ApprovalClaimConflictError(f"Approval occurrence is not pending: {occurrence.status}.")
             if decision.name is not None and decision.name != occurrence.name:
                 raise ValueError("Approval decision tool name does not match the registered occurrence.")
             canonical_arguments = decision.arguments
@@ -497,6 +596,7 @@ class ApprovalLifecycle:
                     raise RuntimeError("Validated terminal approval is missing its retained outcome.")
                 retained_outcomes.append(occurrence.outcome)
                 snapshot_reconciliations.append(occurrence.outcome.snapshot_reconciliation)
+                self._emit_event("duplicate", occurrence)
                 continue
             occurrence.decision = decision
             if not decision.accepted:
@@ -514,6 +614,7 @@ class ApprovalLifecycle:
                     snapshot_reconciliation=self._snapshot_reconciliation(occurrence),
                 )
                 snapshot_reconciliations.append(occurrence.outcome.snapshot_reconciliation)
+                self._emit_event("rejection", occurrence)
                 continue
             if decision.arguments is None:
                 raise RuntimeError("Validated pending approval is missing canonical arguments.")
@@ -521,6 +622,7 @@ class ApprovalLifecycle:
             if occurrence.owner is ApprovalExecutionOwner.UNAVAILABLE:
                 continue
             occurrence.status = ApprovalStatus.CLAIMED
+            self._emit_event("claim", occurrence)
             intents.append(
                 AuthorizedExecution(
                     identity=occurrence.identity,
@@ -536,6 +638,7 @@ class ApprovalLifecycle:
             snapshot_reconciliations=tuple(snapshot_reconciliations),
         )
 
+    @_serialized_by_batch
     def cancel_batch(
         self,
         *,
@@ -543,6 +646,7 @@ class ApprovalLifecycle:
         interrupt_ids: list[str],
     ) -> tuple[ApprovalSnapshotReconciliation, ...]:
         """Validate and cancel selected occurrences without changing their siblings."""
+        self._purge_expired_terminal()
         occurrences: list[ApprovalOccurrence] = []
         reconciliations: list[ApprovalSnapshotReconciliation] = []
         seen_interrupt_ids: set[str] = set()
@@ -557,6 +661,7 @@ class ApprovalLifecycle:
                 terminal = self._occurrences[identity]
                 if terminal.status is ApprovalStatus.CANCELLED:
                     reconciliations.append(self._snapshot_reconciliation(terminal))
+                    self._emit_event("duplicate", terminal)
                     continue
                 raise ValueError("Approval cancellation conflicts with the retained terminal decision.")
             occurrence = self._occurrences[identity]
@@ -568,8 +673,10 @@ class ApprovalLifecycle:
             occurrence.status = ApprovalStatus.CANCELLED
             self._remove_pending_aliases(occurrence)
             reconciliations.append(self._snapshot_reconciliation(occurrence))
+            self._emit_event("cancellation", occurrence)
         return tuple(reconciliations)
 
+    @_serialized_by_batch
     def expire_batch(
         self,
         *,
@@ -577,6 +684,7 @@ class ApprovalLifecycle:
         interrupt_ids: list[str],
     ) -> tuple[ApprovalSnapshotReconciliation, ...]:
         """Expire pending authority without permitting later execution."""
+        self._purge_expired_terminal()
         occurrences: list[ApprovalOccurrence] = []
         seen_interrupt_ids: set[str] = set()
         for interrupt_id in interrupt_ids:
@@ -592,13 +700,73 @@ class ApprovalLifecycle:
         for occurrence in occurrences:
             occurrence.status = ApprovalStatus.EXPIRED
             self._remove_pending_aliases(occurrence)
+            self._emit_event("expiration", occurrence)
         return tuple(self._snapshot_reconciliation(occurrence) for occurrence in occurrences)
 
     def _remove_pending_aliases(self, occurrence: ApprovalOccurrence) -> None:
-        for thread_id in occurrence.thread_ids:
-            self._pending_by_interrupt.pop((thread_id, occurrence.identity.interrupt_id), None)
-            self._terminal_by_interrupt[(thread_id, occurrence.identity.interrupt_id)] = occurrence.identity
+        if occurrence.status is not ApprovalStatus.INDETERMINATE:
+            occurrence.terminal_at = self._clock()
+        with self._index_lock:
+            for thread_id in occurrence.thread_ids:
+                self._pending_by_interrupt.pop((thread_id, occurrence.identity.interrupt_id), None)
+                self._terminal_by_interrupt[(thread_id, occurrence.identity.interrupt_id)] = occurrence.identity
 
+    def _purge_expired_terminal(self) -> None:
+        with self._index_lock:
+            cutoff = self._clock() - self._terminal_retention_seconds
+            expired = [
+                occurrence
+                for occurrence in self._occurrences.values()
+                if occurrence.terminal_at is not None and occurrence.terminal_at <= cutoff
+            ]
+            for occurrence in expired:
+                self._emit_event("retention_purge", occurrence)
+                self._occurrences.pop(occurrence.identity, None)
+                self._locks_by_identity.pop(occurrence.identity, None)
+                for thread_id in occurrence.thread_ids:
+                    key = (thread_id, occurrence.identity.interrupt_id)
+                    if self._terminal_by_interrupt.get(key) == occurrence.identity:
+                        self._terminal_by_interrupt.pop(key, None)
+
+    def _locks_for_batch(self, *, thread_id: str, interrupt_ids: list[str]) -> tuple[RLock, ...]:
+        with self._index_lock:
+            identities = {
+                identity
+                for interrupt_id in interrupt_ids
+                if (
+                    identity := self._pending_by_interrupt.get((thread_id, interrupt_id))
+                    or self._terminal_by_interrupt.get((thread_id, interrupt_id))
+                )
+                is not None
+            }
+            return tuple(
+                self._locks_by_identity[identity]
+                for identity in sorted(identities, key=lambda item: item.occurrence_id)
+            )
+
+    def _lock_for_identity(self, identity: ApprovalOccurrenceIdentity) -> RLock:
+        with self._index_lock:
+            return self._locks_by_identity.setdefault(identity, RLock())
+
+    @staticmethod
+    def _emit_event(
+        event: str,
+        occurrence: ApprovalOccurrence | None = None,
+        *,
+        failure_type: str | None = None,
+    ) -> None:
+        extra: dict[str, str] = {"approval_event": event}
+        if occurrence is not None:
+            extra.update(
+                approval_occurrence_id=occurrence.identity.occurrence_id,
+                approval_status=occurrence.status.value,
+                approval_owner=occurrence.owner.value,
+            )
+        if failure_type is not None:
+            extra["approval_failure_type"] = failure_type
+        logger.info("AG-UI approval lifecycle transition", extra=extra)
+
+    @_serialized_by_occurrence
     def begin_execution(self, intent: AuthorizedExecution, *, owner: ApprovalExecutionOwner) -> None:
         """Mark that an external side effect may begin.
 
@@ -611,9 +779,11 @@ class ApprovalLifecycle:
                 f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
             )
         if occurrence.status is not ApprovalStatus.CLAIMED:
-            raise ValueError(f"Approval occurrence is not claimed: {occurrence.status}.")
+            raise ApprovalClaimConflictError(f"Approval occurrence is not claimed: {occurrence.status}.")
         occurrence.status = ApprovalStatus.EXECUTING
+        self._emit_event("execution_start", occurrence)
 
+    @_serialized_by_occurrence
     def release_claim(self, intent: AuthorizedExecution, *, policy: ClaimRecoveryPolicy) -> None:
         """Release reserved authority when execution is known not to have begun."""
         occurrence = self._occurrences[intent.identity]
@@ -623,6 +793,7 @@ class ApprovalLifecycle:
             raise ValueError(f"Approval occurrence is not claimed: {occurrence.status}.")
         occurrence.status = ApprovalStatus.PENDING
 
+    @_serialized_by_occurrence
     def mark_indeterminate(
         self,
         intent: AuthorizedExecution,
@@ -636,11 +807,13 @@ class ApprovalLifecycle:
                 f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
             )
         if occurrence.status is not ApprovalStatus.EXECUTING:
-            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+            raise ApprovalSettlementConflictError(f"Approval occurrence is not executing: {occurrence.status}.")
         occurrence.status = ApprovalStatus.INDETERMINATE
         self._remove_pending_aliases(occurrence)
+        self._emit_event("indeterminate_recovery", occurrence)
         return self._snapshot_reconciliation(occurrence)
 
+    @_serialized_by_occurrence
     def recover_execution(
         self,
         intent: AuthorizedExecution,
@@ -654,20 +827,21 @@ class ApprovalLifecycle:
                 f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
             )
         if occurrence.status is not ApprovalStatus.EXECUTING:
-            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+            raise ApprovalSettlementConflictError(f"Approval occurrence is not executing: {occurrence.status}.")
         if intent.idempotency_key is not None and intent.idempotency_key == occurrence.idempotency_key:
             occurrence.status = ApprovalStatus.CLAIMED
             return intent
         self.mark_indeterminate(intent, owner=owner)
         return None
 
+    @_serialized_by_occurrence
     def settle(self, intent: AuthorizedExecution, results: list[Content]) -> ApprovalOutcome:
         """Settle an executing occurrence with results under its original call identity."""
         occurrence = self._occurrences[intent.identity]
         if intent.owner is not ApprovalExecutionOwner.LOCAL or occurrence.owner is not ApprovalExecutionOwner.LOCAL:
             raise ValueError("Only the local transition owner can settle a local execution result.")
         if occurrence.status is not ApprovalStatus.EXECUTING:
-            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+            raise ApprovalSettlementConflictError(f"Approval occurrence is not executing: {occurrence.status}.")
         replayable_results = [
             ReplayableToolResult(content=result)
             for result in results
@@ -685,8 +859,10 @@ class ApprovalLifecycle:
             snapshot_reconciliation=self._snapshot_reconciliation(occurrence),
         )
         occurrence.outcome = outcome
+        self._emit_event("settlement", occurrence)
         return outcome
 
+    @_serialized_by_occurrence
     def settle_forwarded(
         self,
         intent: AuthorizedExecution,
@@ -703,7 +879,7 @@ class ApprovalLifecycle:
                 f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
             )
         if occurrence.status is not ApprovalStatus.EXECUTING:
-            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+            raise ApprovalSettlementConflictError(f"Approval occurrence is not executing: {occurrence.status}.")
         replayable_results = [
             ReplayableToolResult(content=result)
             for result in results
@@ -729,8 +905,10 @@ class ApprovalLifecycle:
             snapshot_reconciliation=self._snapshot_reconciliation(occurrence),
         )
         occurrence.outcome = outcome
+        self._emit_event("settlement", occurrence)
         return outcome
 
+    @_serialized_by_occurrence
     def defer(self, intent: AuthorizedExecution, results: list[Content]) -> ApprovalOutcome:
         """Return an execution that yielded only follow-up requests to pending."""
         occurrence = self._occurrences[intent.identity]

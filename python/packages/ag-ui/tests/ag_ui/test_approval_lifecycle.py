@@ -4,13 +4,19 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
 import pytest
 from agent_framework import Content
 
 from agent_framework_ag_ui._approval_lifecycle import (
+    ApprovalCapacityError,
+    ApprovalClaimConflictError,
     ApprovalExecutionOwner,
     ApprovalIndeterminateError,
     ApprovalLifecycle,
+    ApprovalSettlementConflictError,
     ApprovalSnapshotStatus,
     ApprovalStatus,
     ClaimRecoveryPolicy,
@@ -58,6 +64,278 @@ async def test_local_approval_crosses_lifecycle_before_execution_and_settlement(
     ]
     assert [result.content.call_id for result in outcome.replayable_results] == ["call-1"]
     assert [result.content.result for result in outcome.replayable_results] == ["Sunny"]
+
+
+def test_active_occurrence_is_not_evicted_when_capacity_is_exhausted() -> None:
+    """Storage pressure fails explicitly instead of discarding pending authority."""
+    lifecycle = ApprovalLifecycle(max_entries=1)
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"secret":"first"}',
+    )
+
+    with pytest.raises(ApprovalCapacityError):
+        lifecycle.register_local(
+            thread_id="thread-2",
+            interrupt_id="approval-2",
+            call_id="call-2",
+            name="write_record",
+            arguments='{"secret":"second"}',
+        )
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.PENDING
+
+
+async def test_terminal_outcome_expires_only_after_configured_retention_window() -> None:
+    """Duplicate execution protection lasts for the configured terminal retention window."""
+    now = 100.0
+    lifecycle = ApprovalLifecycle(max_entries=1, terminal_retention_seconds=30, clock=lambda: now)
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    decision = ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")
+    intent = lifecycle.claim(thread_id="thread-1", decision=decision)
+
+    async def execute() -> list[Content]:
+        return [Content.from_function_result(call_id="call-1", result="done")]
+
+    outcome = await LocalPendingToolTransitionOwner(execute).execute(intent, lifecycle=lifecycle)
+    now = 129.0
+    assert lifecycle.claim_batch(thread_id="thread-1", decisions=[decision]).retained_outcomes == (outcome,)
+
+    now = 131.0
+    replacement = lifecycle.register_local(
+        thread_id="thread-2",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments="{}",
+    )
+
+    assert replacement.status is ApprovalStatus.PENDING
+    with pytest.raises(KeyError):
+        lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+    with pytest.raises(KeyError):
+        lifecycle.get(occurrence.identity)
+
+
+def test_indeterminate_occurrence_remains_protected_after_terminal_retention_window() -> None:
+    """Uncertain execution is never aged out as a retryable terminal tombstone."""
+    now = 100.0
+    lifecycle = ApprovalLifecycle(max_entries=1, terminal_retention_seconds=30, clock=lambda: now)
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}"),
+    )
+    lifecycle.begin_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+    lifecycle.recover_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+    now = 1_000.0
+
+    with pytest.raises(ApprovalCapacityError):
+        lifecycle.register_local(
+            thread_id="thread-2",
+            interrupt_id="approval-2",
+            call_id="call-2",
+            name="write_record",
+            arguments="{}",
+        )
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.INDETERMINATE
+
+
+async def test_transition_telemetry_covers_lifecycle_without_sensitive_payloads(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Operators can distinguish lifecycle transitions without logging tool inputs."""
+    caplog.set_level("INFO", logger="agent_framework_ag_ui._approval_lifecycle")
+    lifecycle = ApprovalLifecycle()
+    secret = "sensitive-value"
+    settled = lifecycle.register_local(
+        thread_id="thread-settled",
+        interrupt_id="approval-settled",
+        call_id="call-settled",
+        name="write_secret",
+        arguments=f'{{"value":"{secret}"}}',
+    )
+    decision = ResumeDecision(
+        interrupt_id="approval-settled",
+        accepted=True,
+        arguments=f'{{"value":"{secret}"}}',
+    )
+    intent = lifecycle.claim(thread_id="thread-settled", decision=decision)
+
+    async def execute() -> list[Content]:
+        return [Content.from_function_result(call_id="call-settled", result="done")]
+
+    await LocalPendingToolTransitionOwner(execute).execute(intent, lifecycle=lifecycle)
+    lifecycle.claim_batch(thread_id="thread-settled", decisions=[decision])
+
+    lifecycle.register_local(
+        thread_id="thread-rejected",
+        interrupt_id="approval-rejected",
+        call_id="call-rejected",
+        name="reject_secret",
+        arguments="{}",
+    )
+    lifecycle.claim_batch(
+        thread_id="thread-rejected",
+        decisions=[ResumeDecision(interrupt_id="approval-rejected", accepted=False, arguments="{}")],
+    )
+    lifecycle.register_local(
+        thread_id="thread-cancelled",
+        interrupt_id="approval-cancelled",
+        call_id="call-cancelled",
+        name="cancel_secret",
+        arguments="{}",
+    )
+    lifecycle.cancel_batch(thread_id="thread-cancelled", interrupt_ids=["approval-cancelled"])
+    lifecycle.register_local(
+        thread_id="thread-expired",
+        interrupt_id="approval-expired",
+        call_id="call-expired",
+        name="expire_secret",
+        arguments="{}",
+    )
+    lifecycle.expire_batch(thread_id="thread-expired", interrupt_ids=["approval-expired"])
+    uncertain = lifecycle.register_local(
+        thread_id="thread-uncertain",
+        interrupt_id="approval-uncertain",
+        call_id="call-uncertain",
+        name="uncertain_secret",
+        arguments="{}",
+    )
+    uncertain_intent = lifecycle.claim(
+        thread_id="thread-uncertain",
+        decision=ResumeDecision(interrupt_id="approval-uncertain", accepted=True, arguments="{}"),
+    )
+    lifecycle.begin_execution(uncertain_intent, owner=ApprovalExecutionOwner.LOCAL)
+    lifecycle.recover_execution(uncertain_intent, owner=ApprovalExecutionOwner.LOCAL)
+    with pytest.raises(KeyError):
+        lifecycle.claim_batch(
+            thread_id="thread-missing",
+            decisions=[ResumeDecision(interrupt_id="approval-missing", accepted=True, arguments="{}")],
+        )
+    capacity_lifecycle = ApprovalLifecycle(max_entries=1)
+    capacity_lifecycle.register_local(
+        thread_id="thread-capacity-1",
+        interrupt_id="approval-capacity-1",
+        call_id="call-capacity-1",
+        name="capacity_secret",
+        arguments="{}",
+    )
+    with pytest.raises(ApprovalCapacityError):
+        capacity_lifecycle.register_local(
+            thread_id="thread-capacity-2",
+            interrupt_id="approval-capacity-2",
+            call_id="call-capacity-2",
+            name="capacity_secret",
+            arguments="{}",
+        )
+
+    events = {getattr(record, "approval_event", None) for record in caplog.records}
+    assert {
+        "registration",
+        "claim",
+        "execution_start",
+        "settlement",
+        "rejection",
+        "cancellation",
+        "duplicate",
+        "expiration",
+        "indeterminate_recovery",
+        "authority_failure",
+        "capacity_failure",
+    } <= events
+    assert any(
+        getattr(record, "approval_occurrence_id", None) == settled.identity.occurrence_id for record in caplog.records
+    )
+    assert lifecycle.get(uncertain.identity).status is ApprovalStatus.INDETERMINATE
+    assert secret not in caplog.text
+    assert all(secret not in repr(record.__dict__) for record in caplog.records)
+
+
+def test_claim_and_settlement_conflicts_have_typed_outcomes() -> None:
+    """Adapters can distinguish transition conflicts without parsing error messages."""
+    lifecycle = ApprovalLifecycle()
+    lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    decision = ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")
+    intent = lifecycle.claim(thread_id="thread-1", decision=decision)
+
+    with pytest.raises(ApprovalClaimConflictError):
+        lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+    with pytest.raises(ApprovalSettlementConflictError):
+        lifecycle.settle(intent, [Content.from_function_result(call_id="call-1", result="done")])
+
+
+def test_same_thread_transitions_serialize_without_blocking_an_independent_thread() -> None:
+    """One scoped thread is serialized while another can claim concurrently."""
+    lifecycle = ApprovalLifecycle()
+    first = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    lifecycle.register_local(
+        thread_id="thread-2",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments="{}",
+    )
+    first_decision = ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")
+    second_decision = ResumeDecision(interrupt_id="approval-2", accepted=True, arguments="{}")
+    first_claim_entered = Event()
+    release_first_claim = Event()
+    second_same_thread_started = Event()
+    original_emit = lifecycle._emit_event
+
+    def blocking_emit(event: str, occurrence=None, *, failure_type: str | None = None) -> None:
+        if event == "claim" and occurrence is not None and occurrence.identity == first.identity:
+            first_claim_entered.set()
+            assert release_first_claim.wait(timeout=2)
+        original_emit(event, occurrence, failure_type=failure_type)
+
+    lifecycle._emit_event = blocking_emit  # type: ignore[method-assign]
+
+    def repeat_first_claim():
+        second_same_thread_started.set()
+        return lifecycle.claim_batch(thread_id="thread-1", decisions=[first_decision])
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first_claim = executor.submit(lifecycle.claim, thread_id="thread-1", decision=first_decision)
+        assert first_claim_entered.wait(timeout=2)
+        conflicting_claim = executor.submit(repeat_first_claim)
+        assert second_same_thread_started.wait(timeout=2)
+        independent_claim = executor.submit(lifecycle.claim, thread_id="thread-2", decision=second_decision)
+
+        assert independent_claim.result(timeout=2).identity.call_id == "call-2"
+        assert not conflicting_claim.done()
+        release_first_claim.set()
+        assert first_claim.result(timeout=2).identity == first.identity
+        with pytest.raises(ApprovalClaimConflictError):
+            conflicting_claim.result(timeout=2)
 
 
 async def test_hosted_approval_is_forwarded_only_by_its_owner_and_settles_same_occurrence() -> None:

@@ -7,6 +7,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Any
 
+from ._approval_lifecycle import ApprovalLifecycle
+
 ApprovalScope = str
 """Application-defined scope for server-side AG-UI Approval State."""
 
@@ -50,6 +52,44 @@ class InMemoryAGUIApprovalStateStore:
         self.max_entries = max_entries
         self.pending_approvals: OrderedDict[tuple[str, str], Any] = OrderedDict()
         self.tool_approval_states: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.lifecycle = ApprovalLifecycle()
+
+    def register_local(
+        self,
+        *,
+        thread_ids: list[str],
+        name: str,
+        arguments: str,
+        request_id: str,
+        interrupt_id: str,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Register one local occurrence and its trusted aliases."""
+        entry: dict[str, Any] = {
+            "name": name,
+            "arguments": arguments,
+            "request_id": request_id,
+            "interrupt_id": interrupt_id,
+        }
+        if already_approved_requests:
+            entry["already_approved_requests"] = already_approved_requests
+
+        for thread_id in dict.fromkeys(thread_ids):
+            aliases = {(thread_id, request_id), (thread_id, interrupt_id)}
+            replaced_entries = {id(existing) for key, existing in self.pending_approvals.items() if key in aliases}
+            for key, existing in list(self.pending_approvals.items()):
+                if key in aliases or id(existing) in replaced_entries:
+                    self.pending_approvals.pop(key, None)
+            for key in aliases:
+                self.pending_approvals[key] = entry
+            self.lifecycle.register_local(
+                thread_id=thread_id,
+                interrupt_id=interrupt_id,
+                call_id=interrupt_id,
+                name=name,
+                arguments=arguments,
+            )
+        self.evict_oldest()
 
     def evict_oldest(self) -> None:
         """Evict oldest pending approval entries until the store is within bounds."""

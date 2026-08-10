@@ -12,6 +12,60 @@ from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ign
 
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._agent_run import PendingApprovalEntry, PendingApprovalKey, run_agent_stream
+from agent_framework_ag_ui._approval_lifecycle import ResumeDecision
+from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore
+
+
+async def _run_with_registered_approval_state(
+    input_data: dict[str, Any],
+    agent: StubAgent,
+    config: AgentConfig,
+) -> list[Any]:
+    """Cross the lifecycle seam with server-owned state for approval fixtures."""
+    thread_id = str(input_data["thread_id"])
+    calls: dict[str, dict[str, Any]] = {}
+    decisions: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
+    for message in input_data["messages"]:
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls", []):
+                calls[str(tool_call["id"])] = tool_call["function"]
+        if message.get("role") == "tool":
+            decision = json.loads(message["content"])
+            if isinstance(decision, dict) and "accepted" in decision:
+                decisions.append(
+                    {
+                        "interruptId": str(message["toolCallId"]),
+                        "status": "resolved",
+                        "payload": decision,
+                    }
+                )
+                continue
+        messages.append(message)
+
+    store = InMemoryAGUIApprovalStateStore()
+    for decision in decisions:
+        call_id = str(decision["interruptId"])
+        function = calls[call_id]
+        arguments = json.dumps(json.loads(function["arguments"]), sort_keys=True, separators=(",", ":"))
+        store.register_local(
+            thread_ids=[thread_id],
+            name=str(function["name"]),
+            arguments=arguments,
+            request_id=call_id,
+            interrupt_id=call_id,
+        )
+
+    events: list[Any] = []
+    async for event in run_agent_stream(
+        {**input_data, "messages": messages, "resume": decisions},
+        agent,
+        config,
+        pending_approvals=store.pending_approvals,
+        approval_state_store=store,
+    ):
+        events.append(event)
+    return events
 
 
 def _make_weather_tool() -> FunctionTool:
@@ -75,9 +129,7 @@ async def test_approval_resume_emits_tool_call_result() -> None:
         "messages": resume_messages,
     }
 
-    events: list[Any] = []
-    async for event in run_agent_stream(input_data, agent, config):
-        events.append(event)
+    events = await _run_with_registered_approval_state(input_data, agent, config)
 
     event_types = [getattr(e, "type", None) for e in events]
 
@@ -141,9 +193,7 @@ async def test_approval_resume_result_has_content() -> None:
         "messages": resume_messages,
     }
 
-    events: list[Any] = []
-    async for event in run_agent_stream(input_data, agent, config):
-        events.append(event)
+    events = await _run_with_registered_approval_state(input_data, agent, config)
 
     tool_result_events = [e for e in events if getattr(e, "type", None) == "TOOL_CALL_RESULT"]
     assert len(tool_result_events) == 1
@@ -189,8 +239,7 @@ async def test_approval_resume_snapshot_replaces_approval_payload_with_tool_resu
         },
     ]
 
-    events: list[Any] = []
-    async for event in run_agent_stream(
+    events = await _run_with_registered_approval_state(
         {
             "thread_id": "thread-snapshot-replay",
             "run_id": "run-snapshot-replay",
@@ -198,8 +247,7 @@ async def test_approval_resume_snapshot_replaces_approval_payload_with_tool_resu
         },
         agent,
         config,
-    ):
-        events.append(event)
+    )
 
     snapshots = [event.messages for event in events if getattr(event, "type", None) == "MESSAGES_SNAPSHOT"]
     assert snapshots
@@ -289,9 +337,7 @@ async def test_rejection_does_not_emit_tool_call_result() -> None:
         "messages": resume_messages,
     }
 
-    events: list[Any] = []
-    async for event in run_agent_stream(input_data, agent, config):
-        events.append(event)
+    events = await _run_with_registered_approval_state(input_data, agent, config)
 
     tool_result_events = [e for e in events if getattr(e, "type", None) == "TOOL_CALL_RESULT"]
     assert len(tool_result_events) == 0, (
@@ -368,9 +414,7 @@ async def test_mixed_approve_reject_emits_only_approved_tool_result() -> None:
         "messages": resume_messages,
     }
 
-    events: list[Any] = []
-    async for event in run_agent_stream(input_data, agent, config):
-        events.append(event)
+    events = await _run_with_registered_approval_state(input_data, agent, config)
 
     tool_result_events = [e for e in events if getattr(e, "type", None) == "TOOL_CALL_RESULT"]
 
@@ -423,9 +467,7 @@ async def test_approval_resume_zero_updates_emits_tool_result() -> None:
         "messages": resume_messages,
     }
 
-    events: list[Any] = []
-    async for event in run_agent_stream(input_data, agent, config):
-        events.append(event)
+    events = await _run_with_registered_approval_state(input_data, agent, config)
 
     event_types = [getattr(e, "type", None) for e in events]
     assert "RUN_STARTED" in event_types
@@ -552,8 +594,29 @@ async def test_resolve_approval_responses_preserves_follow_up_user_input_group()
         Message(role="user", contents=[approval_request.to_function_approval_response(approved=True)]),
     ]
     agent = StubAgent(updates=[], default_options={"tools": [consent_tool]})
+    store = InMemoryAGUIApprovalStateStore()
+    store.register_local(
+        thread_ids=["thread-consent"],
+        name="request_consent",
+        arguments="{}",
+        request_id="approval_consent",
+        interrupt_id="call_consent",
+    )
+    intent = store.lifecycle.claim(
+        thread_id="thread-consent",
+        decision=ResumeDecision(interrupt_id="call_consent", accepted=True, arguments="{}"),
+    )
 
-    results = await _resolve_approval_responses(messages, [consent_tool], agent, {})
+    results = await _resolve_approval_responses(
+        messages,
+        [consent_tool],
+        agent,
+        {},
+        store.pending_approvals,
+        "thread-consent",
+        lifecycle=store.lifecycle,
+        authorized_executions={"call_consent": intent},
+    )
 
     follow_up_requests = [content for message in messages for content in message.contents if content.user_input_request]
     assert results == []
@@ -612,11 +675,7 @@ async def test_resolve_approval_responses_keeps_fresh_occurrence_when_canonical_
     """A completed occurrence cannot consume a later approval that reuses its canonical call id."""
     from agent_framework import Message
 
-    from agent_framework_ag_ui._agent_run import (
-        _make_pending_approval_entry,
-        _pending_approval_key,
-        _resolve_approval_responses,
-    )
+    from agent_framework_ag_ui._agent_run import _resolve_approval_responses
 
     executions: list[str] = []
 
@@ -647,14 +706,18 @@ async def test_resolve_approval_responses_keeps_fresh_occurrence_when_canonical_
         ),
     ]
     thread_id = "thread-reused"
-    pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] = {
-        _pending_approval_key(thread_id, call_id): _make_pending_approval_entry(
-            "guarded_write",
-            '{"value":"same"}',
-            request_id=call_id,
-            interrupt_id=call_id,
-        )
-    }
+    store = InMemoryAGUIApprovalStateStore()
+    store.register_local(
+        thread_ids=[thread_id],
+        name="guarded_write",
+        arguments='{"value":"same"}',
+        request_id=call_id,
+        interrupt_id=call_id,
+    )
+    intent = store.lifecycle.claim(
+        thread_id=thread_id,
+        decision=ResumeDecision(interrupt_id=call_id, accepted=True, arguments='{"value":"same"}'),
+    )
     agent = StubAgent(updates=[], default_options={"tools": [tool]})
 
     results = await _resolve_approval_responses(
@@ -662,13 +725,15 @@ async def test_resolve_approval_responses_keeps_fresh_occurrence_when_canonical_
         [tool],
         agent,
         {},
-        pending_approvals,
+        store.pending_approvals,
         thread_id,
+        lifecycle=store.lifecycle,
+        authorized_executions={call_id: intent},
     )
 
     assert executions == ["same"]
     assert [result.result for result in results] == ["wrote:same"]
-    assert pending_approvals == {}
+    assert store.pending_approvals == {}
     assert not [
         content for message in messages for content in message.contents if content.type == "function_approval_response"
     ]

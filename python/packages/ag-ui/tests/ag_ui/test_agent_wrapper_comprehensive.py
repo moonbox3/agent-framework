@@ -819,20 +819,24 @@ async def test_function_approval_mode_executes_tool(streaming_chat_client_stub):
     assert len(run_started) == 1
     assert len(run_finished) == 1
 
-    # Verify that a FunctionResultContent was created and sent to the agent
-    tool_result_found = False
-    for msg in messages_received:
-        for content in msg.contents:
-            if content.type == "function_result":
-                tool_result_found = True
-                assert content.call_id == "call_get_datetime_123"
-                assert content.result == "2025/12/01 12:00:00"
-                break
-
-    assert tool_result_found, (
-        "FunctionResultContent should be included in messages sent to agent. "
-        "This is required for the model to see the approved tool execution result."
+    result_events = [event for event in events2 if event.type == "TOOL_CALL_RESULT"]
+    assert len(result_events) == 1
+    assert result_events[0].tool_call_id == "call_get_datetime_123"
+    assert result_events[0].content == "2025/12/01 12:00:00"
+    assert not any(
+        event.type in {"TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END"}
+        and getattr(event, "tool_call_id", None) == "call_get_datetime_123"
+        for event in events2
     )
+
+    replayable_results = [
+        content
+        for message in messages_received
+        for content in message.contents
+        if content.type == "function_result" and content.call_id == "call_get_datetime_123"
+    ]
+    assert len(replayable_results) == 1
+    assert replayable_results[0].result == "2025/12/01 12:00:00"
 
 
 async def test_function_approval_mode_rejection(streaming_chat_client_stub):

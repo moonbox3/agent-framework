@@ -47,6 +47,7 @@ from agent_framework_ag_ui import (
     add_agent_framework_fastapi_endpoint,
 )
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
+from agent_framework_ag_ui._approval_lifecycle import ApprovalLifecycle
 from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
 
@@ -2168,6 +2169,51 @@ async def test_endpoint_agent_approval_replayed_resume_entry_reprojects_retained
     assert len(result_events) == 1
     assert result_events[0]["toolCallId"] == "call_get_weather"
     assert result_events[0]["content"] == "Sunny in Seattle"
+
+
+async def test_endpoint_agent_approval_settlement_failure_prevents_automatic_reexecution(monkeypatch):
+    """A lost settlement becomes indeterminate and an identical resume cannot execute again."""
+    client, _, executed_cities = _build_weather_approval_endpoint()
+    original_settle = ApprovalLifecycle.settle
+
+    def fail_settlement(self, intent, results):
+        del self, intent, results
+        raise RuntimeError("settlement unavailable")
+
+    monkeypatch.setattr(ApprovalLifecycle, "settle", fail_settlement)
+    first_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-resume",
+            "threadId": "thread-weather",
+            "messages": [],
+            "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+    monkeypatch.setattr(ApprovalLifecycle, "settle", original_settle)
+
+    assert first_response.status_code == 200
+    assert executed_cities == ["Seattle"]
+    assert [event for event in _decode_sse_events(first_response) if event.get("type") == "RUN_ERROR"]
+
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": "thread-weather",
+            "messages": [],
+            "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    retry_events = _decode_sse_events(retry_response)
+    run_errors = [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert retry_response.status_code == 200
+    assert executed_cities == ["Seattle"]
+    assert len(run_errors) == 1
+    assert run_errors[0]["code"] == "APPROVAL_RESUME_INVALID"
+    assert "indeterminate" in run_errors[0]["message"]
+    assert not [event for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"]
 
 
 async def test_endpoint_agent_approval_resume_wrong_thread_emits_run_error():

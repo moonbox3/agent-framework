@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
+from asyncio import CancelledError
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from uuid import uuid4
 
 from agent_framework import Content
+
+
+class ApprovalIndeterminateError(ValueError):
+    """An approval may have executed but has no retained terminal outcome."""
 
 
 class ApprovalStatus(str, Enum):
@@ -22,6 +27,7 @@ class ApprovalStatus(str, Enum):
     REJECTED = "rejected"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+    INDETERMINATE = "indeterminate"
 
 
 class ApprovalExecutionOwner(str, Enum):
@@ -31,6 +37,12 @@ class ApprovalExecutionOwner(str, Enum):
     HOSTED = "hosted"
     DEFERRED = "deferred"
     UNAVAILABLE = "unavailable"
+
+
+class ClaimRecoveryPolicy(str, Enum):
+    """Proof required to release authority before execution begins."""
+
+    SAFE_TO_RETRY = "safe_to_retry"
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,7 @@ class ApprovalOccurrence:
     name: str
     arguments: str
     owner: ApprovalExecutionOwner
+    idempotency_key: str | None = None
     status: ApprovalStatus = ApprovalStatus.PENDING
     replayable_results: list[ReplayableToolResult] = field(default_factory=list)
     decision: ResumeDecision | None = None
@@ -77,6 +90,7 @@ class AuthorizedExecution:
     name: str
     arguments: str
     owner: ApprovalExecutionOwner
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +137,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one server-generated local approval occurrence."""
         return self.register_local_aliases(
@@ -131,6 +146,7 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            idempotency_key=idempotency_key,
         )
 
     def register_local_aliases(
@@ -141,6 +157,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one occurrence under its trusted scoped-thread aliases."""
         return self._register_aliases(
@@ -150,6 +167,7 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.LOCAL,
+            idempotency_key=idempotency_key,
         )
 
     def register_hosted(
@@ -160,6 +178,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one server-generated hosted approval occurrence."""
         return self.register_hosted_aliases(
@@ -168,6 +187,7 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            idempotency_key=idempotency_key,
         )
 
     def register_hosted_aliases(
@@ -178,6 +198,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one hosted occurrence under its trusted scoped-thread aliases."""
         return self._register_aliases(
@@ -187,6 +208,7 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.HOSTED,
+            idempotency_key=idempotency_key,
         )
 
     def register_unowned(
@@ -215,6 +237,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one occurrence owned by the in-run transition pipeline."""
         return self.register_deferred_aliases(
@@ -223,6 +246,7 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            idempotency_key=idempotency_key,
         )
 
     def register_deferred_aliases(
@@ -233,6 +257,7 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one deferred occurrence under its trusted scoped-thread aliases."""
         return self._register_aliases(
@@ -242,6 +267,7 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.DEFERRED,
+            idempotency_key=idempotency_key,
         )
 
     def register_unowned_aliases(
@@ -272,7 +298,10 @@ class ApprovalLifecycle:
         name: str,
         arguments: str,
         owner: ApprovalExecutionOwner,
+        idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
+        if idempotency_key == "":
+            raise ValueError("An execution idempotency key cannot be empty.")
         unique_thread_ids = tuple(dict.fromkeys(thread_ids))
         if not unique_thread_ids:
             raise ValueError("An approval occurrence requires at least one scoped thread identity.")
@@ -292,6 +321,7 @@ class ApprovalLifecycle:
                 or occurrence.name != name
                 or occurrence.arguments != arguments
                 or occurrence.owner is not owner
+                or occurrence.idempotency_key != idempotency_key
             ):
                 raise ValueError("Approval alias conflicts with an existing pending occurrence.")
             occurrence.thread_ids = tuple(dict.fromkeys((*occurrence.thread_ids, *unique_thread_ids)))
@@ -311,6 +341,7 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=owner,
+            idempotency_key=idempotency_key,
         )
         self._occurrences[identity] = occurrence
         for thread_id in unique_thread_ids:
@@ -357,6 +388,10 @@ class ApprovalLifecycle:
                 identity = self._terminal_by_interrupt[key]
             occurrence = self._occurrences[identity]
             if is_terminal:
+                if occurrence.status is ApprovalStatus.INDETERMINATE:
+                    raise ApprovalIndeterminateError(
+                        "Approval execution outcome is indeterminate; automatic retry is unsafe."
+                    )
                 if occurrence.status is ApprovalStatus.EXPIRED:
                     raise ValueError("Approval authority has expired.")
                 retained_decision = occurrence.decision
@@ -420,6 +455,7 @@ class ApprovalLifecycle:
                     name=occurrence.name,
                     arguments=occurrence.arguments,
                     owner=occurrence.owner,
+                    idempotency_key=occurrence.idempotency_key,
                 )
             )
         return ApprovalBatchDecision(
@@ -476,7 +512,11 @@ class ApprovalLifecycle:
             self._terminal_by_interrupt[(thread_id, occurrence.identity.interrupt_id)] = occurrence.identity
 
     def begin_execution(self, intent: AuthorizedExecution, *, owner: ApprovalExecutionOwner) -> None:
-        """Mark a claimed occurrence immediately before its owner may invoke a tool."""
+        """Mark that an external side effect may begin.
+
+        A claimed occurrence only reserves authority. Once this transition succeeds,
+        arbitrary execution cannot be assumed safe to retry without idempotency proof.
+        """
         occurrence = self._occurrences[intent.identity]
         if intent.owner is not owner or occurrence.owner is not owner:
             raise ValueError(
@@ -485,6 +525,47 @@ class ApprovalLifecycle:
         if occurrence.status is not ApprovalStatus.CLAIMED:
             raise ValueError(f"Approval occurrence is not claimed: {occurrence.status}.")
         occurrence.status = ApprovalStatus.EXECUTING
+
+    def release_claim(self, intent: AuthorizedExecution, *, policy: ClaimRecoveryPolicy) -> None:
+        """Release reserved authority when execution is known not to have begun."""
+        occurrence = self._occurrences[intent.identity]
+        if policy is not ClaimRecoveryPolicy.SAFE_TO_RETRY:
+            raise ValueError("Claim recovery policy does not permit retry.")
+        if occurrence.status is not ApprovalStatus.CLAIMED:
+            raise ValueError(f"Approval occurrence is not claimed: {occurrence.status}.")
+        occurrence.status = ApprovalStatus.PENDING
+
+    def mark_indeterminate(self, intent: AuthorizedExecution, *, owner: ApprovalExecutionOwner) -> None:
+        """Record that execution may have begun but no result was settled."""
+        occurrence = self._occurrences[intent.identity]
+        if intent.owner is not owner or occurrence.owner is not owner:
+            raise ValueError(
+                f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
+            )
+        if occurrence.status is not ApprovalStatus.EXECUTING:
+            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+        occurrence.status = ApprovalStatus.INDETERMINATE
+        self._remove_pending_aliases(occurrence)
+
+    def recover_execution(
+        self,
+        intent: AuthorizedExecution,
+        *,
+        owner: ApprovalExecutionOwner,
+    ) -> AuthorizedExecution | None:
+        """Recover an execution that has no settled result."""
+        occurrence = self._occurrences[intent.identity]
+        if intent.owner is not owner or occurrence.owner is not owner:
+            raise ValueError(
+                f"Approval occurrence belongs to the {occurrence.owner.value} transition owner, not {owner.value}."
+            )
+        if occurrence.status is not ApprovalStatus.EXECUTING:
+            raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
+        if intent.idempotency_key is not None and intent.idempotency_key == occurrence.idempotency_key:
+            occurrence.status = ApprovalStatus.CLAIMED
+            return intent
+        self.mark_indeterminate(intent, owner=owner)
+        return None
 
     def settle(self, intent: AuthorizedExecution, results: list[Content]) -> ApprovalOutcome:
         """Settle an executing occurrence with results under its original call identity."""
@@ -579,10 +660,14 @@ class LocalPendingToolTransitionOwner:
     ) -> ApprovalOutcome:
         """Execute and settle one call after lifecycle authorization."""
         lifecycle.begin_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
-        results = await self._executor()
-        if not any(result.type == "function_result" for result in results):
-            return lifecycle.defer(intent, results)
-        return lifecycle.settle(intent, results)
+        try:
+            results = await self._executor()
+            if not any(result.type == "function_result" for result in results):
+                return lifecycle.defer(intent, results)
+            return lifecycle.settle(intent, results)
+        except (Exception, CancelledError):
+            lifecycle.recover_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+            raise
 
 
 class ForwardedPendingToolTransitionOwner:
@@ -605,7 +690,11 @@ class ForwardedPendingToolTransitionOwner:
     ) -> list[Content]:
         """Forward one hosted approval after lifecycle authorization."""
         lifecycle.begin_execution(intent, owner=self._owner)
-        return await self._forwarder()
+        try:
+            return await self._forwarder()
+        except (Exception, CancelledError):
+            lifecycle.recover_execution(intent, owner=self._owner)
+            raise
 
     def record_outcome(
         self,
@@ -615,7 +704,11 @@ class ForwardedPendingToolTransitionOwner:
         lifecycle: ApprovalLifecycle,
     ) -> ApprovalOutcome:
         """Record the hosted owner's outcome against the authorized occurrence."""
-        return lifecycle.settle_forwarded(intent, results, owner=self._owner)
+        try:
+            return lifecycle.settle_forwarded(intent, results, owner=self._owner)
+        except (Exception, CancelledError):
+            lifecycle.recover_execution(intent, owner=self._owner)
+            raise
 
     async def execute(
         self,

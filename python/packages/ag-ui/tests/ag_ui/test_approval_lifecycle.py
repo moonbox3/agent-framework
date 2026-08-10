@@ -9,8 +9,10 @@ from agent_framework import Content
 
 from agent_framework_ag_ui._approval_lifecycle import (
     ApprovalExecutionOwner,
+    ApprovalIndeterminateError,
     ApprovalLifecycle,
     ApprovalStatus,
+    ClaimRecoveryPolicy,
     HostedPendingToolTransitionOwner,
     LocalPendingToolTransitionOwner,
     ResumeDecision,
@@ -118,8 +120,8 @@ async def test_hosted_approval_is_forwarded_only_by_its_owner_and_settles_same_o
     assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
 
 
-async def test_execution_failure_keeps_unexecuted_batch_sibling_claimed() -> None:
-    """A failed occurrence does not erase a claimed sibling that can still execute."""
+async def test_execution_failure_becomes_indeterminate_and_keeps_unexecuted_sibling_claimed() -> None:
+    """A possibly started side effect is not retried and does not erase a claimed sibling."""
     lifecycle = ApprovalLifecycle()
     first = lifecycle.register_local(
         thread_id="thread-1",
@@ -143,20 +145,143 @@ async def test_execution_failure_keeps_unexecuted_batch_sibling_claimed() -> Non
         ],
     )
 
+    invocation_count = 0
+
     async def fail_first() -> list[Content]:
+        nonlocal invocation_count
+        invocation_count += 1
         raise RuntimeError("side effect failed")
 
     with pytest.raises(RuntimeError, match="side effect failed"):
         await LocalPendingToolTransitionOwner(fail_first).execute(first_intent, lifecycle=lifecycle)
 
-    assert lifecycle.get(first.identity).status is ApprovalStatus.EXECUTING
+    assert lifecycle.get(first.identity).status is ApprovalStatus.INDETERMINATE
     assert lifecycle.get(second.identity).status is ApprovalStatus.CLAIMED
+    with pytest.raises(ApprovalIndeterminateError) as error:
+        lifecycle.claim_batch(
+            thread_id="thread-1",
+            decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}')],
+        )
+    assert str(error.value) == "Approval execution outcome is indeterminate; automatic retry is unsafe."
+    assert "first" not in str(error.value)
+    assert invocation_count == 1
 
     async def execute_second() -> list[Content]:
         return [Content.from_function_result(call_id="call-2", result="wrote second")]
 
     await LocalPendingToolTransitionOwner(execute_second).execute(second_intent, lifecycle=lifecycle)
     assert lifecycle.get(second.identity).status is ApprovalStatus.SETTLED
+
+
+def test_claim_can_be_released_before_execution_only_with_explicit_safe_policy() -> None:
+    """Reserved authority can be reclaimed when the owner proves execution never began."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    decision = ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")
+    intent = lifecycle.claim(thread_id="thread-1", decision=decision)
+
+    lifecycle.release_claim(intent, policy=ClaimRecoveryPolicy.SAFE_TO_RETRY)
+    retry = lifecycle.claim(thread_id="thread-1", decision=decision)
+
+    assert retry.identity == occurrence.identity
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.CLAIMED
+
+
+def test_recovering_execution_without_a_result_becomes_indeterminate() -> None:
+    """Recovery preserves an uncertain occurrence instead of granting authority again."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    decision = ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")
+    intent = lifecycle.claim(thread_id="thread-1", decision=decision)
+    lifecycle.begin_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+
+    recovered = lifecycle.recover_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+
+    assert recovered is None
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.INDETERMINATE
+    with pytest.raises(ApprovalIndeterminateError):
+        lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+
+
+async def test_explicit_idempotency_key_allows_retry_after_execution_interruption() -> None:
+    """A predeclared idempotency key permits retrying a potentially started side effect."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+        idempotency_key="operation-1",
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}"),
+    )
+    invocation_count = 0
+
+    async def execute_idempotently() -> list[Content]:
+        nonlocal invocation_count
+        invocation_count += 1
+        if invocation_count == 1:
+            raise RuntimeError("connection lost")
+        return [Content.from_function_result(call_id="call-1", result="recorded")]
+
+    owner = LocalPendingToolTransitionOwner(execute_idempotently)
+    with pytest.raises(RuntimeError, match="connection lost"):
+        await owner.execute(intent, lifecycle=lifecycle)
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.CLAIMED
+    outcome = await owner.execute(intent, lifecycle=lifecycle)
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
+    assert outcome.replayable_results[0].content.result == "recorded"
+    assert invocation_count == 2
+
+
+async def test_hosted_idempotency_key_allows_retry_after_forwarding_interruption() -> None:
+    """A hosted owner uses the same explicit recovery rule as the local owner."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_hosted(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="hosted_write",
+        arguments="{}",
+        idempotency_key="hosted-operation-1",
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}"),
+    )
+    forwarding_count = 0
+
+    async def forward_idempotently() -> list[Content]:
+        nonlocal forwarding_count
+        forwarding_count += 1
+        if forwarding_count == 1:
+            raise RuntimeError("host disconnected")
+        return [Content.from_function_result(call_id="call-1", result="recorded")]
+
+    owner = HostedPendingToolTransitionOwner(forward_idempotently)
+    with pytest.raises(RuntimeError, match="host disconnected"):
+        await owner.execute(intent, lifecycle=lifecycle)
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.CLAIMED
+    await owner.execute(intent, lifecycle=lifecycle)
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
+    assert forwarding_count == 2
 
 
 def test_batch_validation_is_atomic_before_claiming_any_occurrence() -> None:

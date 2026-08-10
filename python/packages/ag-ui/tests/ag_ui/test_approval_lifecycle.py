@@ -66,6 +66,36 @@ async def test_local_approval_crosses_lifecycle_before_execution_and_settlement(
     assert [result.content.result for result in outcome.replayable_results] == ["Sunny"]
 
 
+def test_registration_keeps_trusted_aliases_and_projection_metadata_in_lifecycle() -> None:
+    lifecycle = ApprovalLifecycle()
+    sibling = {
+        "type": "function_approval_request",
+        "id": "sibling-request",
+        "function_call": {
+            "type": "function_call",
+            "call_id": "sibling-call",
+            "name": "write_record",
+            "arguments": '{"value":"second"}',
+        },
+    }
+
+    occurrence = lifecycle.register_hosted(
+        thread_id="thread-1",
+        interrupt_id="call-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+        aliases=["request-1"],
+        already_approved_requests=[sibling],
+        server_label="hosted-tools",
+    )
+
+    assert lifecycle.pending_occurrence(thread_id="thread-1", interrupt_id="request-1") is occurrence
+    assert lifecycle.pending_interrupt_ids(thread_id="thread-1") == {"call-1"}
+    assert occurrence.already_approved_requests == (sibling,)
+    assert occurrence.server_label == "hosted-tools"
+
+
 def test_active_occurrence_is_not_evicted_when_capacity_is_exhausted() -> None:
     """Storage pressure fails explicitly instead of discarding pending authority."""
     lifecycle = ApprovalLifecycle(max_entries=1)

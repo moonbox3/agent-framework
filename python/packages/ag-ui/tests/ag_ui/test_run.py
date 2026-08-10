@@ -24,21 +24,18 @@ from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ign
 
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._agent_run import (
-    PendingApprovalEntry,
-    PendingApprovalKey,
     _build_messages_snapshot,
     _build_safe_metadata,
     _canonical_approval_resume_messages,
     _create_state_context_message,
     _filter_local_approval_responses_for_provider,
     _inject_state_context,
-    _make_pending_approval_entry,
     _normalize_response_stream,
-    _pending_approval_key,
     _resume_to_tool_messages,
     _should_suppress_intermediate_snapshot,
     run_agent_stream,
 )
+from agent_framework_ag_ui._approval_lifecycle import ApprovalLifecycle
 from agent_framework_ag_ui._run_common import (
     FlowState,
     _build_run_finished_event,
@@ -1041,29 +1038,29 @@ def test_resume_to_tool_messages_skips_cancelled_entries():
 
 def test_canonical_approval_resume_does_not_mutate_arguments_until_batch_validates():
     """Edited approval arguments are committed only after every resume entry validates."""
-    pending_entry = _make_pending_approval_entry(
-        "get_weather",
-        '{"city":"Seattle"}',
-        request_id="call_a",
+    lifecycle = ApprovalLifecycle()
+    pending_entry = lifecycle.register_local(
+        thread_id="thread-weather",
         interrupt_id="call_a",
+        call_id="call_a",
+        name="get_weather",
+        arguments='{"city":"Seattle"}',
     )
-    pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] = {
-        _pending_approval_key("thread-weather", "call_a"): pending_entry,
-        _pending_approval_key("thread-weather", "call_b"): _make_pending_approval_entry(
-            "get_weather",
-            '{"city":"Portland"}',
-            request_id="call_b",
-            interrupt_id="call_b",
-        ),
-    }
+    lifecycle.register_local(
+        thread_id="thread-weather",
+        interrupt_id="call_b",
+        call_id="call_b",
+        name="get_weather",
+        arguments='{"city":"Portland"}',
+    )
 
     messages, handled_ids, cancelled_ids, error = _canonical_approval_resume_messages(
         [
             {"interruptId": "call_a", "status": "resolved", "payload": {"accepted": True, "city": "Portland"}},
             {"interruptId": "call_b", "status": "resolved", "payload": "not an object"},
         ],
-        pending_approvals,
         "thread-weather",
+        lifecycle=lifecycle,
     )
 
     assert messages == []
@@ -1071,20 +1068,20 @@ def test_canonical_approval_resume_does_not_mutate_arguments_until_batch_validat
     assert cancelled_ids == set()
     assert error is not None
     assert error.code == "APPROVAL_RESUME_INVALID"
-    assert pending_entry["arguments"] == '{"city":"Seattle"}'
+    assert pending_entry.arguments == '{"city":"Seattle"}'
 
 
 def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutating_pending() -> None:
     """Hosted approvals accept a decision only because providers ignore edited arguments."""
-    pending_entry = _make_pending_approval_entry(
-        "docs_search",
-        '{"query":"azure"}',
-        request_id="mcpr_docs",
+    lifecycle = ApprovalLifecycle()
+    pending_entry = lifecycle.register_hosted(
+        thread_id="thread-hosted",
         interrupt_id="mcpr_docs",
+        call_id="mcpr_docs",
+        name="docs_search",
+        arguments='{"query":"azure"}',
         server_label="Microsoft_Learn_MCP",
     )
-    key = _pending_approval_key("thread-hosted", "mcpr_docs")
-    pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] = {key: pending_entry}
 
     messages, handled_ids, cancelled_ids, error = _canonical_approval_resume_messages(
         [
@@ -1094,8 +1091,8 @@ def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutat
                 "payload": {"accepted": True, "query": "untrusted edit"},
             }
         ],
-        pending_approvals,
         "thread-hosted",
+        lifecycle=lifecycle,
     )
 
     assert messages == []
@@ -1103,23 +1100,23 @@ def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutat
     assert cancelled_ids == set()
     assert error is not None
     assert error.code == "APPROVAL_RESUME_INVALID_RESPONSE"
-    assert pending_entry["arguments"] == '{"query":"azure"}'
-    assert pending_approvals[key] is pending_entry
+    assert pending_entry.arguments == '{"query":"azure"}'
+    assert lifecycle.pending_occurrence(thread_id="thread-hosted", interrupt_id="mcpr_docs") is pending_entry
 
 
-def test_pending_approval_registry_scans_exact_thread_keys_with_colons():
+def test_approval_lifecycle_scans_exact_thread_keys_with_colons():
     """A thread id that prefixes another thread id must not inherit its pending approval contract."""
-    pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] = {
-        _pending_approval_key("tenant:thread", "call_1"): _make_pending_approval_entry(
-            "get_weather",
-            '{"city":"Seattle"}',
-            request_id="call_1",
-            interrupt_id="call_1",
-        )
-    }
+    lifecycle = ApprovalLifecycle()
+    lifecycle.register_local(
+        thread_id="tenant:thread",
+        interrupt_id="call_1",
+        call_id="call_1",
+        name="get_weather",
+        arguments='{"city":"Seattle"}',
+    )
 
-    _, _, _, unrelated_error = _canonical_approval_resume_messages(None, pending_approvals, "tenant")
-    _, _, _, owning_error = _canonical_approval_resume_messages(None, pending_approvals, "tenant:thread")
+    _, _, _, unrelated_error = _canonical_approval_resume_messages(None, "tenant", lifecycle=lifecycle)
+    _, _, _, owning_error = _canonical_approval_resume_messages(None, "tenant:thread", lifecycle=lifecycle)
 
     assert unrelated_error is None
     assert owning_error is not None

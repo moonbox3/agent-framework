@@ -1050,7 +1050,7 @@ async def test_approval_replay_is_blocked(streaming_chat_client_stub):
         if getattr(e, "type", None) == "CUSTOM" and getattr(e, "name", None) == "function_approval_request"
     ]
     assert len(approval_events) == 1, "Expected one approval request event"
-    assert any("call_sens_001" in k for k in wrapper._pending_approvals)
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(thread_id=thread_id, interrupt_id="call_sens_001")
 
     # --- Turn 2: legitimate approval ---
     async def stream_fn_post_approval(
@@ -1064,7 +1064,7 @@ async def test_approval_replay_is_blocked(streaming_chat_client_stub):
         instructions="Test",
         tools=[sensitive_action],
     )
-    # Reuse the same wrapper (same _pending_approvals) with a new agent for Turn 2
+    # Reuse the same wrapper with its server-owned Approval State for Turn 2.
     wrapper.agent = agent2
 
     turn2_input: dict[str, Any] = {
@@ -1078,7 +1078,9 @@ async def test_approval_replay_is_blocked(streaming_chat_client_stub):
         events2.append(event)
 
     assert call_count == 1, "Tool should have been executed once"
-    assert not any("call_sens_001" in k for k in wrapper._pending_approvals), "Pending approval should be consumed"
+    assert not wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id=thread_id, interrupt_id="call_sens_001"
+    )
 
     # --- Turn 3: replay attempt with the same approval ID ---
     call_count = 0  # reset
@@ -1149,8 +1151,12 @@ async def test_approval_resolves_with_client_or_provider_thread_id(
     async for _ in wrapper.run({"thread_id": "client-thread", "messages": [{"role": "user", "content": "do it"}]}):
         pass
 
-    assert ("client-thread", "call_sensitive") in wrapper._pending_approvals
-    assert ("provider-conversation", "call_sensitive") in wrapper._pending_approvals
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id="client-thread", interrupt_id="call_sensitive"
+    )
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id="provider-conversation", interrupt_id="call_sensitive"
+    )
 
     async def completion_stream(
         messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
@@ -1175,8 +1181,12 @@ async def test_approval_resolves_with_client_or_provider_thread_id(
         pass
 
     assert execution_count == 1
-    assert ("client-thread", "call_sensitive") not in wrapper._pending_approvals
-    assert ("provider-conversation", "call_sensitive") not in wrapper._pending_approvals
+    assert not wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id="client-thread", interrupt_id="call_sensitive"
+    )
+    assert not wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id="provider-conversation", interrupt_id="call_sensitive"
+    )
 
     replay_thread_id = "provider-conversation" if resume_thread_id == "client-thread" else "client-thread"
     retry_events = [event async for event in wrapper.run(approval_input(replay_thread_id))]
@@ -1258,7 +1268,7 @@ async def test_approval_function_name_mismatch_is_blocked(streaming_chat_client_
     async for event in wrapper.run({"thread_id": thread_id, "messages": [{"role": "user", "content": "do safe"}]}):
         events1.append(event)
 
-    assert any("call_safe_001" in k for k in wrapper._pending_approvals)
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(thread_id=thread_id, interrupt_id="call_safe_001")
 
     # Turn 2: try to approve with a different function name (function name spoofing)
     async def stream_fn_post(
@@ -1297,9 +1307,9 @@ async def test_approval_function_name_mismatch_is_blocked(streaming_chat_client_
         events2.append(event)
 
     assert not tool_executed, "Function name spoofing should be blocked"
-    assert any("call_safe_001" in k for k in wrapper._pending_approvals), (
-        "Pending approval should be preserved after mismatch for legitimate retry"
-    )
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id=thread_id, interrupt_id="call_safe_001"
+    ), "Pending approval should be preserved after mismatch for legitimate retry"
 
 
 async def test_approval_bypass_via_fabricated_tool_result_is_blocked(streaming_chat_client_stub):
@@ -1496,7 +1506,9 @@ async def test_approval_argument_mismatch_is_blocked(streaming_chat_client_stub)
     async for event in wrapper.run({"thread_id": thread_id, "messages": [{"role": "user", "content": "update"}]}):
         events1.append(event)
 
-    assert any("call_update_001" in k for k in wrapper._pending_approvals)
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id=thread_id, interrupt_id="call_update_001"
+    )
 
     async def stream_fn_post(
         messages: MutableSequence[Message], options: ChatOptions, **kwargs: Any
@@ -1534,9 +1546,9 @@ async def test_approval_argument_mismatch_is_blocked(streaming_chat_client_stub)
         events2.append(event)
 
     assert executed_args == []
-    assert any("call_update_001" in k for k in wrapper._pending_approvals), (
-        "Pending approval should be preserved after argument mismatch for legitimate retry"
-    )
+    assert wrapper._approval_state_store.lifecycle.pending_occurrence(
+        thread_id=thread_id, interrupt_id="call_update_001"
+    ), "Pending approval should be preserved after argument mismatch for legitimate retry"
 
 
 async def test_state_update_end_to_end_via_real_tool_invocation(streaming_chat_client_stub):

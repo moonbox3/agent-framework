@@ -170,6 +170,9 @@ class ApprovalOccurrence:
     name: str
     arguments: str
     owner: ApprovalExecutionOwner
+    aliases: tuple[str, ...] = ()
+    already_approved_requests: tuple[dict[str, Any], ...] = ()
+    server_label: str | None = None
     idempotency_key: str | None = None
     status: ApprovalStatus = ApprovalStatus.PENDING
     replayable_results: list[ReplayableToolResult] = field(default_factory=list)
@@ -250,6 +253,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one server-generated local approval occurrence."""
@@ -259,6 +265,9 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -270,6 +279,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one occurrence under its trusted scoped-thread aliases."""
@@ -280,6 +292,9 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.LOCAL,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -291,6 +306,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one server-generated hosted approval occurrence."""
@@ -300,6 +318,9 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -311,6 +332,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one hosted occurrence under its trusted scoped-thread aliases."""
@@ -321,6 +345,9 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.HOSTED,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -332,6 +359,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
     ) -> ApprovalOccurrence:
         """Register an occurrence that has no executable transition owner."""
         return self.register_unowned_aliases(
@@ -340,6 +370,9 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
         )
 
     def register_deferred(
@@ -350,6 +383,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one occurrence owned by the in-run transition pipeline."""
@@ -359,6 +395,9 @@ class ApprovalLifecycle:
             call_id=call_id,
             name=name,
             arguments=arguments,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -370,6 +409,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         """Register one deferred occurrence under its trusted scoped-thread aliases."""
@@ -380,6 +422,9 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.DEFERRED,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
 
@@ -391,6 +436,9 @@ class ApprovalLifecycle:
         call_id: str,
         name: str,
         arguments: str,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
     ) -> ApprovalOccurrence:
         """Register an unowned occurrence under its trusted scoped-thread aliases."""
         return self._register_aliases(
@@ -400,6 +448,9 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=ApprovalExecutionOwner.UNAVAILABLE,
+            aliases=aliases,
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
         )
 
     @_serialized_registration
@@ -412,18 +463,24 @@ class ApprovalLifecycle:
         name: str,
         arguments: str,
         owner: ApprovalExecutionOwner,
+        aliases: list[str] | None = None,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         self._purge_expired_terminal()
         if idempotency_key == "":
             raise ValueError("An execution idempotency key cannot be empty.")
         unique_thread_ids = tuple(dict.fromkeys(thread_ids))
+        alias_values: list[str] = [interrupt_id, *(aliases or [])]
+        occurrence_aliases = tuple(dict.fromkeys(alias_values))
         if not unique_thread_ids:
             raise ValueError("An approval occurrence requires at least one scoped thread identity.")
         existing_identities = {
             identity
             for thread_id in unique_thread_ids
-            if (identity := self._pending_by_interrupt.get((thread_id, interrupt_id))) is not None
+            for alias in occurrence_aliases
+            if (identity := self._pending_by_interrupt.get((thread_id, alias))) is not None
         }
         if len(existing_identities) > 1:
             raise ValueError("Approval aliases resolve to different pending occurrences.")
@@ -437,11 +494,15 @@ class ApprovalLifecycle:
                 or occurrence.arguments != arguments
                 or occurrence.owner is not owner
                 or occurrence.idempotency_key != idempotency_key
+                or occurrence.already_approved_requests != tuple(already_approved_requests or ())
+                or occurrence.server_label != server_label
             ):
                 raise ValueError("Approval alias conflicts with an existing pending occurrence.")
             occurrence.thread_ids = tuple(dict.fromkeys((*occurrence.thread_ids, *unique_thread_ids)))
+            occurrence.aliases = tuple(dict.fromkeys((*occurrence.aliases, *occurrence_aliases)))
             for thread_id in occurrence.thread_ids:
-                self._pending_by_interrupt[(thread_id, interrupt_id)] = occurrence.identity
+                for alias in occurrence.aliases:
+                    self._pending_by_interrupt[(thread_id, alias)] = occurrence.identity
             return occurrence
 
         if len(self._occurrences) >= self._max_entries:
@@ -459,11 +520,15 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=owner,
+            aliases=occurrence_aliases,
+            already_approved_requests=tuple(already_approved_requests or ()),
+            server_label=server_label,
             idempotency_key=idempotency_key,
         )
         self._occurrences[identity] = occurrence
         for thread_id in unique_thread_ids:
-            self._pending_by_interrupt[(thread_id, interrupt_id)] = identity
+            for alias in occurrence.aliases:
+                self._pending_by_interrupt[(thread_id, alias)] = identity
         self._locks_by_identity[identity] = RLock()
         self._emit_event("registration", occurrence)
         return occurrence
@@ -480,6 +545,33 @@ class ApprovalLifecycle:
         identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt[key]
         occurrence = self._occurrences[identity]
         return occurrence.name, occurrence.arguments
+
+    def pending_occurrence(self, *, thread_id: str, interrupt_id: str) -> ApprovalOccurrence | None:
+        """Return pending server-owned state for one trusted interrupt alias."""
+        self._purge_expired_terminal()
+        identity = self._pending_by_interrupt.get((thread_id, interrupt_id))
+        return self._occurrences[identity] if identity is not None else None
+
+    def occurrence_for_alias(self, *, thread_id: str, interrupt_id: str) -> ApprovalOccurrence | None:
+        """Return retained server-owned state for one trusted interrupt alias."""
+        self._purge_expired_terminal()
+        key = (thread_id, interrupt_id)
+        identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt.get(key)
+        return self._occurrences[identity] if identity is not None else None
+
+    def occurrences_for_thread(self, *, thread_id: str) -> tuple[ApprovalOccurrence, ...]:
+        """Return retained occurrences owned by one scoped thread."""
+        self._purge_expired_terminal()
+        return tuple(occurrence for occurrence in self._occurrences.values() if thread_id in occurrence.thread_ids)
+
+    def pending_interrupt_ids(self, *, thread_id: str) -> set[str]:
+        """Return canonical interrupt identities with pending authority for one thread."""
+        self._purge_expired_terminal()
+        return {
+            occurrence.identity.interrupt_id
+            for occurrence in self._occurrences.values()
+            if thread_id in occurrence.thread_ids and occurrence.status is ApprovalStatus.PENDING
+        }
 
     def reconcile_snapshot(
         self,
@@ -708,8 +800,9 @@ class ApprovalLifecycle:
             occurrence.terminal_at = self._clock()
         with self._index_lock:
             for thread_id in occurrence.thread_ids:
-                self._pending_by_interrupt.pop((thread_id, occurrence.identity.interrupt_id), None)
-                self._terminal_by_interrupt[(thread_id, occurrence.identity.interrupt_id)] = occurrence.identity
+                for alias in occurrence.aliases:
+                    self._pending_by_interrupt.pop((thread_id, alias), None)
+                    self._terminal_by_interrupt[(thread_id, alias)] = occurrence.identity
 
     def _purge_expired_terminal(self) -> None:
         with self._index_lock:
@@ -724,9 +817,10 @@ class ApprovalLifecycle:
                 self._occurrences.pop(occurrence.identity, None)
                 self._locks_by_identity.pop(occurrence.identity, None)
                 for thread_id in occurrence.thread_ids:
-                    key = (thread_id, occurrence.identity.interrupt_id)
-                    if self._terminal_by_interrupt.get(key) == occurrence.identity:
-                        self._terminal_by_interrupt.pop(key, None)
+                    for alias in occurrence.aliases:
+                        key = (thread_id, alias)
+                        if self._terminal_by_interrupt.get(key) == occurrence.identity:
+                            self._terminal_by_interrupt.pop(key, None)
 
     def _locks_for_batch(self, *, thread_id: str, interrupt_ids: list[str]) -> tuple[RLock, ...]:
         with self._index_lock:

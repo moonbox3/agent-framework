@@ -33,6 +33,9 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   resumed messages, while `TOOL_CALL_RESULT` events are emitted only for terminal `function_result` contents.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
+- `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority
+  validation, claims, terminal outcomes, and retry deduplication. Runner code normalizes AG-UI protocol values and
+  projects lifecycle outcomes but must not maintain a parallel pending-approval registry.
 - `confirm_changes` snapshot cleanup resolves the synthetic confirmation back to its original `function_call_id`;
   it must never concatenate unrelated tool results or record accepted changes without a matching real result.
 - SSE keepalive is endpoint-owned transport behavior configured through

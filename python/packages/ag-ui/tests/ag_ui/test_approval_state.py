@@ -50,7 +50,7 @@ def test_approval_state_store_does_not_evict_active_entries() -> None:
             interrupt_id="approval-2",
         )
 
-    assert {entry["interrupt_id"] for entry in store.pending_approvals.values()} == {"approval-1"}
+    assert store.lifecycle.pending_interrupt_ids(thread_id="thread-1") == {"approval-1"}
 
 
 def test_approval_state_store_does_not_evict_active_middleware_state() -> None:
@@ -60,4 +60,5 @@ def test_approval_state_store_does_not_evict_active_middleware_state() -> None:
     with pytest.raises(ApprovalCapacityError):
         store.set_tool_approval_state("thread-2", {"call_id": "call-2"})
 
-    assert store.tool_approval_states == {"thread-1": {"call_id": "call-1"}}
+    assert store.get_tool_approval_state("thread-1") == {"call_id": "call-1"}
+    assert store.get_tool_approval_state("thread-2") is None

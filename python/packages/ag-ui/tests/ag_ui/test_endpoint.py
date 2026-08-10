@@ -48,6 +48,7 @@ from agent_framework_ag_ui import (
 )
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
 from agent_framework_ag_ui._approval_lifecycle import ApprovalLifecycle
+from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore, approval_state_thread_id
 from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
 
@@ -1977,10 +1978,11 @@ async def test_endpoint_agent_approval_cancel_clears_queued_state_when_visible_e
     assert pause_response.status_code == 200
     pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
     assert [interrupt["id"] for interrupt in _run_finished_interrupts(pause_finished[-1])] == ["call_first"]
-    stored_state = wrapped_agent._approval_state_store.tool_approval_states["thread-queued-cancel-evicted"]
+    stored_state = wrapped_agent._approval_state_store.get_tool_approval_state("thread-queued-cancel-evicted")
+    assert stored_state is not None
     assert "call_second" in json.dumps(stored_state)
 
-    wrapped_agent._pending_approvals.clear()
+    wrapped_agent._approval_state_store = InMemoryAGUIApprovalStateStore()
     state["phase"] = "resume"
     cancel_response = client.post(
         "/approval",
@@ -2680,7 +2682,7 @@ async def test_endpoint_agent_approval_resume_with_lost_registry_emits_run_error
     pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
     assert _run_finished_interrupts(pause_finished[-1])[0]["id"] == "call_get_weather"
 
-    wrapped_agent._pending_approvals.clear()
+    wrapped_agent._approval_state_store = InMemoryAGUIApprovalStateStore()
 
     agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Should not run")], role="assistant")]
     response = client.post(
@@ -2928,8 +2930,10 @@ async def test_endpoint_agent_approval_cancelled_resume_preserves_uncancelled_in
     assert len(run_errors) == 1
     assert run_errors[0]["code"] == "APPROVAL_RESUME_CANCELLED"
     assert executed == []
-    assert not any("call_seattle" in key for key in wrapped_agent._pending_approvals)
-    assert any("call_portland" in key for key in wrapped_agent._pending_approvals)
+    approval_thread_id = approval_state_thread_id(scope="tenant-a", thread_id="thread-two-approvals")
+    pending_ids = wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id=approval_thread_id)
+    assert "call_seattle" not in pending_ids
+    assert "call_portland" in pending_ids
 
     hydrate_response = client.post(
         "/approval-snapshots",
@@ -4965,7 +4969,8 @@ async def test_agent_endpoint_cancelled_approval_resume_clears_persisted_interru
         "code"
     ] == "APPROVAL_RESUME_CANCELLED"
     assert executed_cities == []
-    assert not wrapped_agent._pending_approvals
+    approval_thread_id = approval_state_thread_id(scope="tenant-a", thread_id="agent-approval-thread")
+    assert not wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id=approval_thread_id)
 
     hydrate_response = client.post(
         "/approval-snapshots",
@@ -5811,7 +5816,7 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
     assert resume_response.status_code == 200
     assert not [event for event in _decode_sse_events(resume_response) if event.get("type") == "RUN_ERROR"]
     assert local_executions == []
-    assert not wrapped_agent._pending_approvals  # pyright: ignore[reportPrivateUsage]
+    assert not wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id="thread-hosted-approval")
     approval_responses = [
         content
         for message in provider_messages
@@ -5956,7 +5961,7 @@ async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat
 
     assert resume_response.status_code == 200
     assert local_executions == ["Approved draft"]
-    assert not wrapped_agent._pending_approvals  # pyright: ignore[reportPrivateUsage]
+    assert not wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id="thread-local-approval")
     state_snapshots = [
         event["snapshot"] for event in _decode_sse_events(resume_response) if event.get("type") == "STATE_SNAPSHOT"
     ]

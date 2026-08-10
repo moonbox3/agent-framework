@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+import copy
 from typing import Any
 
 from ._approval_lifecycle import ApprovalCapacityError, ApprovalExecutionOwner, ApprovalLifecycle
@@ -59,8 +59,7 @@ class InMemoryAGUIApprovalStateStore:
         if max_entries < 1:
             raise ValueError("max_entries must be greater than 0.")
         self.max_entries = max_entries
-        self.pending_approvals: OrderedDict[tuple[str, str], Any] = OrderedDict()
-        self.tool_approval_states: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._tool_approval_states: dict[str, dict[str, Any]] = {}
         self.lifecycle = ApprovalLifecycle(
             max_entries=max_entries,
             terminal_retention_seconds=terminal_retention_seconds,
@@ -167,18 +166,6 @@ class InMemoryAGUIApprovalStateStore:
         server_label: str | None,
         owner: ApprovalExecutionOwner,
     ) -> None:
-        entry: dict[str, Any] = {
-            "name": name,
-            "arguments": arguments,
-            "request_id": request_id,
-            "interrupt_id": interrupt_id,
-        }
-        if already_approved_requests:
-            entry["already_approved_requests"] = already_approved_requests
-        if server_label:
-            entry["server_label"] = server_label
-        entry["execution_owner"] = owner.value
-
         unique_thread_ids = list(dict.fromkeys(thread_ids))
         if owner is ApprovalExecutionOwner.HOSTED:
             register_aliases = self.lifecycle.register_hosted_aliases
@@ -194,19 +181,26 @@ class InMemoryAGUIApprovalStateStore:
             call_id=interrupt_id,
             name=name,
             arguments=arguments,
+            aliases=[request_id],
+            already_approved_requests=already_approved_requests,
+            server_label=server_label,
         )
-        for thread_id in unique_thread_ids:
-            aliases = {(thread_id, request_id), (thread_id, interrupt_id)}
-            replaced_entries = {id(existing) for key, existing in self.pending_approvals.items() if key in aliases}
-            for key, existing in list(self.pending_approvals.items()):
-                if key in aliases or id(existing) in replaced_entries:
-                    self.pending_approvals.pop(key, None)
-            for key in aliases:
-                self.pending_approvals[key] = entry
 
     def set_tool_approval_state(self, thread_id: str, state: dict[str, Any]) -> None:
         """Store approval middleware state without evicting another active thread."""
-        if thread_id not in self.tool_approval_states and len(self.tool_approval_states) >= self.max_entries:
+        if thread_id not in self._tool_approval_states and len(self._tool_approval_states) >= self.max_entries:
             raise ApprovalCapacityError("Approval state capacity is exhausted by protected occurrences.")
-        self.tool_approval_states[thread_id] = state
-        self.tool_approval_states.move_to_end(thread_id)
+        self._tool_approval_states[thread_id] = copy.deepcopy(state)
+
+    def get_tool_approval_state(self, thread_id: str) -> dict[str, Any] | None:
+        """Return an isolated copy of server-owned middleware approval state."""
+        state = self._tool_approval_states.get(thread_id)
+        return copy.deepcopy(state) if state is not None else None
+
+    def delete_tool_approval_state(self, thread_id: str) -> None:
+        """Delete server-owned middleware approval state for one scoped thread."""
+        self._tool_approval_states.pop(thread_id, None)
+
+    def has_tool_approval_state(self, thread_id: str) -> bool:
+        """Return whether middleware approval state exists for one scoped thread."""
+        return thread_id in self._tool_approval_states

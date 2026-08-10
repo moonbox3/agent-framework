@@ -56,8 +56,12 @@ from agent_framework.observability import (
 )
 
 from ._approval_lifecycle import (
+    ApprovalExecutionOwner,
     ApprovalLifecycle,
     AuthorizedExecution,
+    DeferredPendingToolTransitionOwner,
+    ForwardedPendingToolTransitionOwner,
+    HostedPendingToolTransitionOwner,
     LocalPendingToolTransitionOwner,
     ResumeDecision,
 )
@@ -698,6 +702,7 @@ class _PendingApprovalWithSiblings(_PendingApproval, total=False):
     """Pending approval details including sibling calls and trusted hosted metadata."""
 
     already_approved_requests: list[dict[str, Any]]
+    execution_owner: str
     server_label: str
 
 
@@ -718,6 +723,7 @@ def _make_pending_approval_entry(
     interrupt_id: str | None = None,
     already_approved_requests: list[dict[str, Any]] | None = None,
     server_label: str | None = None,
+    execution_owner: ApprovalExecutionOwner | None = None,
 ) -> _PendingApprovalWithSiblings:
     entry: _PendingApprovalWithSiblings = {
         "name": name,
@@ -729,6 +735,8 @@ def _make_pending_approval_entry(
         entry["already_approved_requests"] = already_approved_requests
     if server_label:
         entry["server_label"] = server_label
+    if execution_owner is not None:
+        entry["execution_owner"] = execution_owner.value
     return entry
 
 
@@ -772,6 +780,23 @@ def _function_call_server_label(function_call: Content | None) -> str | None:
         return None
     server_label = function_call.additional_properties.get("server_label")
     return server_label if isinstance(server_label, str) and server_label else None
+
+
+def _function_call_execution_owner(
+    function_call: Content,
+    tools: list[Any] | None,
+    *,
+    has_deferred_owner: bool = False,
+) -> ApprovalExecutionOwner:
+    """Resolve execution ownership only after the call and available tools exist."""
+    if _function_call_server_label(function_call):
+        return ApprovalExecutionOwner.HOSTED
+    tool = _get_tool_map(tools).get(function_call.name) if tools and function_call.name else None
+    if tool is not None and not getattr(tool, "declaration_only", False):
+        return ApprovalExecutionOwner.LOCAL
+    if has_deferred_owner:
+        return ApprovalExecutionOwner.DEFERRED
+    return ApprovalExecutionOwner.UNAVAILABLE
 
 
 def _stored_already_approved_requests_for_visible_approval(
@@ -894,6 +919,9 @@ def _register_server_generated_approval_response(
     response: Content,
     pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] | None,
     thread_id: str,
+    tools: list[Any] | None,
+    *,
+    has_deferred_owner: bool,
 ) -> None:
     """Register a server-owned approval response so normal validation can consume it."""
     if pending_approvals is None or response.function_call is None or not response.function_call.name:
@@ -901,12 +929,18 @@ def _register_server_generated_approval_response(
     response_id = response.id or response.function_call.call_id
     if not response_id:
         return
+    execution_owner = _function_call_execution_owner(
+        response.function_call,
+        tools,
+        has_deferred_owner=has_deferred_owner,
+    )
     entry = _make_pending_approval_entry(
         response.function_call.name,
         canonical_function_arguments(response.function_call),
         request_id=str(response.id) if response.id else None,
         interrupt_id=str(response.function_call.call_id) if response.function_call.call_id else None,
         server_label=_function_call_server_label(response.function_call),
+        execution_owner=execution_owner,
     )
     _register_pending_approval_entry(
         pending_approvals,
@@ -921,6 +955,7 @@ def _pop_collected_tool_approval_response_messages(
     session: AgentSession,
     pending_approvals: dict[PendingApprovalKey, PendingApprovalEntry] | None,
     thread_id: str,
+    tools: list[Any] | None,
     *,
     lifecycle: ApprovalLifecycle | None = None,
     authorized_executions: dict[str, AuthorizedExecution] | None = None,
@@ -940,7 +975,13 @@ def _pop_collected_tool_approval_response_messages(
         response = _content_from_approval_state(raw_response)
         if response is None or response.type != "function_approval_response":
             continue
-        _register_server_generated_approval_response(response, pending_approvals, thread_id)
+        _register_server_generated_approval_response(
+            response,
+            pending_approvals,
+            thread_id,
+            tools,
+            has_deferred_owner=True,
+        )
         function_call = response.function_call
         if (
             lifecycle is not None
@@ -949,10 +990,22 @@ def _pop_collected_tool_approval_response_messages(
             and function_call is not None
             and function_call.call_id
             and function_call.name
-            and not _function_call_server_label(function_call)
         ):
             arguments = canonical_function_arguments(function_call) or "{}"
-            lifecycle.register_local(
+            execution_owner = _function_call_execution_owner(
+                function_call,
+                tools,
+                has_deferred_owner=True,
+            )
+            if execution_owner is ApprovalExecutionOwner.HOSTED:
+                register = lifecycle.register_hosted
+            elif execution_owner is ApprovalExecutionOwner.DEFERRED:
+                register = lifecycle.register_deferred
+            elif execution_owner is ApprovalExecutionOwner.LOCAL:
+                register = lifecycle.register_local
+            else:
+                register = lifecycle.register_unowned
+            register(
                 thread_id=thread_id,
                 interrupt_id=str(response.id or function_call.call_id),
                 call_id=str(function_call.call_id),
@@ -1404,14 +1457,11 @@ def _canonical_approval_resume_messages(
 
     if cancelled_ids:
         if lifecycle is not None:
-            local_cancelled_ids = [
-                interrupt_id
-                for interrupt_id in cancelled_ids
-                if (pending_entry := entries_by_interrupt_id.get(interrupt_id)) is not None
-                and not _pending_approval_server_label(pending_entry)
+            lifecycle_cancelled_ids = [
+                interrupt_id for interrupt_id in cancelled_ids if entries_by_interrupt_id.get(interrupt_id) is not None
             ]
             try:
-                lifecycle.cancel_batch(thread_id=thread_id, interrupt_ids=local_cancelled_ids)
+                lifecycle.cancel_batch(thread_id=thread_id, interrupt_ids=lifecycle_cancelled_ids)
             except (KeyError, ValueError) as exc:
                 return (
                     [],
@@ -1511,7 +1561,7 @@ def _canonical_approval_resume_messages(
         canonical_arguments = json.dumps(make_json_safe(merged_arguments), sort_keys=True, separators=(",", ":"))
         if not isinstance(pending_entry, str):
             argument_updates.append((pending_entry, canonical_arguments))
-        if lifecycle is not None and not _pending_approval_server_label(pending_entry):
+        if lifecycle is not None:
             lifecycle_decisions.append(
                 ResumeDecision(
                     interrupt_id=interrupt_id,
@@ -1550,6 +1600,11 @@ def _canonical_approval_resume_messages(
                 request_id=str(response.id) if response.id else None,
                 interrupt_id=str(function_call.call_id) if function_call.call_id else None,
                 server_label=_function_call_server_label(function_call),
+                execution_owner=(
+                    ApprovalExecutionOwner.HOSTED
+                    if _function_call_server_label(function_call)
+                    else ApprovalExecutionOwner.LOCAL
+                ),
             )
             _register_pending_approval_entry(
                 pending_approvals,
@@ -1558,11 +1613,16 @@ def _canonical_approval_resume_messages(
                 str(response_id),
                 str(function_call.call_id) if function_call.call_id else None,
             )
-            if lifecycle is not None and not _function_call_server_label(function_call):
+            if lifecycle is not None:
                 sibling_interrupt_id = str(response_id)
                 sibling_call_id = str(function_call.call_id or response_id)
                 sibling_arguments = canonical_function_arguments(function_call) or "{}"
-                lifecycle.register_local(
+                register = (
+                    lifecycle.register_hosted
+                    if _function_call_server_label(function_call)
+                    else lifecycle.register_local
+                )
+                register(
                     thread_id=thread_id,
                     interrupt_id=sibling_interrupt_id,
                     call_id=sibling_call_id,
@@ -1631,6 +1691,9 @@ async def _resolve_approval_responses(
     *,
     lifecycle: ApprovalLifecycle | None = None,
     authorized_executions: dict[str, AuthorizedExecution] | None = None,
+    forwarded_executions: (
+        dict[str, tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]] | None
+    ) = None,
 ) -> list[Content]:
     """Execute approved function calls and replace approval content with results.
 
@@ -1667,6 +1730,7 @@ async def _resolve_approval_responses(
 
     valid_response_content_ids: set[int] | None = None
     pending_local_response_content_ids: set[int] | None = None
+    validated_forwarded_approvals: list[Content] = []
     response_content_ids_to_strip: set[int] = set()
     if pending_approvals is not None:
         valid_response_content_ids = set()
@@ -1760,12 +1824,33 @@ async def _resolve_approval_responses(
                 continue
 
             server_label = _pending_approval_server_label(pending_entry)
+            intent: AuthorizedExecution | None = None
             if primary_response.function_call is not None:
                 if server_label:
                     primary_response.function_call.additional_properties["server_label"] = server_label
                 else:
                     primary_response.function_call.additional_properties.pop("server_label", None)
+            if (
+                primary_response.approved
+                and lifecycle is not None
+                and authorized_executions is not None
+                and primary_response.function_call is not None
+            ):
+                call_id = primary_response.function_call.call_id or primary_response.id or ""
+                intent = authorized_executions.get(call_id)
+                if intent is None:
+                    logger.warning(
+                        "Approval remains pending because no transition owner can act for call_id=%s.", call_id
+                    )
+                    response_content_ids_to_strip.add(id(primary_response))
+                    continue
             valid_response_content_ids.add(id(primary_response))
+            if (
+                primary_response.approved
+                and intent is not None
+                and intent.owner in {ApprovalExecutionOwner.HOSTED, ApprovalExecutionOwner.DEFERRED}
+            ):
+                validated_forwarded_approvals.append(primary_response)
             if not server_label:
                 pending_local_response_content_ids.add(id(primary_response))
             _consume_pending_approval_entry(
@@ -1807,6 +1892,34 @@ async def _resolve_approval_responses(
         messages,
         pending_response_content_ids=pending_local_response_content_ids,
     )
+
+    if (
+        validated_forwarded_approvals
+        and lifecycle is not None
+        and authorized_executions is not None
+        and forwarded_executions is not None
+    ):
+        for approval in validated_forwarded_approvals:
+            function_call = approval.function_call
+            call_id = (function_call.call_id if function_call else None) or approval.id or ""
+            intent = authorized_executions.get(call_id)
+            if intent is None:
+                logger.warning("Skipping hosted approval without lifecycle authority for call_id=%s.", call_id)
+                continue
+
+            async def forward_hosted_decision(approval: Content = approval) -> list[Content]:
+                return [approval]
+
+            if intent.owner is ApprovalExecutionOwner.HOSTED:
+                forwarded_owner: ForwardedPendingToolTransitionOwner = HostedPendingToolTransitionOwner(
+                    forward_hosted_decision
+                )
+            else:
+                forwarded_owner = DeferredPendingToolTransitionOwner(forward_hosted_decision)
+            forwarded = await forwarded_owner.forward(intent, lifecycle=lifecycle)
+            if len(forwarded) != 1:
+                raise RuntimeError("Hosted transition owner did not forward exactly one approval decision.")
+            forwarded_executions[call_id] = (forwarded_owner, intent, forwarded[0])
 
     fcc_todo = _collect_approval_responses(messages)
     if valid_response_content_ids is not None:
@@ -1865,8 +1978,8 @@ async def _resolve_approval_responses(
                     return [Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed.")]
                 return result_groups[0]
 
-            owner = LocalPendingToolTransitionOwner(execute_local_call)
-            outcome = await owner.execute(intent, lifecycle=lifecycle)
+            local_owner = LocalPendingToolTransitionOwner(execute_local_call)
+            outcome = await local_owner.execute(intent, lifecycle=lifecycle)
             approved_function_result_groups.append(list(outcome.result_group))
 
     # Normalize one group per static approval and collect only terminal results for TOOL_CALL_RESULT events.
@@ -2401,6 +2514,7 @@ async def run_agent_stream(
         )
 
     authorized_executions: dict[str, AuthorizedExecution] = {}
+    forwarded_executions: dict[str, tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]] = {}
     retained_approval_results: list[Content] = []
     approval_resume_messages, handled_resume_ids, cancelled_resume_ids, resume_error = (
         _canonical_approval_resume_messages(
@@ -2522,6 +2636,7 @@ async def run_agent_stream(
             session,
             pending_approvals,
             approval_thread_id,
+            tools_for_execution,
             lifecycle=approval_state_store.lifecycle if approval_state_store is not None else None,
             authorized_executions=authorized_executions,
         )
@@ -2537,6 +2652,7 @@ async def run_agent_stream(
         validated_approved_responses,
         lifecycle=approval_state_store.lifecycle if approval_state_store is not None else None,
         authorized_executions=authorized_executions,
+        forwarded_executions=forwarded_executions,
     )
 
     # Defense-in-depth: replace approval payloads in snapshot with actual tool results
@@ -2655,6 +2771,15 @@ async def run_agent_stream(
             content_type = getattr(content, "type", None)
             logger.debug(f"Processing content type={content_type}, message_id={flow.message_id}")
 
+            if (
+                content_type == "function_result"
+                and content.call_id
+                and (forwarded := forwarded_executions.pop(content.call_id, None)) is not None
+                and approval_state_store is not None
+            ):
+                owner, intent, _ = forwarded
+                owner.record_outcome(intent, [content], lifecycle=approval_state_store.lifecycle)
+
             # Register pending approval requests so we can validate responses later
             if content_type == "function_approval_request" and pending_approvals is not None:
                 if content.id and content.function_call and content.function_call.name:
@@ -2669,15 +2794,28 @@ async def run_agent_stream(
                         str(content.id),
                         str(canonical_interrupt_id) if canonical_interrupt_id else None,
                     )
-                    if approval_state_store is not None and not server_label:
-                        approval_state_store.register_local(
-                            thread_ids=[approval_thread_id, provider_approval_thread_id],
-                            name=content.function_call.name,
-                            arguments=canonical_function_arguments(content.function_call) or "{}",
-                            request_id=str(content.id),
-                            interrupt_id=str(canonical_interrupt_id),
-                            already_approved_requests=already_approved_requests,
+                    if approval_state_store is not None:
+                        execution_owner = _function_call_execution_owner(
+                            content.function_call,
+                            tools,
+                            has_deferred_owner=_TOOL_APPROVAL_STATE_KEY in session.state,
                         )
+                        registration_kwargs = {
+                            "thread_ids": [approval_thread_id, provider_approval_thread_id],
+                            "name": content.function_call.name,
+                            "arguments": canonical_function_arguments(content.function_call) or "{}",
+                            "request_id": str(content.id),
+                            "interrupt_id": str(canonical_interrupt_id),
+                            "already_approved_requests": already_approved_requests,
+                        }
+                        if execution_owner is ApprovalExecutionOwner.HOSTED:
+                            approval_state_store.register_hosted(server_label=server_label, **registration_kwargs)
+                        elif execution_owner is ApprovalExecutionOwner.DEFERRED:
+                            approval_state_store.register_deferred(**registration_kwargs)
+                        elif execution_owner is ApprovalExecutionOwner.LOCAL:
+                            approval_state_store.register_local(**registration_kwargs)
+                        else:
+                            approval_state_store.register_unowned(**registration_kwargs)
                     else:
                         _register_pending_approval(
                             pending_approvals,
@@ -2893,6 +3031,11 @@ async def run_agent_stream(
 
     # Always emit RunFinished - confirm_changes tool call is complete (Start -> Args -> End)
     # The UI will show confirmation dialog and send a new request when user responds
+    if approval_state_store is not None:
+        for owner, intent, forwarded_approval in forwarded_executions.values():
+            owner.record_outcome(intent, [forwarded_approval], lifecycle=approval_state_store.lifecycle)
+        forwarded_executions.clear()
+
     persisted_messages = latest_messages_snapshot
     if resume_payload is not None and not seeded_resume_from_snapshot:
         # Generic resume requests carry only the synthesized response, so prepend

@@ -5573,6 +5573,7 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
     state = {"phase": "pause"}
     local_executions: list[str] = []
     provider_messages: list[Message] = []
+    provider_invocations = 0
     hosted_call = Content.from_function_call(
         call_id=call_id,
         name="docs_search",
@@ -5595,7 +5596,9 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
         options: dict[str, Any],
         **kwargs: Any,
     ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal provider_invocations
         del options, kwargs
+        provider_invocations += 1
         if state["phase"] == "pause":
             yield ChatResponseUpdate(
                 contents=[Content.from_function_approval_request(id=call_id, function_call=hosted_call)],
@@ -5656,6 +5659,21 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
     assert approval_responses[0].approved is True
     assert approval_responses[0].function_call is not None
     assert approval_responses[0].function_call.additional_properties["server_label"] == server_label
+
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": "thread-hosted-approval",
+            "messages": [],
+            "resume": [{"interruptId": call_id, "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    assert retry_response.status_code == 200
+    assert not [event for event in _decode_sse_events(retry_response) if event.get("type") == "RUN_ERROR"]
+    assert provider_invocations == 2
+    assert local_executions == []
 
 
 async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat_client(

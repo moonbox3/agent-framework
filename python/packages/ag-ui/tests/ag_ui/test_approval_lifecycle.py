@@ -8,8 +8,10 @@ import pytest
 from agent_framework import Content
 
 from agent_framework_ag_ui._approval_lifecycle import (
+    ApprovalExecutionOwner,
     ApprovalLifecycle,
     ApprovalStatus,
+    HostedPendingToolTransitionOwner,
     LocalPendingToolTransitionOwner,
     ResumeDecision,
 )
@@ -53,6 +55,67 @@ async def test_local_approval_crosses_lifecycle_before_execution_and_settlement(
     ]
     assert [result.content.call_id for result in outcome.replayable_results] == ["call-1"]
     assert [result.content.result for result in outcome.replayable_results] == ["Sunny"]
+
+
+async def test_hosted_approval_is_forwarded_only_by_its_owner_and_settles_same_occurrence() -> None:
+    """Hosted authority cannot execute locally and records forwarding against its occurrence."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_hosted(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="hosted_search",
+        arguments='{"query":"azure"}',
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(
+            interrupt_id="approval-1",
+            accepted=True,
+            arguments='{"query":"azure"}',
+        ),
+    )
+    local_invocations = 0
+
+    async def execute_locally() -> list[Content]:
+        nonlocal local_invocations
+        local_invocations += 1
+        return [Content.from_function_result(call_id="call-1", result="local")]
+
+    with pytest.raises(ValueError, match="hosted"):
+        await LocalPendingToolTransitionOwner(execute_locally).execute(intent, lifecycle=lifecycle)
+
+    forwarded_response = Content.from_function_approval_response(
+        approved=True,
+        id="approval-1",
+        function_call=Content.from_function_call(
+            call_id="call-1",
+            name="hosted_search",
+            arguments={"query": "azure"},
+            additional_properties={"server_label": "hosted"},
+        ),
+    )
+    hosted_forwards = 0
+
+    async def forward_to_hosted_owner() -> list[Content]:
+        nonlocal hosted_forwards
+        hosted_forwards += 1
+        return [forwarded_response]
+
+    owner = HostedPendingToolTransitionOwner(forward_to_hosted_owner)
+    forwarded = await owner.forward(intent, lifecycle=lifecycle)
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.EXECUTING
+    remote_result = Content.from_function_result(call_id="call-1", result="hosted")
+    outcome = owner.record_outcome(intent, [remote_result], lifecycle=lifecycle)
+
+    assert intent.owner is ApprovalExecutionOwner.HOSTED
+    assert local_invocations == 0
+    assert hosted_forwards == 1
+    assert forwarded == [forwarded_response]
+    assert outcome.identity == occurrence.identity
+    assert outcome.result_group == (remote_result,)
+    assert [result.content for result in outcome.replayable_results] == [remote_result]
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
 
 
 async def test_execution_failure_keeps_unexecuted_batch_sibling_claimed() -> None:
@@ -125,6 +188,26 @@ def test_batch_validation_is_atomic_before_claiming_any_occurrence() -> None:
 
     assert lifecycle.get(first.identity).status is ApprovalStatus.PENDING
     assert lifecycle.get(second.identity).status is ApprovalStatus.PENDING
+
+
+def test_accepted_declaration_without_execution_owner_remains_pending() -> None:
+    """Approval alone does not grant local authority to a declaration-only call."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_unowned(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="client_action",
+        arguments="{}",
+    )
+
+    batch = lifecycle.claim_batch(
+        thread_id="thread-1",
+        decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")],
+    )
+
+    assert batch.authorized_executions == ()
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.PENDING
 
 
 def test_mixed_batch_accounts_for_rejection_under_original_call_identity() -> None:

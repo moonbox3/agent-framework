@@ -286,3 +286,147 @@ async def test_settled_raw_call_id_can_be_reused_for_a_new_occurrence() -> None:
     assert first.identity != second.identity
     assert lifecycle.get(first.identity).status is ApprovalStatus.SETTLED
     assert lifecycle.get(second.identity).status is ApprovalStatus.PENDING
+
+
+async def test_identical_accepted_retry_returns_retained_outcome_without_execution() -> None:
+    """A settled accepted decision reprojects its result instead of granting authority again."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    decision = ResumeDecision(
+        interrupt_id="approval-1",
+        accepted=True,
+        arguments='{"value":"first"}',
+    )
+    intent = lifecycle.claim(thread_id="thread-1", decision=decision)
+    invocation_count = 0
+
+    async def execute_once() -> list[Content]:
+        nonlocal invocation_count
+        invocation_count += 1
+        return [Content.from_function_result(call_id="call-1", result="wrote first")]
+
+    first_outcome = await LocalPendingToolTransitionOwner(execute_once).execute(intent, lifecycle=lifecycle)
+    retry = lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+
+    assert retry.authorized_executions == ()
+    assert retry.retained_outcomes == (first_outcome,)
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
+    assert invocation_count == 1
+
+
+def test_accepted_retry_after_rejection_fails_as_a_conflict() -> None:
+    """A terminal rejection cannot be changed into execution authority by a retry."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    lifecycle.claim_batch(
+        thread_id="thread-1",
+        decisions=[ResumeDecision(interrupt_id="approval-1", accepted=False, arguments='{"value":"first"}')],
+    )
+
+    with pytest.raises(ValueError, match="conflicts with the retained terminal decision"):
+        lifecycle.claim_batch(
+            thread_id="thread-1",
+            decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}')],
+        )
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.REJECTED
+
+
+def test_identical_rejection_retry_returns_retained_outcome() -> None:
+    """A repeated rejection preserves and returns the original rejection result."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    decision = ResumeDecision(interrupt_id="approval-1", accepted=False, arguments='{"value":"first"}')
+
+    first = lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+    retry = lifecycle.claim_batch(thread_id="thread-1", decisions=[decision])
+
+    assert first.authorized_executions == ()
+    assert first.retained_outcomes == ()
+    assert retry.authorized_executions == ()
+    assert retry.retained_outcomes == (lifecycle.get(occurrence.identity).outcome,)
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.REJECTED
+
+
+def test_changed_tool_name_fails_before_authority_is_claimed() -> None:
+    """A typed decision for another tool cannot claim the registered occurrence."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="safe_action",
+        arguments="{}",
+    )
+
+    with pytest.raises(ValueError, match="tool name does not match"):
+        lifecycle.claim_batch(
+            thread_id="thread-1",
+            decisions=[
+                ResumeDecision(
+                    interrupt_id="approval-1",
+                    accepted=True,
+                    name="dangerous_action",
+                    arguments="{}",
+                )
+            ],
+        )
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.PENDING
+
+
+def test_identical_cancel_retry_keeps_terminal_cancellation() -> None:
+    """Retrying an explicit cancellation is idempotent and cannot restore authority."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+
+    lifecycle.cancel_batch(thread_id="thread-1", interrupt_ids=["approval-1"])
+    lifecycle.cancel_batch(thread_id="thread-1", interrupt_ids=["approval-1"])
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.CANCELLED
+
+
+def test_expired_authority_cannot_be_claimed() -> None:
+    """Expiration is terminal and an otherwise valid decision cannot revive it."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+
+    lifecycle.expire_batch(thread_id="thread-1", interrupt_ids=["approval-1"])
+
+    with pytest.raises(ValueError, match="expired"):
+        lifecycle.claim_batch(
+            thread_id="thread-1",
+            decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}")],
+        )
+
+    assert lifecycle.get(occurrence.identity).status is ApprovalStatus.EXPIRED

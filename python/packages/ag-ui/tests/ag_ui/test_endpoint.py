@@ -2133,8 +2133,8 @@ async def test_endpoint_agent_approval_cancellation_does_not_release_already_app
     assert messages_received == []
 
 
-async def test_endpoint_agent_approval_replayed_resume_entry_emits_run_error():
-    """A consumed server-side approval cannot be replayed to execute a tool again."""
+async def test_endpoint_agent_approval_replayed_resume_entry_reprojects_retained_result():
+    """An identical retry reprojects the retained result without executing the tool again."""
     client, agent, executed_cities = _build_weather_approval_endpoint()
 
     first_response = client.post(
@@ -2162,11 +2162,12 @@ async def test_endpoint_agent_approval_replayed_resume_entry_emits_run_error():
 
     assert replay_response.status_code == 200
     replay_events = _decode_sse_events(replay_response)
-    run_errors = [event for event in replay_events if event.get("type") == "RUN_ERROR"]
-    assert len(run_errors) == 1
-    assert run_errors[0]["code"] == "APPROVAL_RESUME_NOT_FOUND"
     assert executed_cities == ["Seattle"]
-    assert not [event for event in replay_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert not [event for event in replay_events if event.get("type") == "RUN_ERROR"]
+    result_events = [event for event in replay_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert len(result_events) == 1
+    assert result_events[0]["toolCallId"] == "call_get_weather"
+    assert result_events[0]["content"] == "Sunny in Seattle"
 
 
 async def test_endpoint_agent_approval_resume_wrong_thread_emits_run_error():

@@ -1179,10 +1179,28 @@ async def test_approval_resolves_with_client_or_provider_thread_id(
     assert ("provider-conversation", "call_sensitive") not in wrapper._pending_approvals
 
     replay_thread_id = "provider-conversation" if resume_thread_id == "client-thread" else "client-thread"
-    async for _ in wrapper.run(approval_input(replay_thread_id)):
-        pass
+    retry_events = [event async for event in wrapper.run(approval_input(replay_thread_id))]
 
     assert execution_count == 1
+    retry_results = [event for event in retry_events if event.type == "TOOL_CALL_RESULT"]
+    assert len(retry_results) == 1
+    assert retry_results[0].tool_call_id == "call_sensitive"
+    assert retry_results[0].content == "executed"
+    assert not any(event.type == "RUN_ERROR" for event in retry_events)
+
+    conflicting_input = approval_input(replay_thread_id)
+    conflicting_input["resume"][0]["payload"]["accepted"] = False
+    conflicting_events = [event async for event in wrapper.run(conflicting_input)]
+
+    assert execution_count == 1
+    assert any(event.type == "RUN_ERROR" and event.code == "APPROVAL_RESUME_INVALID" for event in conflicting_events)
+
+    changed_input = approval_input(replay_thread_id)
+    changed_input["resume"][0]["payload"]["forged"] = True
+    changed_events = [event async for event in wrapper.run(changed_input)]
+
+    assert execution_count == 1
+    assert any(event.type == "RUN_ERROR" and event.code == "APPROVAL_RESUME_INVALID" for event in changed_events)
 
 
 async def test_approval_function_name_mismatch_is_blocked(streaming_chat_client_stub):

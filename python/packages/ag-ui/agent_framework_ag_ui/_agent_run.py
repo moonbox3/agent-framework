@@ -965,6 +965,7 @@ def _pop_collected_tool_approval_response_messages(
                     interrupt_id=str(response.id or function_call.call_id),
                     accepted=True,
                     arguments=arguments,
+                    name=function_call.name,
                 ),
             )
             authorized_executions[intent.identity.call_id] = intent
@@ -1233,6 +1234,7 @@ def _canonical_approval_resume_messages(
     *,
     lifecycle: ApprovalLifecycle | None = None,
     authorized_executions: dict[str, AuthorizedExecution] | None = None,
+    retained_results: list[Content] | None = None,
 ) -> tuple[list[dict[str, Any]], set[str], set[str], RunErrorEvent | None]:
     """Translate canonical ResumeEntry approvals into existing approval response messages."""
     expected_ids = set(expected_interrupt_ids or set())
@@ -1281,6 +1283,63 @@ def _canonical_approval_resume_messages(
         if _resume_payload_has_approval_decision(resume_payload):
             normalized_interrupts = _normalize_resume_interrupts(resume_payload)
             interrupt_id = normalized_interrupts[0]["id"] if normalized_interrupts else "unknown"
+            if lifecycle is not None and retained_results is not None:
+                decisions: list[ResumeDecision] = []
+                for interrupt in normalized_interrupts:
+                    if interrupt.get("status") != "resolved":
+                        break
+                    payload = _parse_json_object(interrupt.get("value"))
+                    if payload is None:
+                        break
+                    accepted = payload.get("accepted", payload.get("approved"))
+                    if not isinstance(accepted, bool):
+                        break
+                    interrupt_id = str(interrupt["id"])
+                    try:
+                        name, retained_arguments = lifecycle.decision_context(
+                            thread_id=thread_id,
+                            interrupt_id=interrupt_id,
+                        )
+                    except KeyError:
+                        break
+                    edited_arguments = {
+                        key: value for key, value in payload.items() if key not in {"accepted", "approved"}
+                    }
+                    canonical_arguments: str | None = None
+                    if edited_arguments:
+                        retained_argument_values = _parse_json_object(retained_arguments)
+                        if retained_argument_values is None:
+                            break
+                        canonical_arguments = json.dumps(
+                            make_json_safe({**retained_argument_values, **edited_arguments}),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    decisions.append(
+                        ResumeDecision(
+                            interrupt_id=interrupt_id,
+                            accepted=accepted,
+                            arguments=canonical_arguments,
+                            name=name,
+                        )
+                    )
+                if len(decisions) == len(normalized_interrupts) and decisions:
+                    try:
+                        batch = lifecycle.claim_batch(thread_id=thread_id, decisions=decisions)
+                    except KeyError:
+                        pass
+                    except ValueError as exc:
+                        return (
+                            [],
+                            handled_ids,
+                            cancelled_ids,
+                            RunErrorEvent(message=str(exc), code="APPROVAL_RESUME_INVALID"),
+                        )
+                    else:
+                        for outcome in batch.retained_outcomes:
+                            retained_results.extend(result.content for result in outcome.replayable_results)
+                        handled_ids.update(decision.interrupt_id for decision in decisions)
+                        return [], handled_ids, cancelled_ids, None
             return (
                 [],
                 handled_ids,
@@ -1458,6 +1517,7 @@ def _canonical_approval_resume_messages(
                     interrupt_id=interrupt_id,
                     accepted=accepted,
                     arguments=canonical_arguments,
+                    name=_pending_approval_name(pending_entry),
                     original_arguments=pending_arguments,
                 )
             )
@@ -1514,6 +1574,7 @@ def _canonical_approval_resume_messages(
                         interrupt_id=sibling_interrupt_id,
                         accepted=True,
                         arguments=sibling_arguments,
+                        name=function_call.name,
                     )
                 )
             function_approvals.append(
@@ -2340,6 +2401,7 @@ async def run_agent_stream(
         )
 
     authorized_executions: dict[str, AuthorizedExecution] = {}
+    retained_approval_results: list[Content] = []
     approval_resume_messages, handled_resume_ids, cancelled_resume_ids, resume_error = (
         _canonical_approval_resume_messages(
             resume_payload,
@@ -2348,6 +2410,7 @@ async def run_agent_stream(
             expected_interrupt_ids=stored_pending_approval_interrupt_ids or None,
             lifecycle=approval_state_store.lifecycle if approval_state_store is not None else None,
             authorized_executions=authorized_executions,
+            retained_results=retained_approval_results,
         )
     )
     if resume_error is not None:
@@ -2374,6 +2437,12 @@ async def run_agent_stream(
     if resume_messages:
         logger.info(f"Appending {len(resume_messages)} synthesized resume message(s) to AG-UI input.")
         raw_messages.extend(resume_messages)
+    if retained_approval_results and not raw_messages:
+        yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+        for event in _make_approval_tool_result_events(retained_approval_results):
+            yield event
+        yield _build_run_finished_event(run_id=run_id, thread_id=thread_id)
+        return
     protected_tool_call_ids = _approval_state_tool_call_ids(pending_approvals, approval_state_store, approval_thread_id)
     messages, snapshot_messages = normalize_agui_input_messages(
         raw_messages,
@@ -2458,7 +2527,7 @@ async def run_agent_stream(
         )
     )
     validated_approved_responses: list[Content] = []
-    resolved_approval_results = await _resolve_approval_responses(
+    resolved_approval_results = retained_approval_results + await _resolve_approval_responses(
         messages,
         tools_for_execution,
         agent,

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import pytest
 from agent_framework import Content
 
 from agent_framework_ag_ui._approval_lifecycle import (
@@ -52,3 +53,236 @@ async def test_local_approval_crosses_lifecycle_before_execution_and_settlement(
     ]
     assert [result.content.call_id for result in outcome.replayable_results] == ["call-1"]
     assert [result.content.result for result in outcome.replayable_results] == ["Sunny"]
+
+
+async def test_execution_failure_keeps_unexecuted_batch_sibling_claimed() -> None:
+    """A failed occurrence does not erase a claimed sibling that can still execute."""
+    lifecycle = ApprovalLifecycle()
+    first = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    second = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments='{"value":"second"}',
+    )
+    first_intent, second_intent = lifecycle.claim_batch(
+        thread_id="thread-1",
+        decisions=[
+            ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}'),
+            ResumeDecision(interrupt_id="approval-2", accepted=True, arguments='{"value":"second"}'),
+        ],
+    )
+
+    async def fail_first() -> list[Content]:
+        raise RuntimeError("side effect failed")
+
+    with pytest.raises(RuntimeError, match="side effect failed"):
+        await LocalPendingToolTransitionOwner(fail_first).execute(first_intent, lifecycle=lifecycle)
+
+    assert lifecycle.get(first.identity).status is ApprovalStatus.EXECUTING
+    assert lifecycle.get(second.identity).status is ApprovalStatus.CLAIMED
+
+    async def execute_second() -> list[Content]:
+        return [Content.from_function_result(call_id="call-2", result="wrote second")]
+
+    await LocalPendingToolTransitionOwner(execute_second).execute(second_intent, lifecycle=lifecycle)
+    assert lifecycle.get(second.identity).status is ApprovalStatus.SETTLED
+
+
+def test_batch_validation_is_atomic_before_claiming_any_occurrence() -> None:
+    """One invalid decision leaves every occurrence pending and eligible for a corrected batch."""
+    lifecycle = ApprovalLifecycle()
+    first = lifecycle.register_local(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    second = lifecycle.register_local(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments='{"value":"second"}',
+    )
+
+    with pytest.raises(ValueError, match="arguments do not match"):
+        lifecycle.claim_batch(
+            thread_id="tenant-a\x1fthread-1",
+            decisions=[
+                ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}'),
+                ResumeDecision(interrupt_id="approval-2", accepted=True, arguments='{"value":"forged"}'),
+            ],
+        )
+
+    assert lifecycle.get(first.identity).status is ApprovalStatus.PENDING
+    assert lifecycle.get(second.identity).status is ApprovalStatus.PENDING
+
+
+def test_mixed_batch_accounts_for_rejection_under_original_call_identity() -> None:
+    """A rejected occurrence remains represented while its accepted sibling is claimed."""
+    lifecycle = ApprovalLifecycle()
+    accepted = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    rejected = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments='{"value":"second"}',
+    )
+
+    intents = lifecycle.claim_batch(
+        thread_id="thread-1",
+        decisions=[
+            ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}'),
+            ResumeDecision(interrupt_id="approval-2", accepted=False, arguments='{"value":"second"}'),
+        ],
+    )
+
+    assert [intent.identity for intent in intents] == [accepted.identity]
+    assert lifecycle.get(rejected.identity).status is ApprovalStatus.REJECTED
+    assert [result.content.call_id for result in lifecycle.get(rejected.identity).replayable_results] == ["call-2"]
+
+
+def test_batch_claims_preserve_order_and_scope_reused_raw_call_ids() -> None:
+    """Raw call ids reused in another scoped thread cannot correlate approval authority."""
+    lifecycle = ApprovalLifecycle()
+    tenant_a = lifecycle.register_local(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-shared",
+        call_id="call-shared",
+        name="write_record",
+        arguments='{"tenant":"a"}',
+    )
+    tenant_b = lifecycle.register_local(
+        thread_id="tenant-b\x1fthread-1",
+        interrupt_id="approval-shared",
+        call_id="call-shared",
+        name="write_record",
+        arguments='{"tenant":"b"}',
+    )
+
+    intents = lifecycle.claim_batch(
+        thread_id="tenant-a\x1fthread-1",
+        decisions=[
+            ResumeDecision(
+                interrupt_id="approval-shared",
+                accepted=True,
+                arguments='{"tenant":"a"}',
+            )
+        ],
+    )
+
+    assert [intent.identity for intent in intents] == [tenant_a.identity]
+    assert tenant_a.identity != tenant_b.identity
+    assert lifecycle.get(tenant_a.identity).status is ApprovalStatus.CLAIMED
+    assert lifecycle.get(tenant_b.identity).status is ApprovalStatus.PENDING
+
+
+def test_batch_cancellation_preserves_each_original_occurrence() -> None:
+    """Cancelling selected occurrences is terminal without consuming an unrelated sibling."""
+    lifecycle = ApprovalLifecycle()
+    cancelled = lifecycle.register_local(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    pending = lifecycle.register_local(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-2",
+        call_id="call-2",
+        name="write_record",
+        arguments='{"value":"second"}',
+    )
+
+    lifecycle.cancel_batch(
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_ids=["approval-1"],
+    )
+
+    assert lifecycle.get(cancelled.identity).status is ApprovalStatus.CANCELLED
+    assert lifecycle.get(pending.identity).status is ApprovalStatus.PENDING
+
+
+def test_one_occurrence_can_be_claimed_through_a_trusted_thread_alias() -> None:
+    """Provider conversation aliases address one occurrence rather than duplicating authority."""
+    lifecycle = ApprovalLifecycle()
+    occurrence = lifecycle.register_local_aliases(
+        thread_ids=["tenant-a\x1fag-ui-thread", "tenant-a\x1fprovider-thread"],
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+
+    intents = lifecycle.claim_batch(
+        thread_id="tenant-a\x1fprovider-thread",
+        decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}')],
+    )
+
+    assert [intent.identity for intent in intents] == [occurrence.identity]
+    with pytest.raises(ValueError, match="not pending"):
+        lifecycle.register_local_aliases(
+            thread_ids=["tenant-a\x1fag-ui-thread", "tenant-a\x1fprovider-thread"],
+            interrupt_id="approval-1",
+            call_id="call-1",
+            name="write_record",
+            arguments='{"value":"first"}',
+        )
+    with pytest.raises(ValueError, match="not pending"):
+        lifecycle.claim_batch(
+            thread_id="tenant-a\x1fag-ui-thread",
+            decisions=[ResumeDecision(interrupt_id="approval-1", accepted=True, arguments='{"value":"first"}')],
+        )
+
+
+async def test_settled_raw_call_id_can_be_reused_for_a_new_occurrence() -> None:
+    """Sequential reuse creates a fresh logical occurrence instead of reviving settled authority."""
+    lifecycle = ApprovalLifecycle()
+    first = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-shared",
+        call_id="call-shared",
+        name="write_record",
+        arguments='{"value":"first"}',
+    )
+    first_intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(
+            interrupt_id="approval-shared",
+            accepted=True,
+            arguments='{"value":"first"}',
+        ),
+    )
+
+    async def execute_first() -> list[Content]:
+        return [Content.from_function_result(call_id="call-shared", result="wrote first")]
+
+    await LocalPendingToolTransitionOwner(execute_first).execute(first_intent, lifecycle=lifecycle)
+    second = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-shared",
+        call_id="call-shared",
+        name="write_record",
+        arguments='{"value":"second"}',
+    )
+
+    assert first.identity != second.identity
+    assert lifecycle.get(first.identity).status is ApprovalStatus.SETTLED
+    assert lifecycle.get(second.identity).status is ApprovalStatus.PENDING

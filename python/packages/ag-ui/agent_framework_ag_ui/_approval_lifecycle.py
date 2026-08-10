@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from uuid import uuid4
 
 from agent_framework import Content
 
@@ -18,13 +19,16 @@ class ApprovalStatus(str, Enum):
     CLAIMED = "claimed"
     EXECUTING = "executing"
     SETTLED = "settled"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
 class ApprovalOccurrenceIdentity:
-    """Identity of one approval occurrence within a server-owned thread."""
+    """Identity of one occurrence within a scoped server-owned thread."""
 
     thread_id: str
+    occurrence_id: str
     interrupt_id: str
     call_id: str
 
@@ -44,6 +48,7 @@ class ApprovalOccurrence:
     """Server-owned state for one approval-gated call occurrence."""
 
     identity: ApprovalOccurrenceIdentity
+    thread_ids: tuple[str, ...]
     name: str
     arguments: str
     status: ApprovalStatus = ApprovalStatus.PENDING
@@ -92,14 +97,60 @@ class ApprovalLifecycle:
         arguments: str,
     ) -> ApprovalOccurrence:
         """Register one server-generated local approval occurrence."""
+        return self.register_local_aliases(
+            thread_ids=[thread_id],
+            interrupt_id=interrupt_id,
+            call_id=call_id,
+            name=name,
+            arguments=arguments,
+        )
+
+    def register_local_aliases(
+        self,
+        *,
+        thread_ids: list[str],
+        interrupt_id: str,
+        call_id: str,
+        name: str,
+        arguments: str,
+    ) -> ApprovalOccurrence:
+        """Register one occurrence under its trusted scoped-thread aliases."""
+        unique_thread_ids = tuple(dict.fromkeys(thread_ids))
+        if not unique_thread_ids:
+            raise ValueError("An approval occurrence requires at least one scoped thread identity.")
+        existing_identities = {
+            identity
+            for thread_id in unique_thread_ids
+            if (identity := self._pending_by_interrupt.get((thread_id, interrupt_id))) is not None
+        }
+        if len(existing_identities) > 1:
+            raise ValueError("Approval aliases resolve to different pending occurrences.")
+        if existing_identities:
+            occurrence = self._occurrences[next(iter(existing_identities))]
+            if occurrence.status is not ApprovalStatus.PENDING:
+                raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
+            if occurrence.identity.call_id != call_id or occurrence.name != name or occurrence.arguments != arguments:
+                raise ValueError("Approval alias conflicts with an existing pending occurrence.")
+            occurrence.thread_ids = tuple(dict.fromkeys((*occurrence.thread_ids, *unique_thread_ids)))
+            for thread_id in occurrence.thread_ids:
+                self._pending_by_interrupt[(thread_id, interrupt_id)] = occurrence.identity
+            return occurrence
+
         identity = ApprovalOccurrenceIdentity(
-            thread_id=thread_id,
+            thread_id=unique_thread_ids[0],
+            occurrence_id=str(uuid4()),
             interrupt_id=interrupt_id,
             call_id=call_id,
         )
-        occurrence = ApprovalOccurrence(identity=identity, name=name, arguments=arguments)
+        occurrence = ApprovalOccurrence(
+            identity=identity,
+            thread_ids=unique_thread_ids,
+            name=name,
+            arguments=arguments,
+        )
         self._occurrences[identity] = occurrence
-        self._pending_by_interrupt[(thread_id, interrupt_id)] = identity
+        for thread_id in unique_thread_ids:
+            self._pending_by_interrupt[(thread_id, interrupt_id)] = identity
         return occurrence
 
     def get(self, identity: ApprovalOccurrenceIdentity) -> ApprovalOccurrence:
@@ -108,17 +159,76 @@ class ApprovalLifecycle:
 
     def claim(self, *, thread_id: str, decision: ResumeDecision) -> AuthorizedExecution:
         """Validate and reserve one accepted decision before execution."""
-        identity = self._pending_by_interrupt[(thread_id, decision.interrupt_id)]
-        occurrence = self._occurrences[identity]
-        if occurrence.status is not ApprovalStatus.PENDING:
-            raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
         if not decision.accepted:
             raise ValueError("A rejected decision cannot authorize execution.")
-        if (decision.original_arguments or decision.arguments) != occurrence.arguments:
-            raise ValueError("Approval decision arguments do not match the registered occurrence.")
-        occurrence.arguments = decision.arguments
-        occurrence.status = ApprovalStatus.CLAIMED
-        return AuthorizedExecution(identity=identity, name=occurrence.name, arguments=occurrence.arguments)
+        return self.claim_batch(thread_id=thread_id, decisions=[decision])[0]
+
+    def claim_batch(
+        self,
+        *,
+        thread_id: str,
+        decisions: list[ResumeDecision],
+    ) -> tuple[AuthorizedExecution, ...]:
+        """Validate a complete decision batch before reserving accepted occurrences."""
+        resolved: list[tuple[ResumeDecision, ApprovalOccurrence]] = []
+        seen_interrupt_ids: set[str] = set()
+        for decision in decisions:
+            if decision.interrupt_id in seen_interrupt_ids:
+                raise ValueError(f"Approval batch repeats interrupt: {decision.interrupt_id}.")
+            seen_interrupt_ids.add(decision.interrupt_id)
+            identity = self._pending_by_interrupt[(thread_id, decision.interrupt_id)]
+            occurrence = self._occurrences[identity]
+            if occurrence.status is not ApprovalStatus.PENDING:
+                raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
+            if (decision.original_arguments or decision.arguments) != occurrence.arguments:
+                raise ValueError("Approval decision arguments do not match the registered occurrence.")
+            resolved.append((decision, occurrence))
+        intents: list[AuthorizedExecution] = []
+        for decision, occurrence in resolved:
+            if not decision.accepted:
+                occurrence.replayable_results = [
+                    ReplayableToolResult(
+                        content=Content.from_function_result(
+                            call_id=occurrence.identity.call_id,
+                            result="Error: Tool call invocation was rejected by user.",
+                        )
+                    )
+                ]
+                occurrence.status = ApprovalStatus.REJECTED
+                self._remove_pending_aliases(occurrence)
+                continue
+            occurrence.arguments = decision.arguments
+            occurrence.status = ApprovalStatus.CLAIMED
+            intents.append(
+                AuthorizedExecution(
+                    identity=occurrence.identity,
+                    name=occurrence.name,
+                    arguments=occurrence.arguments,
+                )
+            )
+        return tuple(intents)
+
+    def cancel_batch(self, *, thread_id: str, interrupt_ids: list[str]) -> None:
+        """Validate and cancel selected occurrences without changing their siblings."""
+        occurrences: list[ApprovalOccurrence] = []
+        seen_interrupt_ids: set[str] = set()
+        for interrupt_id in interrupt_ids:
+            if interrupt_id in seen_interrupt_ids:
+                raise ValueError(f"Approval batch repeats interrupt: {interrupt_id}.")
+            seen_interrupt_ids.add(interrupt_id)
+            identity = self._pending_by_interrupt[(thread_id, interrupt_id)]
+            occurrence = self._occurrences[identity]
+            if occurrence.status is not ApprovalStatus.PENDING:
+                raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
+            occurrences.append(occurrence)
+
+        for occurrence in occurrences:
+            occurrence.status = ApprovalStatus.CANCELLED
+            self._remove_pending_aliases(occurrence)
+
+    def _remove_pending_aliases(self, occurrence: ApprovalOccurrence) -> None:
+        for thread_id in occurrence.thread_ids:
+            self._pending_by_interrupt.pop((thread_id, occurrence.identity.interrupt_id), None)
 
     def begin_execution(self, intent: AuthorizedExecution) -> None:
         """Mark a claimed occurrence immediately before its owner may invoke a tool."""
@@ -141,7 +251,7 @@ class ApprovalLifecycle:
             raise ValueError("A settled local approval must produce exactly one result for its original call.")
         occurrence.replayable_results = replayable_results
         occurrence.status = ApprovalStatus.SETTLED
-        self._pending_by_interrupt.pop((intent.identity.thread_id, intent.identity.interrupt_id), None)
+        self._remove_pending_aliases(occurrence)
         return ApprovalOutcome(
             identity=occurrence.identity,
             replayable_results=tuple(replayable_results),

@@ -74,7 +74,15 @@ class InMemoryAGUIApprovalStateStore:
         if already_approved_requests:
             entry["already_approved_requests"] = already_approved_requests
 
-        for thread_id in dict.fromkeys(thread_ids):
+        unique_thread_ids = list(dict.fromkeys(thread_ids))
+        self.lifecycle.register_local_aliases(
+            thread_ids=unique_thread_ids,
+            interrupt_id=interrupt_id,
+            call_id=interrupt_id,
+            name=name,
+            arguments=arguments,
+        )
+        for thread_id in unique_thread_ids:
             aliases = {(thread_id, request_id), (thread_id, interrupt_id)}
             replaced_entries = {id(existing) for key, existing in self.pending_approvals.items() if key in aliases}
             for key, existing in list(self.pending_approvals.items()):
@@ -82,13 +90,6 @@ class InMemoryAGUIApprovalStateStore:
                     self.pending_approvals.pop(key, None)
             for key in aliases:
                 self.pending_approvals[key] = entry
-            self.lifecycle.register_local(
-                thread_id=thread_id,
-                interrupt_id=interrupt_id,
-                call_id=interrupt_id,
-                name=name,
-                arguments=arguments,
-            )
         self.evict_oldest()
 
     def evict_oldest(self) -> None:

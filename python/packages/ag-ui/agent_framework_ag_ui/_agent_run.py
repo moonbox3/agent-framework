@@ -1344,6 +1344,22 @@ def _canonical_approval_resume_messages(
             )
 
     if cancelled_ids:
+        if lifecycle is not None:
+            local_cancelled_ids = [
+                interrupt_id
+                for interrupt_id in cancelled_ids
+                if (pending_entry := entries_by_interrupt_id.get(interrupt_id)) is not None
+                and not _pending_approval_server_label(pending_entry)
+            ]
+            try:
+                lifecycle.cancel_batch(thread_id=thread_id, interrupt_ids=local_cancelled_ids)
+            except (KeyError, ValueError) as exc:
+                return (
+                    [],
+                    handled_ids,
+                    cancelled_ids,
+                    RunErrorEvent(message=str(exc), code="APPROVAL_RESUME_INVALID"),
+                )
         for interrupt_id in cancelled_ids:
             pending_entry = entries_by_interrupt_id.get(interrupt_id)
             if pending_entry is not None:
@@ -1516,10 +1532,9 @@ def _canonical_approval_resume_messages(
 
     if lifecycle is not None and authorized_executions is not None:
         try:
-            for decision in lifecycle_decisions:
-                if decision.accepted:
-                    intent = lifecycle.claim(thread_id=thread_id, decision=decision)
-                    authorized_executions[intent.identity.call_id] = intent
+            intents = lifecycle.claim_batch(thread_id=thread_id, decisions=lifecycle_decisions)
+            for intent in intents:
+                authorized_executions[intent.identity.call_id] = intent
         except (KeyError, ValueError) as exc:
             return (
                 [],
@@ -1644,8 +1659,8 @@ async def _resolve_approval_responses(
             primary_response = responses[-1]
             response_content_ids_to_strip.update(id(response) for response in responses[:-1])
             resp_id = primary_response.id
-            registry_key = _pending_approval_key(thread_id, resp_id) if resp_id is not None else None
-            id_entry = pending_approvals.get(registry_key) if registry_key is not None else None
+            primary_registry_key = _pending_approval_key(thread_id, resp_id) if resp_id is not None else None
+            id_entry = pending_approvals.get(primary_registry_key) if primary_registry_key is not None else None
             if not matches_pending_entry(id_entry, pending_entry):
                 logger.warning(
                     "Rejected approval response id=%s: no matching pending approval request",
@@ -2324,6 +2339,7 @@ async def run_agent_stream(
             current_state=flow.current_state,
         )
 
+    authorized_executions: dict[str, AuthorizedExecution] = {}
     approval_resume_messages, handled_resume_ids, cancelled_resume_ids, resume_error = (
         _canonical_approval_resume_messages(
             resume_payload,
@@ -2331,7 +2347,7 @@ async def run_agent_stream(
             approval_thread_id,
             expected_interrupt_ids=stored_pending_approval_interrupt_ids or None,
             lifecycle=approval_state_store.lifecycle if approval_state_store is not None else None,
-            authorized_executions=(authorized_executions := {}),
+            authorized_executions=authorized_executions,
         )
     )
     if resume_error is not None:

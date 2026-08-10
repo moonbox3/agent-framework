@@ -872,8 +872,13 @@ async def test_function_approval_mode_rejection(streaming_chat_client_stub):
 
     thread_id = "thread-rejection-test"
 
-    # Pre-populate the pending approval as if Turn 1 had emitted the request.
-    wrapper._pending_approvals[(thread_id, "call_delete_123")] = "delete_all_data"
+    wrapper._approval_state_store.register_local(
+        thread_ids=[thread_id],
+        name="delete_all_data",
+        arguments="{}",
+        request_id="call_delete_123",
+        interrupt_id="call_delete_123",
+    )
 
     input_data: dict[str, Any] = {
         "thread_id": thread_id,

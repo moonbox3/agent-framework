@@ -11,6 +11,7 @@ from agent_framework_ag_ui._approval_lifecycle import (
     ApprovalExecutionOwner,
     ApprovalIndeterminateError,
     ApprovalLifecycle,
+    ApprovalSnapshotStatus,
     ApprovalStatus,
     ClaimRecoveryPolicy,
     HostedPendingToolTransitionOwner,
@@ -117,6 +118,8 @@ async def test_hosted_approval_is_forwarded_only_by_its_owner_and_settles_same_o
     assert outcome.identity == occurrence.identity
     assert outcome.result_group == (remote_result,)
     assert [result.content for result in outcome.replayable_results] == [remote_result]
+    assert outcome.snapshot_reconciliation.status is ApprovalSnapshotStatus.SETTLED
+    assert outcome.snapshot_reconciliation.retire_interrupt is True
     assert lifecycle.get(occurrence.identity).status is ApprovalStatus.SETTLED
 
 
@@ -419,13 +422,56 @@ def test_batch_cancellation_preserves_each_original_occurrence() -> None:
         arguments='{"value":"second"}',
     )
 
-    lifecycle.cancel_batch(
+    reconciliations = lifecycle.cancel_batch(
         thread_id="tenant-a\x1fthread-1",
         interrupt_ids=["approval-1"],
     )
 
     assert lifecycle.get(cancelled.identity).status is ApprovalStatus.CANCELLED
     assert lifecycle.get(pending.identity).status is ApprovalStatus.PENDING
+    assert [(item.identity, item.status, item.retire_interrupt) for item in reconciliations] == [
+        (cancelled.identity, ApprovalSnapshotStatus.CANCELLED, True)
+    ]
+
+
+def test_snapshot_reconciliation_reports_terminal_pending_and_missing_occurrences() -> None:
+    """Snapshot projection receives lifecycle semantics without recreating authority."""
+    lifecycle = ApprovalLifecycle()
+    settled = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-settled",
+        call_id="call-settled",
+        name="write_record",
+        arguments="{}",
+    )
+    pending = lifecycle.register_local(
+        thread_id="thread-1",
+        interrupt_id="approval-pending",
+        call_id="call-pending",
+        name="write_record",
+        arguments="{}",
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(interrupt_id="approval-settled", accepted=True, arguments="{}"),
+    )
+    lifecycle.begin_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+    outcome = lifecycle.settle(
+        intent,
+        [Content.from_function_result(call_id="call-settled", result="done")],
+    )
+
+    reconciliations = lifecycle.reconcile_snapshot(
+        thread_id="thread-1",
+        interrupt_ids=["approval-settled", "approval-pending", "approval-missing"],
+    )
+
+    assert outcome.snapshot_reconciliation == reconciliations[0]
+    assert [(item.identity, item.status, item.retire_interrupt) for item in reconciliations] == [
+        (settled.identity, ApprovalSnapshotStatus.SETTLED, True),
+        (pending.identity, ApprovalSnapshotStatus.PENDING, False),
+        (None, ApprovalSnapshotStatus.MISSING, True),
+    ]
 
 
 def test_one_occurrence_can_be_claimed_through_a_trusted_thread_alias() -> None:

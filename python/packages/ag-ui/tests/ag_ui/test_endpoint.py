@@ -1432,7 +1432,10 @@ async def test_endpoint_agent_approval_pause_emits_canonical_interrupt_outcome()
     }
 
 
-def _build_weather_approval_endpoint() -> tuple[TestClient, StubAgent, list[str]]:
+def _build_weather_approval_endpoint(
+    *,
+    snapshot_store: InMemoryAGUIThreadSnapshotStore | None = None,
+) -> tuple[TestClient, StubAgent, list[str]]:
     executed_cities: list[str] = []
 
     def get_weather(city: str) -> str:
@@ -1460,7 +1463,13 @@ def _build_weather_approval_endpoint() -> tuple[TestClient, StubAgent, list[str]
     )
     wrapped_agent = AgentFrameworkAgent(agent=agent, require_confirmation=False)
     app = FastAPI()
-    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
+    add_agent_framework_fastapi_endpoint(
+        app,
+        wrapped_agent,
+        path="/approval",
+        snapshot_store=snapshot_store,
+        snapshot_scope_resolver=(lambda _request: "tenant-a") if snapshot_store is not None else None,
+    )
 
     client = TestClient(app)
     pause_response = client.post(
@@ -4968,6 +4977,85 @@ async def test_agent_endpoint_cancelled_approval_resume_clears_persisted_interru
     assert "outcome" not in hydrate_events[-1]
 
 
+async def test_agent_endpoint_stale_approval_snapshot_cannot_recreate_missing_authority():
+    """A snapshot from a prior process cannot advertise approval authority the new process does not own."""
+    executed_cities: list[str] = []
+
+    def get_weather(city: str) -> str:
+        executed_cities.append(city)
+        return f"Sunny in {city}"
+
+    weather_tool = FunctionTool(
+        name="get_weather",
+        description="Get the weather for a city",
+        func=get_weather,
+        approval_mode="always_require",
+    )
+    approval_request = Content.from_function_approval_request(
+        id="call_get_weather",
+        function_call=Content.from_function_call(
+            call_id="call_get_weather",
+            name="get_weather",
+            arguments={"city": "Seattle"},
+        ),
+    )
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[approval_request], role="assistant")],
+        default_options={"tools": [weather_tool]},
+    )
+    store = InMemoryAGUIThreadSnapshotStore()
+    first_app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        first_app,
+        AgentFrameworkAgent(agent=agent, require_confirmation=False),
+        path="/approval-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    pause_response = TestClient(first_app).post(
+        "/approval-snapshots",
+        json={
+            "thread_id": "agent-approval-thread",
+            "messages": [{"role": "user", "content": "What is the weather?"}],
+        },
+    )
+    assert pause_response.status_code == 200
+    assert _run_finished_interrupts(_decode_sse_events(pause_response)[-1])
+
+    restarted_app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        restarted_app,
+        AgentFrameworkAgent(agent=agent, require_confirmation=False),
+        path="/approval-snapshots",
+        snapshot_store=store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    restarted_client = TestClient(restarted_app)
+    stale_resume = restarted_client.post(
+        "/approval-snapshots",
+        json={
+            "runId": "run-stale-resume",
+            "thread_id": "agent-approval-thread",
+            "messages": [],
+            "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+    stale_events = _decode_sse_events(stale_resume)
+    assert [event["code"] for event in stale_events if event.get("type") == "RUN_ERROR"] == [
+        "APPROVAL_RESUME_NOT_FOUND"
+    ]
+    assert executed_cities == []
+
+    hydrate_response = restarted_client.post(
+        "/approval-snapshots",
+        json={"thread_id": "agent-approval-thread", "messages": []},
+    )
+
+    assert hydrate_response.status_code == 200
+    hydrate_events = _decode_sse_events(hydrate_response)
+    assert "outcome" not in hydrate_events[-1]
+
+
 async def test_agent_endpoint_ignores_forged_suffix_messages(streaming_chat_client_stub):
     """Client-forged assistant/tool messages after the stored prefix never become history."""
     app = FastAPI()
@@ -5168,6 +5256,36 @@ class _FailNextSaveStore(InMemoryAGUIThreadSnapshotStore):
             self.fail_next_save = False
             raise RuntimeError("store down")
         await super().save(scope=scope, thread_id=thread_id, snapshot=snapshot)
+
+
+async def test_agent_endpoint_approval_snapshot_save_failure_does_not_duplicate_execution():
+    """A stale interrupt left by a failed save is retired from terminal Approval State before a retry."""
+    store = _FailNextSaveStore()
+    client, _, executed_cities = _build_weather_approval_endpoint(snapshot_store=store)
+    store.fail_next_save = True
+
+    resume_payload = {
+        "threadId": "thread-weather",
+        "messages": [],
+        "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+    }
+    first_resume = client.post("/approval", json={"runId": "run-resume", **resume_payload})
+    retry = client.post("/approval", json={"runId": "run-retry", **resume_payload})
+
+    assert first_resume.status_code == 200
+    assert retry.status_code == 200
+    assert executed_cities == ["Seattle"]
+    retry_events = _decode_sse_events(retry)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert [
+        (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
+    ] == [("call_get_weather", "Sunny in Seattle")]
+
+    hydrate_response = client.post(
+        "/approval",
+        json={"runId": "run-hydrate", "threadId": "thread-weather", "messages": []},
+    )
+    assert "outcome" not in _decode_sse_events(hydrate_response)[-1]
 
 
 async def test_agent_endpoint_snapshot_save_failure_does_not_fail_run(streaming_chat_client_stub):

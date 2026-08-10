@@ -58,6 +58,7 @@ from agent_framework.observability import (
 from ._approval_lifecycle import (
     ApprovalExecutionOwner,
     ApprovalLifecycle,
+    ApprovalSnapshotReconciliation,
     AuthorizedExecution,
     DeferredPendingToolTransitionOwner,
     ForwardedPendingToolTransitionOwner,
@@ -1288,6 +1289,7 @@ def _canonical_approval_resume_messages(
     lifecycle: ApprovalLifecycle | None = None,
     authorized_executions: dict[str, AuthorizedExecution] | None = None,
     retained_results: list[Content] | None = None,
+    snapshot_reconciliations: list[ApprovalSnapshotReconciliation] | None = None,
 ) -> tuple[list[dict[str, Any]], set[str], set[str], RunErrorEvent | None]:
     """Translate canonical ResumeEntry approvals into existing approval response messages."""
     expected_ids = set(expected_interrupt_ids or set())
@@ -1391,6 +1393,8 @@ def _canonical_approval_resume_messages(
                     else:
                         for outcome in batch.retained_outcomes:
                             retained_results.extend(result.content for result in outcome.replayable_results)
+                        if snapshot_reconciliations is not None:
+                            snapshot_reconciliations.extend(batch.snapshot_reconciliations)
                         handled_ids.update(decision.interrupt_id for decision in decisions)
                         return [], handled_ids, cancelled_ids, None
             return (
@@ -1461,7 +1465,12 @@ def _canonical_approval_resume_messages(
                 interrupt_id for interrupt_id in cancelled_ids if entries_by_interrupt_id.get(interrupt_id) is not None
             ]
             try:
-                lifecycle.cancel_batch(thread_id=thread_id, interrupt_ids=lifecycle_cancelled_ids)
+                reconciliations = lifecycle.cancel_batch(
+                    thread_id=thread_id,
+                    interrupt_ids=lifecycle_cancelled_ids,
+                )
+                if snapshot_reconciliations is not None:
+                    snapshot_reconciliations.extend(reconciliations)
             except (KeyError, ValueError) as exc:
                 return (
                     [],
@@ -1654,6 +1663,8 @@ def _canonical_approval_resume_messages(
     if lifecycle is not None and authorized_executions is not None:
         try:
             intents = lifecycle.claim_batch(thread_id=thread_id, decisions=lifecycle_decisions)
+            if snapshot_reconciliations is not None:
+                snapshot_reconciliations.extend(intents.snapshot_reconciliations)
             for intent in intents:
                 authorized_executions[intent.identity.call_id] = intent
         except (KeyError, ValueError) as exc:
@@ -2467,16 +2478,34 @@ async def run_agent_stream(
         scope=snapshot_scope,
         thread_id=thread_id,
     )
-    if snapshot_session.enabled and not raw_messages and resume_payload is None:
-        async for event in snapshot_session.hydrate_events(run_id=run_id):
-            yield event
-        return
 
     stored_snapshot = snapshot_session.stored
     stored_pending_approval_interrupt_ids: set[str] = set()
     seeded_resume_from_snapshot = False
     if stored_snapshot is not None:
         stored_pending_approval_interrupt_ids = _stored_pending_approval_interrupt_ids(stored_snapshot.interrupt)
+        if approval_state_store is not None and stored_pending_approval_interrupt_ids:
+            reconciliations = approval_state_store.lifecycle.reconcile_snapshot(
+                thread_id=approval_thread_id,
+                interrupt_ids=list(stored_pending_approval_interrupt_ids),
+            )
+            retired_interrupt_ids = {
+                reconciliation.identity.interrupt_id
+                if reconciliation.identity is not None
+                else reconciliation.interrupt_id
+                for reconciliation in reconciliations
+                if reconciliation.retire_interrupt
+            }
+            if retired_interrupt_ids:
+                await snapshot_session.clear_interrupts(interrupt_ids=retired_interrupt_ids)
+                stored_snapshot = snapshot_session.stored
+                stored_pending_approval_interrupt_ids.difference_update(retired_interrupt_ids)
+    if snapshot_session.enabled and not raw_messages and resume_payload is None:
+        async for event in snapshot_session.hydrate_events(run_id=run_id):
+            yield event
+        return
+
+    if stored_snapshot is not None:
         if resume_payload is not None and stored_pending_approval_interrupt_ids:
             raw_messages = snapshot_session.resume_seeded_messages(raw_messages)
             seeded_resume_from_snapshot = True
@@ -2516,6 +2545,7 @@ async def run_agent_stream(
     authorized_executions: dict[str, AuthorizedExecution] = {}
     forwarded_executions: dict[str, tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]] = {}
     retained_approval_results: list[Content] = []
+    approval_snapshot_reconciliations: list[ApprovalSnapshotReconciliation] = []
     approval_resume_messages, handled_resume_ids, cancelled_resume_ids, resume_error = (
         _canonical_approval_resume_messages(
             resume_payload,
@@ -2525,6 +2555,7 @@ async def run_agent_stream(
             lifecycle=approval_state_store.lifecycle if approval_state_store is not None else None,
             authorized_executions=authorized_executions,
             retained_results=retained_approval_results,
+            snapshot_reconciliations=approval_snapshot_reconciliations,
         )
     )
     if resume_error is not None:
@@ -2539,7 +2570,14 @@ async def run_agent_stream(
         if should_clear_tool_approval_state:
             _clear_tool_approval_state(approval_state_store, approval_thread_id)
         if resume_error_code == "APPROVAL_RESUME_CANCELLED":
-            await snapshot_session.clear_interrupts(interrupt_ids=cancelled_resume_ids or None)
+            retired_interrupt_ids = {
+                reconciliation.identity.interrupt_id
+                if reconciliation.identity is not None
+                else reconciliation.interrupt_id
+                for reconciliation in approval_snapshot_reconciliations
+                if reconciliation.retire_interrupt
+            }
+            await snapshot_session.clear_interrupts(interrupt_ids=retired_interrupt_ids or cancelled_resume_ids or None)
         yield resume_error
         return
     resume_messages = _resume_to_tool_messages(resume_payload, exclude_interrupt_ids=handled_resume_ids)

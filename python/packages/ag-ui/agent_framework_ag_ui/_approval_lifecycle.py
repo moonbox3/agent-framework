@@ -100,19 +100,21 @@ class ApprovalStatus(str, Enum):
     EXPIRED = "expired"
     INDETERMINATE = "indeterminate"
 
+    @property
+    def is_terminal(self) -> bool:
+        """Whether this state has ended its approval authority."""
+        return self in {
+            ApprovalStatus.SETTLED,
+            ApprovalStatus.REJECTED,
+            ApprovalStatus.CANCELLED,
+            ApprovalStatus.EXPIRED,
+            ApprovalStatus.INDETERMINATE,
+        }
 
-class ApprovalSnapshotStatus(str, Enum):
-    """Approval authority status projected during snapshot reconciliation."""
-
-    PENDING = "pending"
-    CLAIMED = "claimed"
-    EXECUTING = "executing"
-    SETTLED = "settled"
-    REJECTED = "rejected"
-    CANCELLED = "cancelled"
-    EXPIRED = "expired"
-    INDETERMINATE = "indeterminate"
-    MISSING = "missing"
+    @property
+    def is_purgeable(self) -> bool:
+        """Whether this terminal state may expire after the retention window."""
+        return self.is_terminal and self is not ApprovalStatus.INDETERMINATE
 
 
 class ApprovalExecutionOwner(str, Enum):
@@ -146,8 +148,13 @@ class ApprovalSnapshotReconciliation:
 
     interrupt_id: str
     identity: ApprovalOccurrenceIdentity | None
-    status: ApprovalSnapshotStatus
+    status: ApprovalStatus | None
     retire_interrupt: bool
+
+    @property
+    def is_missing(self) -> bool:
+        """Whether no lifecycle occurrence exists for the snapshot interrupt."""
+        return self.status is None
 
 
 @dataclass(frozen=True)
@@ -245,10 +252,12 @@ class ApprovalLifecycle:
         self._pending_by_interrupt: dict[tuple[str, str], ApprovalOccurrenceIdentity] = {}
         self._terminal_by_interrupt: dict[tuple[str, str], ApprovalOccurrenceIdentity] = {}
 
-    def register_local(
+    def register(
         self,
         *,
-        thread_id: str,
+        owner: ApprovalExecutionOwner,
+        thread_ids: list[str] | None = None,
+        thread_id: str | None = None,
         interrupt_id: str,
         call_id: str,
         name: str,
@@ -258,199 +267,21 @@ class ApprovalLifecycle:
         server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
-        """Register one server-generated local approval occurrence."""
-        return self.register_local_aliases(
-            thread_ids=[thread_id],
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            idempotency_key=idempotency_key,
-        )
-
-    def register_local_aliases(
-        self,
-        *,
-        thread_ids: list[str],
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register one occurrence under its trusted scoped-thread aliases."""
+        """Register one approval occurrence with its pending transition owner."""
+        if (thread_ids is None) == (thread_id is None):
+            raise ValueError("Provide exactly one of thread_id or thread_ids when registering an approval.")
+        resolved_thread_ids = thread_ids if thread_ids is not None else [thread_id]
         return self._register_aliases(
-            thread_ids=thread_ids,
+            thread_ids=[value for value in resolved_thread_ids if value is not None],
             interrupt_id=interrupt_id,
             call_id=call_id,
             name=name,
             arguments=arguments,
-            owner=ApprovalExecutionOwner.LOCAL,
+            owner=owner,
             aliases=aliases,
             already_approved_requests=already_approved_requests,
             server_label=server_label,
             idempotency_key=idempotency_key,
-        )
-
-    def register_hosted(
-        self,
-        *,
-        thread_id: str,
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register one server-generated hosted approval occurrence."""
-        return self.register_hosted_aliases(
-            thread_ids=[thread_id],
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            idempotency_key=idempotency_key,
-        )
-
-    def register_hosted_aliases(
-        self,
-        *,
-        thread_ids: list[str],
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register one hosted occurrence under its trusted scoped-thread aliases."""
-        return self._register_aliases(
-            thread_ids=thread_ids,
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            owner=ApprovalExecutionOwner.HOSTED,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            idempotency_key=idempotency_key,
-        )
-
-    def register_unowned(
-        self,
-        *,
-        thread_id: str,
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register an occurrence that has no executable transition owner."""
-        return self.register_unowned_aliases(
-            thread_ids=[thread_id],
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-        )
-
-    def register_deferred(
-        self,
-        *,
-        thread_id: str,
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register one occurrence owned by the in-run transition pipeline."""
-        return self.register_deferred_aliases(
-            thread_ids=[thread_id],
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            idempotency_key=idempotency_key,
-        )
-
-    def register_deferred_aliases(
-        self,
-        *,
-        thread_ids: list[str],
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register one deferred occurrence under its trusted scoped-thread aliases."""
-        return self._register_aliases(
-            thread_ids=thread_ids,
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            owner=ApprovalExecutionOwner.DEFERRED,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            idempotency_key=idempotency_key,
-        )
-
-    def register_unowned_aliases(
-        self,
-        *,
-        thread_ids: list[str],
-        interrupt_id: str,
-        call_id: str,
-        name: str,
-        arguments: str,
-        aliases: list[str] | None = None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-        server_label: str | None = None,
-    ) -> ApprovalOccurrence:
-        """Register an unowned occurrence under its trusted scoped-thread aliases."""
-        return self._register_aliases(
-            thread_ids=thread_ids,
-            interrupt_id=interrupt_id,
-            call_id=call_id,
-            name=name,
-            arguments=arguments,
-            owner=ApprovalExecutionOwner.UNAVAILABLE,
-            aliases=aliases,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
         )
 
     @_serialized_registration
@@ -590,7 +421,7 @@ class ApprovalLifecycle:
                     ApprovalSnapshotReconciliation(
                         interrupt_id=interrupt_id,
                         identity=None,
-                        status=ApprovalSnapshotStatus.MISSING,
+                        status=None,
                         retire_interrupt=True,
                     )
                 )
@@ -601,19 +432,11 @@ class ApprovalLifecycle:
 
     @staticmethod
     def _snapshot_reconciliation(occurrence: ApprovalOccurrence) -> ApprovalSnapshotReconciliation:
-        status = ApprovalSnapshotStatus(occurrence.status.value)
-        terminal_statuses = {
-            ApprovalSnapshotStatus.SETTLED,
-            ApprovalSnapshotStatus.REJECTED,
-            ApprovalSnapshotStatus.CANCELLED,
-            ApprovalSnapshotStatus.EXPIRED,
-            ApprovalSnapshotStatus.INDETERMINATE,
-        }
         return ApprovalSnapshotReconciliation(
             interrupt_id=occurrence.identity.interrupt_id,
             identity=occurrence.identity,
-            status=status,
-            retire_interrupt=status in terminal_statuses,
+            status=occurrence.status,
+            retire_interrupt=occurrence.status.is_terminal,
         )
 
     def claim(self, *, thread_id: str, decision: ResumeDecision) -> AuthorizedExecution:
@@ -796,7 +619,7 @@ class ApprovalLifecycle:
         return tuple(self._snapshot_reconciliation(occurrence) for occurrence in occurrences)
 
     def _remove_pending_aliases(self, occurrence: ApprovalOccurrence) -> None:
-        if occurrence.status is not ApprovalStatus.INDETERMINATE:
+        if occurrence.status.is_purgeable:
             occurrence.terminal_at = self._clock()
         with self._index_lock:
             for thread_id in occurrence.thread_ids:

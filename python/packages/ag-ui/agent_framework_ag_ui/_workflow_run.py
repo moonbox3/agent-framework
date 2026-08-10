@@ -270,16 +270,11 @@ def _pending_workflow_interrupt_ids(pending_events: dict[str, Any]) -> set[str]:
 def _resume_error_for_pending_workflow_requests(
     resume_entries: list[dict[str, Any]],
 ) -> RunErrorEvent | None:
-    """Return a workflow resume error for explicit non-resolved canonical resume entries."""
+    """Return a workflow resume error for unsupported canonical resume entries."""
     for entry in resume_entries:
         interrupt_id = str(entry["interrupt_id"])
         status = entry.get("status")
-        if status == "cancelled":
-            return RunErrorEvent(
-                message=f"Workflow resume for interruptId '{interrupt_id}' was cancelled.",
-                code="WORKFLOW_RESUME_CANCELLED",
-            )
-        if status not in {None, "resolved"}:
+        if status not in {None, "resolved", "cancelled"}:
             return RunErrorEvent(
                 message=f"Unsupported workflow resume status '{status}' for interruptId '{interrupt_id}'.",
                 code="WORKFLOW_RESUME_INVALID",
@@ -818,11 +813,19 @@ async def run_workflow_stream(
             return
         resume_error = _resume_error_for_pending_workflow_requests(resume_entries)
         if resume_error is not None:
-            if getattr(resume_error, "code", None) == "WORKFLOW_RESUME_CANCELLED":
-                _consume_cancelled_workflow_requests(workflow, resume_entries)
             yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
             yield resume_error
             return
+        cancelled_request_ids = {
+            str(entry["interrupt_id"]) for entry in resume_entries if entry.get("status") == "cancelled"
+        }
+        if cancelled_request_ids:
+            _consume_cancelled_workflow_requests(workflow, resume_entries)
+            pending_before_run = {
+                request_id: request_event
+                for request_id, request_event in pending_before_run.items()
+                if str(getattr(request_event, "request_id", None) or request_id) not in cancelled_request_ids
+            }
 
     resume_responses = (
         _resume_entries_to_workflow_responses(resume_entries)

@@ -65,7 +65,7 @@ class InMemoryAGUIApprovalStateStore:
             terminal_retention_seconds=terminal_retention_seconds,
         )
 
-    def register_local(
+    def register(
         self,
         *,
         thread_ids: list[str],
@@ -73,109 +73,14 @@ class InMemoryAGUIApprovalStateStore:
         arguments: str,
         request_id: str,
         interrupt_id: str,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Register one local occurrence and its trusted aliases."""
-        self._register(
-            thread_ids=thread_ids,
-            name=name,
-            arguments=arguments,
-            request_id=request_id,
-            interrupt_id=interrupt_id,
-            already_approved_requests=already_approved_requests,
-            server_label=None,
-            owner=ApprovalExecutionOwner.LOCAL,
-        )
-
-    def register_hosted(
-        self,
-        *,
-        thread_ids: list[str],
-        name: str,
-        arguments: str,
-        request_id: str,
-        interrupt_id: str,
-        server_label: str | None,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Register one hosted occurrence and its trusted aliases."""
-        self._register(
-            thread_ids=thread_ids,
-            name=name,
-            arguments=arguments,
-            request_id=request_id,
-            interrupt_id=interrupt_id,
-            already_approved_requests=already_approved_requests,
-            server_label=server_label,
-            owner=ApprovalExecutionOwner.HOSTED,
-        )
-
-    def register_unowned(
-        self,
-        *,
-        thread_ids: list[str],
-        name: str,
-        arguments: str,
-        request_id: str,
-        interrupt_id: str,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Register one occurrence that has no executable transition owner."""
-        self._register(
-            thread_ids=thread_ids,
-            name=name,
-            arguments=arguments,
-            request_id=request_id,
-            interrupt_id=interrupt_id,
-            already_approved_requests=already_approved_requests,
-            server_label=None,
-            owner=ApprovalExecutionOwner.UNAVAILABLE,
-        )
-
-    def register_deferred(
-        self,
-        *,
-        thread_ids: list[str],
-        name: str,
-        arguments: str,
-        request_id: str,
-        interrupt_id: str,
-        already_approved_requests: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Register one occurrence owned by the in-run transition pipeline."""
-        self._register(
-            thread_ids=thread_ids,
-            name=name,
-            arguments=arguments,
-            request_id=request_id,
-            interrupt_id=interrupt_id,
-            already_approved_requests=already_approved_requests,
-            server_label=None,
-            owner=ApprovalExecutionOwner.DEFERRED,
-        )
-
-    def _register(
-        self,
-        *,
-        thread_ids: list[str],
-        name: str,
-        arguments: str,
-        request_id: str,
-        interrupt_id: str,
-        already_approved_requests: list[dict[str, Any]] | None,
-        server_label: str | None,
         owner: ApprovalExecutionOwner,
+        already_approved_requests: list[dict[str, Any]] | None = None,
+        server_label: str | None = None,
     ) -> None:
+        """Register one occurrence with its pending transition owner."""
         unique_thread_ids = list(dict.fromkeys(thread_ids))
-        if owner is ApprovalExecutionOwner.HOSTED:
-            register_aliases = self.lifecycle.register_hosted_aliases
-        elif owner is ApprovalExecutionOwner.DEFERRED:
-            register_aliases = self.lifecycle.register_deferred_aliases
-        elif owner is ApprovalExecutionOwner.UNAVAILABLE:
-            register_aliases = self.lifecycle.register_unowned_aliases
-        else:
-            register_aliases = self.lifecycle.register_local_aliases
-        register_aliases(
+        self.lifecycle.register(
+            owner=owner,
             thread_ids=unique_thread_ids,
             interrupt_id=interrupt_id,
             call_id=interrupt_id,

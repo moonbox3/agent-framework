@@ -4,7 +4,7 @@
 
 import pytest
 
-from agent_framework_ag_ui._approval_lifecycle import ApprovalCapacityError
+from agent_framework_ag_ui._approval_lifecycle import ApprovalCapacityError, ApprovalExecutionOwner
 from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore, approval_state_thread_id
 
 
@@ -31,9 +31,29 @@ def test_approval_state_store_rejects_invalid_max_entries() -> None:
         InMemoryAGUIApprovalStateStore(max_entries=0)
 
 
+def test_approval_state_store_registers_explicit_execution_owner() -> None:
+    store = InMemoryAGUIApprovalStateStore()
+
+    store.register(
+        owner=ApprovalExecutionOwner.DEFERRED,
+        thread_ids=["thread-1", "provider-thread-1"],
+        name="write_record",
+        arguments="{}",
+        request_id="request-1",
+        interrupt_id="approval-1",
+        server_label=None,
+    )
+
+    occurrence = store.lifecycle.pending_occurrence(thread_id="thread-1", interrupt_id="approval-1")
+    assert occurrence is not None
+    assert occurrence.owner is ApprovalExecutionOwner.DEFERRED
+    assert store.lifecycle.pending_occurrence(thread_id="provider-thread-1", interrupt_id="request-1") is occurrence
+
+
 def test_approval_state_store_does_not_evict_active_entries() -> None:
     store = InMemoryAGUIApprovalStateStore(max_entries=1)
-    store.register_local(
+    store.register(
+        owner=ApprovalExecutionOwner.LOCAL,
         thread_ids=["thread-1"],
         name="write_record",
         arguments="{}",
@@ -42,7 +62,8 @@ def test_approval_state_store_does_not_evict_active_entries() -> None:
     )
 
     with pytest.raises(ApprovalCapacityError):
-        store.register_local(
+        store.register(
+            owner=ApprovalExecutionOwner.LOCAL,
             thread_ids=["thread-2"],
             name="write_record",
             arguments="{}",

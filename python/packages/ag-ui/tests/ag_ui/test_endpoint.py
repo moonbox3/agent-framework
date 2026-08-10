@@ -1421,9 +1421,18 @@ async def test_endpoint_agent_approval_pause_emits_canonical_interrupt_outcome()
     assert interrupt["reason"] == "tool_call"
     assert interrupt["toolCallId"] == "call_write_doc"
     assert interrupt["message"] == "Approve running write_doc?"
-    assert interrupt["responseSchema"]["required"] == ["accepted"]
-    assert interrupt["responseSchema"]["properties"]["accepted"]["type"] == "boolean"
-    assert interrupt["responseSchema"]["properties"]["content"]["type"] == "string"
+    response_schema = interrupt["responseSchema"]
+    assert response_schema["anyOf"] == [{"required": ["approved"]}, {"required": ["accepted"]}]
+    assert response_schema["properties"]["approved"]["type"] == "boolean"
+    assert response_schema["properties"]["accepted"]["type"] == "boolean"
+    assert response_schema["properties"]["content"]["type"] == "string"
+    assert response_schema["properties"]["editedArgs"] == {
+        "type": "object",
+        "description": "Full replacement of the tool arguments. Not merged.",
+        "properties": {"content": {"type": "string"}},
+        "required": ["content"],
+        "additionalProperties": False,
+    }
     metadata_value = interrupt["metadata"]["agent_framework"]
     assert metadata_value["type"] == "function_approval_request"
     assert metadata_value["function_call"] == {
@@ -1705,6 +1714,50 @@ async def test_endpoint_agent_approval_resume_entry_executes_approved_tool():
     assert "outcome" not in [event for event in events if event.get("type") == "RUN_FINISHED"][-1]
 
 
+async def test_endpoint_agent_approval_resume_remains_retryable_when_local_tool_is_temporarily_unavailable():
+    """A local approval can be retried after its executor disappears before resume."""
+    client, agent, executed_cities = _build_weather_approval_endpoint(snapshot_store=InMemoryAGUIThreadSnapshotStore())
+    weather_tool = agent.default_options["tools"][0]
+    agent.default_options["tools"] = []
+
+    unavailable_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-unavailable",
+            "threadId": "thread-weather",
+            "messages": [],
+            "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    assert unavailable_response.status_code == 200
+    unavailable_events = _decode_sse_events(unavailable_response)
+    run_errors = [event for event in unavailable_events if event.get("type") == "RUN_ERROR"]
+    assert len(run_errors) == 1
+    assert run_errors[0]["code"] == "APPROVAL_TOOL_UNAVAILABLE"
+    assert "temporarily unavailable" in run_errors[0]["message"]
+    assert executed_cities == []
+
+    agent.default_options["tools"] = [weather_tool]
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": "thread-weather",
+            "messages": [],
+            "resume": [{"interruptId": "call_get_weather", "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    assert retry_response.status_code == 200
+    retry_events = _decode_sse_events(retry_response)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert [
+        (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
+    ] == [("call_get_weather", "Sunny in Seattle")]
+    assert executed_cities == ["Seattle"]
+
+
 async def test_endpoint_agent_approval_resume_releases_already_approved_sibling(streaming_chat_client_stub):
     """Resuming a visible approval should also complete never-require siblings from the same batch."""
     client, executed, messages_received, state = _build_mixed_approval_batch_endpoint(streaming_chat_client_stub)
@@ -1932,9 +1985,7 @@ async def test_endpoint_agent_approval_cancel_discards_queued_tool_approval(stre
 
     assert cancel_response.status_code == 200
     cancel_events = _decode_sse_events(cancel_response)
-    run_errors = [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
-    assert len(run_errors) == 1
-    assert run_errors[0]["code"] == "APPROVAL_RESUME_CANCELLED"
+    assert [event.get("type") for event in cancel_events] == ["RUN_STARTED", "RUN_FINISHED"]
     assert executed == []
     assert messages_received == []
 
@@ -2110,7 +2161,7 @@ async def test_endpoint_agent_approval_rejection_releases_already_approved_sibli
 async def test_endpoint_agent_approval_cancellation_does_not_release_already_approved_sibling(
     streaming_chat_client_stub,
 ):
-    """Cancelling a visible approval remains fail-closed and emits no sibling result."""
+    """Cancelling a visible approval completes normally without releasing a hidden sibling."""
     client, executed, messages_received, state = _build_mixed_approval_batch_endpoint(streaming_chat_client_stub)
     pause_response = client.post(
         "/approval",
@@ -2137,9 +2188,7 @@ async def test_endpoint_agent_approval_cancellation_does_not_release_already_app
 
     assert cancel_response.status_code == 200
     cancel_events = _decode_sse_events(cancel_response)
-    run_errors = [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
-    assert len(run_errors) == 1
-    assert run_errors[0]["code"] == "APPROVAL_RESUME_CANCELLED"
+    assert [event.get("type") for event in cancel_events] == ["RUN_STARTED", "RUN_FINISHED"]
     assert not [event for event in cancel_events if event.get("type") == "TOOL_CALL_RESULT"]
     assert executed == []
     assert messages_received == []
@@ -2570,8 +2619,69 @@ async def test_endpoint_agent_approval_resume_entry_applies_edited_arguments():
     assert executed_cities == ["Portland"]
 
 
-async def test_endpoint_agent_approval_cancelled_resume_entry_emits_run_error():
-    """A cancelled canonical approval resume should fail safely instead of proceeding."""
+async def test_endpoint_agent_approval_resume_entry_applies_standard_full_replacement_edited_args():
+    """The standard approved/editedArgs payload replaces the complete pending tool arguments."""
+    client, _, executed_cities = _build_weather_approval_endpoint()
+
+    response = client.post(
+        "/approval",
+        json={
+            "runId": "run-standard-edit",
+            "threadId": "thread-weather",
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": "call_get_weather",
+                    "status": "resolved",
+                    "payload": {"approved": True, "editedArgs": {"city": "Portland"}},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _decode_sse_events(response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    tool_results = [event for event in events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert [(event["toolCallId"], event["content"]) for event in tool_results] == [
+        ("call_get_weather", "Sunny in Portland")
+    ]
+    assert executed_cities == ["Portland"]
+
+
+async def test_endpoint_agent_approval_replayed_standard_edited_resume_is_idempotent():
+    """Replaying a standard edited approval returns its retained result without executing again."""
+    client, _, executed_cities = _build_weather_approval_endpoint()
+    resume = [
+        {
+            "interruptId": "call_get_weather",
+            "status": "resolved",
+            "payload": {"approved": True, "editedArgs": {"city": "Portland"}},
+        }
+    ]
+
+    first_response = client.post(
+        "/approval",
+        json={"runId": "run-standard-edit", "threadId": "thread-weather", "messages": [], "resume": resume},
+    )
+    retry_response = client.post(
+        "/approval",
+        json={"runId": "run-standard-retry", "threadId": "thread-weather", "messages": [], "resume": resume},
+    )
+
+    assert first_response.status_code == 200
+    assert retry_response.status_code == 200
+    retry_events = _decode_sse_events(retry_response)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    retry_results = [event for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert [(event["toolCallId"], event["content"]) for event in retry_results] == [
+        ("call_get_weather", "Sunny in Portland")
+    ]
+    assert executed_cities == ["Portland"]
+
+
+async def test_endpoint_agent_approval_cancelled_resume_entry_completes_without_execution():
+    """A cancelled canonical approval resume should complete without executing the pending tool."""
     client, _, executed_cities = _build_weather_approval_endpoint()
 
     response = client.post(
@@ -2586,9 +2696,7 @@ async def test_endpoint_agent_approval_cancelled_resume_entry_emits_run_error():
 
     assert response.status_code == 200
     events = _decode_sse_events(response)
-    run_errors = [event for event in events if event.get("type") == "RUN_ERROR"]
-    assert len(run_errors) == 1
-    assert run_errors[0]["code"] == "APPROVAL_RESUME_CANCELLED"
+    assert [event.get("type") for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
     assert executed_cities == []
     assert not [event for event in events if event.get("type") == "TOOL_CALL_RESULT"]
 
@@ -2850,8 +2958,8 @@ async def test_endpoint_agent_approval_resume_omitting_pending_interrupt_emits_r
     assert executed == []
 
 
-async def test_endpoint_agent_approval_cancelled_resume_preserves_uncancelled_interrupt():
-    """Cancelling one approval clears only that interrupt and leaves others resumable."""
+async def test_endpoint_agent_approval_mixed_cancelled_and_resolved_resume_executes_resolved_tool():
+    """A mixed resume executes resolved approvals and treats cancelled calls as not executed."""
     executed: list[str] = []
 
     def record_city(city: str) -> str:
@@ -2911,6 +3019,7 @@ async def test_endpoint_agent_approval_cancelled_resume_preserves_uncancelled_in
         "call_portland",
     }
 
+    agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
     cancel_response = client.post(
         "/approval-snapshots",
         json={
@@ -2926,14 +3035,16 @@ async def test_endpoint_agent_approval_cancelled_resume_preserves_uncancelled_in
 
     assert cancel_response.status_code == 200
     cancel_events = _decode_sse_events(cancel_response)
-    run_errors = [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
-    assert len(run_errors) == 1
-    assert run_errors[0]["code"] == "APPROVAL_RESUME_CANCELLED"
-    assert executed == []
+    assert not [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
+    tool_results = [event for event in cancel_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert [(event["toolCallId"], event["content"]) for event in tool_results] == [
+        ("call_portland", "Recorded Portland")
+    ]
+    assert executed == ["Portland"]
     approval_thread_id = approval_state_thread_id(scope="tenant-a", thread_id="thread-two-approvals")
     pending_ids = wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id=approval_thread_id)
     assert "call_seattle" not in pending_ids
-    assert "call_portland" in pending_ids
+    assert "call_portland" not in pending_ids
 
     hydrate_response = client.post(
         "/approval-snapshots",
@@ -2941,23 +3052,8 @@ async def test_endpoint_agent_approval_cancelled_resume_preserves_uncancelled_in
     )
     assert hydrate_response.status_code == 200
     hydrate_events = _decode_sse_events(hydrate_response)
-    assert [interrupt["id"] for interrupt in _run_finished_interrupts(hydrate_events[-1])] == ["call_portland"]
-
-    agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
-    resume_response = client.post(
-        "/approval-snapshots",
-        json={
-            "runId": "run-resume-remaining",
-            "threadId": "thread-two-approvals",
-            "messages": [],
-            "resume": [{"interruptId": "call_portland", "status": "resolved", "payload": {"accepted": True}}],
-        },
-    )
-
-    assert resume_response.status_code == 200
-    assert executed == ["Portland"]
-    resume_events = _decode_sse_events(resume_response)
-    assert not [event for event in resume_events if event.get("type") == "RUN_ERROR"]
+    assert hydrate_events[-1]["type"] == "RUN_FINISHED"
+    assert "outcome" not in hydrate_events[-1]
 
 
 def _build_workflow_request_info_app() -> FastAPI:
@@ -3037,8 +3133,8 @@ async def test_endpoint_workflow_request_info_emits_canonical_interrupt_and_resu
         assert "outcome" not in [event for event in resume_events if event.get("type") == "RUN_FINISHED"][-1]
 
 
-async def test_endpoint_workflow_request_info_cancelled_resume_emits_run_error():
-    """Cancelled workflow resumes fail explicitly and do not wedge the next turn."""
+async def test_endpoint_workflow_request_info_cancelled_resume_completes_normally():
+    """Cancelled workflow resumes complete without output and do not wedge the next turn."""
     app = _build_workflow_request_info_app()
 
     with TestClient(app) as client:
@@ -3064,9 +3160,7 @@ async def test_endpoint_workflow_request_info_cancelled_resume_emits_run_error()
 
         assert resume_response.status_code == 200
         events = _decode_sse_events(resume_response)
-        run_errors = [event for event in events if event.get("type") == "RUN_ERROR"]
-        assert len(run_errors) == 1
-        assert run_errors[0]["code"] == "WORKFLOW_RESUME_CANCELLED"
+        assert [event.get("type") for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
         assert not [event for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
 
         next_response = client.post(
@@ -4965,9 +5059,8 @@ async def test_agent_endpoint_cancelled_approval_resume_clears_persisted_interru
     )
     assert cancel_response.status_code == 200
     cancel_events = _decode_sse_events(cancel_response)
-    assert [event for event in cancel_events if event.get("type") == "RUN_ERROR"][0][
-        "code"
-    ] == "APPROVAL_RESUME_CANCELLED"
+    assert [event.get("type") for event in cancel_events][-1] == "RUN_FINISHED"
+    assert not [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
     assert executed_cities == []
     approval_thread_id = approval_state_thread_id(scope="tenant-a", thread_id="agent-approval-thread")
     assert not wrapped_agent._approval_state_store.lifecycle.pending_interrupt_ids(thread_id=approval_thread_id)
@@ -5229,9 +5322,7 @@ async def test_workflow_endpoint_cancelled_resume_clears_persisted_interrupt():
     )
     assert cancel_response.status_code == 200
     cancel_events = _decode_sse_events(cancel_response)
-    assert [event for event in cancel_events if event.get("type") == "RUN_ERROR"][0][
-        "code"
-    ] == "WORKFLOW_RESUME_CANCELLED"
+    assert [event.get("type") for event in cancel_events] == ["RUN_STARTED", "RUN_FINISHED"]
 
     hydrate_response = client.post(
         "/workflow-snapshots",
@@ -5800,7 +5891,9 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
     pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
     pause_interrupts = _run_finished_interrupts(pause_finished[-1])
     assert [interrupt["id"] for interrupt in pause_interrupts] == [call_id]
-    assert set(pause_interrupts[0]["responseSchema"]["properties"]) == {"accepted"}
+    hosted_response_schema = pause_interrupts[0]["responseSchema"]
+    assert set(hosted_response_schema["properties"]) == {"approved", "accepted"}
+    assert hosted_response_schema["anyOf"] == [{"required": ["approved"]}, {"required": ["accepted"]}]
 
     state["phase"] = "resume"
     resume_response = client.post(
@@ -5843,6 +5936,86 @@ async def test_endpoint_canonical_resume_preserves_hosted_approval_for_provider(
     assert not [event for event in _decode_sse_events(retry_response) if event.get("type") == "RUN_ERROR"]
     assert provider_invocations == 2
     assert local_executions == []
+
+
+async def test_endpoint_hosted_approval_becomes_indeterminate_when_provider_stream_fails(
+    streaming_chat_client_stub,
+) -> None:
+    """A forwarded approval with an interrupted provider stream cannot be retried automatically."""
+    call_id = "mcpr_docs_failure"
+    state = {"phase": "pause"}
+    hosted_call = Content.from_function_call(
+        call_id=call_id,
+        name="docs_search",
+        arguments={"query": "azure"},
+        additional_properties={"server_label": "Microsoft_Learn_MCP"},
+    )
+
+    async def stream_fn(
+        messages: list[Message],
+        options: dict[str, Any],
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del messages, options, kwargs
+        if state["phase"] == "pause":
+            yield ChatResponseUpdate(
+                contents=[Content.from_function_approval_request(id=call_id, function_call=hosted_call)],
+                role="assistant",
+            )
+            return
+        raise RuntimeError("provider stream failed")
+
+    agent = Agent(
+        name="test_agent",
+        instructions="Test",
+        client=streaming_chat_client_stub(stream_fn),
+    )
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        AgentFrameworkAgent(agent=agent, require_confirmation=False),
+        path="/approval",
+    )
+    client = TestClient(app)
+
+    pause_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-pause",
+            "threadId": "thread-hosted-failure",
+            "messages": [{"role": "user", "content": "Search the hosted docs"}],
+        },
+    )
+    assert pause_response.status_code == 200
+    state["phase"] = "resume"
+
+    failed_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-failed",
+            "threadId": "thread-hosted-failure",
+            "messages": [],
+            "resume": [{"interruptId": call_id, "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    assert failed_response.status_code == 200
+    assert [event for event in _decode_sse_events(failed_response) if event.get("type") == "RUN_ERROR"]
+
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": "thread-hosted-failure",
+            "messages": [],
+            "resume": [{"interruptId": call_id, "status": "resolved", "payload": {"accepted": True}}],
+        },
+    )
+
+    retry_errors = [event for event in _decode_sse_events(retry_response) if event.get("type") == "RUN_ERROR"]
+    assert len(retry_errors) == 1
+    assert retry_errors[0]["code"] == "APPROVAL_RESUME_INVALID"
+    assert "indeterminate" in retry_errors[0]["message"]
 
 
 async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat_client(

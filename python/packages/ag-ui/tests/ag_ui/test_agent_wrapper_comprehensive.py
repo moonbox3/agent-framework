@@ -10,6 +10,8 @@ import pytest
 from agent_framework import Agent, ChatOptions, ChatResponseUpdate, Content, Message
 from pydantic import BaseModel
 
+from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner
+
 
 async def test_agent_initialization_basic(streaming_chat_client_stub):
     """Test basic agent initialization without state schema."""
@@ -872,7 +874,8 @@ async def test_function_approval_mode_rejection(streaming_chat_client_stub):
 
     thread_id = "thread-rejection-test"
 
-    wrapper._approval_state_store.register_local(
+    wrapper._approval_state_store.register(
+        owner=ApprovalExecutionOwner.LOCAL,
         thread_ids=[thread_id],
         name="delete_all_data",
         arguments="{}",

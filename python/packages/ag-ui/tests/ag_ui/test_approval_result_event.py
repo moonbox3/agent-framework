@@ -12,6 +12,7 @@ from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ign
 
 from agent_framework_ag_ui._agent import AgentConfig
 from agent_framework_ag_ui._agent_run import run_agent_stream
+from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner
 from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore
 
 
@@ -42,7 +43,8 @@ async def _run_resume(
     )
     store = InMemoryAGUIApprovalStateStore()
     for call_id, city in calls:
-        store.register_local(
+        store.register(
+            owner=ApprovalExecutionOwner.LOCAL,
             thread_ids=[thread_id],
             name="get_weather",
             arguments=json.dumps({"city": city}, sort_keys=True, separators=(",", ":")),

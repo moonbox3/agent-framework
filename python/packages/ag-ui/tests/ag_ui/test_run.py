@@ -35,7 +35,7 @@ from agent_framework_ag_ui._agent_run import (
     _should_suppress_intermediate_snapshot,
     run_agent_stream,
 )
-from agent_framework_ag_ui._approval_lifecycle import ApprovalLifecycle
+from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner, ApprovalLifecycle
 from agent_framework_ag_ui._run_common import (
     FlowState,
     _build_run_finished_event,
@@ -923,9 +923,12 @@ def test_emit_approval_request_populates_interrupt_metadata():
     assert flow.interrupts[0]["reason"] == "tool_call"
     assert flow.interrupts[0]["toolCallId"] == "call_123"
     assert flow.interrupts[0]["message"] == "Approve running write_doc?"
-    assert flow.interrupts[0]["responseSchema"]["required"] == ["accepted"]
-    assert flow.interrupts[0]["responseSchema"]["properties"]["accepted"]["type"] == "boolean"
-    assert flow.interrupts[0]["responseSchema"]["properties"]["content"]["type"] == "string"
+    response_schema = flow.interrupts[0]["responseSchema"]
+    assert response_schema["anyOf"] == [{"required": ["approved"]}, {"required": ["accepted"]}]
+    assert response_schema["properties"]["approved"]["type"] == "boolean"
+    assert response_schema["properties"]["accepted"]["type"] == "boolean"
+    assert response_schema["properties"]["content"]["type"] == "string"
+    assert response_schema["properties"]["editedArgs"]["required"] == ["content"]
     assert flow.interrupts[0]["metadata"]["agent_framework"]["type"] == "function_approval_request"
     assert flow.interrupts[0]["metadata"]["agent_framework"]["function_call"] == {
         "call_id": "call_123",
@@ -1039,14 +1042,16 @@ def test_resume_to_tool_messages_skips_cancelled_entries():
 def test_canonical_approval_resume_does_not_mutate_arguments_until_batch_validates():
     """Edited approval arguments are committed only after every resume entry validates."""
     lifecycle = ApprovalLifecycle()
-    pending_entry = lifecycle.register_local(
+    pending_entry = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
         thread_id="thread-weather",
         interrupt_id="call_a",
         call_id="call_a",
         name="get_weather",
         arguments='{"city":"Seattle"}',
     )
-    lifecycle.register_local(
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
         thread_id="thread-weather",
         interrupt_id="call_b",
         call_id="call_b",
@@ -1074,7 +1079,8 @@ def test_canonical_approval_resume_does_not_mutate_arguments_until_batch_validat
 def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutating_pending() -> None:
     """Hosted approvals accept a decision only because providers ignore edited arguments."""
     lifecycle = ApprovalLifecycle()
-    pending_entry = lifecycle.register_hosted(
+    pending_entry = lifecycle.register(
+        owner=ApprovalExecutionOwner.HOSTED,
         thread_id="thread-hosted",
         interrupt_id="mcpr_docs",
         call_id="mcpr_docs",
@@ -1107,7 +1113,8 @@ def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutat
 def test_approval_lifecycle_scans_exact_thread_keys_with_colons():
     """A thread id that prefixes another thread id must not inherit its pending approval contract."""
     lifecycle = ApprovalLifecycle()
-    lifecycle.register_local(
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
         thread_id="tenant:thread",
         interrupt_id="call_1",
         call_id="call_1",

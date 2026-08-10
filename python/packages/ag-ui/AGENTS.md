@@ -29,9 +29,10 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
 - Multimodal user inputs support both legacy (`text`, `binary`) and draft-style (`image`, `audio`, `video`, `document`) shapes.
 - Interrupted runs complete with `RUN_FINISHED.outcome.type == "interrupt"` and canonical `outcome.interrupts`; do not document or add new flows that depend on the legacy top-level `RUN_FINISHED.interrupt` field.
 - `Interrupt` and `ResumeEntry` come from the `ag-ui-protocol` package (`ag_ui.core`), not from an Agent Framework-specific interrupt model.
-- Tool approval interrupts advertise standard `approved` and full-replacement `editedArgs` responses while retaining
-  the existing `accepted` alias and direct partial edits for MAF client compatibility. A `cancelled` resume completes
-  normally without executing that call; resolved siblings in the same complete resume still proceed.
+- Tool approval interrupts, including approvals surfaced through workflow `request_info`, advertise standard
+  `approved` and full-replacement `editedArgs` responses while retaining the existing `accepted` alias and direct
+  partial edits for MAF client compatibility. A `cancelled` resume completes normally without executing that call;
+  resolved siblings in the same complete resume still proceed.
 - Approval-time execution preserves each call's complete result group. Follow-up user-input requests remain in the
   resumed messages, while `TOOL_CALL_RESULT` events are emitted only for terminal `function_result` contents.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather

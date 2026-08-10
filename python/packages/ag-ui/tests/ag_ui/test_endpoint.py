@@ -153,6 +153,315 @@ async def test_add_endpoint_with_workflow_protocol():
     assert "RUN_FINISHED" in event_types
 
 
+async def test_workflow_endpoint_emits_canonical_tool_approval_interrupt() -> None:
+    """Workflow agent approvals use the standard AG-UI tool-approval interrupt contract."""
+
+    @executor(id="approval")
+    async def approval(message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+        del message
+        function_call = Content.from_function_call(
+            call_id="refund-call",
+            name="submit_refund",
+            arguments={"order_id": "12345", "amount": 89.99},
+        )
+        await ctx.request_info(
+            Content.from_function_approval_request(id="approval-1", function_call=function_call),
+            Content,
+            request_id="approval-1",
+        )
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=approval).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-approval")
+
+    response = TestClient(app).post(
+        "/workflow-approval",
+        json={"messages": [{"role": "user", "content": "Refund the order"}]},
+    )
+
+    assert response.status_code == 200
+    finished = [event for event in _decode_sse_events(response) if event.get("type") == "RUN_FINISHED"]
+    interrupt = _run_finished_interrupts(finished[-1])[0]
+    assert interrupt["id"] == "approval-1"
+    assert interrupt["reason"] == "tool_call"
+    assert interrupt["toolCallId"] == "refund-call"
+    assert interrupt["responseSchema"] == {
+        "type": "object",
+        "properties": {
+            "approved": {"type": "boolean", "description": "Whether the requested tool call is approved."},
+            "accepted": {"type": "boolean", "description": "Legacy alias for approved."},
+            "order_id": {"type": "string", "description": "Optional edited value for the 'order_id' tool argument."},
+            "amount": {"type": "number", "description": "Optional edited value for the 'amount' tool argument."},
+            "editedArgs": {
+                "type": "object",
+                "description": "Full replacement of the tool arguments. Not merged.",
+                "properties": {"order_id": {"type": "string"}, "amount": {"type": "number"}},
+                "required": ["order_id", "amount"],
+                "additionalProperties": False,
+            },
+        },
+        "anyOf": [{"required": ["approved"]}, {"required": ["accepted"]}],
+        "additionalProperties": False,
+    }
+    assert interrupt["metadata"]["agent_framework"]["type"] == "function_approval_request"
+
+
+async def test_workflow_endpoint_accepts_canonical_tool_approval_resume() -> None:
+    """Workflow approvals reconstruct server-owned response identity from a canonical resume decision."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345", "amount": 89.99},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request
+            status = "approved" if response.approved else "rejected"
+            await ctx.yield_output(f"Refund {status}.")  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type]
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-approval")
+    client = TestClient(app)
+
+    pause_response = client.post(
+        "/workflow-approval",
+        json={"messages": [{"role": "user", "content": "Refund the order"}]},
+    )
+    assert pause_response.status_code == 200
+
+    resume_response = client.post(
+        "/workflow-approval",
+        json={
+            "messages": [],
+            "resume": [{"interruptId": "approval-1", "status": "resolved", "payload": {"approved": True}}],
+        },
+    )
+
+    assert resume_response.status_code == 200
+    events = _decode_sse_events(resume_response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert "Refund approved." == "".join(
+        str(event.get("delta", "")) for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
+async def test_workflow_endpoint_applies_canonical_approval_edited_args() -> None:
+    """Workflow approvals apply standard editedArgs as a full replacement."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345", "amount": 89.99},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request
+            arguments = response.function_call.parse_arguments() if response.function_call is not None else None
+            await ctx.yield_output(json.dumps(arguments, sort_keys=True))  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type]
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-approval")
+    client = TestClient(app)
+    pause_response = client.post(
+        "/workflow-approval",
+        json={"messages": [{"role": "user", "content": "Refund the order"}]},
+    )
+    assert pause_response.status_code == 200
+
+    resume_response = client.post(
+        "/workflow-approval",
+        json={
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": "approval-1",
+                    "status": "resolved",
+                    "payload": {
+                        "approved": True,
+                        "editedArgs": {"order_id": "54321", "amount": 49.5},
+                    },
+                }
+            ],
+        },
+    )
+
+    assert resume_response.status_code == 200
+    events = _decode_sse_events(resume_response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert '{"amount": 49.5, "order_id": "54321"}' == "".join(
+        str(event.get("delta", "")) for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
+async def test_workflow_endpoint_accepts_legacy_partial_approval_edits() -> None:
+    """Workflow approvals retain the MAF accepted alias and direct partial argument edits."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345", "amount": 89.99},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request
+            arguments = response.function_call.parse_arguments() if response.function_call is not None else None
+            await ctx.yield_output(json.dumps(arguments, sort_keys=True))  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type]
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-approval")
+    client = TestClient(app)
+    pause_response = client.post(
+        "/workflow-approval",
+        json={"messages": [{"role": "user", "content": "Refund the order"}]},
+    )
+    assert pause_response.status_code == 200
+
+    resume_response = client.post(
+        "/workflow-approval",
+        json={
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": "approval-1",
+                    "status": "resolved",
+                    "payload": {"accepted": True, "amount": 49.5},
+                }
+            ],
+        },
+    )
+
+    assert resume_response.status_code == 200
+    events = _decode_sse_events(resume_response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert '{"amount": 49.5, "order_id": "12345"}' == "".join(
+        str(event.get("delta", "")) for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
+async def test_workflow_endpoint_hosted_approval_rejects_argument_edits() -> None:
+    """Workflow-hosted approvals remain decision-only because the remote owner controls arguments."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="hosted-call",
+                name="hosted_refund",
+                arguments={"order_id": "12345"},
+                additional_properties={"server_label": "refund-server"},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request, response
+            await ctx.yield_output("Hosted approval handled.")  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type]
+
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-approval")
+    client = TestClient(app)
+    pause_response = client.post(
+        "/workflow-approval",
+        json={"messages": [{"role": "user", "content": "Refund the order"}]},
+    )
+
+    assert pause_response.status_code == 200
+    finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
+    interrupt = _run_finished_interrupts(finished[-1])[0]
+    assert set(interrupt["responseSchema"]["properties"]) == {"approved", "accepted"}
+
+    resume_response = client.post(
+        "/workflow-approval",
+        json={
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": "approval-1",
+                    "status": "resolved",
+                    "payload": {"approved": True, "editedArgs": {"order_id": "54321"}},
+                }
+            ],
+        },
+    )
+
+    assert resume_response.status_code == 200
+    errors = [event for event in _decode_sse_events(resume_response) if event.get("type") == "RUN_ERROR"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "WORKFLOW_RESUME_INVALID_RESPONSE"
+
+
 async def test_add_endpoint_accepts_keepalive_option_for_supported_runners(build_chat_client):
     """Keepalive configuration is accepted at the endpoint seam for every supported runner shape."""
 
@@ -5333,6 +5642,69 @@ async def test_workflow_endpoint_cancelled_resume_clears_persisted_interrupt():
     hydrate_events = _decode_sse_events(hydrate_response)
     assert "outcome" not in hydrate_events[-1]
     assert call_count == 1
+
+
+async def test_workflow_endpoint_cancelled_agent_approval_does_not_block_next_approval() -> None:
+    """Cancelling one workflow-agent approval leaves a later approval resumable."""
+    app = FastAPI()
+
+    def approval_update(approval_id: str, call_id: str) -> AgentResponseUpdate:
+        function_call = Content.from_function_call(
+            call_id=call_id,
+            name="submit_refund",
+            arguments={"order_id": approval_id},
+        )
+        approval_request = Content.from_function_approval_request(id=approval_id, function_call=function_call)
+        return AgentResponseUpdate(contents=[approval_request], role="assistant")
+
+    agent = StubAgent(updates=[approval_update("approval-1", "refund-call-1")])
+    workflow = WorkflowBuilder(start_executor=agent).build()
+    add_agent_framework_fastapi_endpoint(app, workflow, path="/workflow-agent-approval")
+    client = TestClient(app)
+
+    first_pause = client.post(
+        "/workflow-agent-approval",
+        json={"messages": [{"role": "user", "content": "First refund"}]},
+    )
+    assert first_pause.status_code == 200
+    first_finished = [event for event in _decode_sse_events(first_pause) if event.get("type") == "RUN_FINISHED"]
+    assert _run_finished_interrupts(first_finished[-1])[0]["id"] == "approval-1"
+
+    cancelled = client.post(
+        "/workflow-agent-approval",
+        json={
+            "messages": [],
+            "resume": [{"interruptId": "approval-1", "status": "cancelled"}],
+        },
+    )
+    assert cancelled.status_code == 200
+
+    agent.updates = [approval_update("approval-2", "refund-call-2")]
+    second_pause = client.post(
+        "/workflow-agent-approval",
+        json={"messages": [{"role": "user", "content": "Second refund"}]},
+    )
+    assert second_pause.status_code == 200
+    second_finished = [event for event in _decode_sse_events(second_pause) if event.get("type") == "RUN_FINISHED"]
+    assert _run_finished_interrupts(second_finished[-1])[0]["id"] == "approval-2"
+
+    agent.updates = [
+        AgentResponseUpdate(contents=[Content.from_text(text="Second refund completed.")], role="assistant")
+    ]
+    resumed = client.post(
+        "/workflow-agent-approval",
+        json={
+            "messages": [],
+            "resume": [{"interruptId": "approval-2", "status": "resolved", "payload": {"approved": True}}],
+        },
+    )
+
+    assert resumed.status_code == 200
+    events = _decode_sse_events(resumed)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert "Second refund completed." == "".join(
+        str(event.get("delta", "")) for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
 
 
 class _FailingSaveStore(InMemoryAGUIThreadSnapshotStore):

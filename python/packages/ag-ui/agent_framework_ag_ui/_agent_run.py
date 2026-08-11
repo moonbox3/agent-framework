@@ -58,7 +58,9 @@ from ._approval_lifecycle import (
     ApprovalExecutionOwner,
     ApprovalLifecycle,
     ApprovalOccurrence,
+    ApprovalOccurrenceIdentity,
     ApprovalSnapshotReconciliation,
+    ApprovalStatus,
     AuthorizedExecution,
     ClaimRecoveryPolicy,
     DeferredPendingToolTransitionOwner,
@@ -876,7 +878,20 @@ def _register_server_generated_approval_response(
         aliases=[str(response.function_call.call_id)] if response.function_call.call_id else None,
         server_label=_function_call_server_label(response.function_call),
     )
-    if not response.approved or execution_owner is ApprovalExecutionOwner.UNAVAILABLE:
+    if not response.approved:
+        lifecycle.claim_batch(
+            thread_id=thread_id,
+            decisions=[
+                ResumeDecision(
+                    interrupt_id=str(response_id),
+                    accepted=False,
+                    arguments=arguments,
+                    name=response.function_call.name,
+                )
+            ],
+        )
+        return None
+    if execution_owner is ApprovalExecutionOwner.UNAVAILABLE:
         return None
     return lifecycle.claim(
         thread_id=thread_id,
@@ -895,7 +910,7 @@ def _pop_collected_tool_approval_response_messages(
     tools: list[Any] | None,
     *,
     lifecycle: ApprovalLifecycle,
-    authorized_executions: dict[str, AuthorizedExecution] | None = None,
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
 ) -> list[Message]:
     """Pop server-collected auto-approved responses into provider-visible messages."""
     raw_state = session.state.get(_TOOL_APPROVAL_STATE_KEY)
@@ -920,7 +935,7 @@ def _pop_collected_tool_approval_response_messages(
             has_deferred_owner=True,
         )
         if intent is not None and authorized_executions is not None:
-            authorized_executions[intent.identity.call_id] = intent
+            authorized_executions[intent.identity] = intent
         responses.append(response)
 
     state[_COLLECTED_APPROVAL_RESPONSES_KEY] = []
@@ -1056,6 +1071,114 @@ def _json_schema_value_matches(original_value: Any, edited_value: Any) -> bool:
     return True
 
 
+def _canonical_approval_decision(
+    payload_value: Any,
+    *,
+    interrupt_id: str,
+    original_arguments_text: str,
+    server_label: str | None,
+) -> tuple[bool | None, str | None, dict[str, Any] | None, RunErrorEvent | None]:
+    """Validate one approval payload and return its canonical full argument replacement."""
+    payload = _parse_json_object(payload_value)
+    if payload is None:
+        return (
+            None,
+            None,
+            None,
+            RunErrorEvent(
+                message=f"Approval resume for interruptId '{interrupt_id}' must include an object payload.",
+                code="APPROVAL_RESUME_INVALID",
+            ),
+        )
+    accepted = payload.get("approved", payload.get("accepted"))
+    if not isinstance(accepted, bool):
+        return (
+            None,
+            None,
+            None,
+            RunErrorEvent(
+                message=f"Approval resume for interruptId '{interrupt_id}' must include a boolean accepted value.",
+                code="APPROVAL_RESUME_INVALID",
+            ),
+        )
+
+    original_arguments = _parse_json_object(original_arguments_text) or {}
+    direct_edited_arguments = {
+        key: value for key, value in payload.items() if key not in {"accepted", "approved", "editedArgs"}
+    }
+    standard_edited_arguments = payload.get("editedArgs")
+    if standard_edited_arguments is not None:
+        if not isinstance(standard_edited_arguments, dict) or direct_edited_arguments:
+            return (
+                None,
+                None,
+                None,
+                RunErrorEvent(
+                    message=(
+                        f"Approval resume for interruptId '{interrupt_id}' must provide editedArgs as the "
+                        "only edited-argument representation."
+                    ),
+                    code="APPROVAL_RESUME_INVALID_RESPONSE",
+                ),
+            )
+        edited_arguments = cast(dict[str, Any], standard_edited_arguments)
+        if set(edited_arguments) != set(original_arguments):
+            return (
+                None,
+                None,
+                None,
+                RunErrorEvent(
+                    message=(
+                        f"Approval resume for interruptId '{interrupt_id}' must provide editedArgs as a full "
+                        "replacement of the pending tool arguments."
+                    ),
+                    code="APPROVAL_RESUME_INVALID_RESPONSE",
+                ),
+            )
+    else:
+        edited_arguments = direct_edited_arguments
+    if edited_arguments and server_label:
+        return (
+            None,
+            None,
+            None,
+            RunErrorEvent(
+                message=f"Hosted approval resume for interruptId '{interrupt_id}' does not support edited arguments.",
+                code="APPROVAL_RESUME_INVALID_RESPONSE",
+            ),
+        )
+    if not set(edited_arguments).issubset(set(original_arguments)):
+        return (
+            None,
+            None,
+            None,
+            RunErrorEvent(
+                message=f"Approval resume for interruptId '{interrupt_id}' includes unsupported edited arguments.",
+                code="APPROVAL_RESUME_INVALID",
+            ),
+        )
+    for name, edited_value in edited_arguments.items():
+        if not _json_schema_value_matches(original_arguments[name], edited_value):
+            return (
+                None,
+                None,
+                None,
+                RunErrorEvent(
+                    message=(
+                        f"Approval resume for interruptId '{interrupt_id}' has invalid type for edited argument "
+                        f"'{name}'."
+                    ),
+                    code="APPROVAL_RESUME_INVALID_RESPONSE",
+                ),
+            )
+
+    merged_arguments = (
+        dict(edited_arguments) if standard_edited_arguments is not None else {**original_arguments, **edited_arguments}
+    )
+    canonical_arguments = json.dumps(make_json_safe(merged_arguments), sort_keys=True, separators=(",", ":"))
+    return accepted, canonical_arguments, merged_arguments, None
+
+
 def _canonical_approval_resume_messages(
     resume_payload: Any,
     thread_id: str,
@@ -1064,7 +1187,7 @@ def _canonical_approval_resume_messages(
     lifecycle: ApprovalLifecycle,
     tools: list[Any] | None = None,
     has_deferred_owner: bool = False,
-    authorized_executions: dict[str, AuthorizedExecution] | None = None,
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     retained_results: list[Content] | None = None,
     snapshot_reconciliations: list[ApprovalSnapshotReconciliation] | None = None,
 ) -> tuple[list[dict[str, Any]], set[str], set[str], RunErrorEvent | None]:
@@ -1084,12 +1207,6 @@ def _canonical_approval_resume_messages(
                 for interrupt in normalized_interrupts:
                     if interrupt.get("status") != "resolved":
                         break
-                    payload = _parse_json_object(interrupt.get("value"))
-                    if payload is None:
-                        break
-                    accepted = payload.get("approved", payload.get("accepted"))
-                    if not isinstance(accepted, bool):
-                        break
                     interrupt_id = str(interrupt["id"])
                     try:
                         name, retained_arguments = lifecycle.decision_context(
@@ -1098,34 +1215,31 @@ def _canonical_approval_resume_messages(
                         )
                     except KeyError:
                         break
-                    edited_arguments = {
-                        key: value
-                        for key, value in payload.items()
-                        if key not in {"accepted", "approved", "editedArgs"}
-                    }
-                    standard_edited_arguments = payload.get("editedArgs")
-                    canonical_arguments: str | None = None
-                    if isinstance(standard_edited_arguments, dict) and not edited_arguments:
-                        canonical_arguments = json.dumps(
-                            make_json_safe(standard_edited_arguments),
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                    elif edited_arguments:
-                        retained_argument_values = _parse_json_object(retained_arguments)
-                        if retained_argument_values is None:
-                            break
-                        canonical_arguments = json.dumps(
-                            make_json_safe({**retained_argument_values, **edited_arguments}),
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
+                    occurrence = lifecycle.occurrence_for_alias(thread_id=thread_id, interrupt_id=interrupt_id)
+                    original_arguments_text = (
+                        occurrence.decision.original_arguments
+                        if occurrence is not None
+                        and occurrence.decision is not None
+                        and occurrence.decision.original_arguments is not None
+                        else retained_arguments
+                    )
+                    accepted, canonical_arguments, _, validation_error = _canonical_approval_decision(
+                        interrupt.get("value"),
+                        interrupt_id=interrupt_id,
+                        original_arguments_text=original_arguments_text,
+                        server_label=occurrence.server_label if occurrence is not None else None,
+                    )
+                    if validation_error is not None:
+                        return [], handled_ids, cancelled_ids, validation_error
+                    if accepted is None or canonical_arguments is None:
+                        break
                     decisions.append(
                         ResumeDecision(
                             interrupt_id=interrupt_id,
                             accepted=accepted,
                             arguments=canonical_arguments,
                             name=name,
+                            original_arguments=original_arguments_text,
                         )
                     )
                 if len(decisions) == len(normalized_interrupts) and decisions:
@@ -1142,7 +1256,8 @@ def _canonical_approval_resume_messages(
                         )
                     else:
                         for outcome in batch.retained_outcomes:
-                            retained_results.extend(result.content for result in outcome.replayable_results)
+                            if outcome.snapshot_reconciliation.status is ApprovalStatus.SETTLED:
+                                retained_results.extend(result.content for result in outcome.replayable_results)
                         if snapshot_reconciliations is not None:
                             snapshot_reconciliations.extend(batch.snapshot_reconciliations)
                         handled_ids.update(decision.interrupt_id for decision in decisions)
@@ -1209,25 +1324,6 @@ def _canonical_approval_resume_messages(
                 ),
             )
 
-    if cancelled_ids:
-        lifecycle_cancelled_ids = [
-            interrupt_id for interrupt_id in cancelled_ids if entries_by_interrupt_id.get(interrupt_id) is not None
-        ]
-        try:
-            reconciliations = lifecycle.cancel_batch(
-                thread_id=thread_id,
-                interrupt_ids=lifecycle_cancelled_ids,
-            )
-            if snapshot_reconciliations is not None:
-                snapshot_reconciliations.extend(reconciliations)
-        except (KeyError, ValueError) as exc:
-            return (
-                [],
-                handled_ids,
-                cancelled_ids,
-                RunErrorEvent(message=str(exc), code="APPROVAL_RESUME_INVALID"),
-            )
-
     lifecycle_decisions: list[ResumeDecision] = []
     restored_sibling_response_ids: set[str] = set()
     for entry in entries:
@@ -1236,109 +1332,17 @@ def _canonical_approval_resume_messages(
         if pending_entry is None or entry["status"] == "cancelled":
             continue
 
-        payload = _parse_json_object(entry.get("payload"))
-        if payload is None:
-            return (
-                [],
-                handled_ids,
-                cancelled_ids,
-                RunErrorEvent(
-                    message=f"Approval resume for interruptId '{interrupt_id}' must include an object payload.",
-                    code="APPROVAL_RESUME_INVALID",
-                ),
-            )
-        accepted = payload.get("approved", payload.get("accepted"))
-        if not isinstance(accepted, bool):
-            return (
-                [],
-                handled_ids,
-                cancelled_ids,
-                RunErrorEvent(
-                    message=f"Approval resume for interruptId '{interrupt_id}' must include a boolean accepted value.",
-                    code="APPROVAL_RESUME_INVALID",
-                ),
-            )
-
         pending_arguments = _pending_approval_arguments(pending_entry)
-        original_arguments = _parse_json_object(pending_arguments) or {}
-        direct_edited_arguments = {
-            key: value for key, value in payload.items() if key not in {"accepted", "approved", "editedArgs"}
-        }
-        standard_edited_arguments = payload.get("editedArgs")
-        if standard_edited_arguments is not None:
-            if not isinstance(standard_edited_arguments, dict) or direct_edited_arguments:
-                return (
-                    [],
-                    handled_ids,
-                    cancelled_ids,
-                    RunErrorEvent(
-                        message=(
-                            f"Approval resume for interruptId '{interrupt_id}' must provide editedArgs as the "
-                            "only edited-argument representation."
-                        ),
-                        code="APPROVAL_RESUME_INVALID_RESPONSE",
-                    ),
-                )
-            edited_arguments = cast(dict[str, Any], standard_edited_arguments)
-            if set(edited_arguments) != set(original_arguments):
-                return (
-                    [],
-                    handled_ids,
-                    cancelled_ids,
-                    RunErrorEvent(
-                        message=(
-                            f"Approval resume for interruptId '{interrupt_id}' must provide editedArgs as a full "
-                            "replacement of the pending tool arguments."
-                        ),
-                        code="APPROVAL_RESUME_INVALID_RESPONSE",
-                    ),
-                )
-        else:
-            edited_arguments = direct_edited_arguments
-        if edited_arguments and _pending_approval_server_label(pending_entry):
-            return (
-                [],
-                handled_ids,
-                cancelled_ids,
-                RunErrorEvent(
-                    message=(
-                        f"Hosted approval resume for interruptId '{interrupt_id}' does not support edited arguments."
-                    ),
-                    code="APPROVAL_RESUME_INVALID_RESPONSE",
-                ),
-            )
-        if not set(edited_arguments).issubset(set(original_arguments)):
-            return (
-                [],
-                handled_ids,
-                cancelled_ids,
-                RunErrorEvent(
-                    message=f"Approval resume for interruptId '{interrupt_id}' includes unsupported edited arguments.",
-                    code="APPROVAL_RESUME_INVALID",
-                ),
-            )
-        for name, edited_value in edited_arguments.items():
-            original_value = original_arguments[name]
-            if not _json_schema_value_matches(original_value, edited_value):
-                return (
-                    [],
-                    handled_ids,
-                    cancelled_ids,
-                    RunErrorEvent(
-                        message=(
-                            f"Approval resume for interruptId '{interrupt_id}' has invalid type for edited "
-                            f"argument '{name}'."
-                        ),
-                        code="APPROVAL_RESUME_INVALID_RESPONSE",
-                    ),
-                )
-
-        merged_arguments = (
-            dict(edited_arguments)
-            if standard_edited_arguments is not None
-            else {**original_arguments, **edited_arguments}
+        accepted, canonical_arguments, merged_arguments, validation_error = _canonical_approval_decision(
+            entry.get("payload"),
+            interrupt_id=interrupt_id,
+            original_arguments_text=pending_arguments,
+            server_label=_pending_approval_server_label(pending_entry),
         )
-        canonical_arguments = json.dumps(make_json_safe(merged_arguments), sort_keys=True, separators=(",", ":"))
+        if validation_error is not None:
+            return [], handled_ids, cancelled_ids, validation_error
+        if accepted is None or canonical_arguments is None or merged_arguments is None:
+            raise RuntimeError("Validated approval decision is missing canonical values.")
         lifecycle_decisions.append(
             ResumeDecision(
                 interrupt_id=interrupt_id,
@@ -1406,15 +1410,40 @@ def _canonical_approval_resume_messages(
                     "arguments": make_json_safe(function_call.parse_arguments() or {}),
                 }
             )
-        messages.append({"role": "user", "function_approvals": function_approvals})
+        messages.append(
+            {
+                "id": f"approval-response-{interrupt_id}",
+                "role": "user",
+                "function_approvals": function_approvals,
+            }
+        )
 
+    lifecycle_cancelled_ids = [
+        interrupt_id for interrupt_id in cancelled_ids if entries_by_interrupt_id.get(interrupt_id) is not None
+    ]
     if authorized_executions is not None:
         try:
-            intents = lifecycle.claim_batch(thread_id=thread_id, decisions=lifecycle_decisions)
+            intents = lifecycle.resolve_batch(
+                thread_id=thread_id,
+                decisions=lifecycle_decisions,
+                cancelled_interrupt_ids=lifecycle_cancelled_ids,
+            )
             if snapshot_reconciliations is not None:
                 snapshot_reconciliations.extend(intents.snapshot_reconciliations)
             for intent in intents:
-                authorized_executions[intent.identity.call_id] = intent
+                authorized_executions[intent.identity] = intent
+        except (KeyError, ValueError) as exc:
+            return (
+                [],
+                handled_ids,
+                cancelled_ids,
+                RunErrorEvent(message=str(exc), code="APPROVAL_RESUME_INVALID"),
+            )
+    elif lifecycle_cancelled_ids:
+        try:
+            reconciliations = lifecycle.cancel_batch(thread_id=thread_id, interrupt_ids=lifecycle_cancelled_ids)
+            if snapshot_reconciliations is not None:
+                snapshot_reconciliations.extend(reconciliations)
         except (KeyError, ValueError) as exc:
             return (
                 [],
@@ -1435,9 +1464,9 @@ async def _resolve_approval_responses(
     validated_approved_responses: list[Content] | None = None,
     *,
     lifecycle: ApprovalLifecycle,
-    authorized_executions: dict[str, AuthorizedExecution] | None = None,
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     forwarded_executions: (
-        dict[str, tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]] | None
+        dict[str, list[tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]]] | None
     ) = None,
 ) -> list[Content]:
     """Execute approved function calls and replace approval content with results.
@@ -1476,6 +1505,7 @@ async def _resolve_approval_responses(
     valid_response_content_ids = set()
     pending_local_response_content_ids = set()
     pending_response_groups: dict[object, tuple[ApprovalOccurrence, list[Content]]] = {}
+    intents_by_response_content_id: dict[int, AuthorizedExecution] = {}
     for response in approval_responses:
         resp_id = response.id
         function_call_id = response.function_call.call_id if response.function_call else None
@@ -1558,11 +1588,12 @@ async def _resolve_approval_responses(
             and primary_response.function_call is not None
         ):
             call_id = primary_response.function_call.call_id or primary_response.id or ""
-            intent = authorized_executions.get(call_id)
+            intent = authorized_executions.get(pending_entry.identity)
             if intent is None:
                 logger.warning("Approval remains pending because no transition owner can act for call_id=%s.", call_id)
                 response_content_ids_to_strip.add(id(primary_response))
                 continue
+            intents_by_response_content_id[id(primary_response)] = intent
         valid_response_content_ids.add(id(primary_response))
         if (
             primary_response.approved
@@ -1608,7 +1639,7 @@ async def _resolve_approval_responses(
         for approval in validated_forwarded_approvals:
             function_call = approval.function_call
             call_id = (function_call.call_id if function_call else None) or approval.id or ""
-            intent = authorized_executions.get(call_id)
+            intent = intents_by_response_content_id.get(id(approval))
             if intent is None:
                 logger.warning("Skipping hosted approval without lifecycle authority for call_id=%s.", call_id)
                 continue
@@ -1625,7 +1656,7 @@ async def _resolve_approval_responses(
             forwarded = await forwarded_owner.forward(intent, lifecycle=lifecycle)
             if len(forwarded) != 1:
                 raise RuntimeError("Hosted transition owner did not forward exactly one approval decision.")
-            forwarded_executions[call_id] = (forwarded_owner, intent, forwarded[0])
+            forwarded_executions.setdefault(call_id, []).append((forwarded_owner, intent, forwarded[0]))
 
     fcc_todo = _collect_approval_responses(messages)
     if valid_response_content_ids is not None:
@@ -1647,7 +1678,7 @@ async def _resolve_approval_responses(
     for approval in approved_responses:
         function_call = approval.function_call
         call_id = (function_call.call_id if function_call else None) or approval.id or ""
-        intent = authorized_executions.get(call_id) if authorized_executions is not None else None
+        intent = intents_by_response_content_id.get(id(approval))
         if intent is None or intent.owner is not ApprovalExecutionOwner.LOCAL:
             continue
         static_approved.append(approval)
@@ -1664,7 +1695,7 @@ async def _resolve_approval_responses(
         for approval in static_approved:
             function_call = approval.function_call
             call_id = (function_call.call_id if function_call else None) or approval.id or ""
-            intent = authorized_executions.get(call_id)
+            intent = intents_by_response_content_id.get(id(approval))
             if intent is None:
                 logger.warning("Skipping local approval without lifecycle authority for call_id=%s.", call_id)
                 approved_function_result_groups.append([])
@@ -2236,8 +2267,8 @@ async def run_agent_stream(
             current_state=flow.current_state,
         )
 
-    authorized_executions: dict[str, AuthorizedExecution] = {}
-    forwarded_executions: dict[str, tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]] = {}
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] = {}
+    forwarded_executions: dict[str, list[tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]]] = {}
     retained_approval_results: list[Content] = []
     approval_snapshot_reconciliations: list[ApprovalSnapshotReconciliation] = []
     client_tools = convert_agui_tools_to_agent_framework(input_data.get("tools"))
@@ -2392,7 +2423,7 @@ async def run_agent_stream(
         if (tool := execution_tool_map.get(intent.name)) is None or getattr(tool, "declaration_only", False)
     ]
     if unavailable_local_intents:
-        for intent in local_intents:
+        for intent in authorized_executions.values():
             approval_state_store.lifecycle.release_claim(intent, policy=ClaimRecoveryPolicy.SAFE_TO_RETRY)
         unavailable_names = ", ".join(sorted({intent.name for intent in unavailable_local_intents}))
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
@@ -2536,9 +2567,12 @@ async def run_agent_stream(
                 if (
                     content_type == "function_result"
                     and content.call_id
-                    and (forwarded := forwarded_executions.pop(content.call_id, None)) is not None
+                    and (forwarded_queue := forwarded_executions.get(content.call_id))
                     and approval_state_store is not None
                 ):
+                    forwarded = forwarded_queue.pop(0)
+                    if not forwarded_queue:
+                        forwarded_executions.pop(content.call_id, None)
                     owner, intent, _ = forwarded
                     owner.record_outcome(intent, [content], lifecycle=approval_state_store.lifecycle)
 
@@ -2598,11 +2632,12 @@ async def run_agent_stream(
         stream_completed = True
     finally:
         if approval_state_store is not None:
-            for owner, intent, forwarded_approval in forwarded_executions.values():
-                if stream_completed:
-                    owner.record_outcome(intent, [forwarded_approval], lifecycle=approval_state_store.lifecycle)
-                else:
-                    approval_state_store.lifecycle.recover_execution(intent, owner=intent.owner)
+            for queued_executions in forwarded_executions.values():
+                for owner, intent, forwarded_approval in queued_executions:
+                    if stream_completed:
+                        owner.record_outcome(intent, [forwarded_approval], lifecycle=approval_state_store.lifecycle)
+                    else:
+                        approval_state_store.lifecycle.recover_execution(intent, owner=intent.owner)
             forwarded_executions.clear()
 
     if flow.waiting_for_approval and isinstance(stream, ResponseStream):

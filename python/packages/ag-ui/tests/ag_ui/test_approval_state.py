@@ -2,6 +2,10 @@
 
 """Tests for server-side AG-UI approval state storage."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from time import sleep
+
 import pytest
 
 from agent_framework_ag_ui._approval_lifecycle import ApprovalCapacityError, ApprovalExecutionOwner
@@ -83,3 +87,29 @@ def test_approval_state_store_does_not_evict_active_middleware_state() -> None:
 
     assert store.get_tool_approval_state("thread-1") == {"call_id": "call-1"}
     assert store.get_tool_approval_state("thread-2") is None
+
+
+def test_approval_state_store_enforces_capacity_across_concurrent_first_writes() -> None:
+    """Concurrent first writes cannot reserve more middleware slots than configured."""
+    store = InMemoryAGUIApprovalStateStore(max_entries=1)
+    start = Barrier(2)
+
+    class SlowCopy:
+        def __deepcopy__(self, memo: dict[int, object]) -> "SlowCopy":
+            del memo
+            sleep(0.05)
+            return self
+
+    def write(thread_id: str) -> str:
+        start.wait(timeout=2)
+        try:
+            store.set_tool_approval_state(thread_id, {"call_id": thread_id, "slow": SlowCopy()})
+        except ApprovalCapacityError:
+            return "rejected"
+        return "stored"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(write, ["thread-1", "thread-2"]))
+
+    assert sorted(outcomes) == ["rejected", "stored"]
+    assert sum(store.has_tool_approval_state(thread_id) for thread_id in ["thread-1", "thread-2"]) == 1

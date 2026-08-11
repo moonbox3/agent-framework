@@ -35,7 +35,13 @@ from agent_framework_ag_ui._agent_run import (
     _should_suppress_intermediate_snapshot,
     run_agent_stream,
 )
-from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner, ApprovalLifecycle
+from agent_framework_ag_ui._approval_lifecycle import (
+    ApprovalExecutionOwner,
+    ApprovalLifecycle,
+    ApprovalStatus,
+    ResumeDecision,
+)
+from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore
 from agent_framework_ag_ui._run_common import (
     FlowState,
     _build_run_finished_event,
@@ -937,6 +943,34 @@ def test_emit_approval_request_populates_interrupt_metadata():
     }
 
 
+def test_emit_approval_request_keeps_protocol_fields_when_tool_arguments_use_reserved_names() -> None:
+    """Reserved protocol fields remain controls while editedArgs carries colliding tool arguments."""
+    flow = FlowState(message_id="msg-1")
+    function_call = Content.from_function_call(
+        call_id="call_reserved",
+        name="write_doc",
+        arguments={"approved": "draft", "accepted": 1, "editedArgs": {"value": True}},
+    )
+    approval_content = Content.from_function_approval_request(id="approval_reserved", function_call=function_call)
+
+    _emit_approval_request(approval_content, flow)
+
+    properties = flow.interrupts[0]["responseSchema"]["properties"]
+    assert properties["approved"]["type"] == "boolean"
+    assert properties["accepted"]["type"] == "boolean"
+    assert properties["editedArgs"] == {
+        "type": "object",
+        "description": "Full replacement of the tool arguments. Not merged.",
+        "properties": {
+            "approved": {"type": "string"},
+            "accepted": {"type": "integer"},
+            "editedArgs": {"type": "object", "additionalProperties": True},
+        },
+        "required": ["approved", "accepted", "editedArgs"],
+        "additionalProperties": False,
+    }
+
+
 def test_emit_approval_request_accumulates_multiple_interrupts():
     """Multiple approval requests in the same turn should accumulate in flow.interrupts."""
     flow = FlowState(message_id="msg-1")
@@ -1074,6 +1108,167 @@ def test_canonical_approval_resume_does_not_mutate_arguments_until_batch_validat
     assert error is not None
     assert error.code == "APPROVAL_RESUME_INVALID"
     assert pending_entry.arguments == '{"city":"Seattle"}'
+
+
+def test_canonical_approval_resume_does_not_cancel_until_resolved_siblings_validate() -> None:
+    """A malformed resolved sibling leaves every approval in the batch pending."""
+    lifecycle = ApprovalLifecycle()
+    cancelled = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-weather",
+        interrupt_id="call_a",
+        call_id="call_a",
+        name="get_weather",
+        arguments='{"city":"Seattle"}',
+    )
+    resolved = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-weather",
+        interrupt_id="call_b",
+        call_id="call_b",
+        name="get_weather",
+        arguments='{"city":"Portland"}',
+    )
+
+    _, _, _, error = _canonical_approval_resume_messages(
+        [
+            {"interruptId": "call_a", "status": "cancelled"},
+            {"interruptId": "call_b", "status": "resolved", "payload": "not an object"},
+        ],
+        "thread-weather",
+        lifecycle=lifecycle,
+    )
+
+    assert error is not None
+    assert error.code == "APPROVAL_RESUME_INVALID"
+    assert lifecycle.get(cancelled.identity).status is ApprovalStatus.PENDING
+    assert lifecycle.get(resolved.identity).status is ApprovalStatus.PENDING
+
+
+def test_terminal_approval_retry_validates_standard_edited_arguments() -> None:
+    """A terminal retry cannot bypass the pending path's editedArgs contract."""
+    lifecycle = ApprovalLifecycle()
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-weather",
+        interrupt_id="call_a",
+        call_id="call_a",
+        name="get_weather",
+        arguments='{"city":"Seattle"}',
+    )
+    lifecycle.claim_batch(
+        thread_id="thread-weather",
+        decisions=[
+            ResumeDecision(
+                interrupt_id="call_a",
+                accepted=False,
+                arguments='{"city":"Seattle"}',
+                name="get_weather",
+                original_arguments='{"city":"Seattle"}',
+            )
+        ],
+    )
+    retained_results: list[Content] = []
+
+    _, handled_ids, _, error = _canonical_approval_resume_messages(
+        [
+            {
+                "interruptId": "call_a",
+                "status": "resolved",
+                "payload": {"approved": False, "editedArgs": "not an object"},
+            }
+        ],
+        "thread-weather",
+        lifecycle=lifecycle,
+        retained_results=retained_results,
+    )
+
+    assert handled_ids == set()
+    assert error is not None
+    assert error.code == "APPROVAL_RESUME_INVALID_RESPONSE"
+    assert retained_results == []
+
+
+def test_terminal_rejection_retry_does_not_project_a_live_tool_result() -> None:
+    """An identical rejected retry has the same no-result projection as the original rejection."""
+    lifecycle = ApprovalLifecycle()
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-weather",
+        interrupt_id="call_a",
+        call_id="call_a",
+        name="get_weather",
+        arguments='{"city":"Seattle"}',
+    )
+    decision = ResumeDecision(
+        interrupt_id="call_a",
+        accepted=False,
+        arguments='{"city":"Seattle"}',
+        name="get_weather",
+        original_arguments='{"city":"Seattle"}',
+    )
+    lifecycle.claim_batch(thread_id="thread-weather", decisions=[decision])
+    retained_results: list[Content] = []
+
+    _, handled_ids, _, error = _canonical_approval_resume_messages(
+        [
+            {
+                "interruptId": "call_a",
+                "status": "resolved",
+                "payload": {"approved": False},
+            }
+        ],
+        "thread-weather",
+        lifecycle=lifecycle,
+        retained_results=retained_results,
+    )
+
+    assert error is None
+    assert handled_ids == {"call_a"}
+    assert retained_results == []
+
+
+async def test_run_settles_server_collected_rejection_in_lifecycle() -> None:
+    """A rejection restored from approval middleware state no longer remains pending."""
+    function_call = Content.from_function_call(
+        call_id="call_rejected",
+        name="write_record",
+        arguments={"value": "draft"},
+    )
+    response = Content.from_function_approval_response(
+        approved=False,
+        id="approval_rejected",
+        function_call=function_call,
+    )
+    store = InMemoryAGUIApprovalStateStore()
+    store.set_tool_approval_state(
+        "thread-server-rejection",
+        {"collected_approval_responses": [response.to_dict()]},
+    )
+    agent = StubAgent(updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")])
+
+    events = [
+        event
+        async for event in run_agent_stream(
+            {
+                "runId": "run-server-rejection",
+                "threadId": "thread-server-rejection",
+                "messages": [{"role": "user", "content": "Continue"}],
+            },
+            agent,
+            AgentConfig(),
+            approval_state_store=store,
+        )
+    ]
+
+    assert not [event for event in events if event.type == "RUN_ERROR"]
+    occurrence = store.lifecycle.occurrence_for_alias(
+        thread_id="thread-server-rejection",
+        interrupt_id="approval_rejected",
+    )
+    assert occurrence is not None
+    assert occurrence.status is ApprovalStatus.REJECTED
+    assert store.lifecycle.pending_interrupt_ids(thread_id="thread-server-rejection") == set()
 
 
 def test_canonical_hosted_approval_resume_rejects_edited_arguments_without_mutating_pending() -> None:

@@ -38,11 +38,13 @@ def _serialized_by_batch(method: Callable[..., _ReturnT]) -> Callable[..., _Retu
         if not isinstance(thread_id, str):
             raise TypeError("Serialized approval transitions require a thread_id.")
         decisions = kwargs.get("decisions")
-        interrupt_ids = (
+        decision_interrupt_ids = (
             [decision.interrupt_id for decision in decisions]
             if isinstance(decisions, list) and all(isinstance(decision, ResumeDecision) for decision in decisions)
-            else kwargs.get("interrupt_ids")
+            else []
         )
+        cancellation_interrupt_ids = kwargs.get("cancelled_interrupt_ids", kwargs.get("interrupt_ids", []))
+        interrupt_ids = [*decision_interrupt_ids, *cancellation_interrupt_ids]
         if not isinstance(interrupt_ids, list) or not all(
             isinstance(interrupt_id, str) for interrupt_id in interrupt_ids
         ):
@@ -366,43 +368,49 @@ class ApprovalLifecycle:
 
     def get(self, identity: ApprovalOccurrenceIdentity) -> ApprovalOccurrence:
         """Return server-owned state for a registered occurrence."""
-        self._purge_expired_terminal()
-        return self._occurrences[identity]
+        with self._index_lock:
+            self._purge_expired_terminal()
+            return self._occurrences[identity]
 
     def decision_context(self, *, thread_id: str, interrupt_id: str) -> tuple[str, str]:
         """Return canonical server-owned call data needed to normalize a typed retry."""
-        self._purge_expired_terminal()
-        key = (thread_id, interrupt_id)
-        identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt[key]
-        occurrence = self._occurrences[identity]
-        return occurrence.name, occurrence.arguments
+        with self._index_lock:
+            self._purge_expired_terminal()
+            key = (thread_id, interrupt_id)
+            identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt[key]
+            occurrence = self._occurrences[identity]
+            return occurrence.name, occurrence.arguments
 
     def pending_occurrence(self, *, thread_id: str, interrupt_id: str) -> ApprovalOccurrence | None:
         """Return pending server-owned state for one trusted interrupt alias."""
-        self._purge_expired_terminal()
-        identity = self._pending_by_interrupt.get((thread_id, interrupt_id))
-        return self._occurrences[identity] if identity is not None else None
+        with self._index_lock:
+            self._purge_expired_terminal()
+            identity = self._pending_by_interrupt.get((thread_id, interrupt_id))
+            return self._occurrences[identity] if identity is not None else None
 
     def occurrence_for_alias(self, *, thread_id: str, interrupt_id: str) -> ApprovalOccurrence | None:
         """Return retained server-owned state for one trusted interrupt alias."""
-        self._purge_expired_terminal()
-        key = (thread_id, interrupt_id)
-        identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt.get(key)
-        return self._occurrences[identity] if identity is not None else None
+        with self._index_lock:
+            self._purge_expired_terminal()
+            key = (thread_id, interrupt_id)
+            identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt.get(key)
+            return self._occurrences[identity] if identity is not None else None
 
     def occurrences_for_thread(self, *, thread_id: str) -> tuple[ApprovalOccurrence, ...]:
         """Return retained occurrences owned by one scoped thread."""
-        self._purge_expired_terminal()
-        return tuple(occurrence for occurrence in self._occurrences.values() if thread_id in occurrence.thread_ids)
+        with self._index_lock:
+            self._purge_expired_terminal()
+            return tuple(occurrence for occurrence in self._occurrences.values() if thread_id in occurrence.thread_ids)
 
     def pending_interrupt_ids(self, *, thread_id: str) -> set[str]:
         """Return canonical interrupt identities with pending authority for one thread."""
-        self._purge_expired_terminal()
-        return {
-            occurrence.identity.interrupt_id
-            for occurrence in self._occurrences.values()
-            if thread_id in occurrence.thread_ids and occurrence.status is ApprovalStatus.PENDING
-        }
+        with self._index_lock:
+            self._purge_expired_terminal()
+            return {
+                occurrence.identity.interrupt_id
+                for occurrence in self._occurrences.values()
+                if thread_id in occurrence.thread_ids and occurrence.status is ApprovalStatus.PENDING
+            }
 
     def reconcile_snapshot(
         self,
@@ -411,24 +419,25 @@ class ApprovalLifecycle:
         interrupt_ids: list[str],
     ) -> tuple[ApprovalSnapshotReconciliation, ...]:
         """Describe which stored approval controls remain actionable."""
-        self._purge_expired_terminal()
-        reconciliations: list[ApprovalSnapshotReconciliation] = []
-        for interrupt_id in interrupt_ids:
-            key = (thread_id, interrupt_id)
-            identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt.get(key)
-            if identity is None:
-                reconciliations.append(
-                    ApprovalSnapshotReconciliation(
-                        interrupt_id=interrupt_id,
-                        identity=None,
-                        status=None,
-                        retire_interrupt=True,
+        with self._index_lock:
+            self._purge_expired_terminal()
+            reconciliations: list[ApprovalSnapshotReconciliation] = []
+            for interrupt_id in interrupt_ids:
+                key = (thread_id, interrupt_id)
+                identity = self._pending_by_interrupt.get(key) or self._terminal_by_interrupt.get(key)
+                if identity is None:
+                    reconciliations.append(
+                        ApprovalSnapshotReconciliation(
+                            interrupt_id=interrupt_id,
+                            identity=None,
+                            status=None,
+                            retire_interrupt=True,
+                        )
                     )
-                )
-                continue
-            occurrence = self._occurrences[identity]
-            reconciliations.append(self._snapshot_reconciliation(occurrence))
-        return tuple(reconciliations)
+                    continue
+                occurrence = self._occurrences[identity]
+                reconciliations.append(self._snapshot_reconciliation(occurrence))
+            return tuple(reconciliations)
 
     @staticmethod
     def _snapshot_reconciliation(occurrence: ApprovalOccurrence) -> ApprovalSnapshotReconciliation:
@@ -554,6 +563,32 @@ class ApprovalLifecycle:
         )
 
     @_serialized_by_batch
+    def resolve_batch(
+        self,
+        *,
+        thread_id: str,
+        decisions: list[ResumeDecision],
+        cancelled_interrupt_ids: list[str],
+    ) -> ApprovalBatchDecision:
+        """Atomically validate and apply resolved and cancelled decisions for one resume batch."""
+        self._purge_expired_terminal()
+        cancelled_occurrences, retained_cancellations = self._validate_cancellations(
+            thread_id=thread_id,
+            interrupt_ids=cancelled_interrupt_ids,
+        )
+        decision_batch = self.claim_batch(thread_id=thread_id, decisions=decisions)
+        cancellation_reconciliations = self._cancel_occurrences(cancelled_occurrences)
+        return ApprovalBatchDecision(
+            authorized_executions=decision_batch.authorized_executions,
+            retained_outcomes=decision_batch.retained_outcomes,
+            snapshot_reconciliations=(
+                *decision_batch.snapshot_reconciliations,
+                *retained_cancellations,
+                *cancellation_reconciliations,
+            ),
+        )
+
+    @_serialized_by_batch
     def cancel_batch(
         self,
         *,
@@ -562,6 +597,19 @@ class ApprovalLifecycle:
     ) -> tuple[ApprovalSnapshotReconciliation, ...]:
         """Validate and cancel selected occurrences without changing their siblings."""
         self._purge_expired_terminal()
+        occurrences, reconciliations = self._validate_cancellations(
+            thread_id=thread_id,
+            interrupt_ids=interrupt_ids,
+        )
+        return (*reconciliations, *self._cancel_occurrences(occurrences))
+
+    def _validate_cancellations(
+        self,
+        *,
+        thread_id: str,
+        interrupt_ids: list[str],
+    ) -> tuple[list[ApprovalOccurrence], tuple[ApprovalSnapshotReconciliation, ...]]:
+        """Validate cancellations without mutating lifecycle state."""
         occurrences: list[ApprovalOccurrence] = []
         reconciliations: list[ApprovalSnapshotReconciliation] = []
         seen_interrupt_ids: set[str] = set()
@@ -584,6 +632,14 @@ class ApprovalLifecycle:
                 raise ValueError(f"Approval occurrence is not pending: {occurrence.status}.")
             occurrences.append(occurrence)
 
+        return occurrences, tuple(reconciliations)
+
+    def _cancel_occurrences(
+        self,
+        occurrences: list[ApprovalOccurrence],
+    ) -> tuple[ApprovalSnapshotReconciliation, ...]:
+        """Commit previously validated cancellations while their batch locks are held."""
+        reconciliations: list[ApprovalSnapshotReconciliation] = []
         for occurrence in occurrences:
             occurrence.status = ApprovalStatus.CANCELLED
             self._remove_pending_aliases(occurrence)

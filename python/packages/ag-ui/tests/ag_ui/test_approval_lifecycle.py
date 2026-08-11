@@ -436,6 +436,65 @@ def test_same_thread_transitions_serialize_without_blocking_an_independent_threa
             conflicting_claim.result(timeout=2)
 
 
+def test_terminal_purge_cannot_mutate_indexes_during_thread_snapshot_read() -> None:
+    """Thread-scoped lifecycle reads remain consistent while another operation purges terminal state."""
+    now = 0.0
+    lifecycle = ApprovalLifecycle(terminal_retention_seconds=1, clock=lambda: now)
+    terminal = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="terminal-thread",
+        interrupt_id="terminal-approval",
+        call_id="terminal-call",
+        name="write_record",
+        arguments="{}",
+    )
+    lifecycle.cancel_batch(thread_id="terminal-thread", interrupt_ids=["terminal-approval"])
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="pending-thread",
+        interrupt_id="pending-approval",
+        call_id="pending-call",
+        name="write_record",
+        arguments="{}",
+    )
+    read_entered = Event()
+    release_read = Event()
+
+    class SlowThreadId(str):
+        def __eq__(self, other: object) -> bool:
+            read_entered.set()
+            assert release_read.wait(timeout=2)
+            return super().__eq__(other)
+
+        __hash__ = str.__hash__
+
+    def read_occurrences() -> tuple[object, ...]:
+        return lifecycle.occurrences_for_thread(thread_id=SlowThreadId("unrelated-thread"))
+
+    def purge_during_read() -> None:
+        nonlocal now
+        now = 2.0
+        lifecycle.register(
+            owner=ApprovalExecutionOwner.LOCAL,
+            thread_id="new-thread",
+            interrupt_id="new-approval",
+            call_id="new-call",
+            name="write_record",
+            arguments="{}",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        read = executor.submit(read_occurrences)
+        assert read_entered.wait(timeout=2)
+        purge = executor.submit(purge_during_read)
+        release_read.set()
+        assert read.result(timeout=2) == ()
+        purge.result(timeout=2)
+
+    with pytest.raises(KeyError):
+        lifecycle.get(terminal.identity)
+
+
 async def test_hosted_approval_is_forwarded_only_by_its_owner_and_settles_same_occurrence() -> None:
     """Hosted authority cannot execute locally and records forwarding against its occurrence."""
     lifecycle = ApprovalLifecycle()

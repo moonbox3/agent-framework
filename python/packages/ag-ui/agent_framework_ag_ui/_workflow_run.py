@@ -939,6 +939,7 @@ async def run_workflow_stream(
     pending_before_run = await _pending_request_events(workflow)
     pending_interrupt_ids = _pending_workflow_interrupt_ids(pending_before_run)
     resume_entries: list[dict[str, Any]] = []
+    cancelled_request_ids: set[str] = set()
     if pending_interrupt_ids:
         resume_entries, contract_error, contract_code = _resume_contract_error(
             resume_payload,
@@ -960,13 +961,6 @@ async def run_workflow_stream(
         cancelled_request_ids = {
             str(entry["interrupt_id"]) for entry in resume_entries if entry.get("status") == "cancelled"
         }
-        if cancelled_request_ids:
-            _consume_cancelled_workflow_requests(workflow, resume_entries)
-            pending_before_run = {
-                request_id: request_event
-                for request_id, request_event in pending_before_run.items()
-                if str(getattr(request_event, "request_id", None) or request_id) not in cancelled_request_ids
-            }
 
     resume_responses = (
         _resume_entries_to_workflow_responses(resume_entries)
@@ -984,6 +978,13 @@ async def run_workflow_stream(
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
         yield response_error
         return
+    if cancelled_request_ids:
+        _consume_cancelled_workflow_requests(workflow, resume_entries)
+        pending_before_run = {
+            request_id: request_event
+            for request_id, request_event in pending_before_run.items()
+            if str(getattr(request_event, "request_id", None) or request_id) not in cancelled_request_ids
+        }
     pending_interrupts = _interrupts_from_pending_requests(pending_before_run)
 
     if not responses and pending_before_run:

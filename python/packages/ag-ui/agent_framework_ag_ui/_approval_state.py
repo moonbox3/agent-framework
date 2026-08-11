@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+from threading import RLock
 from typing import Any
 
 from ._approval_lifecycle import ApprovalCapacityError, ApprovalExecutionOwner, ApprovalLifecycle
@@ -59,6 +60,7 @@ class InMemoryAGUIApprovalStateStore:
         if max_entries < 1:
             raise ValueError("max_entries must be greater than 0.")
         self.max_entries = max_entries
+        self._lock = RLock()
         self._tool_approval_states: dict[str, dict[str, Any]] = {}
         self.lifecycle = ApprovalLifecycle(
             max_entries=max_entries,
@@ -93,19 +95,23 @@ class InMemoryAGUIApprovalStateStore:
 
     def set_tool_approval_state(self, thread_id: str, state: dict[str, Any]) -> None:
         """Store approval middleware state without evicting another active thread."""
-        if thread_id not in self._tool_approval_states and len(self._tool_approval_states) >= self.max_entries:
-            raise ApprovalCapacityError("Approval state capacity is exhausted by protected occurrences.")
-        self._tool_approval_states[thread_id] = copy.deepcopy(state)
+        with self._lock:
+            if thread_id not in self._tool_approval_states and len(self._tool_approval_states) >= self.max_entries:
+                raise ApprovalCapacityError("Approval state capacity is exhausted by protected occurrences.")
+            self._tool_approval_states[thread_id] = copy.deepcopy(state)
 
     def get_tool_approval_state(self, thread_id: str) -> dict[str, Any] | None:
         """Return an isolated copy of server-owned middleware approval state."""
-        state = self._tool_approval_states.get(thread_id)
-        return copy.deepcopy(state) if state is not None else None
+        with self._lock:
+            state = self._tool_approval_states.get(thread_id)
+            return copy.deepcopy(state) if state is not None else None
 
     def delete_tool_approval_state(self, thread_id: str) -> None:
         """Delete server-owned middleware approval state for one scoped thread."""
-        self._tool_approval_states.pop(thread_id, None)
+        with self._lock:
+            self._tool_approval_states.pop(thread_id, None)
 
     def has_tool_approval_state(self, thread_id: str) -> bool:
         """Return whether middleware approval state exists for one scoped thread."""
-        return thread_id in self._tool_approval_states
+        with self._lock:
+            return thread_id in self._tool_approval_states

@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 from agent_framework import AgentResponseUpdate, Content, FunctionTool
+from agent_framework.exceptions import UserInputRequiredException
 from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ignore[reportMissingImports]
 
 from agent_framework_ag_ui._agent import AgentConfig
@@ -86,6 +87,37 @@ async def _run_resume(
     return events
 
 
+async def _run_custom_approval(tool: FunctionTool) -> tuple[list[Any], StubAgent]:
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")],
+        default_options={"tools": [tool]},
+    )
+    store = InMemoryAGUIApprovalStateStore()
+    store.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_ids=["thread-custom"],
+        name=tool.name,
+        arguments="{}",
+        request_id="approval-custom",
+        interrupt_id="call-custom",
+    )
+    events = [
+        event
+        async for event in run_agent_stream(
+            {
+                "thread_id": "thread-custom",
+                "run_id": "resume-custom",
+                "messages": [{"role": "user", "content": "Continue"}],
+                "resume": [{"interruptId": "call-custom", "status": "resolved", "payload": {"approved": True}}],
+            },
+            agent,
+            AgentConfig(),
+            approval_state_store=store,
+        )
+    ]
+    return events, agent
+
+
 async def test_approved_call_emits_one_live_result_under_original_identity() -> None:
     executions: list[str] = []
 
@@ -128,3 +160,71 @@ async def test_mixed_batch_preserves_approved_result_identity_and_order() -> Non
     results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
     assert executions == ["Seattle"]
     assert [(event.tool_call_id, event.content) for event in results] == [("call-seattle", "Sunny in Seattle")]
+
+
+async def test_approval_follow_up_group_remains_in_history_without_live_tool_result() -> None:
+    """Approval-time user-input requests remain grouped without becoming terminal tool results."""
+
+    def request_consent() -> str:
+        raise UserInputRequiredException(
+            contents=[
+                Content.from_oauth_consent_request(consent_link="https://example.com/first"),
+                Content.from_oauth_consent_request(consent_link="https://example.com/second"),
+            ]
+        )
+
+    events, agent = await _run_custom_approval(
+        FunctionTool(name="request_consent", description="Request consent", func=request_consent)
+    )
+
+    assert not [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    requests = [
+        content
+        for message in agent.messages_received
+        for content in message.contents
+        if isinstance(content, Content) and content.user_input_request
+    ]
+    assert [request.consent_link for request in requests] == [
+        "https://example.com/first",
+        "https://example.com/second",
+    ]
+
+
+async def test_approval_execution_failure_emits_one_terminal_error_result() -> None:
+    """An approved tool failure produces one deterministic terminal result."""
+
+    def fail() -> str:
+        raise RuntimeError("secret failure detail")
+
+    events, _ = await _run_custom_approval(FunctionTool(name="fail", description="Fail", func=fail))
+
+    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    assert [(event.tool_call_id, event.content) for event in results] == [("call-custom", "Error: Function failed.")]
+
+
+async def test_no_approval_path_emits_no_approval_specific_duplicate_result() -> None:
+    """An ordinary provider tool result is projected once without approval bookkeeping."""
+    agent = StubAgent(
+        updates=[
+            AgentResponseUpdate(
+                contents=[Content.from_function_result(call_id="call-ordinary", result="ordinary result")],
+                role="tool",
+            )
+        ]
+    )
+
+    events = [
+        event
+        async for event in run_agent_stream(
+            {
+                "thread_id": "thread-ordinary",
+                "run_id": "run-ordinary",
+                "messages": [{"role": "user", "content": "Run it"}],
+            },
+            agent,
+            AgentConfig(),
+        )
+    ]
+
+    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    assert [(event.tool_call_id, event.content) for event in results] == [("call-ordinary", "ordinary result")]

@@ -47,7 +47,7 @@ from agent_framework_ag_ui import (
     add_agent_framework_fastapi_endpoint,
 )
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
-from agent_framework_ag_ui._approval_lifecycle import ApprovalLifecycle
+from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner, ApprovalLifecycle, ApprovalStatus
 from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore, approval_state_thread_id
 from agent_framework_ag_ui._workflow import AgentFrameworkWorkflow
 
@@ -1807,6 +1807,120 @@ def _build_weather_approval_endpoint(
 
     agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
     return client, agent, executed_cities
+
+
+async def test_endpoint_agent_approval_batch_keeps_distinct_occurrences_for_reused_call_id() -> None:
+    """Unique interrupts sharing a provider call ID each execute and settle exactly once."""
+    executed: list[str] = []
+
+    def first_tool() -> str:
+        executed.append("first")
+        return "first result"
+
+    def second_tool() -> str:
+        executed.append("second")
+        return "second result"
+
+    tools = [
+        FunctionTool(name="first_tool", description="First", func=first_tool),
+        FunctionTool(name="second_tool", description="Second", func=second_tool),
+    ]
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")],
+        default_options={"tools": tools},
+    )
+    wrapped_agent = AgentFrameworkAgent(agent=agent, require_confirmation=False)
+    lifecycle = wrapped_agent._approval_state_store.lifecycle
+    first = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-shared-call",
+        interrupt_id="approval-first",
+        call_id="call-shared",
+        name="first_tool",
+        arguments="{}",
+    )
+    second = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-shared-call",
+        interrupt_id="approval-second",
+        call_id="call-shared",
+        name="second_tool",
+        arguments="{}",
+    )
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
+
+    response = TestClient(app).post(
+        "/approval",
+        json={
+            "runId": "run-shared-call",
+            "threadId": "thread-shared-call",
+            "messages": [],
+            "resume": [
+                {"interruptId": "approval-first", "status": "resolved", "payload": {"approved": True}},
+                {"interruptId": "approval-second", "status": "resolved", "payload": {"approved": True}},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _decode_sse_events(response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert lifecycle.get(first.identity).status is ApprovalStatus.SETTLED
+    assert lifecycle.get(second.identity).status is ApprovalStatus.SETTLED
+    assert executed == ["first", "second"]
+    assert [event["content"] for event in events if event.get("type") == "TOOL_CALL_RESULT"] == [
+        "first result",
+        "second result",
+    ]
+
+
+async def test_endpoint_agent_unavailable_local_executor_releases_every_unstarted_batch_intent() -> None:
+    """A local executor failure leaves local and hosted siblings retryable."""
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Should not run.")], role="assistant")],
+        default_options={"tools": []},
+    )
+    wrapped_agent = AgentFrameworkAgent(agent=agent, require_confirmation=False)
+    lifecycle = wrapped_agent._approval_state_store.lifecycle
+    local = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-unavailable-batch",
+        interrupt_id="approval-local",
+        call_id="call-local",
+        name="missing_local_tool",
+        arguments="{}",
+    )
+    hosted = lifecycle.register(
+        owner=ApprovalExecutionOwner.HOSTED,
+        thread_id="thread-unavailable-batch",
+        interrupt_id="approval-hosted",
+        call_id="call-hosted",
+        name="hosted_tool",
+        arguments="{}",
+        server_label="hosted-server",
+    )
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
+
+    response = TestClient(app).post(
+        "/approval",
+        json={
+            "runId": "run-unavailable-batch",
+            "threadId": "thread-unavailable-batch",
+            "messages": [],
+            "resume": [
+                {"interruptId": "approval-local", "status": "resolved", "payload": {"approved": True}},
+                {"interruptId": "approval-hosted", "status": "resolved", "payload": {"approved": True}},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    errors = [event for event in _decode_sse_events(response) if event.get("type") == "RUN_ERROR"]
+    assert [error["code"] for error in errors] == ["APPROVAL_TOOL_UNAVAILABLE"]
+    assert lifecycle.get(local.identity).status is ApprovalStatus.PENDING
+    assert lifecycle.get(hosted.identity).status is ApprovalStatus.PENDING
 
 
 def _build_mixed_approval_batch_endpoint(

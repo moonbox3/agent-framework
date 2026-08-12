@@ -3124,6 +3124,26 @@ async def test_endpoint_agent_approval_cancelled_resume_entry_completes_without_
     assert not [event for event in events if event.get("type") == "TOOL_CALL_RESULT"]
 
 
+async def test_endpoint_agent_approval_replayed_cancellation_completes_idempotently() -> None:
+    """Retrying a cancellation after a lost response completes normally without execution."""
+    client, _, executed_cities = _build_weather_approval_endpoint()
+    resume = [{"interruptId": "call_get_weather", "status": "cancelled"}]
+
+    first_response = client.post(
+        "/approval",
+        json={"runId": "run-cancel-first", "threadId": "thread-weather", "messages": [], "resume": resume},
+    )
+    retry_response = client.post(
+        "/approval",
+        json={"runId": "run-cancel-retry", "threadId": "thread-weather", "messages": [], "resume": resume},
+    )
+
+    assert first_response.status_code == 200
+    assert retry_response.status_code == 200
+    assert [event.get("type") for event in _decode_sse_events(retry_response)] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert executed_cities == []
+
+
 async def test_endpoint_agent_approval_unknown_resume_entry_emits_run_error():
     """A canonical approval resume for an unknown pending interrupt should fail safely."""
     client, _, executed_cities = _build_weather_approval_endpoint()

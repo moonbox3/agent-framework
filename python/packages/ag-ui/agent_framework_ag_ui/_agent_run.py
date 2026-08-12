@@ -855,6 +855,7 @@ def _register_server_generated_approval_response(
     *,
     lifecycle: ApprovalLifecycle,
     has_deferred_owner: bool,
+    approval_scope: str | None = None,
 ) -> AuthorizedExecution | None:
     """Register a server-owned approval response so normal validation can consume it."""
     if response.function_call is None or not response.function_call.name:
@@ -870,6 +871,7 @@ def _register_server_generated_approval_response(
     arguments = canonical_function_arguments(response.function_call) or "{}"
     lifecycle.register(
         owner=execution_owner,
+        scope=approval_scope,
         thread_ids=[thread_id],
         interrupt_id=str(response_id),
         call_id=str(response.function_call.call_id or response_id),
@@ -911,6 +913,7 @@ def _pop_collected_tool_approval_response_messages(
     *,
     lifecycle: ApprovalLifecycle,
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
+    approval_scope: str | None = None,
 ) -> list[Message]:
     """Pop server-collected auto-approved responses into provider-visible messages."""
     raw_state = session.state.get(_TOOL_APPROVAL_STATE_KEY)
@@ -933,6 +936,7 @@ def _pop_collected_tool_approval_response_messages(
             tools,
             lifecycle=lifecycle,
             has_deferred_owner=True,
+            approval_scope=approval_scope,
         )
         if intent is not None and authorized_executions is not None:
             authorized_executions[intent.identity] = intent
@@ -1190,6 +1194,7 @@ def _canonical_approval_resume_messages(
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     retained_results: list[Content] | None = None,
     snapshot_reconciliations: list[ApprovalSnapshotReconciliation] | None = None,
+    approval_scope: str | None = None,
 ) -> tuple[list[dict[str, Any]], set[str], set[str], RunErrorEvent | None]:
     """Translate canonical ResumeEntry approvals into existing approval response messages."""
     expected_ids = set(expected_interrupt_ids or set())
@@ -1202,6 +1207,30 @@ def _canonical_approval_resume_messages(
         if _resume_payload_has_approval_decision(resume_payload):
             normalized_interrupts = _normalize_resume_interrupts(resume_payload)
             interrupt_id = normalized_interrupts[0]["id"] if normalized_interrupts else "unknown"
+            cancelled_retry_ids = [
+                str(interrupt["id"]) for interrupt in normalized_interrupts if interrupt.get("status") == "cancelled"
+            ]
+            if len(cancelled_retry_ids) == len(normalized_interrupts) and cancelled_retry_ids:
+                try:
+                    reconciliations = lifecycle.cancel_batch(
+                        thread_id=thread_id,
+                        interrupt_ids=cancelled_retry_ids,
+                    )
+                except KeyError:
+                    pass
+                except ValueError as exc:
+                    return (
+                        [],
+                        handled_ids,
+                        cancelled_ids,
+                        RunErrorEvent(message=str(exc), code="APPROVAL_RESUME_INVALID"),
+                    )
+                else:
+                    if snapshot_reconciliations is not None:
+                        snapshot_reconciliations.extend(reconciliations)
+                    handled_ids.update(cancelled_retry_ids)
+                    cancelled_ids.update(cancelled_retry_ids)
+                    return [], handled_ids, cancelled_ids, None
             if retained_results is not None:
                 decisions: list[ResumeDecision] = []
                 for interrupt in normalized_interrupts:
@@ -1385,6 +1414,7 @@ def _canonical_approval_resume_messages(
             )
             lifecycle.register(
                 owner=execution_owner,
+                scope=approval_scope,
                 thread_ids=[thread_id],
                 interrupt_id=sibling_interrupt_id,
                 call_id=sibling_call_id,
@@ -2286,6 +2316,7 @@ async def run_agent_stream(
             authorized_executions=authorized_executions,
             retained_results=retained_approval_results,
             snapshot_reconciliations=approval_snapshot_reconciliations,
+            approval_scope=approval_scope,
         )
     )
     if resume_error is not None:
@@ -2411,6 +2442,7 @@ async def run_agent_stream(
             tools_for_execution,
             lifecycle=approval_state_store.lifecycle,
             authorized_executions=authorized_executions,
+            approval_scope=approval_scope,
         )
     )
     execution_tool_map = _get_tool_map(tools_for_execution) if tools_for_execution else {}
@@ -2605,6 +2637,7 @@ async def run_agent_stream(
                         }
                         approval_state_store.register(
                             owner=execution_owner,
+                            scope=approval_scope,
                             server_label=server_label,
                             **registration_kwargs,
                         )

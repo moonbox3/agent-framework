@@ -14,6 +14,8 @@ ApprovalScope = str
 """Application-defined scope for server-side AG-UI Approval State."""
 
 DEFAULT_MAX_APPROVAL_STATES = 10_000
+DEFAULT_PENDING_RETENTION_SECONDS = 86_400
+DEFAULT_INDETERMINATE_RETENTION_SECONDS = 604_800
 DEFAULT_TERMINAL_RETENTION_SECONDS = 900
 _APPROVAL_SCOPE_INPUT_KEY = "__ag_ui_approval_scope"
 _APPROVAL_THREAD_SEPARATOR = "\x1f"
@@ -46,12 +48,16 @@ class InMemoryAGUIApprovalStateStore:
         self,
         *,
         max_entries: int = DEFAULT_MAX_APPROVAL_STATES,
+        pending_retention_seconds: float = DEFAULT_PENDING_RETENTION_SECONDS,
+        indeterminate_retention_seconds: float = DEFAULT_INDETERMINATE_RETENTION_SECONDS,
         terminal_retention_seconds: float = DEFAULT_TERMINAL_RETENTION_SECONDS,
     ) -> None:
         """Initialize the process-local Approval State store.
 
         Keyword Args:
             max_entries: Maximum approval occurrences or middleware state entries to retain.
+            pending_retention_seconds: Maximum time to retain abandoned pending approval authority.
+            indeterminate_retention_seconds: Safety window for uncertain execution records before reclamation.
             terminal_retention_seconds: Process-local duplicate-execution protection window.
 
         Raises:
@@ -64,6 +70,8 @@ class InMemoryAGUIApprovalStateStore:
         self._tool_approval_states: dict[str, dict[str, Any]] = {}
         self.lifecycle = ApprovalLifecycle(
             max_entries=max_entries,
+            pending_retention_seconds=pending_retention_seconds,
+            indeterminate_retention_seconds=indeterminate_retention_seconds,
             terminal_retention_seconds=terminal_retention_seconds,
         )
 
@@ -76,6 +84,7 @@ class InMemoryAGUIApprovalStateStore:
         request_id: str,
         interrupt_id: str,
         owner: ApprovalExecutionOwner,
+        scope: ApprovalScope | None = None,
         already_approved_requests: list[dict[str, Any]] | None = None,
         server_label: str | None = None,
     ) -> None:
@@ -83,6 +92,7 @@ class InMemoryAGUIApprovalStateStore:
         unique_thread_ids = list(dict.fromkeys(thread_ids))
         self.lifecycle.register(
             owner=owner,
+            scope=scope,
             thread_ids=unique_thread_ids,
             interrupt_id=interrupt_id,
             call_id=interrupt_id,

@@ -173,6 +173,105 @@ def test_active_occurrence_is_not_evicted_when_capacity_is_exhausted() -> None:
     assert lifecycle.get(occurrence.identity).status is ApprovalStatus.PENDING
 
 
+def test_abandoned_pending_occurrence_expires_and_releases_capacity() -> None:
+    """Abandoned pending authority is reclaimed after its configured safety windows."""
+    now = 100.0
+    lifecycle = ApprovalLifecycle(
+        max_entries=1,
+        pending_retention_seconds=20,
+        terminal_retention_seconds=10,
+        clock=lambda: now,
+    )
+    abandoned = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-abandoned",
+        interrupt_id="approval-abandoned",
+        call_id="call-abandoned",
+        name="write_record",
+        arguments="{}",
+    )
+
+    now = 131.0
+    replacement = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-replacement",
+        interrupt_id="approval-replacement",
+        call_id="call-replacement",
+        name="write_record",
+        arguments="{}",
+    )
+
+    assert replacement.status is ApprovalStatus.PENDING
+    with pytest.raises(KeyError):
+        lifecycle.get(abandoned.identity)
+    with pytest.raises(KeyError):
+        lifecycle.claim_batch(
+            thread_id="thread-abandoned",
+            decisions=[ResumeDecision(interrupt_id="approval-abandoned", accepted=True, arguments="{}")],
+        )
+
+
+def test_safe_claim_release_restarts_pending_retention_window() -> None:
+    """A safely released claim receives a fresh pending decision window."""
+    now = 100.0
+    lifecycle = ApprovalLifecycle(max_entries=1, pending_retention_seconds=20, clock=lambda: now)
+    occurrence = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-1",
+        interrupt_id="approval-1",
+        call_id="call-1",
+        name="write_record",
+        arguments="{}",
+    )
+    intent = lifecycle.claim(
+        thread_id="thread-1",
+        decision=ResumeDecision(interrupt_id="approval-1", accepted=True, arguments="{}"),
+    )
+
+    now = 119.0
+    lifecycle.release_claim(intent, policy=ClaimRecoveryPolicy.SAFE_TO_RETRY)
+    now = 121.0
+
+    assert lifecycle.pending_occurrence(thread_id="thread-1", interrupt_id="approval-1") is occurrence
+
+
+def test_capacity_is_enforced_per_trusted_scope() -> None:
+    """One trusted application scope cannot exhaust another scope's approval quota."""
+    lifecycle = ApprovalLifecycle(max_entries=1)
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        scope="tenant-a",
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-a-1",
+        call_id="call-a-1",
+        name="write_record",
+        arguments="{}",
+    )
+
+    with pytest.raises(ApprovalCapacityError):
+        lifecycle.register(
+            owner=ApprovalExecutionOwner.LOCAL,
+            scope="tenant-a",
+            thread_id="tenant-a\x1fthread-2",
+            interrupt_id="approval-a-2",
+            call_id="call-a-2",
+            name="write_record",
+            arguments="{}",
+        )
+
+    tenant_b = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        scope="tenant-b",
+        thread_id="tenant-b\x1fthread-1",
+        interrupt_id="approval-b-1",
+        call_id="call-b-1",
+        name="write_record",
+        arguments="{}",
+    )
+
+    assert tenant_b.status is ApprovalStatus.PENDING
+
+
 async def test_terminal_outcome_expires_only_after_configured_retention_window() -> None:
     """Duplicate execution protection lasts for the configured terminal retention window."""
     now = 100.0
@@ -243,6 +342,64 @@ def test_indeterminate_occurrence_remains_protected_after_terminal_retention_win
         )
 
     assert lifecycle.get(occurrence.identity).status is ApprovalStatus.INDETERMINATE
+
+
+def test_indeterminate_occurrence_is_reclaimed_after_its_safety_window() -> None:
+    """An uncertain execution is eventually reclaimed without restoring approval authority."""
+    now = 100.0
+    lifecycle = ApprovalLifecycle(
+        max_entries=1,
+        indeterminate_retention_seconds=30,
+        terminal_retention_seconds=10,
+        clock=lambda: now,
+    )
+    uncertain = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        scope="tenant-a",
+        thread_id="tenant-a\x1fthread-1",
+        interrupt_id="approval-uncertain",
+        call_id="call-uncertain",
+        name="write_record",
+        arguments="{}",
+    )
+    intent = lifecycle.claim(
+        thread_id="tenant-a\x1fthread-1",
+        decision=ResumeDecision(interrupt_id="approval-uncertain", accepted=True, arguments="{}"),
+    )
+    lifecycle.begin_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+    lifecycle.recover_execution(intent, owner=ApprovalExecutionOwner.LOCAL)
+
+    now = 129.0
+    with pytest.raises(ApprovalCapacityError):
+        lifecycle.register(
+            owner=ApprovalExecutionOwner.LOCAL,
+            scope="tenant-a",
+            thread_id="tenant-a\x1fthread-2",
+            interrupt_id="approval-blocked",
+            call_id="call-blocked",
+            name="write_record",
+            arguments="{}",
+        )
+
+    now = 131.0
+    replacement = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        scope="tenant-a",
+        thread_id="tenant-a\x1fthread-2",
+        interrupt_id="approval-replacement",
+        call_id="call-replacement",
+        name="write_record",
+        arguments="{}",
+    )
+
+    assert replacement.status is ApprovalStatus.PENDING
+    with pytest.raises(KeyError):
+        lifecycle.get(uncertain.identity)
+    with pytest.raises(KeyError):
+        lifecycle.claim_batch(
+            thread_id="tenant-a\x1fthread-1",
+            decisions=[ResumeDecision(interrupt_id="approval-uncertain", accepted=True, arguments="{}")],
+        )
 
 
 async def test_transition_telemetry_covers_lifecycle_without_sensitive_payloads(

@@ -179,11 +179,13 @@ class ApprovalOccurrence:
     name: str
     arguments: str
     owner: ApprovalExecutionOwner
+    scope: str | None = None
     aliases: tuple[str, ...] = ()
     already_approved_requests: tuple[dict[str, Any], ...] = ()
     server_label: str | None = None
     idempotency_key: str | None = None
     status: ApprovalStatus = ApprovalStatus.PENDING
+    pending_since: float = 0
     replayable_results: list[ReplayableToolResult] = field(default_factory=list)
     decision: ResumeDecision | None = None
     outcome: ApprovalOutcome | None = None
@@ -238,14 +240,22 @@ class ApprovalLifecycle:
         self,
         *,
         max_entries: int = 10_000,
+        pending_retention_seconds: float = 86_400,
+        indeterminate_retention_seconds: float = 604_800,
         terminal_retention_seconds: float = 900,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be greater than 0.")
+        if pending_retention_seconds <= 0:
+            raise ValueError("pending_retention_seconds must be greater than 0.")
+        if indeterminate_retention_seconds <= 0:
+            raise ValueError("indeterminate_retention_seconds must be greater than 0.")
         if terminal_retention_seconds <= 0:
             raise ValueError("terminal_retention_seconds must be greater than 0.")
         self._max_entries = max_entries
+        self._pending_retention_seconds = pending_retention_seconds
+        self._indeterminate_retention_seconds = indeterminate_retention_seconds
         self._terminal_retention_seconds = terminal_retention_seconds
         self._clock = clock
         self._index_lock = RLock()
@@ -258,6 +268,7 @@ class ApprovalLifecycle:
         self,
         *,
         owner: ApprovalExecutionOwner,
+        scope: str | None = None,
         thread_ids: list[str] | None = None,
         thread_id: str | None = None,
         interrupt_id: str,
@@ -280,6 +291,7 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=owner,
+            scope=scope,
             aliases=aliases,
             already_approved_requests=already_approved_requests,
             server_label=server_label,
@@ -296,12 +308,15 @@ class ApprovalLifecycle:
         name: str,
         arguments: str,
         owner: ApprovalExecutionOwner,
+        scope: str | None = None,
         aliases: list[str] | None = None,
         already_approved_requests: list[dict[str, Any]] | None = None,
         server_label: str | None = None,
         idempotency_key: str | None = None,
     ) -> ApprovalOccurrence:
         self._purge_expired_terminal()
+        if scope == "":
+            raise ValueError("An approval scope cannot be empty.")
         if idempotency_key == "":
             raise ValueError("An execution idempotency key cannot be empty.")
         unique_thread_ids = tuple(dict.fromkeys(thread_ids))
@@ -326,6 +341,7 @@ class ApprovalLifecycle:
                 or occurrence.name != name
                 or occurrence.arguments != arguments
                 or occurrence.owner is not owner
+                or occurrence.scope != scope
                 or occurrence.idempotency_key != idempotency_key
                 or occurrence.already_approved_requests != tuple(already_approved_requests or ())
                 or occurrence.server_label != server_label
@@ -338,7 +354,7 @@ class ApprovalLifecycle:
                     self._pending_by_interrupt[(thread_id, alias)] = occurrence.identity
             return occurrence
 
-        if len(self._occurrences) >= self._max_entries:
+        if sum(occurrence.scope == scope for occurrence in self._occurrences.values()) >= self._max_entries:
             self._emit_event("capacity_failure")
             raise ApprovalCapacityError("Approval state capacity is exhausted by protected occurrences.")
         identity = ApprovalOccurrenceIdentity(
@@ -353,10 +369,12 @@ class ApprovalLifecycle:
             name=name,
             arguments=arguments,
             owner=owner,
+            scope=scope,
             aliases=occurrence_aliases,
             already_approved_requests=tuple(already_approved_requests or ()),
             server_label=server_label,
             idempotency_key=idempotency_key,
+            pending_since=self._clock(),
         )
         self._occurrences[identity] = occurrence
         for thread_id in unique_thread_ids:
@@ -675,7 +693,7 @@ class ApprovalLifecycle:
         return tuple(self._snapshot_reconciliation(occurrence) for occurrence in occurrences)
 
     def _remove_pending_aliases(self, occurrence: ApprovalOccurrence) -> None:
-        if occurrence.status.is_purgeable:
+        if occurrence.status.is_terminal:
             occurrence.terminal_at = self._clock()
         with self._index_lock:
             for thread_id in occurrence.thread_ids:
@@ -685,11 +703,31 @@ class ApprovalLifecycle:
 
     def _purge_expired_terminal(self) -> None:
         with self._index_lock:
-            cutoff = self._clock() - self._terminal_retention_seconds
+            now = self._clock()
+            pending_cutoff = now - self._pending_retention_seconds
+            abandoned = [
+                occurrence
+                for occurrence in self._occurrences.values()
+                if occurrence.status is ApprovalStatus.PENDING and occurrence.pending_since <= pending_cutoff
+            ]
+            for occurrence in abandoned:
+                occurrence.status = ApprovalStatus.EXPIRED
+                self._remove_pending_aliases(occurrence)
+                occurrence.terminal_at = occurrence.pending_since + self._pending_retention_seconds
+                self._emit_event("expiration", occurrence)
+            cutoff = now - self._terminal_retention_seconds
+            indeterminate_cutoff = now - self._indeterminate_retention_seconds
             expired = [
                 occurrence
                 for occurrence in self._occurrences.values()
-                if occurrence.terminal_at is not None and occurrence.terminal_at <= cutoff
+                if occurrence.terminal_at is not None
+                and (
+                    (occurrence.status.is_purgeable and occurrence.terminal_at <= cutoff)
+                    or (
+                        occurrence.status is ApprovalStatus.INDETERMINATE
+                        and occurrence.terminal_at <= indeterminate_cutoff
+                    )
+                )
             ]
             for occurrence in expired:
                 self._emit_event("retention_purge", occurrence)
@@ -765,6 +803,7 @@ class ApprovalLifecycle:
         if occurrence.status is not ApprovalStatus.CLAIMED:
             raise ValueError(f"Approval occurrence is not claimed: {occurrence.status}.")
         occurrence.status = ApprovalStatus.PENDING
+        occurrence.pending_since = self._clock()
 
     @_serialized_by_occurrence
     def mark_indeterminate(
@@ -890,6 +929,7 @@ class ApprovalLifecycle:
         if occurrence.status is not ApprovalStatus.EXECUTING:
             raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
         occurrence.status = ApprovalStatus.PENDING
+        occurrence.pending_since = self._clock()
         return ApprovalOutcome(
             identity=occurrence.identity,
             replayable_results=(),

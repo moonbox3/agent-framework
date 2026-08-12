@@ -650,7 +650,9 @@ class FunctionalWorkflow:
     state across calls to :meth:`run`. Scope an instance to one logical
     caller or session. Use :meth:`create_instance` when independent callers
     need the same workflow definition; do not share one instance across
-    mutually untrusted callers.
+    mutually untrusted callers. Instance isolation covers in-memory state.
+    When checkpointing is enabled, the host must also authorize and
+    tenant-scope access to the checkpoint storage.
 
     Args:
         func: The async function that implements the workflow logic.
@@ -705,11 +707,21 @@ class FunctionalWorkflow:
 
         functools.update_wrapper(self, func)  # type: ignore[arg-type]
 
-    def create_instance(self) -> FunctionalWorkflow:
+    def create_instance(
+        self,
+        *,
+        checkpoint_storage: CheckpointStorage | None = None,
+    ) -> FunctionalWorkflow:
         """Create an independent stateful instance of this workflow definition.
 
         The new instance reuses the workflow function and configuration but
-        has its own message, step-cache, and pending-request state.
+        has its own message, step-cache, and pending-request state. Checkpoint
+        storage is not inherited because a shared external store requires
+        host-managed authorization and tenant isolation.
+
+        Args:
+            checkpoint_storage: Optional storage scoped and authorized for the
+                new instance's logical caller or session.
 
         Returns:
             A new :class:`FunctionalWorkflow` for one logical caller or session.
@@ -718,7 +730,7 @@ class FunctionalWorkflow:
             self._func,
             name=self.name,
             description=self.description,
-            checkpoint_storage=self._checkpoint_storage,
+            checkpoint_storage=checkpoint_storage,
         )
 
     @staticmethod
@@ -1367,7 +1379,9 @@ class FunctionalWorkflowAgent:
 
     The wrapped workflow owns mutable execution state. Scope the workflow and
     this adapter to one logical caller or session; create separate workflow
-    instances for independent or mutually untrusted callers.
+    instances for independent or mutually untrusted callers. If those
+    instances use checkpoint storage, the host must also authorize and
+    tenant-scope access to that external store.
 
     Args:
         workflow: The :class:`FunctionalWorkflow` to wrap.

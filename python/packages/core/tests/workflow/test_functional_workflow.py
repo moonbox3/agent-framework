@@ -246,6 +246,32 @@ class TestHITL:
         caller_a_completed = await caller_a.run(responses={request_id: "caller-a-response"})
         assert caller_a_completed.get_outputs() == ["caller-a:caller-a-response"]
 
+    async def test_create_instance_does_not_inherit_checkpoint_storage_by_default(self):
+        storage = InMemoryCheckpointStorage()
+
+        @workflow(checkpoint_storage=storage)
+        async def review_wf(doc: str, ctx: RunContext) -> str:
+            return await ctx.request_info(doc, response_type=str)
+
+        caller = review_wf.create_instance()
+        await caller.run("caller")
+
+        assert await storage.list_checkpoints(workflow_name="review_wf") == []
+
+    async def test_create_instance_accepts_tenant_scoped_checkpoint_storage(self):
+        definition_storage = InMemoryCheckpointStorage()
+        caller_storage = InMemoryCheckpointStorage()
+
+        @workflow(checkpoint_storage=definition_storage)
+        async def review_wf(doc: str, ctx: RunContext) -> str:
+            return await ctx.request_info(doc, response_type=str)
+
+        caller = review_wf.create_instance(checkpoint_storage=caller_storage)
+        await caller.run("caller")
+
+        assert await definition_storage.list_checkpoints(workflow_name="review_wf") == []
+        assert len(await caller_storage.list_checkpoints(workflow_name="review_wf")) == 1
+
     async def test_request_info_interrupts(self):
         @workflow
         async def review_wf(doc: str, ctx: RunContext) -> str:

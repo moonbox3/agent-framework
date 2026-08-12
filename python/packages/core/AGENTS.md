@@ -204,7 +204,9 @@ agent_framework/
   results, and pending `request_info` state on the workflow instance for response-only replay. Like graph workflows,
   one instance represents one logical caller or session. Do not share an instance or its
   `FunctionalWorkflowAgent` across mutually untrusted callers. Use `create_instance()` to create independent
-  stateful instances from the same decorated workflow definition.
+  stateful instances from the same decorated workflow definition. New instances do not inherit the definition's
+  checkpoint storage; pass a caller-scoped storage explicitly when needed. Instance separation protects in-memory
+  state only — hosts remain responsible for authorizing and tenant-scoping access to any shared checkpoint adapter.
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

@@ -415,7 +415,7 @@ def test_same_thread_transitions_serialize_without_blocking_an_independent_threa
             assert release_first_claim.wait(timeout=2)
         original_emit(event, occurrence, failure_type=failure_type)
 
-    lifecycle._emit_event = blocking_emit  # type: ignore[method-assign]
+    lifecycle._emit_event = blocking_emit  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     def repeat_first_claim():
         second_same_thread_started.set()

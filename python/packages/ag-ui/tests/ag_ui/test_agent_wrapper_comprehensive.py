@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, MutableSequence
 from typing import Any
 
 import pytest
+from ag_ui.core import RunErrorEvent, ToolCallResultEvent
 from agent_framework import Agent, ChatOptions, ChatResponseUpdate, Content, Message
 from pydantic import BaseModel
 
@@ -1195,7 +1196,7 @@ async def test_approval_resolves_with_client_or_provider_thread_id(
     retry_events = [event async for event in wrapper.run(approval_input(replay_thread_id))]
 
     assert execution_count == 1
-    retry_results = [event for event in retry_events if event.type == "TOOL_CALL_RESULT"]
+    retry_results = [event for event in retry_events if isinstance(event, ToolCallResultEvent)]
     assert len(retry_results) == 1
     assert retry_results[0].tool_call_id == "call_sensitive"
     assert retry_results[0].content == "executed"
@@ -1206,14 +1207,16 @@ async def test_approval_resolves_with_client_or_provider_thread_id(
     conflicting_events = [event async for event in wrapper.run(conflicting_input)]
 
     assert execution_count == 1
-    assert any(event.type == "RUN_ERROR" and event.code == "APPROVAL_RESUME_INVALID" for event in conflicting_events)
+    assert any(
+        isinstance(event, RunErrorEvent) and event.code == "APPROVAL_RESUME_INVALID" for event in conflicting_events
+    )
 
     changed_input = approval_input(replay_thread_id)
     changed_input["resume"][0]["payload"]["forged"] = True
     changed_events = [event async for event in wrapper.run(changed_input)]
 
     assert execution_count == 1
-    assert any(event.type == "RUN_ERROR" and event.code == "APPROVAL_RESUME_INVALID" for event in changed_events)
+    assert any(isinstance(event, RunErrorEvent) and event.code == "APPROVAL_RESUME_INVALID" for event in changed_events)
 
 
 async def test_approval_function_name_mismatch_is_blocked(streaming_chat_client_stub):

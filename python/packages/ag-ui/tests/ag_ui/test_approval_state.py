@@ -7,6 +7,7 @@ from threading import Barrier
 from time import sleep
 
 import pytest
+from typing_extensions import Self
 
 from agent_framework_ag_ui._approval_lifecycle import ApprovalCapacityError, ApprovalExecutionOwner
 from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore, approval_state_thread_id
@@ -95,7 +96,7 @@ def test_approval_state_store_enforces_capacity_across_concurrent_first_writes()
     start = Barrier(2)
 
     class SlowCopy:
-        def __deepcopy__(self, memo: dict[int, object]) -> "SlowCopy":
+        def __deepcopy__(self, memo: dict[int, object]) -> Self:
             del memo
             sleep(0.05)
             return self

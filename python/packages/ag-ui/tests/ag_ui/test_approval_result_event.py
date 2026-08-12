@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ag_ui.core import ToolCallResultEvent
 from agent_framework import AgentResponseUpdate, Content, FunctionTool
 from agent_framework.exceptions import UserInputRequiredException
 from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ignore[reportMissingImports]
@@ -128,7 +129,7 @@ async def test_approved_call_emits_one_live_result_under_original_identity() -> 
         executions=executions,
     )
 
-    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    results = [event for event in events if isinstance(event, ToolCallResultEvent)]
     assert executions == ["Seattle"]
     assert [(event.tool_call_id, event.content) for event in results] == [("call-weather", "Sunny in Seattle")]
 
@@ -157,7 +158,7 @@ async def test_mixed_batch_preserves_approved_result_identity_and_order() -> Non
         executions=executions,
     )
 
-    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    results = [event for event in events if isinstance(event, ToolCallResultEvent)]
     assert executions == ["Seattle"]
     assert [(event.tool_call_id, event.content) for event in results] == [("call-seattle", "Sunny in Seattle")]
 
@@ -198,7 +199,7 @@ async def test_approval_execution_failure_emits_one_terminal_error_result() -> N
 
     events, _ = await _run_custom_approval(FunctionTool(name="fail", description="Fail", func=fail))
 
-    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    results = [event for event in events if isinstance(event, ToolCallResultEvent)]
     assert [(event.tool_call_id, event.content) for event in results] == [("call-custom", "Error: Function failed.")]
 
 
@@ -226,5 +227,5 @@ async def test_no_approval_path_emits_no_approval_specific_duplicate_result() ->
         )
     ]
 
-    results = [event for event in events if getattr(event, "type", None) == "TOOL_CALL_RESULT"]
+    results = [event for event in events if isinstance(event, ToolCallResultEvent)]
     assert [(event.tool_call_id, event.content) for event in results] == [("call-ordinary", "ordinary result")]

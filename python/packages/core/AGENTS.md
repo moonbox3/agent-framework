@@ -200,13 +200,12 @@ agent_framework/
   every output-capable executor not selected by `output_from`.
 - **`WorkflowRunResult`** - Non-streaming workflow result with Workflow Output `get_outputs()`
   and Intermediate Output `get_intermediate_outputs()` accessors
-- **`FunctionalWorkflow` instance ownership** - Functional workflows retain the original message, cached step
-  results, and pending `request_info` state on the workflow instance for response-only replay. Like graph workflows,
-  one instance represents one logical caller or session. Do not share an instance or its
-  `FunctionalWorkflowAgent` across mutually untrusted callers. Use `create_instance()` to create independent
-  stateful instances from the same decorated workflow definition. New instances do not inherit the definition's
-  checkpoint storage; pass a caller-scoped storage explicitly when needed. Instance separation protects in-memory
-  state only — hosts remain responsible for authorizing and tenant-scoping access to any shared checkpoint adapter.
+- **Functional workflow definition/build lifecycle** - `@workflow` returns a stateless
+  `FunctionalWorkflowDefinition`. Call `build()` to create a stateful `FunctionalWorkflow` scoped to one logical
+  caller or session. The definition has no `run()` or `as_agent()` surface, so module-level decorated definitions
+  cannot accidentally retain caller state. Each built workflow and its `FunctionalWorkflowAgent` must remain scoped
+  to that caller/session. Pass a caller-scoped checkpoint storage to `build(checkpoint_storage=...)` when needed;
+  hosts remain responsible for authorizing and tenant-scoping access to any shared checkpoint adapter.
 - **Orchestrators**: `SequentialOrchestrator`, `ConcurrentOrchestrator`, `GroupChatOrchestrator`, `MagenticOrchestrator`, `HandoffOrchestrator`
 
 ## Built-in Providers

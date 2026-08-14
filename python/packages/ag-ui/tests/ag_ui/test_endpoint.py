@@ -40,6 +40,8 @@ from conftest import StubAgent  # pyrefly: ignore[missing-import] # pyright: ign
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.params import Depends
 from fastapi.testclient import TestClient
+from starlette.types import Message as ASGIMessage
+from starlette.types import Receive, Scope, Send
 
 from agent_framework_ag_ui import (
     AGUIRequest,
@@ -70,7 +72,7 @@ async def _post_until_sse_event_then_disconnect(
     disconnect = asyncio.Event()
     body = json.dumps(payload).encode()
 
-    async def receive() -> dict[str, Any]:
+    async def receive() -> ASGIMessage:
         nonlocal request_sent
         if not request_sent:
             request_sent = True
@@ -78,14 +80,14 @@ async def _post_until_sse_event_then_disconnect(
         await disconnect.wait()
         return {"type": "http.disconnect"}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: ASGIMessage) -> None:
         if message["type"] != "http.response.body":
             return
         chunk = message.get("body", b"")
         if isinstance(chunk, bytes) and f'"type":"{event_type}"'.encode() in chunk:
             disconnect.set()
 
-    scope = {
+    scope: Scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
         "http_version": "1.1",
@@ -99,7 +101,7 @@ async def _post_until_sse_event_then_disconnect(
         "client": ("testclient", 50000),
         "server": ("testserver", 80),
     }
-    await app(scope, receive, send)
+    await asyncio.wait_for(app(scope, cast(Receive, receive), cast(Send, send)), timeout=5)
 
 
 def _run_finished_interrupts(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3936,6 +3938,108 @@ async def test_endpoint_workflow_request_info_rejects_resume_from_different_scop
         assert not [event for event in attacker_events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
 
 
+async def test_endpoint_workflow_request_info_stale_snapshot_does_not_replace_live_owner():
+    """A stale scoped snapshot cannot replace a newer live interrupt owner."""
+
+    def resolve_scope(request: AGUIRequest) -> str:
+        forwarded_props = request.forwarded_props
+        assert forwarded_props is not None
+        tenant = forwarded_props["tenant"]
+        assert isinstance(tenant, str)
+        return tenant
+
+    store = InMemoryAGUIThreadSnapshotStore()
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        _build_flight_choice_workflow(),
+        path="/workflow",
+        snapshot_store=store,
+        snapshot_scope_resolver=resolve_scope,
+    )
+
+    with TestClient(app) as client:
+        first_pause = client.post(
+            "/workflow",
+            json={
+                "runId": "run-first-pause",
+                "threadId": "shared-thread",
+                "messages": [{"role": "user", "content": "Book me a flight"}],
+                "forwardedProps": {"tenant": "tenant-a"},
+            },
+        )
+        assert first_pause.status_code == 200
+        stale_snapshot = await store.get(scope="tenant-a", thread_id="shared-thread")
+        assert stale_snapshot is not None
+
+        first_cancel = client.post(
+            "/workflow",
+            json={
+                "runId": "run-first-cancel",
+                "threadId": "shared-thread",
+                "messages": [],
+                "resume": [{"interruptId": "flight-choice", "status": "cancelled"}],
+                "forwardedProps": {"tenant": "tenant-a"},
+            },
+        )
+        assert first_cancel.status_code == 200
+
+        second_pause = client.post(
+            "/workflow",
+            json={
+                "runId": "run-second-pause",
+                "threadId": "shared-thread",
+                "messages": [{"role": "user", "content": "Book another flight"}],
+                "forwardedProps": {"tenant": "tenant-b"},
+            },
+        )
+        assert second_pause.status_code == 200
+
+        await store.save(scope="tenant-a", thread_id="shared-thread", snapshot=stale_snapshot)
+        stale_resume = client.post(
+            "/workflow",
+            json={
+                "runId": "run-stale-resume",
+                "threadId": "shared-thread",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": "flight-choice",
+                        "status": "resolved",
+                        "payload": {"airline": "KLM"},
+                    }
+                ],
+                "forwardedProps": {"tenant": "tenant-a"},
+            },
+        )
+
+        stale_events = _decode_sse_events(stale_resume)
+        stale_errors = [event for event in stale_events if event.get("type") == "RUN_ERROR"]
+        assert len(stale_errors) == 1
+        assert stale_errors[0]["code"] == "WORKFLOW_RESUME_NOT_FOUND"
+
+        live_resume = client.post(
+            "/workflow",
+            json={
+                "runId": "run-live-resume",
+                "threadId": "shared-thread",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": "flight-choice",
+                        "status": "resolved",
+                        "payload": {"airline": "United"},
+                    }
+                ],
+                "forwardedProps": {"tenant": "tenant-b"},
+            },
+        )
+        live_events = _decode_sse_events(live_resume)
+        assert not [event for event in live_events if event.get("type") == "RUN_ERROR"]
+        text_deltas = [event["delta"] for event in live_events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
+        assert "Booked United" in text_deltas
+
+
 async def test_endpoint_workflow_request_info_rejects_cancellation_from_different_thread():
     """A different AG-UI thread cannot cancel another thread's workflow interrupt."""
     app = _build_workflow_request_info_app()
@@ -4062,8 +4166,8 @@ async def test_endpoint_workflow_request_info_rejects_unowned_pending_interrupt(
         assert attacker_errors[0]["code"] == "WORKFLOW_RESUME_NOT_FOUND"
 
 
-async def test_endpoint_workflow_checkpoint_resume_rejects_different_thread_after_restart():
-    """Checkpoint restore preserves the AG-UI thread that owns a pending workflow interrupt."""
+async def test_endpoint_workflow_checkpoint_resume_rejects_threaded_resume_after_restart():
+    """An explicitly threaded cold checkpoint resume fails closed when ownership is unavailable."""
     storage = InMemoryCheckpointStorage()
     first_app = FastAPI()
     first_workflow = _build_flight_choice_workflow()
@@ -4121,6 +4225,64 @@ async def test_endpoint_workflow_checkpoint_resume_rejects_different_thread_afte
         assert len(attacker_errors) == 1
         assert attacker_errors[0]["code"] == "WORKFLOW_RESUME_NOT_FOUND"
         assert not [event for event in attacker_events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
+
+
+async def test_endpoint_workflow_checkpoint_resume_without_thread_remains_supported():
+    """Legacy unthreaded checkpoint resumes remain compatible after wrapper restart."""
+    storage = InMemoryCheckpointStorage()
+    first_app = FastAPI()
+    first_workflow = _build_flight_choice_workflow()
+    add_agent_framework_fastapi_endpoint(
+        first_app,
+        first_workflow,
+        path="/workflow",
+        checkpoint_storage=storage,
+    )
+
+    with TestClient(first_app) as client:
+        pause_response = client.post(
+            "/workflow",
+            json={
+                "runId": "run-pause",
+                "messages": [{"role": "user", "content": "Book me a flight"}],
+            },
+        )
+        assert pause_response.status_code == 200
+
+    checkpoints = await storage.list_checkpoints(workflow_name=first_workflow.name)
+    pending_checkpoints = [checkpoint for checkpoint in checkpoints if checkpoint.pending_request_info_events]
+    assert pending_checkpoints
+    checkpoint_id = max(pending_checkpoints, key=lambda checkpoint: checkpoint.timestamp).checkpoint_id
+
+    second_app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        second_app,
+        _build_flight_choice_workflow(),
+        path="/workflow",
+        checkpoint_storage=storage,
+    )
+
+    with TestClient(second_app) as client:
+        resume_response = client.post(
+            "/workflow",
+            json={
+                "runId": "run-resume",
+                "messages": [],
+                "forwardedProps": {"checkpointId": checkpoint_id},
+                "resume": [
+                    {
+                        "interruptId": "flight-choice",
+                        "status": "resolved",
+                        "payload": {"airline": "KLM"},
+                    }
+                ],
+            },
+        )
+
+        resume_events = _decode_sse_events(resume_response)
+        assert not [event for event in resume_events if event.get("type") == "RUN_ERROR"]
+        text_deltas = [event["delta"] for event in resume_events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
+        assert "Booked KLM" in text_deltas
 
 
 async def test_endpoint_workflow_request_info_cancelled_resume_completes_normally():
@@ -6236,10 +6398,25 @@ async def test_workflow_resume_preserves_persisted_history(monkeypatch):
 
     @executor(id="noop")
     async def noop(message: Any, ctx: WorkflowContext[Any, Any]) -> None:
-        del message, ctx
+        del message
+        await ctx.request_info({"agent": "flights"}, str, request_id="interrupt-1")
 
+    workflow = WorkflowBuilder(start_executor=noop).build()
+    _ = [
+        event
+        async for event in workflow.run(
+            message=[Message(role="user", contents=[Content.from_text(text="First question")])],
+            stream=True,
+        )
+    ]
+    pending_events = await workflow_module._pending_request_events(workflow)
+    setattr(
+        pending_events["interrupt-1"],
+        workflow_module._REQUEST_OWNER_ATTRIBUTE,
+        ("tenant-a", "workflow-thread"),
+    )
     runner = AgentFrameworkWorkflow(
-        workflow=WorkflowBuilder(start_executor=noop).build(),
+        workflow=workflow,
         snapshot_store=store,
     )
 

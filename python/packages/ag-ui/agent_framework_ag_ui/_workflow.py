@@ -14,6 +14,7 @@ from ag_ui.core import (
     MessagesSnapshotEvent,
     RunErrorEvent,
     RunFinishedEvent,
+    RunStartedEvent,
     StateSnapshotEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
@@ -30,6 +31,7 @@ from ._message_adapters import agui_messages_to_snapshot_format
 from ._run_common import (
     _cancelled_resume_interrupt_ids,
     _extract_resume_payload,
+    _normalize_resume_interrupts,
     _reconstruct_messages_from_thread_snapshot,
 )
 from ._snapshot_session import ThreadSnapshotSession, _event_messages_to_snapshot_dicts
@@ -45,6 +47,9 @@ from ._workflow_run import run_workflow_stream
 logger = logging.getLogger(__name__)
 
 WorkflowFactory = Callable[[str], Workflow]
+WorkflowRequestOwner = tuple[str | None, str | None]
+
+_CHECKPOINT_REQUEST_OWNER_KEY = "ag_ui_workflow_request_owner"
 
 
 def _checkpoint_id_from_input(input_data: dict[str, Any]) -> str | None:
@@ -56,6 +61,42 @@ def _checkpoint_id_from_input(input_data: dict[str, Any]) -> str | None:
     if checkpoint_id is None:
         return None
     return str(checkpoint_id)
+
+
+def _checkpoint_request_owner(metadata: dict[str, Any]) -> WorkflowRequestOwner | None:
+    """Read AG-UI workflow request ownership from checkpoint metadata."""
+    raw_owner = metadata.get(_CHECKPOINT_REQUEST_OWNER_KEY)
+    if not isinstance(raw_owner, dict):
+        return None
+    snapshot_scope = raw_owner.get("snapshot_scope")
+    thread_id = raw_owner.get("thread_id")
+    if snapshot_scope is not None and not isinstance(snapshot_scope, str):
+        return None
+    if thread_id is not None and not isinstance(thread_id, str):
+        return None
+    return snapshot_scope, thread_id
+
+
+async def _persist_checkpoint_request_owner(
+    *,
+    checkpoint_storage: CheckpointStorage,
+    workflow: Workflow,
+    pending_interrupt_ids: set[str],
+    request_owner: WorkflowRequestOwner,
+) -> None:
+    """Persist the owner of pending workflow requests on the latest checkpoint."""
+    checkpoint = await checkpoint_storage.get_latest(workflow_name=workflow.name)
+    if checkpoint is None:
+        return
+    checkpoint_pending_ids = {str(request_id) for request_id in checkpoint.pending_request_info_events}
+    if not pending_interrupt_ids.issubset(checkpoint_pending_ids):
+        return
+    checkpoint.metadata = dict(checkpoint.metadata)
+    checkpoint.metadata[_CHECKPOINT_REQUEST_OWNER_KEY] = {
+        "snapshot_scope": request_owner[0],
+        "thread_id": request_owner[1],
+    }
+    await checkpoint_storage.save(checkpoint)
 
 
 class _WorkflowSnapshotBuilder:
@@ -225,6 +266,7 @@ class AgentFrameworkWorkflow:
 
         self.workflow = workflow
         self._workflow_factory = workflow_factory
+        self._shared_workflow_request_owners: dict[str, WorkflowRequestOwner] = {}
         # Cache keyed by (snapshot_scope, thread_id): the Snapshot Scope is the
         # authorization boundary for both snapshots and in-memory workflow_factory
         # instances, so the same thread id under different scopes must never share
@@ -301,6 +343,7 @@ class AgentFrameworkWorkflow:
             scope=snapshot_scope,
             thread_id=thread_id,
         )
+        stored_snapshot = snapshot_session.stored
 
         checkpoint_storage = self.checkpoint_storage
         checkpoint_id = _checkpoint_id_from_input(input_data)
@@ -309,6 +352,50 @@ class AgentFrameworkWorkflow:
                 "Resuming from a checkpoint requires checkpoint_storage to be configured on "
                 "AgentFrameworkWorkflow (or the AG-UI endpoint)."
             )
+
+        supplied_thread_id = input_data.get("thread_id") or input_data.get("threadId")
+        request_owner = (snapshot_scope, str(supplied_thread_id) if supplied_thread_id is not None else None)
+        resume_interrupt_ids = {
+            str(interrupt["id"])
+            for interrupt in _normalize_resume_interrupts(resume_payload)
+            if interrupt.get("id") is not None
+        }
+        if self.workflow is not None and stored_snapshot is not None:
+            for interrupt in stored_snapshot.interrupt or []:
+                interrupt_id = interrupt.get("id")
+                if interrupt_id is not None:
+                    self._shared_workflow_request_owners[str(interrupt_id)] = request_owner
+        if self.workflow is not None and checkpoint_id is not None and checkpoint_storage is not None:
+            checkpoint = await checkpoint_storage.load(checkpoint_id)
+            checkpoint_pending_ids = {str(request_id) for request_id in checkpoint.pending_request_info_events}
+            checkpoint_owner = _checkpoint_request_owner(checkpoint.metadata)
+            if checkpoint_pending_ids and checkpoint_owner is None and request_owner != (None, None):
+                yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+                yield RunErrorEvent(
+                    message=f"No pending interrupt found for checkpointId '{checkpoint_id}'.",
+                    code="WORKFLOW_RESUME_NOT_FOUND",
+                )
+                return
+            if checkpoint_owner is not None and checkpoint_owner != request_owner:
+                yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+                yield RunErrorEvent(
+                    message=f"No pending interrupt found for checkpointId '{checkpoint_id}'.",
+                    code="WORKFLOW_RESUME_NOT_FOUND",
+                )
+                return
+            if checkpoint_owner is not None:
+                for interrupt_id in checkpoint_pending_ids:
+                    self._shared_workflow_request_owners[interrupt_id] = checkpoint_owner
+        if self.workflow is not None:
+            for interrupt_id in resume_interrupt_ids:
+                owner = self._shared_workflow_request_owners.get(interrupt_id)
+                if owner != request_owner and (owner is not None or request_owner != (None, None)):
+                    yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+                    yield RunErrorEvent(
+                        message=f"No pending interrupt found for resume interruptId '{interrupt_id}'.",
+                        code="WORKFLOW_RESUME_NOT_FOUND",
+                    )
+                    return
 
         # A checkpoint resume legitimately carries no new messages; it must reach the
         # core workflow's restore path rather than replaying a stored thread snapshot.
@@ -319,7 +406,6 @@ class AgentFrameworkWorkflow:
 
         # Seed follow-up turns so the workflow runs with the full persisted thread
         # history instead of just the latest request messages.
-        stored_snapshot = snapshot_session.stored
         if stored_snapshot is not None and resume_payload is None:
             raw_messages = _reconstruct_messages_from_thread_snapshot(
                 stored_messages=stored_snapshot.messages,
@@ -350,11 +436,46 @@ class AgentFrameworkWorkflow:
             if isinstance(state_snapshot, dict):
                 snapshot_builder.state = cast(dict[str, Any], state_snapshot)
         run_error_emitted = False
+        pending_interrupt_ids: set[str] = set()
         async for event in run_workflow_stream(
             input_data, workflow, checkpoint_storage=checkpoint_storage, checkpoint_id=checkpoint_id
         ):
             if snapshot_builder is not None:
                 snapshot_builder.observe(event)
+            if (
+                self.workflow is not None
+                and isinstance(event, ToolCallStartEvent)
+                and event.tool_call_name == "request_info"
+            ):
+                interrupt_id = str(event.tool_call_id)
+                self._shared_workflow_request_owners[interrupt_id] = request_owner
+                if checkpoint_storage is not None:
+                    await _persist_checkpoint_request_owner(
+                        checkpoint_storage=checkpoint_storage,
+                        workflow=workflow,
+                        pending_interrupt_ids={interrupt_id},
+                        request_owner=request_owner,
+                    )
+            if isinstance(event, RunFinishedEvent):
+                outcome = getattr(event, "outcome", None)
+                if getattr(outcome, "type", None) == "interrupt":
+                    pending_interrupt_ids = {
+                        str(interrupt.id)
+                        for interrupt in getattr(outcome, "interrupts", [])
+                        if getattr(interrupt, "id", None)
+                    }
+                if self.workflow is not None:
+                    for interrupt_id in resume_interrupt_ids:
+                        self._shared_workflow_request_owners.pop(interrupt_id, None)
+                    for interrupt_id in pending_interrupt_ids:
+                        self._shared_workflow_request_owners[interrupt_id] = request_owner
+                    if checkpoint_storage is not None and pending_interrupt_ids:
+                        await _persist_checkpoint_request_owner(
+                            checkpoint_storage=checkpoint_storage,
+                            workflow=workflow,
+                            pending_interrupt_ids=pending_interrupt_ids,
+                            request_owner=request_owner,
+                        )
             if isinstance(event, RunErrorEvent):
                 run_error_emitted = True
                 if getattr(event, "code", None) == "WORKFLOW_RESUME_CANCELLED":

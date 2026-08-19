@@ -700,12 +700,12 @@ async def test_textless_handoff_preserves_target_context_without_synthetic_user_
 
     handoffs = [event.data for event in events if event.type == "handoff_sent"]
     assert handoffs == [
-        HandoffSentEvent(source=source.name, target=target.name),
-        HandoffSentEvent(source=target.name, target=source.name),
+        HandoffSentEvent(source=resolve_agent_id(source), target=resolve_agent_id(target)),
+        HandoffSentEvent(source=resolve_agent_id(target), target=resolve_agent_id(source)),
     ]
     requests = [event for event in events if event.type == "request_info"]
     assert len(requests) == 1
-    assert requests[0].source_executor_id == source.name
+    assert requests[0].source_executor_id == resolve_agent_id(source)
     assert final_state == WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
 
 

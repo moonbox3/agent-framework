@@ -5,6 +5,8 @@ from typing import Any, cast
 
 import pytest
 from a2a.types import Artifact, Part, StreamResponse, Task, TaskState, TaskStatus
+from a2a.types import Message as A2AMessage
+from a2a.types import Role as A2ARole
 from agent_framework import (
     AgentResponse,
     AgentResponseUpdate,
@@ -34,6 +36,40 @@ class RecordingA2AClient:
                 context_id="group-chat-context",
                 status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
                 artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Remote answer")])],
+            )
+        )
+
+
+class InputRequiredA2AClient:
+    """A2A transport that pauses once, then completes the same task."""
+
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    async def send_message(self, request: Any) -> AsyncIterator[StreamResponse]:
+        self.messages.append(request.message)
+        if len(self.messages) == 1:
+            yield StreamResponse(
+                task=Task(
+                    id="task-input",
+                    context_id="group-chat-context",
+                    status=TaskStatus(
+                        state=TaskState.TASK_STATE_INPUT_REQUIRED,
+                        message=A2AMessage(
+                            message_id="input-request",
+                            role=A2ARole.ROLE_AGENT,
+                            parts=[Part(text="What is your name?")],
+                        ),
+                    ),
+                )
+            )
+            return
+        yield StreamResponse(
+            task=Task(
+                id="task-input",
+                context_id="group-chat-context",
+                status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Thanks, Alice")])],
             )
         )
 
@@ -190,3 +226,52 @@ async def test_consecutive_session_backed_participant_still_receives_empty_turn(
     assert selection_count == 2
     assert len(participant.invocations) == 2
     assert participant.invocations[1] == []
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_input_required_pauses_group_chat_and_resumes_same_task(stream: bool) -> None:
+    """Only caller input can resume the paused A2A participant."""
+    client = InputRequiredA2AClient()
+    remote = A2AAgent(name="remote", client=cast(Any, client), http_client=None)
+    peer = SessionBackedAgent()
+    speakers = ["remote", "session-backed"]
+
+    def select_in_sequence(state: GroupChatState) -> str:
+        return speakers[state.current_round]
+
+    workflow = GroupChatBuilder(
+        participants=[remote, peer],
+        selection_func=select_in_sequence,
+        max_rounds=2,
+    ).build()
+
+    if stream:
+        initial_stream = workflow.run("Start", stream=True)
+        async for _ in initial_stream:
+            pass
+        initial_result = await initial_stream.get_final_response()
+    else:
+        initial_result = await workflow.run("Start")
+
+    requests = initial_result.get_request_info_events()
+    assert len(requests) == 1
+    assert requests[0].data.id == "task-input"
+    assert requests[0].data.text == "What is your name?"
+    assert peer.invocations == []
+
+    caller_response = Content.from_text(text="Alice")
+    if stream:
+        resumed_stream = workflow.run(
+            stream=True,
+            responses={requests[0].request_id: caller_response},
+        )
+        async for _ in resumed_stream:
+            pass
+        await resumed_stream.get_final_response()
+    else:
+        await workflow.run(responses={requests[0].request_id: caller_response})
+
+    assert len(client.messages) == 2
+    assert client.messages[1].task_id == "task-input"
+    assert client.messages[1].parts[0].text == "Alice"
+    assert len(peer.invocations) == 1

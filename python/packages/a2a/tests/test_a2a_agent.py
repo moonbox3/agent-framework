@@ -1510,13 +1510,21 @@ async def test_streaming_input_required_emits_content(a2a_agent: A2AAgent, mock_
     )
     mock_a2a_client.responses.append(StreamResponse(status_update=update_event))
 
+    stream = a2a_agent.run("Hello", stream=True)
     updates: list[AgentResponseUpdate] = []
-    async for update in a2a_agent.run("Hello", stream=True):
+    async for update in stream:
         updates.append(update)
+    response = await stream.get_final_response()
 
     assert len(updates) == 1
     assert updates[0].text == "What is your name?"
     assert updates[0].message_id == "msg-input-req"
+    assert [(request.id, request.text) for request in updates[0].user_input_requests] == [
+        ("task-status", "What is your name?")
+    ]
+    assert [(request.id, request.text) for request in response.user_input_requests] == [
+        ("task-status", "What is your name?")
+    ]
 
 
 @mark.asyncio
@@ -2140,6 +2148,37 @@ async def test_task_state_tracked_on_session(mock_a2a_client: MockA2AClient) -> 
 
     assert session.task_id == "task-input"
     assert session.task_state == TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+@mark.asyncio
+@mark.parametrize("stream", [False, True])
+async def test_input_required_exposes_stable_user_input_request(
+    mock_a2a_client: MockA2AClient,
+    stream: bool,
+) -> None:
+    """INPUT_REQUIRED preserves the remote question and task identity."""
+    agent = A2AAgent(name="Test Agent", id="test-agent", client=cast(Any, mock_a2a_client), http_client=None)
+    mock_a2a_client.add_in_progress_task_response(
+        "task-input",
+        context_id="ctx-input",
+        state=TaskState.TASK_STATE_INPUT_REQUIRED,
+        text="What is your name?",
+    )
+
+    if stream:
+        response_stream = agent.run("Start", stream=True)
+        updates = [update async for update in response_stream]
+        response = await response_stream.get_final_response()
+        assert len(updates) == 1
+        assert [(request.id, request.text) for request in updates[0].user_input_requests] == [
+            ("task-input", "What is your name?")
+        ]
+    else:
+        response = await agent.run("Start")
+
+    assert [(request.id, request.text) for request in response.user_input_requests] == [
+        ("task-input", "What is your name?")
+    ]
 
 
 @mark.asyncio

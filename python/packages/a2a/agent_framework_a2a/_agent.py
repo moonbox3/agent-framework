@@ -730,6 +730,21 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         status = task.status
         task_metadata = MessageToDict(task.metadata) if task.metadata else None
 
+        if status.state == TaskState.TASK_STATE_INPUT_REQUIRED and status.HasField("message") and status.message.parts:
+            contents = self._parse_contents_from_a2a(status.message.parts)
+            if contents:
+                contents[0].id = task.id
+                contents[0].user_input_request = True
+                return [
+                    AgentResponseUpdate(
+                        contents=contents,
+                        role="assistant" if status.message.role == A2ARole.ROLE_AGENT else "user",
+                        response_id=task.id,
+                        additional_properties={"a2a_metadata": task_metadata} if task_metadata else None,
+                        raw_representation=task,
+                    )
+                ]
+
         if status.state in TERMINAL_TASK_STATES:
             task_messages = self._parse_messages_from_task(task)
             if task.artifacts and streamed_artifact_ids:
@@ -834,6 +849,9 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         contents = self._parse_contents_from_a2a(message.parts)
         if not contents:
             return []
+        if state == TaskState.TASK_STATE_INPUT_REQUIRED:
+            contents[0].id = update_event.task_id
+            contents[0].user_input_request = True
 
         msg_meta = MessageToDict(message.metadata) if message.metadata else {}
         event_meta = MessageToDict(update_event.metadata) if update_event.metadata else {}

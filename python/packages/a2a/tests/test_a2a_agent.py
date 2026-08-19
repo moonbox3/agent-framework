@@ -29,6 +29,7 @@ from agent_framework import (
     SessionContext,
 )
 from agent_framework.a2a import A2AAgent
+from agent_framework.exceptions import AgentInvalidRequestException
 from pytest import fixture, mark, raises, warns
 
 from agent_framework_a2a import A2AAgentSession, A2AContinuationToken, A2AServiceSessionId
@@ -1234,15 +1235,47 @@ async def test_run_creates_session_for_providers_when_none_provided(mock_a2a_cli
 async def test_run_raises_when_no_messages_and_no_continuation_token(
     mock_a2a_client: MockA2AClient, messages: list[str] | None
 ) -> None:
-    """Test that run() raises ValueError when messages is None/empty and no continuation_token is provided."""
+    """Empty A2A input requires a real message or an explicit continuation token."""
     agent = A2AAgent(
         name="Test Agent",
         client=cast(Any, mock_a2a_client),
         http_client=None,
     )
 
-    with raises(ValueError, match="At least one message is required"):
+    with raises(
+        AgentInvalidRequestException,
+        match="A2A agent 'Test Agent' requires a real message or an explicit continuation token",
+    ):
         await agent.run(messages)
+
+
+async def test_empty_input_error_includes_session_task_context_without_resuming(
+    mock_a2a_client: MockA2AClient,
+) -> None:
+    """Durable A2A task state explains an invalid call but never authorizes continuation."""
+    agent = A2AAgent(
+        name="Remote specialist",
+        client=cast(Any, mock_a2a_client),
+        http_client=None,
+    )
+    session = AgentSession(
+        service_session_id=A2AServiceSessionId(
+            context_id="customer-42",
+            task_id="task-17",
+            task_state=TaskState.TASK_STATE_COMPLETED,
+        )
+    )
+
+    with raises(
+        AgentInvalidRequestException,
+        match=(
+            "A2A agent 'Remote specialist' requires a real message or an explicit continuation token. "
+            "Session context: context_id='customer-42', task_id='task-17', task_state=TASK_STATE_COMPLETED."
+        ),
+    ):
+        await agent.run([], session=session)
+
+    assert mock_a2a_client.call_count == 0
 
 
 async def test_run_with_continuation_token_does_not_require_messages(mock_a2a_client: MockA2AClient) -> None:

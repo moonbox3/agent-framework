@@ -44,6 +44,7 @@ from agent_framework import (
 )
 from agent_framework._telemetry import mark_feature_used
 from agent_framework._types import AgentRunInputs
+from agent_framework.exceptions import AgentInvalidRequestException
 from agent_framework.observability import AgentTelemetryLayer
 from google.protobuf.json_format import MessageToDict
 
@@ -486,7 +487,16 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
             )
         else:
             if not normalized_messages:
-                raise ValueError("At least one message is required when starting a new task (no continuation_token).")
+                context_id, task_id, task_state = self._extract_a2a_session_state(session)
+                message = f"A2A agent {self.name!r} requires a real message or an explicit continuation token."
+                if context_id is not None or task_id is not None or task_state is not None:
+                    task_context = [
+                        f"context_id={context_id!r}",
+                        f"task_id={task_id!r}",
+                        f"task_state={TaskState.Name(task_state) if task_state is not None else None}",
+                    ]
+                    message = f"{message} Session context: {', '.join(task_context)}."
+                raise AgentInvalidRequestException(message)
             a2a_message = self._prepare_message_for_a2a(normalized_messages[-1], session=session)
             request = SendMessageRequest(message=a2a_message)
             if background and not stream:

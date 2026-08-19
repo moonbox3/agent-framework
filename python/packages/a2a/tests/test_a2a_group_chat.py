@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from a2a.types import Artifact, Part, StreamResponse, Task, TaskState, TaskStatus
+from a2a.types import Artifact, Part, StreamResponse, Task, TaskState, TaskStatus, TaskStatusUpdateEvent
 from a2a.types import Message as A2AMessage
 from a2a.types import Role as A2ARole
 from agent_framework import (
@@ -96,6 +96,46 @@ class MessageLessInputRequiredA2AClient(InputRequiredA2AClient):
                 context_id="group-chat-context",
                 status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
                 artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Thanks, Alice")])],
+            )
+        )
+
+
+class DuplicateMessageLessInputRequiredA2AClient(InputRequiredA2AClient):
+    """A2A transport that repeats one message-less prompt in two protocol shapes."""
+
+    async def send_message(self, request: Any) -> AsyncIterator[StreamResponse]:
+        self.messages.append(request.message)
+        if len(self.messages) == 1:
+            yield StreamResponse(
+                status_update=TaskStatusUpdateEvent(
+                    task_id="task-input-no-message",
+                    context_id="group-chat-context",
+                    status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED),
+                )
+            )
+            yield StreamResponse(
+                task=Task(
+                    id="task-input-no-message",
+                    context_id="group-chat-context",
+                    status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED),
+                )
+            )
+            return
+        if len(self.messages) == 2:
+            yield StreamResponse(
+                task=Task(
+                    id="task-input-no-message",
+                    context_id="group-chat-context",
+                    status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED),
+                )
+            )
+            return
+        yield StreamResponse(
+            task=Task(
+                id="task-input-no-message",
+                context_id="group-chat-context",
+                status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Complete")])],
             )
         )
 
@@ -284,6 +324,42 @@ async def test_message_less_input_required_pauses_and_resumes_group_chat() -> No
     assert len(client.messages) == 2
     assert client.messages[1].task_id == "task-input-no-message"
     assert client.messages[1].parts[0].text == "Alice"
+    assert len(peer.invocations) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_duplicate_message_less_input_events_share_one_request_per_caller_turn(stream: bool) -> None:
+    """Duplicate representations share identity until caller input starts a new prompt."""
+    client = DuplicateMessageLessInputRequiredA2AClient()
+    remote = A2AAgent(name="remote", client=cast(Any, client), http_client=None)
+    peer = SessionBackedAgent()
+    workflow = GroupChatBuilder(
+        participants=[remote, peer],
+        selection_func=lambda state: ["remote", "session-backed"][state.current_round],
+        max_rounds=2,
+    ).build()
+
+    if stream:
+        first_stream = workflow.run("Start", stream=True)
+        async for _ in first_stream:
+            pass
+        first_result = await first_stream.get_final_response()
+    else:
+        first_result = await workflow.run("Start")
+    [first_request] = first_result.get_request_info_events()
+
+    second_result = await workflow.run(
+        responses={first_request.request_id: Content.from_text(text="First answer")},
+    )
+    [second_request] = second_result.get_request_info_events()
+
+    assert second_request.request_id != first_request.request_id
+    assert len(client.messages) == 2
+
+    await workflow.run(
+        responses={second_request.request_id: Content.from_text(text="Second answer")},
+    )
+    assert len(client.messages) == 3
     assert len(peer.invocations) == 1
 
 

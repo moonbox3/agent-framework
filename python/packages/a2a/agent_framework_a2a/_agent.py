@@ -485,6 +485,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
             a2a_stream: AsyncIterable[A2AStreamItem] = self.client.subscribe(
                 SubscribeToTaskRequest(id=continuation_token["task_id"])
             )
+            input_request_occurrence_id = continuation_token["task_id"]
         else:
             if not normalized_messages:
                 context_id, task_id, task_state = self._extract_a2a_session_state(session)
@@ -498,6 +499,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                     message = f"{message} Session context: {', '.join(task_context)}."
                 raise AgentInvalidRequestException(message)
             a2a_message = self._prepare_message_for_a2a(normalized_messages[-1], session=session)
+            input_request_occurrence_id = a2a_message.message_id
             request = SendMessageRequest(message=a2a_message)
             if background and not stream:
                 # return_immediately only applies to non-streaming (message/send)
@@ -520,6 +522,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 a2a_stream,
                 background=background,
                 emit_intermediate=stream,
+                input_request_occurrence_id=input_request_occurrence_id,
                 session=provider_session,
                 session_context=session_context,
             ),
@@ -535,6 +538,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         *,
         background: bool = False,
         emit_intermediate: bool = False,
+        input_request_occurrence_id: str,
         session: AgentSession | None = None,
         session_context: SessionContext | None = None,
     ) -> AsyncIterable[AgentResponseUpdate]:
@@ -551,6 +555,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 carry message content are yielded to the caller.  Typically
                 set for streaming callers so non-streaming consumers only
                 receive terminal task outputs.
+            input_request_occurrence_id: Stable identity for message-less input requests observed in this run.
             session: The agent session for context providers.
             session_context: The session context for context providers.
         """
@@ -573,6 +578,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
             )
 
         all_updates: list[AgentResponseUpdate] = []
+        seen_user_input_request_ids: set[str] = set()
         streamed_artifact_ids_by_task: dict[str, set[str]] = {}
         last_task_id: str | None = None
         last_context_id: str | None = None
@@ -610,8 +616,10 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                     task,
                     background=background,
                     emit_intermediate=emit_intermediate,
+                    input_request_occurrence_id=input_request_occurrence_id,
                     streamed_artifact_ids=streamed_artifact_ids_by_task.get(task.id),
                 )
+                updates = self._deduplicate_user_input_request_updates(updates, seen_user_input_request_ids)
                 if task.status.state in TERMINAL_TASK_STATES:
                     streamed_artifact_ids_by_task.pop(task.id, None)
                     # If the terminal Task has no content, flush accumulated updates
@@ -631,7 +639,12 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 if status_event.context_id:
                     last_context_id = status_event.context_id
                 last_task_state = status_event.status.state
-                updates = self._updates_from_task_update_event(status_event, background=background)
+                updates = self._updates_from_task_update_event(
+                    status_event,
+                    background=background,
+                    input_request_occurrence_id=input_request_occurrence_id,
+                )
+                updates = self._deduplicate_user_input_request_updates(updates, seen_user_input_request_ids)
                 is_terminal = status_event.status.state in TERMINAL_TASK_STATES
                 is_input_required = status_event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
                 if emit_intermediate:
@@ -714,7 +727,13 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         scoped_occurrence = f"{len(self.id)}:{self.id}{len(task_id)}:{task_id}{occurrence_id}"
         return f"a2a-input-{uuid.uuid5(uuid.NAMESPACE_URL, scoped_occurrence)}"
 
-    def _input_required_request(self, task_id: str, message: A2AMessage | None) -> Content:
+    def _input_required_request(
+        self,
+        task_id: str,
+        message: A2AMessage | None,
+        *,
+        fallback_occurrence_id: str,
+    ) -> Content:
         """Normalize an A2A input requirement into one durable caller request."""
         contents = self._parse_contents_from_a2a(message.parts) if message is not None else []
         prompt_parts = [
@@ -726,10 +745,25 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 {"a2a_input_required_message": MessageToDict(message)} if message is not None else None
             ),
         )
-        occurrence_id = message.message_id if message is not None and message.message_id else str(uuid.uuid4())
+        occurrence_id = message.message_id if message is not None and message.message_id else fallback_occurrence_id
         request.id = self._user_input_request_id(task_id, occurrence_id)
         request.user_input_request = True
         return request
+
+    @staticmethod
+    def _deduplicate_user_input_request_updates(
+        updates: list[AgentResponseUpdate],
+        seen_request_ids: set[str],
+    ) -> list[AgentResponseUpdate]:
+        """Drop duplicate representations of a user-input request within one agent run."""
+        deduplicated: list[AgentResponseUpdate] = []
+        for update in updates:
+            request_ids = {request.id for request in update.user_input_requests if request.id}
+            if request_ids and request_ids.issubset(seen_request_ids):
+                continue
+            seen_request_ids.update(request_ids)
+            deduplicated.append(update)
+        return deduplicated
 
     def _updates_from_task(
         self,
@@ -737,6 +771,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         *,
         background: bool = False,
         emit_intermediate: bool = False,
+        input_request_occurrence_id: str | None = None,
         streamed_artifact_ids: set[str] | None = None,
     ) -> list[AgentResponseUpdate]:
         """Convert an A2A Task into AgentResponseUpdate(s).
@@ -754,9 +789,16 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
 
         if status.state == TaskState.TASK_STATE_INPUT_REQUIRED:
             message = status.message if status.HasField("message") and status.message.parts else None
+            occurrence_id = input_request_occurrence_id or task.id
             return [
                 AgentResponseUpdate(
-                    contents=[self._input_required_request(task.id, message)],
+                    contents=[
+                        self._input_required_request(
+                            task.id,
+                            message,
+                            fallback_occurrence_id=occurrence_id,
+                        )
+                    ],
                     role="assistant" if message is None or message.role == A2ARole.ROLE_AGENT else "user",
                     response_id=task.id,
                     continuation_token=self._build_continuation_token(task) if background else None,
@@ -838,6 +880,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         update_event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent,
         *,
         background: bool = False,
+        input_request_occurrence_id: str | None = None,
     ) -> list[AgentResponseUpdate]:
         """Convert A2A task update events into streaming AgentResponseUpdates."""
         if isinstance(update_event, TaskArtifactUpdateEvent):
@@ -876,9 +919,16 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
             message_meta = MessageToDict(message.metadata) if message is not None and message.metadata else {}
             event_meta = MessageToDict(update_event.metadata) if update_event.metadata else {}
             merged_metadata = {**message_meta, **event_meta} or None
+            occurrence_id = input_request_occurrence_id or update_event.task_id
             return [
                 AgentResponseUpdate(
-                    contents=[self._input_required_request(update_event.task_id, message)],
+                    contents=[
+                        self._input_required_request(
+                            update_event.task_id,
+                            message,
+                            fallback_occurrence_id=occurrence_id,
+                        )
+                    ],
                     role="assistant" if message is None or message.role == A2ARole.ROLE_AGENT else "user",
                     response_id=update_event.task_id,
                     message_id=message.message_id if message is not None else None,

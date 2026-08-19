@@ -669,9 +669,15 @@ async def test_textless_handoff_preserves_target_context_without_synthetic_user_
         events = list(result)
         final_state = result.get_final_state()
 
-    assert len(target_client.received_messages) == 1
-    assert [message.text for message in target_client.received_messages[0] if message.role == "user"] == [initial_task]
-    assert len(source_client.received_messages) == 2
+    received_messages = [
+        [(message.role, message.text) for message in invocation]
+        for invocation in [*source_client.received_messages, *target_client.received_messages]
+    ]
+    assert received_messages == [
+        [("user", initial_task)],
+        [("user", initial_task), ("assistant", ""), ("tool", "")],
+        [("user", initial_task)],
+    ]
 
     revisited_source_messages = source_client.received_messages[1]
     source_call_ids = {
@@ -689,12 +695,6 @@ async def test_textless_handoff_preserves_target_context_without_synthetic_user_
     assert "source-handoff-0" in source_call_ids
     assert "source-handoff-0" in source_result_ids
 
-    all_received_messages = [
-        message
-        for invocation in [*source_client.received_messages, *target_client.received_messages]
-        for message in invocation
-    ]
-    assert all("continue the conversation" not in (message.text or "").lower() for message in all_received_messages)
     assert observed_user_turns
     assert all(user_turns == [initial_task] for user_turns in observed_user_turns)
 

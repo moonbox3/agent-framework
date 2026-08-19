@@ -702,24 +702,23 @@ class WorkflowAgent(BaseAgent):
         self,
         event: WorkflowEvent[Any],
     ) -> Content:
-        """Convert a request_info event to FunctionApprovalRequestContent.
+        """Convert a request_info event to caller-facing content.
 
         Args:
             event: A WorkflowEvent with type='request_info'.
 
         Returns:
-            A content object representing the request info. The content can be a `function_approval_request`
-            or a `function_call` depending on the structure of the event data.
+            Specialized user-input request content unchanged, or a `function_call` envelope for generic requests.
 
         Note:
-            If the event data is already a FunctionApprovalRequestContent, it will be returned as-is.
+            Text requests use the function-call envelope so callers can reply with a matching function result.
         """
         if (
             isinstance(event.data, Content)
             and event.data.user_input_request
-            and event.data.type in {"function_approval_request", "function_call"}
+            and event.data.type != "text"
         ):
-            # Preserve request contents that already have a matching response envelope.
+            # Preserve specialized requests that callers already understand how to present.
             return event.data
 
         request_id = event.request_id

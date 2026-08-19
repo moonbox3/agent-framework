@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from agent_framework import (
     AgentSession,
     BaseAgent,
     Content,
+    FileCheckpointStorage,
     Message,
     ResponseStream,
 )
@@ -275,3 +277,75 @@ async def test_input_required_pauses_group_chat_and_resumes_same_task(stream: bo
     assert client.messages[1].task_id == "task-input"
     assert client.messages[1].parts[0].text == "Alice"
     assert len(peer.invocations) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_input_required_survives_group_chat_checkpoint_restoration(stream: bool, tmp_path: Path) -> None:
+    """Restoration preserves caller authority and the original remote task."""
+    client = InputRequiredA2AClient()
+    storage = FileCheckpointStorage(tmp_path)
+    peers: list[SessionBackedAgent] = []
+
+    def select_in_sequence(state: GroupChatState) -> str:
+        return ["remote", "session-backed"][state.current_round]
+
+    def build_workflow() -> Any:
+        peer = SessionBackedAgent()
+        peers.append(peer)
+        return GroupChatBuilder(
+            participants=[
+                A2AAgent(name="remote", client=cast(Any, client), http_client=None),
+                peer,
+            ],
+            selection_func=select_in_sequence,
+            max_rounds=2,
+            checkpoint_storage=storage,
+        ).build()
+
+    workflow = build_workflow()
+    if stream:
+        initial_stream = workflow.run("Start", stream=True)
+        async for _ in initial_stream:
+            pass
+        initial_result = await initial_stream.get_final_response()
+    else:
+        initial_result = await workflow.run("Start")
+
+    [request] = initial_result.get_request_info_events()
+    assert request.data.id == "task-input"
+    checkpoints = await storage.list_checkpoints(workflow_name=workflow.name)
+    checkpoint = next(
+        checkpoint for checkpoint in checkpoints if request.request_id in checkpoint.pending_request_info_events
+    )
+    assert checkpoint.pending_request_info_events[request.request_id].data.id == "task-input"
+
+    restored = build_workflow()
+    with pytest.raises(ValueError, match="unknown request ID"):
+        await restored.run(
+            checkpoint_id=checkpoint.checkpoint_id,
+            responses={"unrelated-request": Content.from_text(text="peer message")},
+        )
+    assert len(client.messages) == 1
+    assert all(peer.invocations == [] for peer in peers)
+
+    caller_response = Content.from_text(text="Alice")
+    if stream:
+        resumed_stream = restored.run(
+            checkpoint_id=checkpoint.checkpoint_id,
+            stream=True,
+            responses={request.request_id: caller_response},
+        )
+        async for _ in resumed_stream:
+            pass
+        resumed_result = await resumed_stream.get_final_response()
+    else:
+        resumed_result = await restored.run(
+            checkpoint_id=checkpoint.checkpoint_id,
+            responses={request.request_id: caller_response},
+        )
+
+    assert resumed_result.get_request_info_events() == []
+    assert len(client.messages) == 2
+    assert client.messages[1].task_id == "task-input"
+    assert client.messages[1].parts[0].text == "Alice"
+    assert sum(len(peer.invocations) for peer in peers) == 1

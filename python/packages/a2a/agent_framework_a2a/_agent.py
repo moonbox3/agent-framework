@@ -735,6 +735,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
             if contents:
                 contents[0].id = task.id
                 contents[0].user_input_request = True
+                contents[0].raw_representation = None
                 return [
                     AgentResponseUpdate(
                         contents=contents,
@@ -852,6 +853,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         if state == TaskState.TASK_STATE_INPUT_REQUIRED:
             contents[0].id = update_event.task_id
             contents[0].user_input_request = True
+            contents[0].raw_representation = None
 
         msg_meta = MessageToDict(message.metadata) if message.metadata else {}
         event_meta = MessageToDict(update_event.metadata) if update_event.metadata else {}

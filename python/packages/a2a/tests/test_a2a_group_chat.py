@@ -19,7 +19,7 @@ from agent_framework import (
     ResponseStream,
 )
 from agent_framework.exceptions import AgentInvalidRequestException
-from agent_framework.orchestrations import GroupChatBuilder, GroupChatState
+from agent_framework.orchestrations import ConcurrentBuilder, GroupChatBuilder, GroupChatState
 
 from agent_framework_a2a import A2AAgent
 
@@ -69,6 +69,30 @@ class InputRequiredA2AClient:
         yield StreamResponse(
             task=Task(
                 id="task-input",
+                context_id="group-chat-context",
+                status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Thanks, Alice")])],
+            )
+        )
+
+
+class MessageLessInputRequiredA2AClient(InputRequiredA2AClient):
+    """A2A transport whose first input request omits the optional prompt."""
+
+    async def send_message(self, request: Any) -> AsyncIterator[StreamResponse]:
+        self.messages.append(request.message)
+        if len(self.messages) == 1:
+            yield StreamResponse(
+                task=Task(
+                    id="task-input-no-message",
+                    context_id="group-chat-context",
+                    status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED),
+                )
+            )
+            return
+        yield StreamResponse(
+            task=Task(
+                id="task-input-no-message",
                 context_id="group-chat-context",
                 status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
                 artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Thanks, Alice")])],
@@ -141,6 +165,94 @@ class SessionBackedAgent(BaseAgent):
             return AgentResponse(messages=[Message("assistant", [text], author_name=self.name)])
 
         return _run()
+
+
+async def test_concurrent_a2a_requests_with_same_remote_task_id_remain_isolated() -> None:
+    """Caller responses remain scoped to the participant that requested them."""
+    first_client = InputRequiredA2AClient()
+    second_client = InputRequiredA2AClient()
+    workflow = ConcurrentBuilder(
+        participants=[
+            A2AAgent(name="first-remote", client=cast(Any, first_client), http_client=None),
+            A2AAgent(name="second-remote", client=cast(Any, second_client), http_client=None),
+        ]
+    ).build()
+
+    initial_result = await workflow.run("Start")
+
+    requests = {event.source_executor_id: event for event in initial_result.get_request_info_events()}
+    assert set(requests) == {"first-remote", "second-remote"}
+    assert requests["first-remote"].request_id != requests["second-remote"].request_id
+
+    await workflow.run(
+        responses={requests["first-remote"].request_id: "Alice"},
+    )
+    assert len(first_client.messages) == 2
+    assert len(second_client.messages) == 1
+
+    await workflow.run(
+        responses={requests["second-remote"].request_id: "Bob"},
+    )
+    assert len(second_client.messages) == 2
+
+
+async def test_input_required_round_trips_through_group_chat_as_agent() -> None:
+    """A workflow agent exposes and accepts the generic request-info envelope."""
+    client = InputRequiredA2AClient()
+    workflow = GroupChatBuilder(
+        participants=[A2AAgent(name="remote", client=cast(Any, client), http_client=None)],
+        selection_func=lambda state: "remote",
+        max_rounds=1,
+    ).build()
+    workflow_agent = workflow.as_agent(name="group-chat-agent")
+
+    initial_response = await workflow_agent.run("Start")
+
+    request_calls = [
+        content
+        for message in initial_response.messages
+        for content in message.contents
+        if content.type == "function_call" and content.name == "request_info"
+    ]
+    [request_call] = request_calls
+    assert request_call.call_id is not None
+
+    final_response = await workflow_agent.run(
+        Message(
+            role="tool",
+            contents=[Content.from_function_result(call_id=request_call.call_id, result="Alice")],
+        )
+    )
+
+    assert final_response.user_input_requests == []
+    assert len(client.messages) == 2
+    assert client.messages[1].task_id == "task-input"
+    assert client.messages[1].parts[0].text == "Alice"
+
+
+async def test_message_less_input_required_pauses_and_resumes_group_chat() -> None:
+    """Remote caller authority survives an omitted A2A prompt message."""
+    client = MessageLessInputRequiredA2AClient()
+    remote = A2AAgent(name="remote", client=cast(Any, client), http_client=None)
+    peer = SessionBackedAgent()
+    workflow = GroupChatBuilder(
+        participants=[remote, peer],
+        selection_func=lambda state: ["remote", "session-backed"][state.current_round],
+        max_rounds=2,
+    ).build()
+
+    initial_result = await workflow.run("Start")
+
+    [request] = initial_result.get_request_info_events()
+    assert request.data.text == "Remote A2A task requires input."
+    assert peer.invocations == []
+
+    await workflow.run(responses={request.request_id: "Alice"})
+
+    assert len(client.messages) == 2
+    assert client.messages[1].task_id == "task-input-no-message"
+    assert client.messages[1].parts[0].text == "Alice"
+    assert len(peer.invocations) == 1
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -257,11 +369,12 @@ async def test_input_required_pauses_group_chat_and_resumes_same_task(stream: bo
 
     requests = initial_result.get_request_info_events()
     assert len(requests) == 1
-    assert requests[0].data.id == "task-input"
+    assert requests[0].data.id == requests[0].request_id
+    assert requests[0].request_id != "task-input"
     assert requests[0].data.text == "What is your name?"
     assert peer.invocations == []
 
-    caller_response = Content.from_text(text="Alice")
+    caller_response = "Alice"
     if stream:
         resumed_stream = workflow.run(
             stream=True,
@@ -312,23 +425,24 @@ async def test_input_required_survives_group_chat_checkpoint_restoration(stream:
         initial_result = await workflow.run("Start")
 
     [request] = initial_result.get_request_info_events()
-    assert request.data.id == "task-input"
+    assert request.data.id == request.request_id
+    assert request.request_id != "task-input"
     checkpoints = await storage.list_checkpoints(workflow_name=workflow.name)
     checkpoint = next(
         checkpoint for checkpoint in checkpoints if request.request_id in checkpoint.pending_request_info_events
     )
-    assert checkpoint.pending_request_info_events[request.request_id].data.id == "task-input"
+    assert checkpoint.pending_request_info_events[request.request_id].data.id == request.request_id
 
     restored = build_workflow()
     with pytest.raises(ValueError, match="unknown request ID"):
         await restored.run(
             checkpoint_id=checkpoint.checkpoint_id,
-            responses={"unrelated-request": Content.from_text(text="peer message")},
+            responses={"unrelated-request": "peer message"},
         )
     assert len(client.messages) == 1
     assert all(peer.invocations == [] for peer in peers)
 
-    caller_response = Content.from_text(text="Alice")
+    caller_response = "Alice"
     if stream:
         resumed_stream = restored.run(
             checkpoint_id=checkpoint.checkpoint_id,

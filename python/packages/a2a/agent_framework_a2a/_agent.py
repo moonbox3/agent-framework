@@ -631,7 +631,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 if status_event.context_id:
                     last_context_id = status_event.context_id
                 last_task_state = status_event.status.state
-                updates = self._updates_from_task_update_event(status_event)
+                updates = self._updates_from_task_update_event(status_event, background=background)
                 is_terminal = status_event.status.state in TERMINAL_TASK_STATES
                 is_input_required = status_event.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
                 if emit_intermediate:
@@ -709,6 +709,27 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
     # Task helpers
     # ------------------------------------------------------------------
 
+    def _user_input_request_id(self, task_id: str) -> str:
+        """Return a stable workflow request ID scoped to this A2A participant."""
+        scoped_task_id = f"{len(self.id)}:{self.id}{task_id}"
+        return f"a2a-input-{uuid.uuid5(uuid.NAMESPACE_URL, scoped_task_id)}"
+
+    def _input_required_request(self, task_id: str, message: A2AMessage | None) -> Content:
+        """Normalize an A2A input requirement into one durable caller request."""
+        contents = self._parse_contents_from_a2a(message.parts) if message is not None else []
+        prompt_parts = [
+            value for content in contents if (value := content.text or (content.uri if content.type == "uri" else None))
+        ]
+        request = Content.from_text(
+            text="\n".join(prompt_parts) or "Remote A2A task requires input.",
+            additional_properties=(
+                {"a2a_input_required_message": MessageToDict(message)} if message is not None else None
+            ),
+        )
+        request.id = self._user_input_request_id(task_id)
+        request.user_input_request = True
+        return request
+
     def _updates_from_task(
         self,
         task: Task,
@@ -730,21 +751,18 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         status = task.status
         task_metadata = MessageToDict(task.metadata) if task.metadata else None
 
-        if status.state == TaskState.TASK_STATE_INPUT_REQUIRED and status.HasField("message") and status.message.parts:
-            contents = self._parse_contents_from_a2a(status.message.parts)
-            if contents:
-                contents[0].id = task.id
-                contents[0].user_input_request = True
-                contents[0].raw_representation = None
-                return [
-                    AgentResponseUpdate(
-                        contents=contents,
-                        role="assistant" if status.message.role == A2ARole.ROLE_AGENT else "user",
-                        response_id=task.id,
-                        additional_properties={"a2a_metadata": task_metadata} if task_metadata else None,
-                        raw_representation=task,
-                    )
-                ]
+        if status.state == TaskState.TASK_STATE_INPUT_REQUIRED:
+            message = status.message if status.HasField("message") and status.message.parts else None
+            return [
+                AgentResponseUpdate(
+                    contents=[self._input_required_request(task.id, message)],
+                    role="assistant" if message is None or message.role == A2ARole.ROLE_AGENT else "user",
+                    response_id=task.id,
+                    continuation_token=self._build_continuation_token(task) if background else None,
+                    additional_properties={"a2a_metadata": task_metadata} if task_metadata else None,
+                    raw_representation=task,
+                )
+            ]
 
         if status.state in TERMINAL_TASK_STATES:
             task_messages = self._parse_messages_from_task(task)
@@ -815,7 +833,10 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         return []
 
     def _updates_from_task_update_event(
-        self, update_event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent
+        self,
+        update_event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent,
+        *,
+        background: bool = False,
     ) -> list[AgentResponseUpdate]:
         """Convert A2A task update events into streaming AgentResponseUpdates."""
         if isinstance(update_event, TaskArtifactUpdateEvent):
@@ -839,22 +860,43 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
         if not isinstance(update_event, TaskStatusUpdateEvent):
             return []
 
+        state = update_event.status.state
+        continuation_token = (
+            A2AContinuationToken(task_id=update_event.task_id, context_id=update_event.context_id)
+            if background and state in IN_PROGRESS_TASK_STATES
+            else None
+        )
+        if state == TaskState.TASK_STATE_INPUT_REQUIRED:
+            message = (
+                update_event.status.message
+                if update_event.status.HasField("message") and update_event.status.message.parts
+                else None
+            )
+            message_meta = MessageToDict(message.metadata) if message is not None and message.metadata else {}
+            event_meta = MessageToDict(update_event.metadata) if update_event.metadata else {}
+            merged_metadata = {**message_meta, **event_meta} or None
+            return [
+                AgentResponseUpdate(
+                    contents=[self._input_required_request(update_event.task_id, message)],
+                    role="assistant" if message is None or message.role == A2ARole.ROLE_AGENT else "user",
+                    response_id=update_event.task_id,
+                    message_id=message.message_id if message is not None else None,
+                    continuation_token=continuation_token,
+                    additional_properties={"a2a_metadata": merged_metadata} if merged_metadata else None,
+                    raw_representation=update_event,
+                )
+            ]
+
         if not update_event.status.HasField("message") or not update_event.status.message.parts:
             return []
 
-        state = update_event.status.state
-        if state not in TERMINAL_TASK_STATES and state != TaskState.TASK_STATE_INPUT_REQUIRED:
+        if state not in TERMINAL_TASK_STATES:
             return []
 
         message = update_event.status.message
         contents = self._parse_contents_from_a2a(message.parts)
         if not contents:
             return []
-        if state == TaskState.TASK_STATE_INPUT_REQUIRED:
-            contents[0].id = update_event.task_id
-            contents[0].user_input_request = True
-            contents[0].raw_representation = None
-
         msg_meta = MessageToDict(message.metadata) if message.metadata else {}
         event_meta = MessageToDict(update_event.metadata) if update_event.metadata else {}
         merged_metadata = {**msg_meta, **event_meta} or None
@@ -865,6 +907,7 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 role="assistant" if message.role == A2ARole.ROLE_AGENT else "user",
                 response_id=update_event.task_id,
                 message_id=message.message_id,
+                continuation_token=continuation_token,
                 additional_properties={"a2a_metadata": merged_metadata} if merged_metadata else None,
                 raw_representation=update_event,
             )

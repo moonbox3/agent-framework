@@ -316,6 +316,16 @@ class AgentExecutor(Executor):
             self._pending_responses_to_agent.clear()
             await self._run_agent_and_emit(ctx)
 
+    @response_handler
+    async def handle_text_user_input_response(
+        self,
+        original_request: Content,
+        response: str,
+        ctx: WorkflowContext[AgentExecutorResponse, AgentResponse | AgentResponseUpdate],
+    ) -> None:
+        """Normalize a text response before resuming agent execution."""
+        await self.handle_user_input_response(original_request, Content.from_text(text=response), ctx)
+
     @override
     async def on_checkpoint_save(self) -> dict[str, Any]:
         """Capture current executor state for checkpointing.
@@ -446,7 +456,8 @@ class AgentExecutor(Executor):
                 )
             for user_input_request in response.user_input_requests:
                 self._pending_agent_requests[user_input_request.id] = user_input_request  # type: ignore[index]
-                await ctx.request_info(user_input_request, Content, request_id=user_input_request.id)
+                response_type = str if user_input_request.type == "text" else Content
+                await ctx.request_info(user_input_request, response_type, request_id=user_input_request.id)
             return None
 
         # Only yield output if the response is complete and not waiting for user input.
@@ -540,7 +551,8 @@ class AgentExecutor(Executor):
         if user_input_requests:
             for user_input_request in user_input_requests:
                 self._pending_agent_requests[user_input_request.id] = user_input_request  # type: ignore[index]
-                await ctx.request_info(user_input_request, Content, request_id=user_input_request.id)
+                response_type = str if user_input_request.type == "text" else Content
+                await ctx.request_info(user_input_request, response_type, request_id=user_input_request.id)
             return None
 
         return response

@@ -714,8 +714,12 @@ class WorkflowAgent(BaseAgent):
         Note:
             If the event data is already a FunctionApprovalRequestContent, it will be returned as-is.
         """
-        if isinstance(event.data, Content) and event.data.user_input_request:
-            # Return the event data as-is if it's already a properly formed FunctionApprovalRequestContent
+        if (
+            isinstance(event.data, Content)
+            and event.data.user_input_request
+            and event.data.type in {"function_approval_request", "function_call"}
+        ):
+            # Preserve request contents that already have a matching response envelope.
             return event.data
 
         request_id = event.request_id

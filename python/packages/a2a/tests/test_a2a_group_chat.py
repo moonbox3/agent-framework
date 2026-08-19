@@ -100,6 +100,38 @@ class MessageLessInputRequiredA2AClient(InputRequiredA2AClient):
         )
 
 
+class RepeatedInputRequiredA2AClient(InputRequiredA2AClient):
+    """A2A transport that requests caller input twice for the same task."""
+
+    async def send_message(self, request: Any) -> AsyncIterator[StreamResponse]:
+        self.messages.append(request.message)
+        if len(self.messages) <= 2:
+            prompt_number = len(self.messages)
+            yield StreamResponse(
+                task=Task(
+                    id="task-input",
+                    context_id="group-chat-context",
+                    status=TaskStatus(
+                        state=TaskState.TASK_STATE_INPUT_REQUIRED,
+                        message=A2AMessage(
+                            message_id=f"input-request-{prompt_number}",
+                            role=A2ARole.ROLE_AGENT,
+                            parts=[Part(text=f"Question {prompt_number}?")],
+                        ),
+                    ),
+                )
+            )
+            return
+        yield StreamResponse(
+            task=Task(
+                id="task-input",
+                context_id="group-chat-context",
+                status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                artifacts=[Artifact(artifact_id="answer", parts=[Part(text="Complete")])],
+            )
+        )
+
+
 class TextlessAgent(BaseAgent):
     """Participant whose response projects to no Group Chat messages."""
 
@@ -255,6 +287,69 @@ async def test_message_less_input_required_pauses_and_resumes_group_chat() -> No
     assert len(peer.invocations) == 1
 
 
+async def test_repeated_input_requests_for_same_remote_task_reject_stale_responses() -> None:
+    """Each remote prompt occurrence has independent workflow correlation."""
+    client = RepeatedInputRequiredA2AClient()
+    remote = A2AAgent(name="remote", client=cast(Any, client), http_client=None)
+    peer = SessionBackedAgent()
+    workflow = GroupChatBuilder(
+        participants=[remote, peer],
+        selection_func=lambda state: ["remote", "session-backed"][state.current_round],
+        max_rounds=2,
+    ).build()
+
+    first_result = await workflow.run("Start")
+    [first_request] = first_result.get_request_info_events()
+
+    second_result = await workflow.run(
+        responses={first_request.request_id: Content.from_text(text="First answer")},
+    )
+    [second_request] = second_result.get_request_info_events()
+
+    assert second_request.request_id != first_request.request_id
+    with pytest.raises(ValueError, match="unknown request ID"):
+        await workflow.run(
+            responses={first_request.request_id: Content.from_text(text="Stale first answer")},
+        )
+    assert len(client.messages) == 2
+
+    await workflow.run(
+        responses={second_request.request_id: Content.from_text(text="Second answer")},
+    )
+    assert len(client.messages) == 3
+    assert client.messages[2].task_id == "task-input"
+    assert client.messages[2].parts[0].text == "Second answer"
+    assert len(peer.invocations) == 1
+
+
+async def test_input_required_accepts_structured_content_response() -> None:
+    """Caller responses preserve structured content supported by A2A."""
+    client = InputRequiredA2AClient()
+    remote = A2AAgent(name="remote", client=cast(Any, client), http_client=None)
+    peer = SessionBackedAgent()
+    workflow = GroupChatBuilder(
+        participants=[remote, peer],
+        selection_func=lambda state: ["remote", "session-backed"][state.current_round],
+        max_rounds=2,
+    ).build()
+
+    initial_result = await workflow.run("Start")
+    [request] = initial_result.get_request_info_events()
+
+    await workflow.run(
+        responses={
+            request.request_id: Content.from_uri(
+                "https://example.com/answer.pdf",
+                media_type="application/pdf",
+            )
+        },
+    )
+
+    assert len(client.messages) == 2
+    assert client.messages[1].task_id == "task-input"
+    assert client.messages[1].parts[0].url == "https://example.com/answer.pdf"
+
+
 @pytest.mark.parametrize("stream", [False, True])
 async def test_consecutive_a2a_selection_rejects_empty_invocation_without_remote_call(stream: bool) -> None:
     """A consecutive A2A turn fails instead of inventing continuation input."""
@@ -374,7 +469,7 @@ async def test_input_required_pauses_group_chat_and_resumes_same_task(stream: bo
     assert requests[0].data.text == "What is your name?"
     assert peer.invocations == []
 
-    caller_response = "Alice"
+    caller_response = Content.from_text(text="Alice")
     if stream:
         resumed_stream = workflow.run(
             stream=True,

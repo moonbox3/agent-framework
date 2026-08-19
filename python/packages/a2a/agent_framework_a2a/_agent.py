@@ -709,10 +709,10 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
     # Task helpers
     # ------------------------------------------------------------------
 
-    def _user_input_request_id(self, task_id: str) -> str:
-        """Return a stable workflow request ID scoped to this A2A participant."""
-        scoped_task_id = f"{len(self.id)}:{self.id}{task_id}"
-        return f"a2a-input-{uuid.uuid5(uuid.NAMESPACE_URL, scoped_task_id)}"
+    def _user_input_request_id(self, task_id: str, occurrence_id: str) -> str:
+        """Return a workflow request ID scoped to one remote prompt occurrence."""
+        scoped_occurrence = f"{len(self.id)}:{self.id}{len(task_id)}:{task_id}{occurrence_id}"
+        return f"a2a-input-{uuid.uuid5(uuid.NAMESPACE_URL, scoped_occurrence)}"
 
     def _input_required_request(self, task_id: str, message: A2AMessage | None) -> Content:
         """Normalize an A2A input requirement into one durable caller request."""
@@ -726,7 +726,8 @@ class A2AAgent(AgentTelemetryLayer, BaseAgent):
                 {"a2a_input_required_message": MessageToDict(message)} if message is not None else None
             ),
         )
-        request.id = self._user_input_request_id(task_id)
+        occurrence_id = message.message_id if message is not None and message.message_id else str(uuid.uuid4())
+        request.id = self._user_input_request_id(task_id, occurrence_id)
         request.user_input_request = True
         return request
 

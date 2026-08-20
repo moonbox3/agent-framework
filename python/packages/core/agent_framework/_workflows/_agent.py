@@ -775,7 +775,10 @@ class WorkflowAgent(BaseAgent):
                     pending_request = pending_requests.get(request_id)
                     response_data = (
                         content
-                        if pending_request is not None and pending_request.response_type is Content
+                        if pending_request is not None
+                        and pending_request.response_type is Content
+                        and isinstance(pending_request.data, Content)
+                        and pending_request.data.type == "function_call"
                         else content.result
                     )
                     function_responses[request_id] = response_data

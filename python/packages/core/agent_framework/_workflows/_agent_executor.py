@@ -410,9 +410,9 @@ class AgentExecutor(Executor):
         Returns:
             The complete AgentResponse, or None if waiting for user input.
         """
-        function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(
-            ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
-        )
+        raw_run_kwargs = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
+        function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(raw_run_kwargs)
+        tools = raw_run_kwargs.get("tools")
 
         if not self._cache:
             logger.warning(
@@ -422,13 +422,15 @@ class AgentExecutor(Executor):
             )
 
         run_agent = cast(Callable[..., Awaitable[AgentResponse[Any]]], self._agent.run)
-        response = await run_agent(
-            self._cache,
-            stream=False,
-            session=self._session,
-            function_invocation_kwargs=function_invocation_kwargs,
-            client_kwargs=client_kwargs,
-        )
+        run_kwargs: dict[str, Any] = {
+            "stream": False,
+            "session": self._session,
+            "function_invocation_kwargs": function_invocation_kwargs,
+            "client_kwargs": client_kwargs,
+        }
+        if tools is not None:
+            run_kwargs["tools"] = tools
+        response = await run_agent(self._cache, **run_kwargs)
 
         # Handle any user input requests
         if response.user_input_requests:
@@ -464,9 +466,9 @@ class AgentExecutor(Executor):
         Returns:
             The complete AgentResponse, or None if waiting for user input.
         """
-        function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(
-            ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
-        )
+        raw_run_kwargs = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
+        function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(raw_run_kwargs)
+        tools = raw_run_kwargs.get("tools")
 
         if not self._cache:
             logger.warning(
@@ -478,13 +480,15 @@ class AgentExecutor(Executor):
         updates: list[AgentResponseUpdate] = []
         streamed_user_input_requests: list[Content] = []
         run_agent_stream = cast(Callable[..., ResponseStream[AgentResponseUpdate, AgentResponse[Any]]], self._agent.run)
-        stream = run_agent_stream(
-            self._cache,
-            stream=True,
-            session=self._session,
-            function_invocation_kwargs=function_invocation_kwargs,
-            client_kwargs=client_kwargs,
-        )
+        run_kwargs: dict[str, Any] = {
+            "stream": True,
+            "session": self._session,
+            "function_invocation_kwargs": function_invocation_kwargs,
+            "client_kwargs": client_kwargs,
+        }
+        if tools is not None:
+            run_kwargs["tools"] = tools
+        stream = run_agent_stream(self._cache, **run_kwargs)
         async for update in stream:
             updates.append(update)
             if update.user_input_requests:
@@ -562,7 +566,6 @@ class AgentExecutor(Executor):
         """
         fi_resolved = raw_run_kwargs.get("function_invocation_kwargs")
         ci_resolved = raw_run_kwargs.get("client_kwargs")
-
         function_invocation_kwargs = self._resolve_executor_kwargs(fi_resolved)
         client_kwargs = self._resolve_executor_kwargs(ci_resolved)
 

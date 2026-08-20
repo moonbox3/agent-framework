@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from .._sessions import ContextProvider
+from .._tools import ToolTypes
 from .._types import Content, ResponseStream
 from ..exceptions import WorkflowException
 from ..observability import OtelAttr, capture_exception, create_workflow_span
@@ -480,6 +481,7 @@ class Workflow(DictConvertible):
         initial_executor_fn: Callable[[], Awaitable[None]] | None = None,
         is_continuation: bool = False,
         streaming: bool = False,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
         function_invocation_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
         client_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> AsyncIterable[WorkflowEvent]:
@@ -498,6 +500,7 @@ class Workflow(DictConvertible):
                 fresh-message runs reset them. Shared workflow state is
                 preserved in both cases.
             streaming: Whether to enable streaming mode for agents.
+            tools: Runtime tools available to agent executors.
             function_invocation_kwargs: Optional kwargs to store in State for function
                 invocations in subagents.
             client_kwargs: Optional kwargs to store in State for chat client
@@ -550,8 +553,10 @@ class Workflow(DictConvertible):
                 # - On a continuation (checkpoint restore or responses), the
                 #   prior run's kwargs are preserved unless the caller
                 #   explicitly provides new kwargs.
-                if function_invocation_kwargs is not None or client_kwargs is not None:
+                if function_invocation_kwargs is not None or client_kwargs is not None or tools is not None:
                     combined_kwargs: dict[str, Any] = {}
+                    if tools is not None:
+                        combined_kwargs["tools"] = tools
                     if function_invocation_kwargs is not None:
                         combined_kwargs["function_invocation_kwargs"] = self._resolve_invocation_kwargs(
                             function_invocation_kwargs, "function_invocation_kwargs"
@@ -688,6 +693,7 @@ class Workflow(DictConvertible):
         responses: Mapping[str, Any] | None = None,
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
         function_invocation_kwargs: Mapping[str, Any] | None = None,
         client_kwargs: Mapping[str, Any] | None = None,
     ) -> ResponseStream[WorkflowEvent, WorkflowRunResult]: ...
@@ -702,6 +708,7 @@ class Workflow(DictConvertible):
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         include_status_events: bool = False,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
         function_invocation_kwargs: Mapping[str, Any] | None = None,
         client_kwargs: Mapping[str, Any] | None = None,
     ) -> Awaitable[WorkflowRunResult]: ...
@@ -715,6 +722,7 @@ class Workflow(DictConvertible):
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         include_status_events: bool = False,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
         function_invocation_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
         client_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> ResponseStream[WorkflowEvent, WorkflowRunResult] | Awaitable[WorkflowRunResult]:
@@ -738,6 +746,7 @@ class Workflow(DictConvertible):
                 (restore then send responses).
             checkpoint_storage: Runtime checkpoint storage.
             include_status_events: Whether to include status events (non-streaming only).
+            tools: Runtime tools available to agent executors.
             function_invocation_kwargs: Keyword arguments forwarded to tool invocations in
                 subagents. Either a mapping for agent name or agent executor id to kwargs,
                 or a flat mapping of kwargs for all tool invocations.
@@ -783,6 +792,7 @@ class Workflow(DictConvertible):
                 checkpoint_id=checkpoint_id,
                 checkpoint_storage=checkpoint_storage,
                 streaming=stream,
+                tools=tools,
                 function_invocation_kwargs=function_invocation_kwargs,
                 client_kwargs=client_kwargs,
             ),
@@ -802,6 +812,7 @@ class Workflow(DictConvertible):
         checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
         streaming: bool = False,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
         function_invocation_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
         client_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> AsyncIterable[WorkflowEvent]:
@@ -877,6 +888,7 @@ class Workflow(DictConvertible):
                 initial_executor_fn=initial_executor_fn,
                 is_continuation=(message is None),
                 streaming=streaming,
+                tools=tools,
                 function_invocation_kwargs=function_invocation_kwargs,
                 client_kwargs=client_kwargs,
             ):

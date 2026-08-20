@@ -454,6 +454,90 @@ async def test_workflow_endpoint_accepts_canonical_tool_approval_resume() -> Non
     )
 
 
+async def test_endpoint_workflow_as_agent_resumes_with_client_tools() -> None:
+    """A workflow exposed through AgentFrameworkAgent accepts client tools across approval resume."""
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345", "amount": 89.99},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request
+            arguments = response.function_call.parse_arguments() if response.function_call is not None else None
+            await ctx.yield_output(json.dumps(arguments, sort_keys=True))  # type: ignore[arg-type]
+
+    client_tool = {
+        "name": "submit_refund",
+        "description": "Submit a refund",
+        "parameters": {
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}, "amount": {"type": "number"}},
+        },
+    }
+    app = FastAPI()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    wrapped_agent = AgentFrameworkAgent(agent=workflow.as_agent())
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/workflow-as-agent")
+
+    with TestClient(app) as client:
+        pause_response = client.post(
+            "/workflow-as-agent",
+            json={
+                "runId": "run-pause",
+                "threadId": "thread-client-tools",
+                "messages": [{"role": "user", "content": "Refund the order"}],
+                "tools": [client_tool],
+            },
+        )
+        pause_events = _decode_sse_events(pause_response)
+        assert not [event for event in pause_events if event.get("type") == "RUN_ERROR"]
+        pause_finished = [event for event in pause_events if event.get("type") == "RUN_FINISHED"]
+        assert _run_finished_interrupts(pause_finished[-1])[0]["id"] == "refund-call"
+
+        resume_response = client.post(
+            "/workflow-as-agent",
+            json={
+                "runId": "run-resume",
+                "threadId": "thread-client-tools",
+                "messages": [],
+                "tools": [client_tool],
+                "resume": [
+                    {
+                        "interruptId": "refund-call",
+                        "status": "resolved",
+                        "payload": {"accepted": True, "amount": 49.5},
+                    }
+                ],
+            },
+        )
+        resume_events = _decode_sse_events(resume_response)
+
+    assert not [event for event in resume_events if event.get("type") == "RUN_ERROR"]
+    assert '{"amount": 49.5, "order_id": "12345"}' == "".join(
+        str(event.get("delta", "")) for event in resume_events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
 async def test_workflow_endpoint_applies_canonical_approval_edited_args() -> None:
     """Workflow approvals apply standard editedArgs as a full replacement."""
 

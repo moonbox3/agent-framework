@@ -584,6 +584,19 @@ async def test_workflow_as_agent_run_propagates_kwargs_to_underlying_agent() -> 
     assert received.get("function_invocation_kwargs") == fi_kwargs
 
 
+async def test_workflow_as_agent_run_propagates_tools_to_underlying_agent() -> None:
+    """Tools passed to workflow.as_agent().run() reach the underlying agent executor."""
+    agent = _KwargsCapturingAgent(name="inner_agent")
+    workflow = SequentialBuilder(participants=[agent]).build()
+    workflow_agent = workflow.as_agent(name="TestWorkflowAgent")
+
+    client_tools = [object()]
+    _ = await workflow_agent.run("test message", tools=client_tools)
+
+    assert len(agent.captured_kwargs) >= 1, "Inner agent should have been invoked at least once"
+    assert agent.captured_kwargs[0].get("tools") is client_tools
+
+
 async def test_workflow_as_agent_run_stream_propagates_kwargs_to_underlying_agent() -> None:
     """Test that function_invocation_kwargs passed to workflow_agent.run(stream=True) flow through."""
     agent = _KwargsCapturingAgent(name="inner_agent")
@@ -693,6 +706,24 @@ async def test_subworkflow_kwargs_propagation() -> None:
     assert received_kwargs.get("function_invocation_kwargs") == fi_kwargs, (
         f"Expected function_invocation_kwargs={fi_kwargs}, got {received_kwargs.get('function_invocation_kwargs')}"
     )
+
+
+async def test_subworkflow_tools_propagation() -> None:
+    """Tools passed to a parent workflow reach agents inside a nested workflow."""
+    from agent_framework._workflows._workflow_executor import WorkflowExecutor
+
+    inner_agent = _KwargsCapturingAgent(name="inner_agent")
+    inner_workflow = SequentialBuilder(participants=[inner_agent]).build()
+    subworkflow_executor = WorkflowExecutor(workflow=inner_workflow, id="subworkflow_executor")
+    outer_workflow = SequentialBuilder(participants=[subworkflow_executor]).build()
+
+    client_tools = [object()]
+    async for event in outer_workflow.run("test message for subworkflow", stream=True, tools=client_tools):
+        if event.type == "status" and event.state == WorkflowRunState.IDLE:
+            break
+
+    assert len(inner_agent.captured_kwargs) >= 1, "Inner agent in subworkflow should have been invoked"
+    assert inner_agent.captured_kwargs[0].get("tools") is client_tools
 
 
 async def test_subworkflow_kwargs_accessible_via_state() -> None:

@@ -36,6 +36,7 @@ from agent_framework import (
     MESSAGE_INJECTION_PENDING_MESSAGES_STATE_KEY,
     Message,
     SupportsAgentRun,
+    WorkflowAgent,
 )
 from agent_framework._middleware import FunctionMiddlewarePipeline
 from agent_framework._tools import (
@@ -1192,6 +1193,7 @@ def _canonical_approval_resume_messages(
     lifecycle: ApprovalLifecycle,
     tools: list[Any] | None = None,
     has_deferred_owner: bool = False,
+    workflow_agent_owns_approval: bool = False,
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     retained_results: list[Content] | None = None,
     snapshot_reconciliations: list[ApprovalSnapshotReconciliation] | None = None,
@@ -1382,9 +1384,15 @@ def _canonical_approval_resume_messages(
                 original_arguments=pending_arguments,
             )
         )
+        response_id = interrupt_id
+        if workflow_agent_owns_approval:
+            response_id = next(
+                (alias for alias in pending_entry.aliases if alias != interrupt_id),
+                interrupt_id,
+            )
         function_approvals = [
             {
-                "id": interrupt_id,
+                "id": response_id,
                 "call_id": pending_entry.identity.call_id,
                 "name": _pending_approval_name(pending_entry) or "",
                 "approved": accepted,
@@ -2306,6 +2314,7 @@ async def run_agent_stream(
     client_tools = convert_agui_tools_to_agent_framework(input_data.get("tools"))
     server_tools = collect_server_tools(agent)
     tools = merge_tools(server_tools, client_tools)
+    workflow_agent_owns_approval = isinstance(agent, WorkflowAgent)
     approval_resume_messages, handled_resume_ids, cancelled_resume_ids, resume_error = (
         _canonical_approval_resume_messages(
             resume_payload,
@@ -2313,7 +2322,9 @@ async def run_agent_stream(
             expected_interrupt_ids=stored_pending_approval_interrupt_ids or None,
             lifecycle=approval_state_store.lifecycle,
             tools=tools,
-            has_deferred_owner=approval_state_store.has_tool_approval_state(approval_thread_id),
+            has_deferred_owner=approval_state_store.has_tool_approval_state(approval_thread_id)
+            or workflow_agent_owns_approval,
+            workflow_agent_owns_approval=workflow_agent_owns_approval,
             authorized_executions=authorized_executions,
             retained_results=retained_approval_results,
             snapshot_reconciliations=approval_snapshot_reconciliations,
@@ -2626,7 +2637,8 @@ async def run_agent_stream(
                         execution_owner = _function_call_execution_owner(
                             content.function_call,
                             tools,
-                            has_deferred_owner=_TOOL_APPROVAL_STATE_KEY in session.state,
+                            has_deferred_owner=_TOOL_APPROVAL_STATE_KEY in session.state
+                            or workflow_agent_owns_approval,
                         )
                         registration_kwargs = {
                             "thread_ids": [approval_thread_id, provider_approval_thread_id],

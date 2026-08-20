@@ -328,6 +328,11 @@ class AgentExecutor(Executor):
             await self._run_agent_and_emit(ctx)
 
     @override
+    async def _cancel_pending_request(self, request_id: str) -> None:
+        """Release an agent-owned user-input request after workflow cancellation."""
+        self._pending_agent_requests.pop(request_id, None)
+
+    @override
     async def on_checkpoint_save(self) -> dict[str, Any]:
         """Capture current executor state for checkpointing.
 

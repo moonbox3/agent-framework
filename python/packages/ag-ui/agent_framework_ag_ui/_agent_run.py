@@ -74,7 +74,6 @@ from ._approval_state import _APPROVAL_SCOPE_INPUT_KEY, InMemoryAGUIApprovalStat
 from ._message_adapters import normalize_agui_input_messages
 from ._predictive_state import PredictiveStateHandler
 from ._tooling import collect_server_tools, merge_tools
-from ._workflow_run import _consume_cancelled_workflow_requests  # pyright: ignore[reportPrivateUsage]
 from ._run_common import (
     FlowState,
     _approval_interrupt_for_function_call,  # type: ignore
@@ -885,7 +884,7 @@ def _register_server_generated_approval_response(
         server_label=_function_call_server_label(response.function_call),
     )
     if response.approved is not True:
-        lifecycle.claim_batch(
+        batch = lifecycle.claim_batch(
             thread_id=thread_id,
             decisions=[
                 ResumeDecision(
@@ -896,6 +895,14 @@ def _register_server_generated_approval_response(
                 )
             ],
         )
+        if batch.authorized_executions:
+            intent = batch.authorized_executions[0]
+            lifecycle.begin_execution(intent, owner=intent.owner)
+            lifecycle.settle_forwarded(
+                intent,
+                [response],
+                owner=intent.owner,
+            )
         return None
     if execution_owner is ApprovalExecutionOwner.UNAVAILABLE:
         return None
@@ -1625,7 +1632,7 @@ async def _resolve_approval_responses(
             else:
                 primary_response.function_call.additional_properties.pop("server_label", None)
         if (
-            primary_response.approved is True
+            (primary_response.approved is True or pending_entry.owner is ApprovalExecutionOwner.DEFERRED)
             and lifecycle is not None
             and authorized_executions is not None
             and primary_response.function_call is not None
@@ -1640,10 +1647,9 @@ async def _resolve_approval_responses(
         valid_response_content_ids.add(id(primary_response))
         if pending_entry.owner is ApprovalExecutionOwner.DEFERRED:
             deferred_response_content_ids.add(id(primary_response))
-        if (
-            primary_response.approved is True
-            and intent is not None
-            and intent.owner in {ApprovalExecutionOwner.HOSTED, ApprovalExecutionOwner.DEFERRED}
+        if intent is not None and (
+            intent.owner is ApprovalExecutionOwner.DEFERRED
+            or (primary_response.approved is True and intent.owner is ApprovalExecutionOwner.HOSTED)
         ):
             validated_forwarded_approvals.append(primary_response)
         if not server_label:
@@ -2353,19 +2359,16 @@ async def run_agent_stream(
         yield resume_error
         return
     if cancelled_resume_ids and isinstance(agent, WorkflowAgent):
-        cancelled_workflow_entries: list[dict[str, Any]] = []
+        cancelled_workflow_request_ids: set[str] = set()
         for interrupt_id in cancelled_resume_ids:
             occurrence = approval_state_store.lifecycle.occurrence_for_alias(
                 thread_id=approval_thread_id,
                 interrupt_id=interrupt_id,
             )
-            cancelled_workflow_entries.append(
-                {
-                    "interrupt_id": occurrence.response_id if occurrence and occurrence.response_id else interrupt_id,
-                    "status": "cancelled",
-                }
+            cancelled_workflow_request_ids.add(
+                occurrence.response_id if occurrence and occurrence.response_id else interrupt_id
             )
-        _consume_cancelled_workflow_requests(agent.workflow, cancelled_workflow_entries)
+        await agent.workflow.cancel_pending_requests(cancelled_workflow_request_ids)
     if cancelled_resume_ids and handled_resume_ids == cancelled_resume_ids:
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
         _clear_tool_approval_state(approval_state_store, approval_thread_id)

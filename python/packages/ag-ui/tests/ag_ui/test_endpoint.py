@@ -807,6 +807,123 @@ async def test_endpoint_workflow_as_agent_rejection_reaches_response_handler() -
     )
 
 
+async def test_endpoint_workflow_as_agent_rejection_retries_after_transient_failure() -> None:
+    """A deferred rejection remains retryable until the wrapped workflow consumes it."""
+
+    class FailFirstResumeProvider(ContextProvider):
+        def __init__(self) -> None:
+            super().__init__("fail-first-resume")
+            self.call_count = 0
+
+        async def before_run(
+            self,
+            *,
+            agent: SupportsAgentRun,
+            session: AgentSession,
+            context: SessionContext,
+            state: dict[str, Any],
+        ) -> None:
+            del agent, session, context, state
+            self.call_count += 1
+            if self.call_count == 2:
+                raise RuntimeError("transient workflow failure")
+
+    class ApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="approval")
+
+        @handler
+        async def start(self, message: Any, ctx: WorkflowContext[Any, Any]) -> None:
+            del message
+            function_call = Content.from_function_call(
+                call_id="refund-call",
+                name="submit_refund",
+                arguments={"order_id": "12345"},
+            )
+            await ctx.request_info(
+                Content.from_function_approval_request(id="approval-1", function_call=function_call),
+                Content,
+                request_id="approval-1",
+            )
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: Content,
+            response: Content,
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            del original_request
+            await ctx.yield_output(f"{response.type}:{response.approved}")  # type: ignore[arg-type]
+
+    provider = FailFirstResumeProvider()
+    workflow = WorkflowBuilder(start_executor=ApprovalExecutor()).build()
+    workflow_agent = workflow.as_agent(context_providers=[provider])
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        AgentFrameworkAgent(agent=workflow_agent),
+        path="/workflow-agent-retry",
+    )
+    resume = [
+        {
+            "interruptId": "refund-call",
+            "status": "resolved",
+            "payload": {"accepted": False},
+        }
+    ]
+    client_tool = {
+        "name": "submit_refund",
+        "description": "Submit a refund",
+        "parameters": {
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}},
+        },
+    }
+
+    with TestClient(app) as client:
+        pause_response = client.post(
+            "/workflow-agent-retry",
+            json={
+                "runId": "run-pause",
+                "threadId": "thread-reject-retry",
+                "messages": [{"role": "user", "content": "Refund the order"}],
+                "tools": [client_tool],
+            },
+        )
+        assert not [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_ERROR"]
+
+        failed_response = client.post(
+            "/workflow-agent-retry",
+            json={
+                "runId": "run-failed",
+                "threadId": "thread-reject-retry",
+                "messages": [],
+                "tools": [client_tool],
+                "resume": resume,
+            },
+        )
+        failed_errors = [event for event in _decode_sse_events(failed_response) if event.get("type") == "RUN_ERROR"]
+        assert len(failed_errors) == 1
+
+        retry_response = client.post(
+            "/workflow-agent-retry",
+            json={
+                "runId": "run-retry",
+                "threadId": "thread-reject-retry",
+                "messages": [],
+                "tools": [client_tool],
+                "resume": resume,
+            },
+        )
+
+    retry_events = _decode_sse_events(retry_response)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert "function_approval_response:False" == "".join(
+        str(event.get("delta", "")) for event in retry_events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
 async def test_workflow_endpoint_applies_canonical_approval_edited_args() -> None:
     """Workflow approvals apply standard editedArgs as a full replacement."""
 

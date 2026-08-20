@@ -25,6 +25,7 @@ from agent_framework import (
     WorkflowBuilder,
     WorkflowContext,
     WorkflowEvent,
+    WorkflowExecutor,
     executor,
     tool,
 )
@@ -364,6 +365,36 @@ async def test_agent_executor_parallel_tool_call_with_approval() -> None:
     final_response = events.get_outputs()
     assert len(final_response) == 1
     assert final_response[0] == "Tool executed successfully."
+
+
+async def test_workflow_cancels_nested_pending_request_without_blocking_sibling() -> None:
+    """Cancelling one nested request lets its resolved sibling complete the workflow."""
+    agent = Agent(
+        client=MockChatClient(parallel_request=True),
+        name="ApprovalAgent",
+        tools=[mock_tool_requiring_approval],
+    )
+    child = WorkflowBuilder(start_executor=agent, output_from=[test_executor]).add_edge(agent, test_executor).build()
+    nested = WorkflowExecutor(
+        child,
+        id="nested-workflow",
+        propagate_request=True,
+        allow_direct_output=True,
+    )
+    parent = WorkflowBuilder(start_executor=nested).build()
+
+    paused = await parent.run([Message(role="user", contents=["Invoke tool requiring approval"])])
+    first_request, second_request = paused.get_request_info_events()
+
+    cancelled = await parent.cancel_pending_requests([first_request.request_id])
+    resumed = await parent.run(
+        responses={
+            second_request.request_id: second_request.data.to_function_approval_response(True),
+        }
+    )
+
+    assert cancelled == {first_request.request_id}
+    assert resumed.get_outputs() == ["Tool executed successfully."]
 
 
 async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> None:

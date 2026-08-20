@@ -342,36 +342,6 @@ def _resume_error_for_pending_workflow_requests(
     return None
 
 
-def _consume_cancelled_workflow_requests(workflow: Workflow, resume_entries: list[dict[str, Any]]) -> None:
-    """Remove cancelled workflow requests from runner and owning agent-executor state."""
-    cancelled_ids = {str(entry["interrupt_id"]) for entry in resume_entries if entry.get("status") == "cancelled"}
-    if not cancelled_ids:
-        return
-
-    runner_context = getattr(workflow, "_runner_context", None)
-    pending_events = getattr(runner_context, "_pending_request_info_events", None)
-    if not isinstance(pending_events, dict):
-        return
-    pending_events = cast(dict[str, Any], pending_events)
-
-    for interrupt_id in cancelled_ids:
-        request_event = pending_events.pop(interrupt_id, None)
-        source_executor_id = getattr(request_event, "source_executor_id", None)
-        executor = workflow.executors.get(source_executor_id) if source_executor_id else None
-        nested_workflow = getattr(executor, "workflow", None)
-        if isinstance(nested_workflow, Workflow):
-            _consume_cancelled_workflow_requests(
-                nested_workflow,
-                [{"interrupt_id": interrupt_id, "status": "cancelled"}],
-            )
-        pending_agent_requests = getattr(executor, "_pending_agent_requests", None)
-        if isinstance(pending_agent_requests, dict):
-            cast(dict[str, Any], pending_agent_requests).pop(interrupt_id, None)
-
-    if not pending_events:
-        workflow._status = WorkflowRunState.IDLE  # pyright: ignore[reportPrivateUsage]
-
-
 def _coerce_json_value(value: Any) -> Any:
     """Parse JSON strings when possible; otherwise return the original value."""
     if not isinstance(value, str):
@@ -1097,7 +1067,7 @@ async def run_workflow_stream(
         yield response_error
         return
     if cancelled_request_ids:
-        _consume_cancelled_workflow_requests(workflow, resume_entries)
+        await workflow.cancel_pending_requests(cancelled_request_ids)
         pending_before_run = {
             request_id: request_event
             for request_id, request_event in pending_before_run.items()

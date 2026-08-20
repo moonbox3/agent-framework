@@ -315,6 +315,10 @@ class RunnerContext(Protocol):
         """
         ...
 
+    async def cancel_request_info_events(self, request_ids: set[str]) -> dict[str, WorkflowEvent[Any]]:
+        """Remove and return pending request_info events selected for cancellation."""
+        ...
+
     def set_yield_output_classifier(self, classifier: YieldOutputClassifier) -> None:
         """Set the classifier used by WorkflowContext.yield_output()."""
         ...
@@ -605,6 +609,14 @@ class InProcRunnerContext:
             A dictionary mapping request IDs to their corresponding WorkflowEvent (type='request_info').
         """
         return dict(self._pending_request_info_events)
+
+    async def cancel_request_info_events(self, request_ids: set[str]) -> dict[str, WorkflowEvent[Any]]:
+        """Remove and return pending request_info events selected for cancellation."""
+        return {
+            request_id: event
+            for request_id in request_ids
+            if (event := self._pending_request_info_events.pop(request_id, None)) is not None
+        }
 
     def set_yield_output_classifier(self, classifier: YieldOutputClassifier) -> None:
         """Set the classifier used by WorkflowContext.yield_output()."""

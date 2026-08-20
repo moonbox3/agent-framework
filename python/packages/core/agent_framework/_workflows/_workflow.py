@@ -12,7 +12,7 @@ import types
 import uuid
 import warnings
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -1203,6 +1203,38 @@ class Workflow(DictConvertible):
             output_types.update(workflow_output_types)
 
         return list(output_types)
+
+    async def cancel_pending_requests(self, request_ids: Collection[str]) -> set[str]:
+        """Cancel pending external requests and release their owning executor state.
+
+        Cancellation follows requests through nested workflows and clears any executor-owned
+        correlation without synthesizing a response. Unknown or already-handled request IDs
+        are ignored.
+
+        Args:
+            request_ids: Request identifiers to cancel.
+
+        Returns:
+            The set of request identifiers that were pending and are now cancelled.
+        """
+        selected_ids = set(request_ids)
+        if not all(isinstance(request_id, str) and request_id for request_id in selected_ids):
+            raise ValueError("Pending workflow request IDs must be non-empty strings.")
+        cancelled_events = await self._runner.context.cancel_request_info_events(selected_ids)
+        for request_id, request_event in cancelled_events.items():
+            source_executor_id = request_event.source_executor_id
+            executor = self.executors.get(source_executor_id) if source_executor_id else None
+            if executor is not None:
+                await executor._cancel_pending_request(request_id)  # pyright: ignore[reportPrivateUsage]
+
+        if (
+            cancelled_events
+            and not await self._runner.context.get_pending_request_info_events()
+            and self._status
+            in {WorkflowRunState.IDLE_WITH_PENDING_REQUESTS, WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS}
+        ):
+            self._status = WorkflowRunState.IDLE
+        return set(cancelled_events)
 
     def as_agent(
         self,

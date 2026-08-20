@@ -1067,7 +1067,16 @@ async def run_workflow_stream(
         yield response_error
         return
     if cancelled_request_ids:
-        await workflow.cancel_pending_requests(cancelled_request_ids)
+        if checkpoint_id is not None:
+            _ = await workflow.run(
+                checkpoint_id=checkpoint_id,
+                checkpoint_storage=checkpoint_storage,
+            )
+            checkpoint_id = None
+        await workflow.cancel_pending_requests(
+            cancelled_request_ids,
+            checkpoint_storage=checkpoint_storage,
+        )
         pending_before_run = {
             request_id: request_event
             for request_id, request_event in pending_before_run.items()

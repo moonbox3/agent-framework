@@ -4846,6 +4846,97 @@ async def test_endpoint_workflow_checkpoint_resume_same_owner_after_restart():
         assert "Booked KLM" in text_deltas
 
 
+async def test_endpoint_workflow_checkpoint_cancellation_survives_cold_restore() -> None:
+    """Cold restore applies cancellation before resolving the remaining sibling."""
+
+    class BatchApprovalExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="batch-approval")
+
+        @handler
+        async def start(self, messages: list[Message], ctx: WorkflowContext[Any, Any]) -> None:
+            del messages
+            await ctx.request_info({"order_id": "order-1"}, dict, request_id="approval-1")
+            await ctx.request_info({"order_id": "order-2"}, dict, request_id="approval-2")
+
+        @response_handler
+        async def approve(
+            self,
+            original_request: dict[str, Any],
+            response: dict[str, Any],
+            ctx: WorkflowContext[Any, Any],
+        ) -> None:
+            assert response == {"approved": True}
+            await ctx.yield_output(f"Approved {original_request['order_id']}")  # type: ignore[arg-type]
+
+    def build_workflow() -> Any:
+        return WorkflowBuilder(
+            name="cold-checkpoint-cancellation",
+            start_executor=BatchApprovalExecutor(),
+        ).build()
+
+    storage = InMemoryCheckpointStorage()
+    first_app = FastAPI()
+    first_workflow = build_workflow()
+    add_agent_framework_fastapi_endpoint(
+        first_app,
+        first_workflow,
+        path="/workflow",
+        checkpoint_storage=storage,
+    )
+
+    with TestClient(first_app) as client:
+        pause_response = client.post(
+            "/workflow",
+            json={
+                "runId": "run-pause",
+                "threadId": "owner-thread",
+                "messages": [{"role": "user", "content": "Approve both orders"}],
+            },
+        )
+        assert pause_response.status_code == 200
+
+    checkpoints = await storage.list_checkpoints(workflow_name=first_workflow.name)
+    pending_checkpoints = [checkpoint for checkpoint in checkpoints if checkpoint.pending_request_info_events]
+    assert pending_checkpoints
+    checkpoint_id = max(pending_checkpoints, key=lambda checkpoint: checkpoint.timestamp).checkpoint_id
+
+    second_app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        second_app,
+        build_workflow(),
+        path="/workflow",
+        checkpoint_storage=storage,
+    )
+
+    with TestClient(second_app) as client:
+        cancel_response = client.post(
+            "/workflow",
+            json={
+                "runId": "run-cancel",
+                "threadId": "owner-thread",
+                "messages": [],
+                "forwardedProps": {"checkpointId": checkpoint_id},
+                "resume": [
+                    {"interruptId": "approval-1", "status": "cancelled"},
+                    {
+                        "interruptId": "approval-2",
+                        "status": "resolved",
+                        "payload": {"approved": True},
+                    },
+                ],
+            },
+        )
+
+    cancel_events = _decode_sse_events(cancel_response)
+    assert not [event for event in cancel_events if event.get("type") == "RUN_ERROR"]
+    finished = [event for event in cancel_events if event.get("type") == "RUN_FINISHED"]
+    assert finished[-1].get("outcome") is None
+    assert "Approved order-2" == "".join(
+        str(event.get("delta", "")) for event in cancel_events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+
+
 async def test_endpoint_workflow_checkpoint_resume_uses_checkpoint_owner_not_live_reused_id():
     """A live reused interrupt ID cannot authorize a different checkpoint occurrence."""
     storage = InMemoryCheckpointStorage()

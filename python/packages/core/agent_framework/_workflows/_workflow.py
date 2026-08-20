@@ -588,8 +588,11 @@ class Workflow(DictConvertible):
                         with _framework_event_origin():
                             pending_status = WorkflowEvent.status(self._status)
                         yield pending_status
-                # Workflow runs until idle - emit final status based on whether requests are pending
-                if saw_request:
+                # Workflow runs until idle - emit final status based on whether requests are pending.
+                # Continuations such as cancellation may retain an existing sibling request without
+                # re-emitting its request_info event during this run.
+                pending_requests = await self._runner.context.get_pending_request_info_events()
+                if saw_request or pending_requests:
                     self._status = WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
                     with _framework_event_origin():
                         terminal_status = WorkflowEvent.status(self._status)
@@ -1204,37 +1207,66 @@ class Workflow(DictConvertible):
 
         return list(output_types)
 
-    async def cancel_pending_requests(self, request_ids: Collection[str]) -> set[str]:
+    async def cancel_pending_requests(
+        self,
+        request_ids: Collection[str],
+        *,
+        checkpoint_storage: CheckpointStorage | None = None,
+    ) -> WorkflowRunResult:
         """Cancel pending external requests and release their owning executor state.
 
         Cancellation follows requests through nested workflows and clears any executor-owned
-        correlation without synthesizing a response. Unknown or already-handled request IDs
-        are ignored.
+        correlation without synthesizing a response. If cancellation drains an executor's pending
+        set after sibling responses were already accepted, the executor resumes through its normal
+        continuation path. Unknown or already-handled request IDs are ignored.
 
         Args:
             request_ids: Request identifiers to cancel.
 
+        Keyword Args:
+            checkpoint_storage: Runtime checkpoint storage for the cancellation continuation.
+
         Returns:
-            The set of request identifiers that were pending and are now cancelled.
+            Events produced while applying cancellation and any resulting continuation.
         """
         selected_ids = set(request_ids)
         if not all(isinstance(request_id, str) and request_id for request_id in selected_ids):
             raise ValueError("Pending workflow request IDs must be non-empty strings.")
-        cancelled_events = await self._runner.context.cancel_request_info_events(selected_ids)
-        for request_id, request_event in cancelled_events.items():
-            source_executor_id = request_event.source_executor_id
-            executor = self.executors.get(source_executor_id) if source_executor_id else None
-            if executor is not None:
-                await executor._cancel_pending_request(request_id)  # pyright: ignore[reportPrivateUsage]
 
-        if (
-            cancelled_events
-            and not await self._runner.context.get_pending_request_info_events()
-            and self._status
-            in {WorkflowRunState.IDLE_WITH_PENDING_REQUESTS, WorkflowRunState.IN_PROGRESS_PENDING_REQUESTS}
-        ):
-            self._status = WorkflowRunState.IDLE
-        return set(cancelled_events)
+        async def apply_cancellations() -> None:
+            cancelled_events = await self._runner.context.cancel_request_info_events(selected_ids)
+            for request_id, request_event in cancelled_events.items():
+                source_executor_id = request_event.source_executor_id
+                executor = self.executors.get(source_executor_id) if source_executor_id else None
+                if executor is None:
+                    continue
+                context = executor._create_context_for_handler(  # pyright: ignore[reportPrivateUsage]
+                    source_executor_ids=[INTERNAL_SOURCE_ID(executor.id)],
+                    state=self._runner.state,
+                    runner_context=self._runner.context,
+                )
+                await executor._cancel_pending_request(  # pyright: ignore[reportPrivateUsage]
+                    request_id,
+                    context,
+                )
+
+        if checkpoint_storage is not None:
+            self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
+        events: list[WorkflowEvent[Any]] = []
+        try:
+            async for event in self._run_workflow_with_tracing(
+                initial_executor_fn=apply_cancellations,
+                is_continuation=True,
+                streaming=False,
+                tools=self._runner.context.get_runtime_tools(),
+                function_invocation_kwargs=None,
+                client_kwargs=None,
+            ):
+                events.append(event)
+        finally:
+            if checkpoint_storage is not None:
+                self._runner.context.clear_runtime_checkpoint_storage()
+        return self._finalize_events(events)
 
     def as_agent(
         self,

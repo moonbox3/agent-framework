@@ -451,9 +451,10 @@ class WorkflowExecutor(Executor):
         )
 
     @override
-    async def _cancel_pending_request(self, request_id: str) -> None:
+    async def _cancel_pending_request(self, request_id: str, ctx: WorkflowContext[Any, Any]) -> None:
         """Propagate cancellation into the wrapped workflow."""
-        await self.workflow.cancel_pending_requests([request_id])
+        result = await self.workflow.cancel_pending_requests([request_id])
+        await self._process_workflow_result(result, ctx)
 
     @override
     async def on_checkpoint_save(self) -> dict[str, Any]:

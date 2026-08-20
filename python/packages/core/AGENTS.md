@@ -193,8 +193,8 @@ agent_framework/
 ### Workflows (`_workflows/`)
 
 - **`Workflow`** - Graph-based workflow definition. `cancel_pending_requests(request_ids)` cancels selected external
-  requests without synthesizing responses, recursively releases nested executor correlation, and returns the IDs
-  that were still pending.
+  requests without synthesizing responses, recursively releases nested executor correlation, resumes executors whose
+  remaining requests were already answered, and returns the resulting `WorkflowRunResult`.
 - **`WorkflowBuilder`** - Fluent API for building workflows, including explicit
   `output_from` / `intermediate_output_from` selection for caller-facing emissions. `output_from`
   is an allow-list for **Workflow Output**; unselected executor payloads are hidden unless

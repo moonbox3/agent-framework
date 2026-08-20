@@ -386,15 +386,37 @@ async def test_workflow_cancels_nested_pending_request_without_blocking_sibling(
     paused = await parent.run([Message(role="user", contents=["Invoke tool requiring approval"])])
     first_request, second_request = paused.get_request_info_events()
 
-    cancelled = await parent.cancel_pending_requests([first_request.request_id])
+    await parent.cancel_pending_requests([first_request.request_id])
     resumed = await parent.run(
         responses={
             second_request.request_id: second_request.data.to_function_approval_response(True),
         }
     )
 
-    assert cancelled == {first_request.request_id}
     assert resumed.get_outputs() == ["Tool executed successfully."]
+
+
+async def test_workflow_final_cancellation_resumes_accumulated_sibling_response() -> None:
+    """Cancelling the final request resumes an agent that already received its sibling response."""
+    agent = Agent(
+        client=MockChatClient(parallel_request=True),
+        name="ApprovalAgent",
+        tools=[mock_tool_requiring_approval],
+    )
+    workflow = WorkflowBuilder(start_executor=agent, output_from=[test_executor]).add_edge(agent, test_executor).build()
+
+    paused = await workflow.run("Invoke tool requiring approval")
+    first_request, second_request = paused.get_request_info_events()
+    partial = await workflow.run(
+        responses={
+            first_request.request_id: first_request.data.to_function_approval_response(True),
+        }
+    )
+
+    cancelled = await workflow.cancel_pending_requests([second_request.request_id])
+
+    assert partial.get_outputs() == []
+    assert cancelled.get_outputs() == ["Tool executed successfully."]
 
 
 async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> None:

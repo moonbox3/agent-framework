@@ -358,6 +358,12 @@ def _consume_cancelled_workflow_requests(workflow: Workflow, resume_entries: lis
         request_event = pending_events.pop(interrupt_id, None)
         source_executor_id = getattr(request_event, "source_executor_id", None)
         executor = workflow.executors.get(source_executor_id) if source_executor_id else None
+        nested_workflow = getattr(executor, "workflow", None)
+        if isinstance(nested_workflow, Workflow):
+            _consume_cancelled_workflow_requests(
+                nested_workflow,
+                [{"interrupt_id": interrupt_id, "status": "cancelled"}],
+            )
         pending_agent_requests = getattr(executor, "_pending_agent_requests", None)
         if isinstance(pending_agent_requests, dict):
             cast(dict[str, Any], pending_agent_requests).pop(interrupt_id, None)

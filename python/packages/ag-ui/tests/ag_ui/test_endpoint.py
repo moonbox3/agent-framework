@@ -32,6 +32,7 @@ from agent_framework import (
     ToolApprovalMiddleware,
     WorkflowBuilder,
     WorkflowContext,
+    WorkflowExecutor,
     executor,
     handler,
     response_handler,
@@ -627,6 +628,104 @@ async def test_endpoint_workflow_as_agent_cancellation_allows_next_turn() -> Non
     assert "Follow-up completed." == "".join(
         str(event.get("delta", "")) for event in follow_up_events if event.get("type") == "TEXT_MESSAGE_CONTENT"
     )
+
+
+async def test_workflow_endpoint_nested_mixed_approval_resume(streaming_chat_client_stub) -> None:
+    """Cancelling one nested approval does not block its approved sibling."""
+
+    def function_call(order_id: str, call_id: str) -> Content:
+        return Content.from_function_call(
+            call_id=call_id,
+            name="submit_refund",
+            arguments={"order_id": order_id},
+        )
+
+    call_count = 0
+    executed_orders: list[str] = []
+
+    def submit_refund(order_id: str) -> str:
+        executed_orders.append(order_id)
+        return f"Refunded {order_id}"
+
+    async def stream_fn(messages: Any, options: Any, **kwargs: Any) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal call_count
+        del messages, options, kwargs
+        call_count += 1
+        if call_count == 1:
+            yield ChatResponseUpdate(
+                contents=[
+                    function_call("order-1", "refund-call-1"),
+                    function_call("order-2", "refund-call-2"),
+                ]
+            )
+            return
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Approved sibling completed.")])
+
+    child_agent = Agent(
+        name="nested-agent",
+        client=streaming_chat_client_stub(stream_fn),
+        tools=[
+            FunctionTool(
+                name="submit_refund",
+                description="Submit a refund",
+                func=submit_refund,
+                approval_mode="always_require",
+            )
+        ],
+    )
+    child_workflow = WorkflowBuilder(start_executor=child_agent).build()
+    parent_workflow = WorkflowBuilder(
+        start_executor=WorkflowExecutor(
+            child_workflow,
+            id="nested-workflow",
+            propagate_request=True,
+            allow_direct_output=True,
+        )
+    ).build()
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        parent_workflow,
+        path="/nested-workflow",
+    )
+
+    with TestClient(app) as client:
+        pause_response = client.post(
+            "/nested-workflow",
+            json={
+                "runId": "run-pause",
+                "threadId": "thread-nested-mixed",
+                "messages": [{"role": "user", "content": "Refund both orders"}],
+            },
+        )
+        pause_events = _decode_sse_events(pause_response)
+        pause_finished = [event for event in pause_events if event.get("type") == "RUN_FINISHED"]
+        pause_interrupts = _run_finished_interrupts(pause_finished[-1])
+        assert {interrupt["id"] for interrupt in pause_interrupts} == {
+            "refund-call-1",
+            "refund-call-2",
+        }, pause_events
+
+        resume_response = client.post(
+            "/nested-workflow",
+            json={
+                "runId": "run-resume",
+                "threadId": "thread-nested-mixed",
+                "messages": [],
+                "resume": [
+                    {"interruptId": "refund-call-1", "status": "cancelled"},
+                    {"interruptId": "refund-call-2", "status": "resolved", "payload": {"approved": True}},
+                ],
+            },
+        )
+
+    resume_events = _decode_sse_events(resume_response)
+    assert not [event for event in resume_events if event.get("type") == "RUN_ERROR"]
+    assert "Approved sibling completed." == "".join(
+        str(event.get("delta", "")) for event in resume_events if event.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert call_count == 2
+    assert executed_orders == ["order-2"]
 
 
 async def test_endpoint_workflow_as_agent_rejection_reaches_response_handler() -> None:

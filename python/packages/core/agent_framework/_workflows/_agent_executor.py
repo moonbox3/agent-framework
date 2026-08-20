@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import inspect
 import logging
 import sys
 from collections.abc import Awaitable, Callable
@@ -27,6 +28,15 @@ else:
     from typing_extensions import override  # pragma: no cover
 
 logger = logging.getLogger(__name__)
+
+
+def _accepts_runtime_tools(agent: SupportsAgentRun) -> bool:
+    """Return whether the agent run surface accepts a tools keyword."""
+    try:
+        parameters = inspect.signature(agent.run).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.name == "tools" or parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters)
 
 
 @dataclass
@@ -166,6 +176,7 @@ class AgentExecutor(Executor):
             raise ValueError("Agent must have a non-empty name or id or an explicit id must be provided.")
         super().__init__(exec_id)
         self._agent = agent
+        self._accepts_runtime_tools = _accepts_runtime_tools(agent)
         self._session = session or self._agent.create_session()
 
         self._pending_agent_requests: dict[str, Content] = {}
@@ -412,7 +423,7 @@ class AgentExecutor(Executor):
         """
         raw_run_kwargs = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
         function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(raw_run_kwargs)
-        tools = raw_run_kwargs.get("tools")
+        tools = ctx.get_runtime_tools()
 
         if not self._cache:
             logger.warning(
@@ -428,7 +439,7 @@ class AgentExecutor(Executor):
             "function_invocation_kwargs": function_invocation_kwargs,
             "client_kwargs": client_kwargs,
         }
-        if tools is not None:
+        if tools is not None and self._accepts_runtime_tools:
             run_kwargs["tools"] = tools
         response = await run_agent(self._cache, **run_kwargs)
 
@@ -468,7 +479,7 @@ class AgentExecutor(Executor):
         """
         raw_run_kwargs = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
         function_invocation_kwargs, client_kwargs = self._prepare_agent_run_args(raw_run_kwargs)
-        tools = raw_run_kwargs.get("tools")
+        tools = ctx.get_runtime_tools()
 
         if not self._cache:
             logger.warning(
@@ -486,7 +497,7 @@ class AgentExecutor(Executor):
             "function_invocation_kwargs": function_invocation_kwargs,
             "client_kwargs": client_kwargs,
         }
-        if tools is not None:
+        if tools is not None and self._accepts_runtime_tools:
             run_kwargs["tools"] = tools
         stream = run_agent_stream(self._cache, **run_kwargs)
         async for update in stream:

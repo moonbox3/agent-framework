@@ -74,6 +74,7 @@ from ._approval_state import _APPROVAL_SCOPE_INPUT_KEY, InMemoryAGUIApprovalStat
 from ._message_adapters import normalize_agui_input_messages
 from ._predictive_state import PredictiveStateHandler
 from ._tooling import collect_server_tools, merge_tools
+from ._workflow_run import _consume_cancelled_workflow_requests  # pyright: ignore[reportPrivateUsage]
 from ._run_common import (
     FlowState,
     _approval_interrupt_for_function_call,  # type: ignore
@@ -880,6 +881,7 @@ def _register_server_generated_approval_response(
         name=response.function_call.name,
         arguments=arguments,
         aliases=[str(response.function_call.call_id)] if response.function_call.call_id else None,
+        response_id=str(response_id),
         server_label=_function_call_server_label(response.function_call),
     )
     if response.approved is not True:
@@ -1193,7 +1195,6 @@ def _canonical_approval_resume_messages(
     lifecycle: ApprovalLifecycle,
     tools: list[Any] | None = None,
     has_deferred_owner: bool = False,
-    workflow_agent_owns_approval: bool = False,
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     retained_results: list[Content] | None = None,
     snapshot_reconciliations: list[ApprovalSnapshotReconciliation] | None = None,
@@ -1384,12 +1385,7 @@ def _canonical_approval_resume_messages(
                 original_arguments=pending_arguments,
             )
         )
-        response_id = interrupt_id
-        if workflow_agent_owns_approval:
-            response_id = next(
-                (alias for alias in pending_entry.aliases if alias != interrupt_id),
-                interrupt_id,
-            )
+        response_id = pending_entry.response_id or interrupt_id
         function_approvals = [
             {
                 "id": response_id,
@@ -1430,6 +1426,7 @@ def _canonical_approval_resume_messages(
                 name=function_call.name,
                 arguments=sibling_arguments,
                 aliases=[sibling_call_id],
+                response_id=str(response_id),
                 server_label=_function_call_server_label(function_call),
             )
             lifecycle_decisions.append(
@@ -1540,6 +1537,7 @@ async def _resolve_approval_responses(
     valid_response_content_ids: set[int] | None = None
     pending_local_response_content_ids: set[int] | None = None
     validated_forwarded_approvals: list[Content] = []
+    deferred_response_content_ids: set[int] = set()
     response_content_ids_to_strip: set[int] = set()
     valid_response_content_ids = set()
     pending_local_response_content_ids = set()
@@ -1640,6 +1638,8 @@ async def _resolve_approval_responses(
                 continue
             intents_by_response_content_id[id(primary_response)] = intent
         valid_response_content_ids.add(id(primary_response))
+        if pending_entry.owner is ApprovalExecutionOwner.DEFERRED:
+            deferred_response_content_ids.add(id(primary_response))
         if (
             primary_response.approved is True
             and intent is not None
@@ -1708,7 +1708,7 @@ async def _resolve_approval_responses(
         fcc_todo = {
             response_id: response
             for response_id, response in fcc_todo.items()
-            if id(response) in valid_response_content_ids
+            if id(response) in valid_response_content_ids and id(response) not in deferred_response_content_ids
         }
     if not fcc_todo:
         return []
@@ -2324,7 +2324,6 @@ async def run_agent_stream(
             tools=tools,
             has_deferred_owner=approval_state_store.has_tool_approval_state(approval_thread_id)
             or workflow_agent_owns_approval,
-            workflow_agent_owns_approval=workflow_agent_owns_approval,
             authorized_executions=authorized_executions,
             retained_results=retained_approval_results,
             snapshot_reconciliations=approval_snapshot_reconciliations,
@@ -2353,6 +2352,20 @@ async def run_agent_stream(
             await snapshot_session.clear_interrupts(interrupt_ids=retired_interrupt_ids or cancelled_resume_ids or None)
         yield resume_error
         return
+    if cancelled_resume_ids and isinstance(agent, WorkflowAgent):
+        cancelled_workflow_entries: list[dict[str, Any]] = []
+        for interrupt_id in cancelled_resume_ids:
+            occurrence = approval_state_store.lifecycle.occurrence_for_alias(
+                thread_id=approval_thread_id,
+                interrupt_id=interrupt_id,
+            )
+            cancelled_workflow_entries.append(
+                {
+                    "interrupt_id": occurrence.response_id if occurrence and occurrence.response_id else interrupt_id,
+                    "status": "cancelled",
+                }
+            )
+        _consume_cancelled_workflow_requests(agent.workflow, cancelled_workflow_entries)
     if cancelled_resume_ids and handled_resume_ids == cancelled_resume_ids:
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
         _clear_tool_approval_state(approval_state_store, approval_thread_id)

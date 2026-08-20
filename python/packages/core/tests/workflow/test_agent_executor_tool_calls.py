@@ -424,6 +424,7 @@ class DeclarationOnlyMockChatClient(FunctionInvocationLayer[Any], BaseChatClient
         BaseChatClient.__init__(self)
         self._iteration: int = 0
         self._parallel_request: bool = parallel_request
+        self.received_messages: list[list[Message]] = []
 
     def _inner_get_response(
         self,
@@ -433,6 +434,7 @@ class DeclarationOnlyMockChatClient(FunctionInvocationLayer[Any], BaseChatClient
         options: Mapping[str, Any],
         **kwargs: Any,
     ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+        self.received_messages.append(list(messages))
         if stream:
             return self._build_response_stream(self._stream_response())
 
@@ -532,6 +534,36 @@ async def test_agent_executor_declaration_only_tool_emits_request_info() -> None
     final_response = events.get_outputs()
     assert len(final_response) == 1
     assert final_response[0] == "Tool executed successfully."
+
+
+async def test_workflow_agent_preserves_structured_declaration_only_tool_result() -> None:
+    """WorkflowAgent keeps a client-tool result typed and tool-role for the owning AgentExecutor."""
+    client = DeclarationOnlyMockChatClient()
+    agent = Agent(
+        client=client,
+        name="DeclarationOnlyAgent",
+        tools=[declaration_only_tool],
+    )
+    workflow = WorkflowBuilder(start_executor=agent).build()
+    workflow_agent = workflow.as_agent()
+
+    paused = await workflow_agent.run("Use the client side tool")
+    [request] = paused.user_input_requests
+    assert request.call_id is not None
+
+    resumed = await workflow_agent.run(
+        Message(
+            role="tool",
+            contents=[Content.from_function_result(call_id=request.call_id, result={"answer": 42})],
+        )
+    )
+
+    assert resumed.text == "Tool executed successfully."
+    tool_messages = [message for message in client.received_messages[-1] if message.role == "tool"]
+    assert len(tool_messages) == 1
+    [result] = tool_messages[0].contents
+    assert result.type == "function_result"
+    assert result.result == '{"answer": 42}'
 
 
 async def test_agent_executor_declaration_only_tool_emits_request_info_streaming() -> None:

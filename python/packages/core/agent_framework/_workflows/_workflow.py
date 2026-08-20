@@ -553,10 +553,8 @@ class Workflow(DictConvertible):
                 # - On a continuation (checkpoint restore or responses), the
                 #   prior run's kwargs are preserved unless the caller
                 #   explicitly provides new kwargs.
-                if function_invocation_kwargs is not None or client_kwargs is not None or tools is not None:
+                if function_invocation_kwargs is not None or client_kwargs is not None:
                     combined_kwargs: dict[str, Any] = {}
-                    if tools is not None:
-                        combined_kwargs["tools"] = tools
                     if function_invocation_kwargs is not None:
                         combined_kwargs["function_invocation_kwargs"] = self._resolve_invocation_kwargs(
                             function_invocation_kwargs, "function_invocation_kwargs"
@@ -784,6 +782,7 @@ class Workflow(DictConvertible):
         # its async-generator finalizer ran. Clear it so this run starts clean and does
         # not silently inherit the prior run's runtime checkpoint storage.
         self._runner.context.clear_runtime_checkpoint_storage()
+        self._runner.context.set_runtime_tools(tools)
 
         response_stream = ResponseStream[WorkflowEvent, WorkflowRunResult](
             self._run_core(
@@ -921,6 +920,7 @@ class Workflow(DictConvertible):
                 # deferred finalizer can't clear a successor's storage.
                 if checkpoint_storage is not None:
                     self._runner.context.clear_runtime_checkpoint_storage()
+                self._runner.context.clear_runtime_tools()
 
     @staticmethod
     def _finalize_events(

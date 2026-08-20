@@ -181,6 +181,7 @@ class ApprovalOccurrence:
     owner: ApprovalExecutionOwner
     scope: str | None = None
     aliases: tuple[str, ...] = ()
+    response_id: str | None = None
     already_approved_requests: tuple[dict[str, Any], ...] = ()
     server_label: str | None = None
     idempotency_key: str | None = None
@@ -276,6 +277,7 @@ class ApprovalLifecycle:
         name: str,
         arguments: str,
         aliases: list[str] | None = None,
+        response_id: str | None = None,
         already_approved_requests: list[dict[str, Any]] | None = None,
         server_label: str | None = None,
         idempotency_key: str | None = None,
@@ -293,6 +295,7 @@ class ApprovalLifecycle:
             owner=owner,
             scope=scope,
             aliases=aliases,
+            response_id=response_id,
             already_approved_requests=already_approved_requests,
             server_label=server_label,
             idempotency_key=idempotency_key,
@@ -310,6 +313,7 @@ class ApprovalLifecycle:
         owner: ApprovalExecutionOwner,
         scope: str | None = None,
         aliases: list[str] | None = None,
+        response_id: str | None = None,
         already_approved_requests: list[dict[str, Any]] | None = None,
         server_label: str | None = None,
         idempotency_key: str | None = None,
@@ -342,6 +346,7 @@ class ApprovalLifecycle:
                 or occurrence.arguments != arguments
                 or occurrence.owner is not owner
                 or occurrence.scope != scope
+                or occurrence.response_id != response_id
                 or occurrence.idempotency_key != idempotency_key
                 or occurrence.already_approved_requests != tuple(already_approved_requests or ())
                 or occurrence.server_label != server_label
@@ -371,6 +376,7 @@ class ApprovalLifecycle:
             owner=owner,
             scope=scope,
             aliases=occurrence_aliases,
+            response_id=response_id,
             already_approved_requests=tuple(already_approved_requests or ()),
             server_label=server_label,
             idempotency_key=idempotency_key,

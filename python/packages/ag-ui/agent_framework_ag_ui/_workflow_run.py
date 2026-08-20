@@ -362,6 +362,9 @@ def _consume_cancelled_workflow_requests(workflow: Workflow, resume_entries: lis
         if isinstance(pending_agent_requests, dict):
             cast(dict[str, Any], pending_agent_requests).pop(interrupt_id, None)
 
+    if not pending_events:
+        workflow._status = WorkflowRunState.IDLE  # pyright: ignore[reportPrivateUsage]
+
 
 def _coerce_json_value(value: Any) -> Any:
     """Parse JSON strings when possible; otherwise return the original value."""

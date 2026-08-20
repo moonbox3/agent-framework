@@ -201,6 +201,18 @@ class RunnerContext(Protocol):
         """
         ...
 
+    def set_runtime_tools(self, tools: Any | None) -> None:
+        """Set request-scoped tools for the active workflow run."""
+        ...
+
+    def get_runtime_tools(self) -> Any | None:
+        """Get request-scoped tools for the active workflow run."""
+        ...
+
+    def clear_runtime_tools(self) -> None:
+        """Clear request-scoped tools after the active workflow run."""
+        ...
+
     async def build_checkpoint(
         self,
         workflow_name: str,
@@ -339,6 +351,7 @@ class InProcRunnerContext:
 
         # Streaming flag - set by workflow's run(..., stream=True) vs run(..., stream=False)
         self._streaming: bool = False
+        self._runtime_tools: Any | None = None
         self._yield_output_classifier: YieldOutputClassifier = lambda _executor_id: "output"
 
     # region Messaging and Events
@@ -530,6 +543,18 @@ class InProcRunnerContext:
             True if streaming mode is enabled, False otherwise.
         """
         return self._streaming
+
+    def set_runtime_tools(self, tools: Any | None) -> None:
+        """Set request-scoped tools for the active workflow run."""
+        self._runtime_tools = tools
+
+    def get_runtime_tools(self) -> Any | None:
+        """Get request-scoped tools for the active workflow run."""
+        return self._runtime_tools
+
+    def clear_runtime_tools(self) -> None:
+        """Clear request-scoped tools after the active workflow run."""
+        self._runtime_tools = None
 
     async def add_request_info_event(self, event: WorkflowEvent[Any]) -> None:
         """Add a request_info event to the context and track it for correlation.

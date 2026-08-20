@@ -381,7 +381,7 @@ class WorkflowExecutor(Executor):
         # against the subworkflow's own executor IDs.
         fi_kwargs: dict[str, Any] | None = None
         ci_kwargs: dict[str, Any] | None = None
-        tools = parent_kwargs.get("tools")
+        tools = ctx.get_runtime_tools()
         for key in ("function_invocation_kwargs", "client_kwargs"):
             resolved = parent_kwargs.get(key)
             if isinstance(resolved, dict):
@@ -608,6 +608,5 @@ class WorkflowExecutor(Executor):
 
         # Forward the response to the sub-workflow, which resumes and validates it against its own
         # pending requests, then process whatever the sub-workflow produces.
-        parent_kwargs: dict[str, Any] = ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {})
-        result = await self.workflow.run(responses={request_id: response}, tools=parent_kwargs.get("tools"))
+        result = await self.workflow.run(responses={request_id: response}, tools=ctx.get_runtime_tools())
         await self._process_workflow_result(result, ctx)

@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-from collections.abc import AsyncIterable, Awaitable
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import pytest
@@ -597,6 +597,61 @@ async def test_workflow_as_agent_run_propagates_tools_to_underlying_agent() -> N
     assert agent.captured_kwargs[0].get("tools") is client_tools
 
 
+async def test_workflow_tools_do_not_break_exact_supports_agent_run_signature() -> None:
+    """Runtime tools do not reach an agent whose documented run contract has no tools keyword."""
+
+    class ExactSignatureAgent(BaseAgent):
+        @overload
+        def run(
+            self,
+            messages: AgentRunInputs | None = ...,
+            *,
+            stream: Literal[False] = ...,
+            session: AgentSession | None = ...,
+            function_invocation_kwargs: Mapping[str, Any] | None = ...,
+            client_kwargs: Mapping[str, Any] | None = ...,
+        ) -> Awaitable[AgentResponse[Any]]: ...
+
+        @overload
+        def run(
+            self,
+            messages: AgentRunInputs | None = ...,
+            *,
+            stream: Literal[True],
+            session: AgentSession | None = ...,
+            function_invocation_kwargs: Mapping[str, Any] | None = ...,
+            client_kwargs: Mapping[str, Any] | None = ...,
+        ) -> ResponseStream[AgentResponseUpdate, AgentResponse[Any]]: ...
+
+        def run(
+            self,
+            messages: AgentRunInputs | None = None,
+            *,
+            stream: bool = False,
+            session: AgentSession | None = None,
+            function_invocation_kwargs: Mapping[str, Any] | None = None,
+            client_kwargs: Mapping[str, Any] | None = None,
+        ) -> Awaitable[AgentResponse[Any]] | ResponseStream[AgentResponseUpdate, AgentResponse[Any]]:
+            del messages, session, function_invocation_kwargs, client_kwargs
+            if stream:
+
+                async def _stream() -> AsyncIterable[AgentResponseUpdate]:
+                    yield AgentResponseUpdate(contents=[Content.from_text(text="exact response")])
+
+                return ResponseStream(_stream(), finalizer=AgentResponse.from_updates)
+
+            async def _run() -> AgentResponse[Any]:
+                return AgentResponse(messages=[Message(role="assistant", contents=["exact response"])])
+
+            return _run()
+
+    workflow = SequentialBuilder(participants=[ExactSignatureAgent(name="exact")]).build()
+
+    result = await workflow.run("test message", tools=[object()])
+
+    assert "exact response" in str(result.get_outputs()[0])
+
+
 async def test_workflow_as_agent_run_stream_propagates_kwargs_to_underlying_agent() -> None:
     """Test that function_invocation_kwargs passed to workflow_agent.run(stream=True) flow through."""
     agent = _KwargsCapturingAgent(name="inner_agent")
@@ -657,6 +712,61 @@ async def test_workflow_as_agent_kwargs_with_complex_nested_data() -> None:
     assert len(agent.captured_kwargs) >= 1
     received = agent.captured_kwargs[0]
     assert received.get("function_invocation_kwargs") == complex_data
+
+
+async def test_continuation_tools_preserve_existing_invocation_kwargs() -> None:
+    """Supplying request-scoped tools on resume does not replace stored invocation kwargs."""
+    from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler, response_handler
+
+    captured_run_kwargs: list[dict[str, Any]] = []
+
+    class RequestingExecutor(Executor):
+        @handler
+        async def start(self, messages: list[Message], ctx: WorkflowContext[Any, Any]) -> None:
+            del messages
+            await ctx.request_info("Continue?", str, request_id="continue-request")
+
+        @response_handler
+        async def resume(self, request: str, response: str, ctx: WorkflowContext[Any, Any]) -> None:
+            del request, response
+            captured_run_kwargs.append(ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {}))
+            await ctx.yield_output("resumed")  # type: ignore[arg-type]
+
+    workflow = WorkflowBuilder(start_executor=RequestingExecutor(id="requester")).build()
+    function_kwargs = {"api_key": "secret"}
+    client_kwargs = {"model": "test-model"}
+
+    _ = await workflow.run(
+        [Message(role="user", contents=["start"])],
+        function_invocation_kwargs=function_kwargs,
+        client_kwargs=client_kwargs,
+    )
+    _ = await workflow.run(responses={"continue-request": "yes"}, tools=[object()])
+
+    assert captured_run_kwargs == [
+        {
+            "function_invocation_kwargs": {"__global__": function_kwargs},
+            "client_kwargs": {"__global__": client_kwargs},
+        }
+    ]
+
+
+async def test_runtime_tools_are_not_written_to_checkpoints(tmp_path) -> None:
+    """Request-scoped tools do not enter serialized workflow state."""
+    from agent_framework import FileCheckpointStorage
+
+    agent = _KwargsCapturingAgent(name="checkpoint_agent")
+    workflow = SequentialBuilder(participants=[agent]).build()
+    storage = FileCheckpointStorage(tmp_path)
+    runtime_tool = lambda: None  # noqa: E731
+
+    _ = await workflow.run("checkpoint tools", tools=[runtime_tool], checkpoint_storage=storage)
+
+    checkpoints = await storage.list_checkpoints(workflow_name=workflow.name)
+    assert checkpoints
+    for checkpoint in checkpoints:
+        run_kwargs = checkpoint.state.get(WORKFLOW_RUN_KWARGS_KEY, {})
+        assert "tools" not in run_kwargs
 
 
 # endregion
@@ -724,6 +834,46 @@ async def test_subworkflow_tools_propagation() -> None:
 
     assert len(inner_agent.captured_kwargs) >= 1, "Inner agent in subworkflow should have been invoked"
     assert inner_agent.captured_kwargs[0].get("tools") is client_tools
+
+
+async def test_subworkflow_resume_tools_preserve_child_invocation_kwargs() -> None:
+    """Nested workflow resume tools do not replace the child's stored invocation kwargs."""
+    from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler, response_handler
+    from agent_framework._workflows._workflow_executor import WorkflowExecutor
+
+    captured_child_kwargs: list[dict[str, Any]] = []
+
+    class RequestingExecutor(Executor):
+        @handler
+        async def start(self, messages: list[Message], ctx: WorkflowContext[Any, Any]) -> None:
+            del messages
+            await ctx.request_info("Continue?", str, request_id="child-request")
+
+        @response_handler
+        async def resume(self, request: str, response: str, ctx: WorkflowContext[Any, Any]) -> None:
+            del request, response
+            captured_child_kwargs.append(ctx.get_state(WORKFLOW_RUN_KWARGS_KEY, {}))
+            await ctx.yield_output("child resumed")  # type: ignore[arg-type]
+
+    child = WorkflowBuilder(start_executor=RequestingExecutor(id="child-requester")).build()
+    child_executor = WorkflowExecutor(child, id="child", propagate_request=True)
+    parent = WorkflowBuilder(start_executor=child_executor).build()
+    function_kwargs = {"api_key": "secret"}
+    client_kwargs = {"model": "test-model"}
+
+    _ = await parent.run(
+        [Message(role="user", contents=["start"])],
+        function_invocation_kwargs=function_kwargs,
+        client_kwargs=client_kwargs,
+    )
+    _ = await parent.run(responses={"child-request": "yes"}, tools=[object()])
+
+    assert captured_child_kwargs == [
+        {
+            "function_invocation_kwargs": {"__global__": function_kwargs},
+            "client_kwargs": {"__global__": client_kwargs},
+        }
+    ]
 
 
 async def test_subworkflow_kwargs_accessible_via_state() -> None:

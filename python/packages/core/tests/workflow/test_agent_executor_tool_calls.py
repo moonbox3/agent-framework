@@ -419,6 +419,45 @@ async def test_workflow_final_cancellation_resumes_accumulated_sibling_response(
     assert cancelled.get_outputs() == ["Tool executed successfully."]
 
 
+async def test_workflow_final_cancellation_preserves_runtime_tool_for_approved_sibling() -> None:
+    """Cancellation continuation keeps request-scoped tools needed by an accepted sibling."""
+    executed_queries: list[str] = []
+
+    def execute_runtime_tool(query: str) -> str:
+        executed_queries.append(query)
+        return f"Executed runtime tool with query: {query}"
+
+    runtime_tool = FunctionTool(
+        name="mock_tool_requiring_approval",
+        description="Request-scoped approval tool",
+        func=execute_runtime_tool,
+        approval_mode="always_require",
+    )
+    agent = Agent(
+        client=MockChatClient(parallel_request=True),
+        name="ApprovalAgent",
+    )
+    workflow = WorkflowBuilder(start_executor=agent, output_from=[test_executor]).add_edge(agent, test_executor).build()
+
+    paused = await workflow.run("Invoke tool requiring approval", tools=[runtime_tool])
+    first_request, second_request = paused.get_request_info_events()
+    partial = await workflow.run(
+        responses={
+            first_request.request_id: first_request.data.to_function_approval_response(True),
+        },
+        tools=[runtime_tool],
+    )
+
+    cancelled = await workflow.cancel_pending_requests(
+        [second_request.request_id],
+        tools=[runtime_tool],
+    )
+
+    assert partial.get_outputs() == []
+    assert cancelled.get_outputs() == ["Tool executed successfully."]
+    assert executed_queries == ["test"]
+
+
 async def test_agent_executor_parallel_tool_call_with_approval_streaming() -> None:
     """Test that AgentExecutor handles parallel tool calls requiring approval in streaming mode."""
     # Arrange

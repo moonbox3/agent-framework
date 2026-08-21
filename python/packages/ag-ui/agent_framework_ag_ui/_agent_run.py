@@ -2368,7 +2368,10 @@ async def run_agent_stream(
             cancelled_workflow_request_ids.add(
                 occurrence.response_id if occurrence and occurrence.response_id else interrupt_id
             )
-        await agent.workflow.cancel_pending_requests(cancelled_workflow_request_ids)
+        await agent.workflow.cancel_pending_requests(
+            cancelled_workflow_request_ids,
+            tools=tools,
+        )
     if cancelled_resume_ids and handled_resume_ids == cancelled_resume_ids:
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
         _clear_tool_approval_state(approval_state_store, approval_thread_id)

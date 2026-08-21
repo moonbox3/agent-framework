@@ -520,7 +520,6 @@ class Workflow(DictConvertible):
             OtelAttr.WORKFLOW_RUN_SPAN,
             attributes,
         ) as span:
-            saw_request = False
             emitted_in_progress_pending = False
             try:
                 # Add workflow started event (telemetry + surface state to consumers)
@@ -577,9 +576,6 @@ class Workflow(DictConvertible):
 
                 # All executor executions happen within workflow span
                 async for event in self._runner.run_until_convergence():
-                    # Track request events for final status determination
-                    if event.type == "request_info":
-                        saw_request = True
                     yield event
 
                     if event.type == "request_info" and not emitted_in_progress_pending:
@@ -592,7 +588,7 @@ class Workflow(DictConvertible):
                 # Continuations such as cancellation may retain an existing sibling request without
                 # re-emitting its request_info event during this run.
                 pending_requests = await self._runner.context.get_pending_request_info_events()
-                if saw_request or pending_requests:
+                if pending_requests:
                     self._status = WorkflowRunState.IDLE_WITH_PENDING_REQUESTS
                     with _framework_event_origin():
                         terminal_status = WorkflowEvent.status(self._status)
@@ -1211,7 +1207,11 @@ class Workflow(DictConvertible):
         self,
         request_ids: Collection[str],
         *,
+        checkpoint_id: str | None = None,
         checkpoint_storage: CheckpointStorage | None = None,
+        tools: ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]] | None = None,
+        function_invocation_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        client_kwargs: Mapping[str, Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> WorkflowRunResult:
         """Cancel pending external requests and release their owning executor state.
 
@@ -1224,7 +1224,11 @@ class Workflow(DictConvertible):
             request_ids: Request identifiers to cancel.
 
         Keyword Args:
+            checkpoint_id: Checkpoint to restore before applying cancellation.
             checkpoint_storage: Runtime checkpoint storage for the cancellation continuation.
+            tools: Request-scoped tools available while cancellation resumes executors.
+            function_invocation_kwargs: Keyword arguments forwarded to resumed tool invocations.
+            client_kwargs: Keyword arguments forwarded to resumed chat client calls.
 
         Returns:
             Events produced while applying cancellation and any resulting continuation.
@@ -1252,20 +1256,26 @@ class Workflow(DictConvertible):
 
         if checkpoint_storage is not None:
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
+        self._runner.context.set_runtime_tools(tools)
         events: list[WorkflowEvent[Any]] = []
         try:
+            if checkpoint_id is not None:
+                await self._runner.restore_from_checkpoint(checkpoint_id, checkpoint_storage)
             async for event in self._run_workflow_with_tracing(
                 initial_executor_fn=apply_cancellations,
                 is_continuation=True,
                 streaming=False,
-                tools=self._runner.context.get_runtime_tools(),
-                function_invocation_kwargs=None,
-                client_kwargs=None,
+                tools=tools,
+                function_invocation_kwargs=function_invocation_kwargs,
+                client_kwargs=client_kwargs,
             ):
+                if event.type == "request_info" and event.request_id in selected_ids:
+                    continue
                 events.append(event)
         finally:
             if checkpoint_storage is not None:
                 self._runner.context.clear_runtime_checkpoint_storage()
+            self._runner.context.clear_runtime_tools()
         return self._finalize_events(events)
 
     def as_agent(

@@ -22,10 +22,6 @@ permissions:
   issues: write
   pull-requests: write
 
-concurrency:
-  group: devflow-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number || github.run_id }}
-  cancel-in-progress: true
-
 env:
   DEVFLOW_REPOSITORY: ${{ vars.DF_REPO }}
   DEVFLOW_REF: main
@@ -175,6 +171,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: team_check
     if: ${{ needs.team_check.outputs.is_team_member == 'true' }}
+    concurrency:
+      group: devflow-pr-review-${{ github.repository }}-${{ needs.team_check.outputs.pr_number }}
+      cancel-in-progress: true
     permissions:
       copilot-requests: write
       contents: read

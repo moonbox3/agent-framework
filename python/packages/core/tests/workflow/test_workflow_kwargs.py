@@ -14,6 +14,7 @@ from agent_framework import (
     AgentSession,
     BaseAgent,
     Content,
+    FunctionTool,
     Message,
     ResponseStream,
     WorkflowRunState,
@@ -584,17 +585,23 @@ async def test_workflow_as_agent_run_propagates_kwargs_to_underlying_agent() -> 
     assert received.get("function_invocation_kwargs") == fi_kwargs
 
 
-async def test_workflow_as_agent_run_propagates_tools_to_underlying_agent() -> None:
-    """Tools passed to workflow.as_agent().run() reach the underlying agent executor."""
+async def test_workflow_as_agent_run_normalizes_tools_for_underlying_agent() -> None:
+    """Tools passed to workflow.as_agent().run() are normalized before reaching the underlying agent."""
     agent = _KwargsCapturingAgent(name="inner_agent")
     workflow = SequentialBuilder(participants=[agent]).build()
     workflow_agent = workflow.as_agent(name="TestWorkflowAgent")
 
-    client_tools = [object()]
-    _ = await workflow_agent.run("test message", tools=client_tools)
+    def client_tool() -> str:
+        return "client result"
+
+    _ = await workflow_agent.run("test message", tools=client_tool)
 
     assert len(agent.captured_kwargs) >= 1, "Inner agent should have been invoked at least once"
-    assert agent.captured_kwargs[0].get("tools") is client_tools
+    received_tools = agent.captured_kwargs[0].get("tools")
+    assert isinstance(received_tools, list)
+    assert len(received_tools) == 1
+    assert isinstance(received_tools[0], FunctionTool)
+    assert received_tools[0].name == "client_tool"
 
 
 async def test_workflow_tools_do_not_break_exact_supports_agent_run_signature() -> None:
@@ -650,6 +657,93 @@ async def test_workflow_tools_do_not_break_exact_supports_agent_run_signature() 
     result = await workflow.run("test message", tools=[object()])
 
     assert "exact response" in str(result.get_outputs()[0])
+
+
+async def test_workflow_cancellation_normalizes_tools_for_resumed_agent() -> None:
+    """Tools passed to cancellation are normalized before the owning agent resumes."""
+
+    class ApprovalRequestAgent(BaseAgent):
+        def __init__(self) -> None:
+            super().__init__(name="approval_agent", description="Requests two approvals")
+            self.run_count = 0
+            self.resumed_tools: Any = None
+
+        @overload
+        def run(
+            self,
+            messages: AgentRunInputs | None = ...,
+            *,
+            stream: Literal[False] = ...,
+            session: AgentSession | None = ...,
+            **kwargs: Any,
+        ) -> Awaitable[AgentResponse[Any]]: ...
+
+        @overload
+        def run(
+            self,
+            messages: AgentRunInputs | None = ...,
+            *,
+            stream: Literal[True],
+            session: AgentSession | None = ...,
+            **kwargs: Any,
+        ) -> ResponseStream[AgentResponseUpdate, AgentResponse[Any]]: ...
+
+        def run(
+            self,
+            messages: AgentRunInputs | None = None,
+            *,
+            stream: bool = False,
+            session: AgentSession | None = None,
+            **kwargs: Any,
+        ) -> Awaitable[AgentResponse[Any]] | ResponseStream[AgentResponseUpdate, AgentResponse[Any]]:
+            del messages, session
+
+            async def _run() -> AgentResponse[Any]:
+                self.run_count += 1
+                if self.run_count == 1:
+                    requests = [
+                        Content.from_function_approval_request(
+                            id=f"approval-{index}",
+                            function_call=Content.from_function_call(
+                                call_id=f"call-{index}",
+                                name="client_tool",
+                                arguments={},
+                            ),
+                        )
+                        for index in range(2)
+                    ]
+                    return AgentResponse(messages=[Message(role="assistant", contents=requests)])
+                self.resumed_tools = kwargs.get("tools")
+                return AgentResponse(messages=[Message(role="assistant", contents=["resumed"])])
+
+            if stream:
+
+                async def _stream() -> AsyncIterable[AgentResponseUpdate]:
+                    response = await _run()
+                    yield AgentResponseUpdate(contents=response.messages[0].contents, role="assistant")
+
+                return ResponseStream(_stream(), finalizer=AgentResponse.from_updates)
+            return _run()
+
+    agent = ApprovalRequestAgent()
+    workflow = SequentialBuilder(participants=[agent]).build()
+    paused = await workflow.run("start")
+    first_request, second_request = paused.get_request_info_events()
+    _ = await workflow.run(
+        responses={
+            first_request.request_id: first_request.data.to_function_approval_response(True),
+        }
+    )
+
+    def client_tool() -> str:
+        return "client result"
+
+    _ = await workflow.cancel_pending_requests([second_request.request_id], tools=client_tool)
+
+    assert isinstance(agent.resumed_tools, list)
+    assert len(agent.resumed_tools) == 1
+    assert isinstance(agent.resumed_tools[0], FunctionTool)
+    assert agent.resumed_tools[0].name == "client_tool"
 
 
 async def test_workflow_as_agent_run_stream_propagates_kwargs_to_underlying_agent() -> None:
@@ -827,13 +921,19 @@ async def test_subworkflow_tools_propagation() -> None:
     subworkflow_executor = WorkflowExecutor(workflow=inner_workflow, id="subworkflow_executor")
     outer_workflow = SequentialBuilder(participants=[subworkflow_executor]).build()
 
-    client_tools = [object()]
-    async for event in outer_workflow.run("test message for subworkflow", stream=True, tools=client_tools):
+    def client_tool() -> str:
+        return "client result"
+
+    async for event in outer_workflow.run("test message for subworkflow", stream=True, tools=client_tool):
         if event.type == "status" and event.state == WorkflowRunState.IDLE:
             break
 
     assert len(inner_agent.captured_kwargs) >= 1, "Inner agent in subworkflow should have been invoked"
-    assert inner_agent.captured_kwargs[0].get("tools") is client_tools
+    received_tools = inner_agent.captured_kwargs[0].get("tools")
+    assert isinstance(received_tools, list)
+    assert len(received_tools) == 1
+    assert isinstance(received_tools[0], FunctionTool)
+    assert received_tools[0].name == "client_tool"
 
 
 async def test_subworkflow_resume_tools_preserve_child_invocation_kwargs() -> None:

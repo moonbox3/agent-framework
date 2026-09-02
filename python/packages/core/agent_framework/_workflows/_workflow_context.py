@@ -13,6 +13,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 from typing_extensions import Never, TypeVar
 
+from .._tools import ToolTypes
 from ..observability import OtelAttr, create_workflow_span
 from ._events import (
     WorkflowEvent,
@@ -488,6 +489,6 @@ class WorkflowContext(Generic[OutT, W_OutT]):
         """
         return self._runner_context.is_streaming()
 
-    def get_runtime_tools(self) -> Any | None:
+    def get_runtime_tools(self) -> list[ToolTypes] | None:
         """Get request-scoped tools supplied to the active workflow run."""
         return self._runner_context.get_runtime_tools()

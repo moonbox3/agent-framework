@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from .._sessions import ContextProvider
-from .._tools import ToolTypes
+from .._tools import ToolTypes, normalize_tools
 from .._types import Content, ResponseStream
 from ..exceptions import WorkflowException
 from ..observability import OtelAttr, capture_exception, create_workflow_span
@@ -781,7 +781,8 @@ class Workflow(DictConvertible):
         # its async-generator finalizer ran. Clear it so this run starts clean and does
         # not silently inherit the prior run's runtime checkpoint storage.
         self._runner.context.clear_runtime_checkpoint_storage()
-        self._runner.context.set_runtime_tools(tools)
+        runtime_tools = normalize_tools(tools) if tools is not None else None
+        self._runner.context.set_runtime_tools(runtime_tools)
 
         response_stream = ResponseStream[WorkflowEvent, WorkflowRunResult](
             self._run_core(
@@ -790,7 +791,7 @@ class Workflow(DictConvertible):
                 checkpoint_id=checkpoint_id,
                 checkpoint_storage=checkpoint_storage,
                 streaming=stream,
-                tools=tools,
+                tools=runtime_tools,
                 function_invocation_kwargs=function_invocation_kwargs,
                 client_kwargs=client_kwargs,
             ),
@@ -1256,7 +1257,8 @@ class Workflow(DictConvertible):
 
         if checkpoint_storage is not None:
             self._runner.context.set_runtime_checkpoint_storage(checkpoint_storage)
-        self._runner.context.set_runtime_tools(tools)
+        runtime_tools = normalize_tools(tools) if tools is not None else None
+        self._runner.context.set_runtime_tools(runtime_tools)
         events: list[WorkflowEvent[Any]] = []
         try:
             if checkpoint_id is not None:
@@ -1265,7 +1267,7 @@ class Workflow(DictConvertible):
                 initial_executor_fn=apply_cancellations,
                 is_continuation=True,
                 streaming=False,
-                tools=tools,
+                tools=runtime_tools,
                 function_invocation_kwargs=function_invocation_kwargs,
                 client_kwargs=client_kwargs,
             ):

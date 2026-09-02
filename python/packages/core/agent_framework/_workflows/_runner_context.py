@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
+from .._tools import ToolTypes
 from ._checkpoint import CheckpointID, CheckpointStorage, WorkflowCheckpoint
 from ._const import INTERNAL_SOURCE_ID
 from ._events import WorkflowEvent
@@ -201,11 +202,11 @@ class RunnerContext(Protocol):
         """
         ...
 
-    def set_runtime_tools(self, tools: Any | None) -> None:
+    def set_runtime_tools(self, tools: list[ToolTypes] | None) -> None:
         """Set request-scoped tools for the active workflow run."""
         ...
 
-    def get_runtime_tools(self) -> Any | None:
+    def get_runtime_tools(self) -> list[ToolTypes] | None:
         """Get request-scoped tools for the active workflow run."""
         ...
 
@@ -355,7 +356,7 @@ class InProcRunnerContext:
 
         # Streaming flag - set by workflow's run(..., stream=True) vs run(..., stream=False)
         self._streaming: bool = False
-        self._runtime_tools: Any | None = None
+        self._runtime_tools: list[ToolTypes] | None = None
         self._yield_output_classifier: YieldOutputClassifier = lambda _executor_id: "output"
 
     # region Messaging and Events
@@ -548,11 +549,11 @@ class InProcRunnerContext:
         """
         return self._streaming
 
-    def set_runtime_tools(self, tools: Any | None) -> None:
+    def set_runtime_tools(self, tools: list[ToolTypes] | None) -> None:
         """Set request-scoped tools for the active workflow run."""
         self._runtime_tools = tools
 
-    def get_runtime_tools(self) -> Any | None:
+    def get_runtime_tools(self) -> list[ToolTypes] | None:
         """Get request-scoped tools for the active workflow run."""
         return self._runtime_tools
 

@@ -19,8 +19,7 @@ concurrency:
   group: >-
     issue-triage-${{ github.repository }}-${{
       github.event_name == 'workflow_dispatch' && inputs.issue_number
-      || (github.event.issue.type.name == 'Bug'
-          || github.event.issue.type.name == 'Feature') && github.event.issue.number
+      || github.event_name == 'issues' && github.event.issue.number
       || github.run_id
     }}
   cancel-in-progress: true

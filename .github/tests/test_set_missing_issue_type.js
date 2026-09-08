@@ -2,6 +2,8 @@
 
 const { it } = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const setMissingIssueType = require('../scripts/set_missing_issue_type.js');
 
 function createMocks(issue) {
@@ -59,3 +61,37 @@ it('propagates API failures so the workflow reports the failure', async () => {
   mocks.github.rest.issues.update = async () => { throw new Error('API unavailable'); };
   await assert.rejects(setMissingIssueType(mocks), /API unavailable/);
 });
+
+for (const failingMethod of ['get', 'update']) {
+  it(`finishes workflow label assignment before a fallback ${failingMethod} failure`, async () => {
+    const workflow = readFileSync(path.join(__dirname, '../workflows/label-issues.yml'), 'utf8');
+    // Execute the actual github-script steps in workflow order, with API mocks.
+    const scripts = [...workflow.matchAll(/^          script: \|\n((?:^            .*\n|^\n)+)/gm)]
+      .map((match) => match[1].replace(/^            /gm, ''));
+    assert.equal(scripts.length, 2);
+    const mocks = createMocks({ title: 'Python: [Bug]: broken', type: null });
+    const calls = [];
+    mocks.github.rest.issues.addLabels = async ({ labels }) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(labels, ['triage', 'python']);
+      calls.push('labels completed');
+    };
+    mocks.github.rest.issues[failingMethod] = async () => {
+      calls.push('fallback failed');
+      throw new Error('API unavailable');
+    };
+    const requireScript = (name) => name.endsWith('check_team_membership.js')
+      ? async () => ({ isTeamMember: false })
+      : setMissingIssueType;
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const runSteps = async () => {
+      for (const script of scripts) {
+        await new AsyncFunction('github', 'context', 'core', 'require', script)(
+          mocks.github, mocks.context, mocks.core, requireScript,
+        );
+      }
+    };
+    await assert.rejects(runSteps(), /API unavailable/);
+    assert.deepEqual(calls, ['labels completed', 'fallback failed']);
+  });
+}

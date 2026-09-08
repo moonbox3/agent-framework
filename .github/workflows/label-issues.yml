@@ -22,6 +22,7 @@ jobs:
           sparse-checkout: |
             .github/actions/github-app-token
             .github/scripts/check_team_membership.js
+            .github/scripts/set_missing_issue_type.js
           fetch-depth: 1
           persist-credentials: false
 
@@ -39,6 +40,15 @@ jobs:
           github-app-installation-id: ${{ secrets.GH_APP_INSTALLATION_ID }}
           repository: ${{ github.repository }}
           fallback-token: ${{ secrets.GH_ACTIONS_PR_WRITE }}
+
+      # Use the app token so assigning a type can trigger the triage workflow.
+      - name: Set missing issue type
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.github-auth.outputs.token }}
+          script: |
+            const setMissingIssueType = require('./.github/scripts/set_missing_issue_type.js');
+            await setMissingIssueType({ github, context, core });
 
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:

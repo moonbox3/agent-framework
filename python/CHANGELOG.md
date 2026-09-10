@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-09-10
+
+### Changed
+- **tests**: Update the Python type-checking development dependencies ([#8208](https://github.com/microsoft/agent-framework/pull/8208))
+
+### Fixed
+- **agent-framework-core**: Validate workflow executor checkpoint state when saving instead of deferring invalid-state failures until restore ([#8215](https://github.com/microsoft/agent-framework/pull/8215))
+- **agent-framework-core**: Keep MCP-provided security labels subordinate to locally configured FIDES policy ([#8187](https://github.com/microsoft/agent-framework/pull/8187))
+
 ## [1.17.0] - 2026-09-03
 
 ### Added
@@ -1606,7 +1615,8 @@ Release candidate for **agent-framework-core** and **agent-framework-azure-ai** 
 
 For more information, see the [announcement blog post](https://devblogs.microsoft.com/foundry/introducing-microsoft-agent-framework-the-open-source-engine-for-agentic-ai-apps/).
 
-[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.17.0...HEAD
+[Unreleased]: https://github.com/microsoft/agent-framework/compare/python-1.17.1...HEAD
+[1.17.1]: https://github.com/microsoft/agent-framework/compare/python-1.17.0...python-1.17.1
 [1.17.0]: https://github.com/microsoft/agent-framework/compare/python-1.16.0...python-1.17.0
 [1.16.0]: https://github.com/microsoft/agent-framework/compare/python-1.15.0...python-1.16.0
 [1.15.0]: https://github.com/microsoft/agent-framework/compare/python-1.14.0...python-1.15.0

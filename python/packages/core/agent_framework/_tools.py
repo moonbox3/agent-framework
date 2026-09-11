@@ -21,7 +21,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial, wraps
 from time import perf_counter, time_ns
 from typing import (
@@ -2140,6 +2140,30 @@ _DECLARATION_ONLY_EXECUTION_KEY = "_declaration_only_execution"
 class _DeclarationOnlyExecution:
     executed_call_count: int = 0
     should_terminate: bool = False
+    _budget_state: dict[str, Any] = field(default_factory=dict[str, Any], repr=False)
+
+    def client_kwargs(self, existing: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Install declaration-only execution and its shared budget in client kwargs."""
+        client_kwargs = dict(existing) if existing is not None else {}
+        existing_budget = client_kwargs.get(_FUNCTION_INVOCATION_BUDGET_STATE_KEY)
+        if isinstance(existing_budget, dict):
+            self._budget_state = existing_budget
+        client_kwargs[_DECLARATION_ONLY_EXECUTION_KEY] = self
+        client_kwargs[_FUNCTION_INVOCATION_BUDGET_STATE_KEY] = self._budget_state
+        return client_kwargs
+
+    @property
+    def calls_used(self) -> int:
+        """Return the cumulative core and adapter function-call charge."""
+        value = self._budget_state.get("total_function_calls", 0)
+        budget_calls = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+        return max(budget_calls, self.executed_call_count)
+
+    def record_adapter_calls(self, count: int) -> None:
+        """Charge adapter-executed calls to the shared function-call budget."""
+        if count < 0:
+            raise ValueError("Adapter function-call count cannot be negative.")
+        self._budget_state["total_function_calls"] = self.calls_used + count
 
 
 async def _execute_function_calls(

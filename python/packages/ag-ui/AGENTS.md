@@ -42,11 +42,15 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   A2UI-wrapped Agents. `MiddlewareFailure` remains fatal and must not be converted into a model-visible tool error.
   Core owns preparation through public `before_run` and `SessionContext.extend_middleware`; approval execution and
   continuation reuse that prepared context instead of preparing providers twice. Private approval-observer hooks
-  are not a substitute for provider preparation.
+  are not a substitute for provider preparation. Wrapped approvals prepare the same effective A2UI messages as
+  normal wrapper execution, including per-request context and sanitization. The prepared-execution interface owns
+  single-call result groups, observer notification, and continuation kwargs; runners do not unpack its state.
 - A2UI mixed planner batches leave server-tool siblings of the declaration-only `generate_a2ui` call in the core
   function loop, preserving provider middleware and the shared call budget before surface rendering.
   Adapter-side compatibility execution is limited to non-core agents without context providers; unsupported
   provider preparation fails explicitly instead of executing with a partial policy.
+  Core-backed continuation retains the inner response's original model-turn and reasoning/call/result groups.
+  The core execution state owns runtime budget keys and accounting for both server calls and rendered surfaces.
 - Local approval resume checks the current function-invocation configuration before any approved side effect begins.
   When invocation is disabled, grants remain pending under their original retention deadline and the endpoint emits
   `APPROVAL_INVOCATION_DISABLED`; only a later explicit retry after re-enablement can execute them. Rejections and
@@ -56,6 +60,13 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   Returning early or failing provider preparation releases every unstarted claimed grant, including hosted and
   deferred siblings, without extending pending retention or changing the execution owner. Recheck enablement
   after provider preparation, before beginning any execution.
+- Approval claim cleanup covers the complete run, including approval-time failures before streaming starts.
+  Forwarded owners begin execution only when their decisions are dispatched to the agent. Cleanup releases
+  unstarted claims without renewing retention and recovers possibly started executions without replaying
+  uncertain work; settled and cancelled outcomes stay inert.
+- Complete resume payloads may include a retained result alongside a distinct pending occurrence that reuses
+  the provider call id. Match logical function-call occurrences and current request generations, not provider
+  ids alone; an older request generation for the same occurrence is still invalid.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

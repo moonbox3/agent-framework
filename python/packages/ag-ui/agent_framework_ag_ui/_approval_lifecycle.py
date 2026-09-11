@@ -949,6 +949,18 @@ class ApprovalLifecycle:
         return None
 
     @_serialized_by_occurrence
+    def recover_unfinished(self, intent: AuthorizedExecution) -> None:
+        """Release unstarted authority or recover an execution without replaying uncertain work."""
+        occurrence = self._occurrences.get(intent.identity)
+        if occurrence is None:
+            # A terminal outcome may have expired before the enclosing stream closes.
+            return
+        if occurrence.status is ApprovalStatus.EXECUTING:
+            self.recover_execution(intent, owner=intent.owner)
+        if occurrence.status is ApprovalStatus.CLAIMED:
+            self.release_claim(intent, policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION)
+
+    @_serialized_by_occurrence
     def settle(self, intent: AuthorizedExecution, results: list[Content]) -> ApprovalOutcome:
         """Settle an executing occurrence with results under its original call identity."""
         occurrence = self._occurrences[intent.identity]

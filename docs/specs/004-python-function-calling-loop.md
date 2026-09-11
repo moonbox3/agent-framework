@@ -401,6 +401,9 @@ that manually replay messages own the equivalent rule: do not resend an approval
 - Adapter-owned local approval execution uses the function middleware contributed through normal provider
   `before_run` preparation, including `SessionContext.extend_middleware`. A private provider-specific approval
   hook cannot replace that contract. Approval execution and its continuation share the prepared provider context.
+  For wrapped agents, preparation uses the same effective input transformation as normal wrapper execution,
+  including A2UI context prompts. A preparation bound to another Agent or AgentSession is rejected before use
+  without consuming the original preparation.
 - With an `AgentSession`, every surfaced local or hosted approval request is stored as an immutable snapshot in one
   active model batch. A new surfaced batch replaces an abandoned batch instead of accumulating session state.
 - Initial local approval request IDs use the recorded `function_call.id` occurrence identity. A policy replacement
@@ -473,6 +476,12 @@ that manually replay messages own the equivalent rule: do not resend an approval
   under current authority and policy; it never starts execution automatically.
   A provider-preparation failure also releases unstarted claims before propagating the failure, and enablement
   is checked again after successful preparation so provider-driven disablement cannot consume the grant.
+- AG-UI claim cleanup covers approval execution as well as streaming, including cancellation and fatal middleware
+  escapes. Unstarted claims return to pending with their original retention deadline; possibly started executions
+  use the existing indeterminate/idempotency recovery rules. Terminal outcomes are not replayed or revived.
+- A complete resume may replay a retained result while resolving a different pending logical occurrence with the
+  same provider `call_id`. Retained-result eligibility uses the logical function-call occurrence and current request
+  generation, so a stale generation of the same occurrence cannot masquerade as an independent retained result.
 - A server-issued approval request must not be replayed inline during service-side continuation.
 - History providers may retain approval control contents in their backing store for audit, but base history replay
   filters them before later model calls.
@@ -484,6 +493,9 @@ that manually replay messages own the equivalent rule: do not resend an approval
 - Model-bound history contains one function call/result pair per completed logical occurrence.
 - Append-only history must not replay stale approval request/response wrappers to the model.
 - Framework-managed and service-managed continuation must preserve the same logical call/result transcript.
+- A2UI continuation preserves the original inner model-turn boundaries, including reasoning and ordered
+  call/result groups when a server-only turn precedes a mixed server/A2UI turn. It does not flatten all calls
+  and results from an inner Agent run into one synthetic turn.
 - A streaming response rebuilt from updates by an intermediate middleware must carry over the inner response's
   conversation id and its internal-conversation-id marker, so framework-managed continuation appends only the latest
   message instead of replaying a transcript the provider already holds. The rebuilt response mirrors the inner
@@ -588,8 +600,13 @@ that manually replay messages own the equivalent rule: do not resend an approval
 | AG-UI approval retention and capacity | Pending authority expires automatically, indeterminate outcomes remain non-retryable until their safety window permits reclamation, and one trusted scope cannot consume another scope's occurrence quota. | `packages/ag-ui/tests/ag_ui/test_approval_lifecycle.py::test_abandoned_pending_occurrence_expires_and_releases_capacity`, `test_indeterminate_occurrence_is_reclaimed_after_its_safety_window`, `test_capacity_is_enforced_per_trusted_scope` |
 | AG-UI provider function policy | Public provider-contributed function middleware denies an approved or A2UI mixed-batch tool before any protected effect or result; direct Agent controls match. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_agent_approval_resume_preserves_agent_function_policy`, `test_endpoint_a2ui_mixed_batch_preserves_agent_function_policy` |
 | AG-UI prepared approval continuation | An approved tool and its subsequent model turn use the same provider preparation. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_approved_tool_and_continuation_share_provider_preparation` |
+| Wrapped approval input preparation | Message-dependent provider policy observes the same A2UI context prompt on approval resume as on normal wrapped execution. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_a2ui_approval_prepares_policy_from_effective_input` |
+| Prepared continuation binding | Wrong-agent and wrong-session handoffs fail in both response modes without consuming the original valid preparation. | `packages/core/tests/core/test_agents.py::test_prepared_continuation_rejects_another_agent_or_session` |
 | A2UI shared execution budget | Core-executed server tools and adapter-rendered surfaces share the call limit across planner rounds without duplicate results. | `packages/ag-ui/tests/ag_ui/test_a2ui.py::test_core_a2ui_shares_call_budget_with_surface_generation` |
+| A2UI multi-turn inner response replay | A server-only turn followed by a mixed A2UI turn retains original reasoning/call/result groups and model-turn boundaries on continuation. | `packages/ag-ui/tests/ag_ui/test_a2ui.py::test_core_a2ui_preserves_inner_turn_boundaries_for_continuation` |
 | AG-UI blocked cross-owner resume | Disabled invocation, provider-preparation failure, and provider-driven disablement preserve unstarted local and hosted grants for explicit retry; completed replay executes neither again. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_disabled_resume_keeps_local_and_hosted_grants_retryable` |
+| AG-UI fatal approval recovery | A fatal escape before or after a local tool starts releases unstarted siblings; potentially started work is not replayed. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_fatal_approval_preserves_unstarted_siblings` |
+| Retained and pending occurrence retry | A retained result and a distinct pending approval remain independently resumable when they reuse a provider call id. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_retained_and_pending_occurrences_resume_independently`, `test_endpoint_fides_replacement_rotates_lifecycle_generation` |
 | AG-UI local executor unavailable on resume | A claimed local occurrence whose executor disappeared releases its unstarted claim, reports temporary unavailability, and remains safely retryable. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_agent_approval_resume_remains_retryable_when_local_tool_is_temporarily_unavailable` |
 | AG-UI forwarded execution interruption | A provider failure, cancellation, or stream close after forwarding an approval recovers the open occurrence as indeterminate when no idempotency key proves retry safety. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_hosted_approval_becomes_indeterminate_when_provider_stream_fails` |
 

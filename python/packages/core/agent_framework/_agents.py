@@ -246,24 +246,44 @@ class _PreparedAgentSession:
 
 
 @dataclass
-class _PreparedFunctionExecution:
-    context: _RunContext
-    middleware: FunctionMiddlewarePipeline
-    configuration: FunctionInvocationConfiguration
+class _PreparedFunctionResult:
+    contents: list[Content]
+    should_terminate: bool
 
-    async def execute(self, calls: Sequence[Content]) -> tuple[list[list[Content]], bool]:
+
+@dataclass
+class _PreparedFunctionExecution:
+    _context: _RunContext
+    _middleware: FunctionMiddlewarePipeline
+    _configuration: FunctionInvocationConfiguration
+
+    def continuation_client_kwargs(self) -> dict[str, Any]:
+        """Hand off the one-use provider preparation without exposing its storage layout."""
+        return {_PREPARED_AGENT_SESSION_KEY: self._context["session_preparation"]}
+
+    def notify_approval_responses(self, responses: Sequence[Content]) -> None:
+        """Notify the prepared policy using its owning session."""
+        self._middleware._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+            responses, session=self._context["session"]
+        )
+
+    async def execute_one(self, call: Content) -> _PreparedFunctionResult:
+        """Execute one occurrence, preserving its complete result group and termination signal."""
         from ._tools import _try_execute_function_call_groups  # pyright: ignore[reportPrivateUsage]
 
-        if not self.configuration.get("enabled", True):
+        if not self._configuration.get("enabled", True):
             raise AgentInvalidRequestException("Function invocation is disabled.")
-        return await _try_execute_function_call_groups(
-            custom_args=dict(self.context["function_invocation_kwargs"]),
-            function_calls=calls,
-            tools=self.context["chat_options"].get("tools") or [],
-            config=self.configuration,
-            invocation_session=self.context["session"],
-            middleware_pipeline=self.middleware,
+        groups, should_terminate = await _try_execute_function_call_groups(
+            custom_args=dict(self._context["function_invocation_kwargs"]),
+            function_calls=[call],
+            tools=self._context["chat_options"].get("tools") or [],
+            config=self._configuration,
+            invocation_session=self._context["session"],
+            middleware_pipeline=self._middleware,
         )
+        if len(groups) != 1 or not groups[0]:
+            raise AgentInvalidResponseException("Prepared tool execution must return one non-empty result group.")
+        return _PreparedFunctionResult(contents=groups[0], should_terminate=should_terminate)
 
 
 # region Agent Protocol

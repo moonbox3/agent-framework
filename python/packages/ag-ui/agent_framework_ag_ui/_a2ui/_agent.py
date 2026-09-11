@@ -24,6 +24,7 @@ Two paths:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping
@@ -378,10 +379,17 @@ class A2UIAgent:
         context_slice = kwargs.pop("a2ui_context", None)
         if context_slice is None:
             context_slice = self._context_slice
-        messages = self._with_context_prompt(messages, context_slice)
+        messages = self._prepare_run_messages(messages, a2ui_context=context_slice)
         if stream:
             return self._run_streaming(messages, context_slice, **kwargs)
         return self._run_non_streaming(messages, context_slice, **kwargs)
+
+    def _prepare_run_messages(
+        self, messages: Any = None, *, a2ui_context: dict[str, Any] | None = None
+    ) -> list[Message]:
+        """Prepare one A2UI request's model input."""
+        context_slice = self._context_slice if a2ui_context is None else a2ui_context
+        return _sanitize_unanswered_tool_calls(self._with_context_prompt(messages, context_slice))
 
     def _with_context_prompt(self, messages: Any, context_slice: dict[str, Any]) -> list[Message]:
         """Prepend the forwarded component catalog + guidelines as a system message."""
@@ -594,8 +602,6 @@ class A2UIAgent:
         from agent_framework import AgentResponseUpdate
         from agent_framework._agents import RawAgent
         from agent_framework._tools import (
-            _DECLARATION_ONLY_EXECUTION_KEY,
-            _FUNCTION_INVOCATION_BUDGET_STATE_KEY,
             FunctionInvocationLayer,
             _DeclarationOnlyExecution,
             normalize_function_invocation_configuration,
@@ -631,14 +637,8 @@ class A2UIAgent:
             self.inner_agent.client, FunctionInvocationLayer
         )
         execution_state = _DeclarationOnlyExecution()
-        budget_state: dict[str, Any] = {}
-        rendered_calls = 0
         if core_execution:
-            kwargs["client_kwargs"] = {
-                **(kwargs.get("client_kwargs") or {}),
-                _DECLARATION_ONLY_EXECUTION_KEY: execution_state,
-                _FUNCTION_INVOCATION_BUDGET_STATE_KEY: budget_state,
-            }
+            kwargs["client_kwargs"] = execution_state.client_kwargs(kwargs.get("client_kwargs"))
 
         pending: list[Any] = history
         pending_session = session
@@ -666,13 +666,14 @@ class A2UIAgent:
             active_cid: str | None = None
             core_results: list[Content] = []
             core_control: list[Content] = []
-            async for update in self.inner_agent.run(
+            inner_stream = self.inner_agent.run(
                 pending,
                 stream=True,
                 session=pending_session,
                 tools=[*incoming_tools, generate_decl],
                 **kwargs,
-            ):
+            )
+            async for update in inner_stream:
                 for content in update.contents:
                     ctype = getattr(content, "type", None)
                     if core_execution:
@@ -711,6 +712,10 @@ class A2UIAgent:
                         if target is not None:
                             all_concat[target] += frag
                 yield update
+            inner_response_messages: list[Message] | None = None
+            if core_execution:
+                inner_response = await inner_stream.get_final_response()
+                inner_response_messages = list(inner_response.messages)
 
             # Core Agents already executed server siblings using their prepared provider context.
             # Only the declaration-only UI call is rendered here; opaque agents use the
@@ -760,7 +765,7 @@ class A2UIAgent:
             server_terminated = False
             deferred_calls: list[Content] = []
             if core_execution:
-                calls_used = execution_state.executed_call_count + rendered_calls
+                calls_used = execution_state.calls_used
                 deferred_calls = [call for call in server_calls if call.call_id not in core_result_ids]
             elif server_calls:
                 runnable = server_calls if fi_enabled else []
@@ -786,8 +791,8 @@ class A2UIAgent:
                 generate_calls = generate_calls[:allowed]
             calls_used += len(generate_calls)
             if core_execution:
-                rendered_calls += len(generate_calls)
-                budget_state["total_function_calls"] = calls_used
+                execution_state.record_adapter_calls(len(generate_calls))
+                calls_used = execution_state.calls_used
 
             generate_results: list[Content] = []
             for call in generate_calls:
@@ -816,12 +821,23 @@ class A2UIAgent:
             # Record this round's assistant call(s) + results BEFORE deciding to stop, so
             # the tools-off final narration below sees the surface this turn just produced
             # (otherwise it receives only the original user messages and cannot narrate it).
-            assistant_contents = [*text_contents, *server_calls, *generate_calls]
-            history = [
-                *history,
-                Message(role="assistant", contents=assistant_contents),
-                Message(role="tool", contents=all_results),
-            ]
+            if inner_response_messages is not None:
+                completed_messages = copy.deepcopy(inner_response_messages)
+                if (
+                    completed_messages
+                    and getattr(completed_messages[-1].role, "value", completed_messages[-1].role) == "tool"
+                ):
+                    completed_messages[-1].contents.extend(generate_results)
+                else:
+                    completed_messages.append(Message(role="tool", contents=generate_results))
+                history = [*history, *completed_messages]
+            else:
+                assistant_contents = [*text_contents, *server_calls, *generate_calls]
+                history = [
+                    *history,
+                    Message(role="assistant", contents=assistant_contents),
+                    Message(role="tool", contents=all_results),
+                ]
 
             budget_exhausted = max_calls is not None and calls_used >= max_calls
             if budget_exhausted:

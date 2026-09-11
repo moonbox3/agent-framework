@@ -45,7 +45,6 @@ from agent_framework._middleware import (
 )
 from agent_framework._agents import (
     RawAgent,
-    _PREPARED_AGENT_SESSION_KEY,  # pyright: ignore[reportPrivateUsage]
     _PreparedFunctionExecution,  # pyright: ignore[reportPrivateUsage]
 )
 from agent_framework._tools import (
@@ -1240,8 +1239,8 @@ def _canonical_approval_resume_messages(
     handled_ids: set[str] = set()
     cancelled_ids: set[str] = set()
     pending_interrupt_ids = lifecycle.pending_client_resume_interrupt_ids(thread_id=thread_id)
-    pending_call_ids = {
-        occurrence.identity.call_id
+    pending_occurrence_ids = {
+        occurrence.function_call_id
         for interrupt_id in pending_interrupt_ids
         if (occurrence := lifecycle.pending_occurrence(thread_id=thread_id, interrupt_id=interrupt_id)) is not None
     }
@@ -1254,7 +1253,7 @@ def _canonical_approval_resume_messages(
             and occurrence is not None
             and occurrence.status.is_terminal
             and occurrence.active_interrupt_id == interrupt_id
-            and occurrence.identity.call_id not in pending_call_ids
+            and occurrence.function_call_id not in pending_occurrence_ids
         ):
             retained_interrupt_ids.add(interrupt_id)
     contract_interrupt_ids = expected_ids | pending_interrupt_ids | retained_interrupt_ids
@@ -1778,9 +1777,12 @@ async def _resolve_approval_responses(
             validated_approved_responses.append(primary_response)
 
     if authenticated_non_grants:
-        middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
-            authenticated_non_grants, session=invocation_session
-        )
+        if prepared_execution is not None:
+            prepared_execution.notify_approval_responses(authenticated_non_grants)
+        else:
+            middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+                authenticated_non_grants, session=invocation_session
+            )
 
     if response_content_ids_to_strip:
         filtered_messages: list[Message] = []
@@ -1829,10 +1831,7 @@ async def _resolve_approval_responses(
                 )
             else:
                 forwarded_owner = DeferredPendingToolTransitionOwner(forward_hosted_decision)
-            forwarded = await forwarded_owner.forward(intent, lifecycle=lifecycle)
-            if len(forwarded) != 1:
-                raise RuntimeError("Hosted transition owner did not forward exactly one approval decision.")
-            forwarded_executions.setdefault(call_id, []).append((forwarded_owner, intent, forwarded[0]))
+            forwarded_executions.setdefault(call_id, []).append((forwarded_owner, intent, approval))
 
     fcc_todo = _collect_approval_responses(messages)
     if valid_response_content_ids is not None:
@@ -1878,7 +1877,7 @@ async def _resolve_approval_responses(
             async def execute_local_call(approval: Content = approval, call_id: str = call_id) -> list[Content]:
                 try:
                     if prepared_execution is not None:
-                        result_groups, _ = await prepared_execution.execute([approval])
+                        return (await prepared_execution.execute_one(approval)).contents
                     else:
                         result_groups, _ = await _try_execute_function_call_groups(
                             custom_args=tool_kwargs,
@@ -2601,6 +2600,34 @@ async def run_agent_stream(
     Yields:
         AG-UI events
     """
+    state_store = approval_state_store if approval_state_store is not None else InMemoryAGUIApprovalStateStore()
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] = {}
+    stream = _run_agent_stream(
+        input_data,
+        agent,
+        config,
+        state_store,
+        authorized_executions=authorized_executions,
+    )
+    try:
+        async for event in stream:
+            yield event
+    finally:
+        try:
+            await stream.aclose()
+        finally:
+            for intent in authorized_executions.values():
+                state_store.lifecycle.recover_unfinished(intent)
+
+
+async def _run_agent_stream(
+    input_data: dict[str, Any],
+    agent: SupportsAgentRun,
+    config: AgentConfig,
+    approval_state_store: InMemoryAGUIApprovalStateStore,
+    *,
+    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution],
+) -> AsyncGenerator[BaseEvent]:
     # Parse IDs
     supplied_thread_id = input_data.get("thread_id") or input_data.get("threadId")
     supplied_run_id = input_data.get("run_id") or input_data.get("runId")
@@ -2614,9 +2641,6 @@ async def run_agent_stream(
     )
     approval_scope = cast(str | None, input_data.get(_APPROVAL_SCOPE_INPUT_KEY))
     approval_thread_id = approval_state_thread_id(scope=approval_scope, thread_id=thread_id)
-    if approval_state_store is None:
-        approval_state_store = InMemoryAGUIApprovalStateStore()
-
     state_schema = cast(dict[str, Any], getattr(config, "state_schema", {}) or {})
     predict_state_config = cast(dict[str, dict[str, str]], getattr(config, "predict_state_config", {}) or {})
 
@@ -2707,7 +2731,6 @@ async def run_agent_stream(
             current_state=flow.current_state,
         )
 
-    authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] = {}
     forwarded_executions: dict[str, list[tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]]] = {}
     retained_approval_results: list[Content] = []
     approval_snapshot_reconciliations: list[ApprovalSnapshotReconciliation] = []
@@ -3048,8 +3071,19 @@ async def run_agent_stream(
     if local_intents and invocation_config.get("enabled", True):
         try:
             if isinstance(core_agent, RawAgent):
+                preparation_messages = messages
+                if a2ui_active:
+                    preparation_runner = a2ui_runner or agent
+                    preparation_context = run_kwargs.get("a2ui_context")
+                    while isinstance(preparation_runner, A2UIAgent):
+                        wrapper = cast(A2UIAgent, preparation_runner)
+                        preparation_messages = wrapper._prepare_run_messages(  # pyright: ignore[reportPrivateUsage]
+                            preparation_messages, a2ui_context=preparation_context
+                        )
+                        preparation_runner = wrapper.inner_agent
+                        preparation_context = None
                 prepared_execution = await core_agent._prepare_function_execution(  # pyright: ignore[reportPrivateUsage]
-                    messages=messages,
+                    messages=preparation_messages,
                     session=session,
                     tools=run_kwargs.get("tools") or [],
                     options=run_kwargs.get("options"),
@@ -3063,10 +3097,7 @@ async def run_agent_stream(
                 )
             raise
         if prepared_execution is not None:
-            approval_middleware_pipeline = prepared_execution.middleware
-            run_kwargs["client_kwargs"] = {
-                _PREPARED_AGENT_SESSION_KEY: prepared_execution.context["session_preparation"]
-            }
+            run_kwargs["client_kwargs"] = prepared_execution.continuation_client_kwargs()
         invocation_config = normalize_function_invocation_configuration(
             getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
         )
@@ -3089,10 +3120,13 @@ async def run_agent_stream(
             and occurrence.status is ApprovalStatus.REJECTED
         ]
         if authenticated_rejections:
-            approval_middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
-                authenticated_rejections,
-                session=session,
-            )
+            if prepared_execution is not None:
+                prepared_execution.notify_approval_responses(authenticated_rejections)
+            else:
+                approval_middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+                    authenticated_rejections,
+                    session=session,
+                )
         retired_interrupt_ids = {
             reconciliation.interrupt_id
             for reconciliation in approval_snapshot_reconciliations
@@ -3222,6 +3256,11 @@ async def run_agent_stream(
     stream_completed = False
     try:
         with telemetry_context():
+            for queued_executions in forwarded_executions.values():
+                for owner, intent, _ in queued_executions:
+                    forwarded = await owner.forward(intent, lifecycle=approval_state_store.lifecycle)
+                    if len(forwarded) != 1:
+                        raise RuntimeError("Transition owner did not forward exactly one approval decision.")
             response_stream = (a2ui_runner or agent).run(messages, stream=True, **run_kwargs)
             stream = await _normalize_response_stream(response_stream)
 
@@ -3369,7 +3408,7 @@ async def run_agent_stream(
                     if stream_completed:
                         owner.record_outcome(intent, [forwarded_approval], lifecycle=approval_state_store.lifecycle)
                     else:
-                        approval_state_store.lifecycle.recover_execution(intent, owner=intent.owner)
+                        approval_state_store.lifecycle.recover_unfinished(intent)
             forwarded_executions.clear()
 
     if flow.waiting_for_approval and isinstance(stream, ResponseStream):

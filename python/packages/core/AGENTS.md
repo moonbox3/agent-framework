@@ -55,7 +55,9 @@ agent_framework/
 - Adapter-owned local approval execution uses core's private prepared function-execution context. Provider
   `before_run` hooks populate the normal `SessionContext`; a one-use, agent/session-bound preparation handoff
   lets the subsequent run reuse it without invoking providers twice. This is transient run state, never
-  session-serialized authority or a public execution API.
+  session-serialized authority or a public execution API. The prepared-execution interface owns single-call
+  result grouping, approval-observer notification, and continuation kwargs; adapters do not access its storage
+  fields or token keys. Rejected wrong-agent/session handoffs do not consume the original preparation.
 
 ### Chat Clients (`_clients.py`)
 

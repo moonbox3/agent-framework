@@ -385,6 +385,34 @@ async def test_chat_client_agent_create_session(
     assert isinstance(session, AgentSession)
 
 
+@pytest.mark.parametrize("binding", ["agent", "session"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_prepared_continuation_rejects_another_agent_or_session(
+    chat_client_base: SupportsChatGetResponse, binding: str, stream: bool
+) -> None:
+    agent = Agent(client=chat_client_base)
+    session = AgentSession(session_id="prepared-session")
+    prepared = await agent._prepare_function_execution(messages="Prepare", session=session, tools=[])
+    target_agent = Agent(client=chat_client_base) if binding == "agent" else agent
+    target_session = AgentSession(session_id=session.session_id) if binding == "session" else session
+
+    with pytest.raises(AgentInvalidRequestException, match="different agent or session"):
+        if stream:
+            async for _ in target_agent.run(
+                "Continue",
+                stream=True,
+                session=target_session,
+                client_kwargs=prepared.continuation_client_kwargs(),
+            ):
+                pass
+        else:
+            await target_agent.run(
+                "Continue", session=target_session, client_kwargs=prepared.continuation_client_kwargs()
+            )
+
+    await agent.run("Continue", session=session, client_kwargs=prepared.continuation_client_kwargs())
+
+
 async def test_chat_client_agent_prepare_session_and_messages(
     client: SupportsChatGetResponse,
 ) -> None:

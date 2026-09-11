@@ -1133,6 +1133,80 @@ async def test_core_a2ui_shares_call_budget_with_surface_generation(
     )
 
 
+async def test_core_a2ui_preserves_inner_turn_boundaries_for_continuation(streaming_chat_client_stub) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+
+    executed: list[str] = []
+    provider_inputs: list[list[tuple[str, list[tuple[str, str | None]]]]] = []
+    provider_round = 0
+
+    def search(query: str) -> str:
+        executed.append(query)
+        return f"{query} result"
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal provider_round
+        provider_round += 1
+        provider_inputs.append(
+            [
+                (
+                    str(message.role),
+                    [(content.type, content.call_id) for content in message.contents],
+                )
+                for message in messages
+            ]
+        )
+        if provider_round == 1:
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_text_reasoning(text="Find source data first.", id="reasoning-1"),
+                    Content.from_function_call(call_id="search-1", name="search", arguments={"query": "first"}),
+                ],
+            )
+        elif provider_round == 2:
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_text_reasoning(text="Use the first result for the surface.", id="reasoning-2"),
+                    Content.from_function_call(call_id="search-2", name="search", arguments={"query": "second"}),
+                    Content.from_function_call(
+                        call_id="generate-1", name="generate_a2ui", arguments={"intent": "create"}
+                    ),
+                ],
+            )
+        else:
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text(text="Done.")])
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(client=client, tools=[FunctionTool(name="search", description="Search", func=search)])
+
+    kinds = await _drive(enable_a2ui(agent, _RenderSub()))
+
+    assert executed == ["first", "second"]
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1] == "search-1"]) == 1
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1] == "search-2"]) == 1
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1] == "generate-1"]) == 1
+    assert provider_inputs[2] == [
+        ("user", [("text", None)]),
+        ("assistant", [("text_reasoning", None), ("function_call", "search-1")]),
+        ("tool", [("function_result", "search-1")]),
+        (
+            "assistant",
+            [
+                ("text_reasoning", None),
+                ("function_call", "search-2"),
+                ("function_call", "generate-1"),
+            ],
+        ),
+        ("tool", [("function_result", "search-2"), ("function_result", "generate-1")]),
+    ]
+
+
 def test_mixed_batch_middleware_failure_aborts_without_rendering():
     # A fail-closed authorization/guardrail abort (MiddlewareFailure) raised while executing a
     # server tool alongside generate_a2ui must propagate and stop the run, exactly as the core
@@ -1428,8 +1502,9 @@ def test_a2ui_agent_conditionally_delegates_conversation_creation():
     assert not hasattr(A2UIAgent(type("_NoConversation", (), {})(), _RenderSub()), "create_conversation")
 
 
-def test_a2ui_agent_uses_per_request_context_over_constructor():
-    # A reused runner must serve the CURRENT request's catalog, not a stale constructor one.
+def test_a2ui_agent_uses_per_request_context_over_constructor_and_honors_empty_override():
+    # A reused runner must serve the CURRENT request's catalog, not a stale constructor one,
+    # while an explicit empty context disables the constructor fallback.
     old = build_ag_ui_context_slice(
         [{"description": A2UI_SCHEMA_CONTEXT_DESCRIPTION, "value": '{"components":{"OldCard":{}}}'}]
     )
@@ -1461,6 +1536,13 @@ def test_a2ui_agent_uses_per_request_context_over_constructor():
     asyncio.run(go())
     sys_text = inner.seen[0].text  # prepended system message
     assert "NewCard" in sys_text and "OldCard" not in sys_text
+
+    async def go_without_context():
+        async for _ in runner.run("hi", stream=True, a2ui_context={}):
+            pass
+
+    asyncio.run(go_without_context())
+    assert [_role(message) for message in inner.seen] == ["user"]
 
 
 def test_facade_no_longer_advertises_removed_context_agent():

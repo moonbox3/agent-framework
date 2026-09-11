@@ -377,6 +377,9 @@ that manually replay messages own the equivalent rule: do not resend an approval
   not invent one.
 - A completed function call/result pair is inert on later turns.
 - Informational-only and declaration-only calls are not executed as local tools.
+- A2UI may internally opt into executing server siblings of declaration-only calls inside the core loop.
+  Executable siblings still use the prepared provider middleware, approval rules, and shared call budget;
+  declaration-only calls remain unresolved for the adapter or caller. Ordinary mixed-batch behavior is unchanged.
 
 ### Reasoning-bound calls
 
@@ -395,6 +398,9 @@ that manually replay messages own the equivalent rule: do not resend an approval
 ### Approval request and resume
 
 - A tool that requires approval does not execute before an approved response.
+- Adapter-owned local approval execution uses the function middleware contributed through normal provider
+  `before_run` preparation, including `SessionContext.extend_middleware`. A private provider-specific approval
+  hook cannot replace that contract. Approval execution and its continuation share the prepared provider context.
 - With an `AgentSession`, every surfaced local or hosted approval request is stored as an immutable snapshot in one
   active model batch. A new surfaced batch replaces an abandoned batch instead of accumulating session state.
 - Initial local approval request IDs use the recorded `function_call.id` occurrence identity. A policy replacement
@@ -460,6 +466,13 @@ that manually replay messages own the equivalent rule: do not resend an approval
 - AG-UI Approval State capacity is enforced independently for each trusted application scope. Abandoned pending
   authority expires after its configured window, and indeterminate execution records remain non-retryable until
   their separate safety window permits reclamation. Reclamation never recreates approval authority.
+- If AG-UI blocks a local approval resume because function invocation is disabled, it reports
+  `APPROVAL_INVOCATION_DISABLED` without executing or consuming the pending grant. Every claimed sibling that
+  will remain unstarted, including hosted and deferred owners, returns to pending without extending its retention
+  deadline. Terminal rejection/cancellation decisions remain terminal. Re-enablement requires an explicit retry
+  under current authority and policy; it never starts execution automatically.
+  A provider-preparation failure also releases unstarted claims before propagating the failure, and enablement
+  is checked again after successful preparation so provider-driven disablement cannot consume the grant.
 - A server-issued approval request must not be replayed inline during service-side continuation.
 - History providers may retain approval control contents in their backing store for audit, but base history replay
   filters them before later model calls.
@@ -573,6 +586,10 @@ that manually replay messages own the equivalent rule: do not resend an approval
 | AG-UI cancellation | A cancelled interrupt executes zero times and completes normally, including an identical retry during retained cancellation state; resolved siblings in the same complete resume still execute once. Workflow cancellation clears both runner correlation and the owning agent executor's pending request so later approvals remain resumable. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_agent_approval_cancelled_resume_entry_completes_without_execution`, `test_endpoint_agent_approval_replayed_cancellation_completes_idempotently`, `test_endpoint_agent_approval_mixed_cancelled_and_resolved_resume_executes_resolved_tool`, `test_endpoint_workflow_request_info_cancelled_resume_completes_normally`, `test_workflow_endpoint_cancelled_agent_approval_does_not_block_next_approval` |
 | AG-UI shared workflow interrupt ownership | A direct shared `Workflow` request-info interrupt can only be resolved or cancelled by the Snapshot Scope and AG-UI thread that created it. Ownership follows the authoritative pending request occurrence, and explicitly threaded cold checkpoint resumes fail closed when ownership is unavailable. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_workflow_request_info_rejects_resume_from_different_thread`, `test_endpoint_workflow_request_info_rejects_resume_from_different_scope`, `test_endpoint_workflow_request_info_rejects_cancellation_from_different_thread`, `test_endpoint_workflow_request_info_remains_owned_after_client_disconnect`, `test_endpoint_workflow_request_info_rejects_unowned_pending_interrupt`, `test_endpoint_workflow_checkpoint_resume_rejects_threaded_resume_after_restart` |
 | AG-UI approval retention and capacity | Pending authority expires automatically, indeterminate outcomes remain non-retryable until their safety window permits reclamation, and one trusted scope cannot consume another scope's occurrence quota. | `packages/ag-ui/tests/ag_ui/test_approval_lifecycle.py::test_abandoned_pending_occurrence_expires_and_releases_capacity`, `test_indeterminate_occurrence_is_reclaimed_after_its_safety_window`, `test_capacity_is_enforced_per_trusted_scope` |
+| AG-UI provider function policy | Public provider-contributed function middleware denies an approved or A2UI mixed-batch tool before any protected effect or result; direct Agent controls match. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_agent_approval_resume_preserves_agent_function_policy`, `test_endpoint_a2ui_mixed_batch_preserves_agent_function_policy` |
+| AG-UI prepared approval continuation | An approved tool and its subsequent model turn use the same provider preparation. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_approved_tool_and_continuation_share_provider_preparation` |
+| A2UI shared execution budget | Core-executed server tools and adapter-rendered surfaces share the call limit across planner rounds without duplicate results. | `packages/ag-ui/tests/ag_ui/test_a2ui.py::test_core_a2ui_shares_call_budget_with_surface_generation` |
+| AG-UI blocked cross-owner resume | Disabled invocation, provider-preparation failure, and provider-driven disablement preserve unstarted local and hosted grants for explicit retry; completed replay executes neither again. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_disabled_resume_keeps_local_and_hosted_grants_retryable` |
 | AG-UI local executor unavailable on resume | A claimed local occurrence whose executor disappeared releases its unstarted claim, reports temporary unavailability, and remains safely retryable. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_agent_approval_resume_remains_retryable_when_local_tool_is_temporarily_unavailable` |
 | AG-UI forwarded execution interruption | A provider failure, cancellation, or stream close after forwarding an approval recovers the open occurrence as indeterminate when no idempotency key proves retry safety. | `packages/ag-ui/tests/ag_ui/test_endpoint.py::test_endpoint_hosted_approval_becomes_indeterminate_when_provider_stream_fails` |
 

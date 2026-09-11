@@ -40,14 +40,22 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
 - Approval consent does not bypass function policy. Local approval execution applies the effective client, Agent,
   supported run-level, bundle, and applicable context-provider function middleware in canonical order for plain and
   A2UI-wrapped Agents. `MiddlewareFailure` remains fatal and must not be converted into a model-visible tool error.
-- A2UI mixed planner batches apply that same effective function middleware before executing server-tool siblings of
-  the declaration-only `generate_a2ui` call. A policy denial aborts the batch before surface rendering.
+  Core owns preparation through public `before_run` and `SessionContext.extend_middleware`; approval execution and
+  continuation reuse that prepared context instead of preparing providers twice. Private approval-observer hooks
+  are not a substitute for provider preparation.
+- A2UI mixed planner batches leave server-tool siblings of the declaration-only `generate_a2ui` call in the core
+  function loop, preserving provider middleware and the shared call budget before surface rendering.
+  Adapter-side compatibility execution is limited to non-core agents without context providers; unsupported
+  provider preparation fails explicitly instead of executing with a partial policy.
 - Local approval resume checks the current function-invocation configuration before any approved side effect begins.
   When invocation is disabled, grants remain pending under their original retention deadline and the endpoint emits
   `APPROVAL_INVOCATION_DISABLED`; only a later explicit retry after re-enablement can execute them. Rejections and
   cancellations in a mixed resume still settle and retire their snapshot controls while grants remain pending.
   Repeating that mixed response or explicitly retrying it after re-enablement reuses retained terminal outcomes
   without reviving cancelled/rejected authority or replaying completed tool effects.
+  Returning early or failing provider preparation releases every unstarted claimed grant, including hosted and
+  deferred siblings, without extending pending retention or changing the execution owner. Recheck enablement
+  after provider preparation, before beginning any execution.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

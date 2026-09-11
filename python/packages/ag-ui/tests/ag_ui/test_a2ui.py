@@ -19,6 +19,7 @@ import pytest
 pytest.importorskip("ag_ui_a2ui_toolkit")
 
 from agent_framework import AgentResponseUpdate, ChatResponse, ChatResponseUpdate, Content, Message  # noqa: E402
+from agent_framework._tools import FunctionInvocationLayer  # noqa: E402
 
 from agent_framework_ag_ui._a2ui import (  # noqa: E402
     A2UI_SCHEMA_CONTEXT_DESCRIPTION,
@@ -976,8 +977,21 @@ def test_mixed_batch_server_tool_runs_through_middleware_pipeline():
     assert any(k[0] == "result" and k[1] == "s1" and "Ritz" in k[2] for k in kinds)
 
 
-def test_mixed_batch_preserves_effective_middleware_order_session_and_invocation_kwargs():
-    from agent_framework import AgentSession, FunctionInvocationContext, FunctionTool, MiddlewareBundle
+async def test_mixed_batch_preserves_effective_middleware_order_session_and_invocation_kwargs(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import (
+        Agent,
+        AgentSession,
+        ContextProvider,
+        FunctionInvocationContext,
+        FunctionTool,
+        MiddlewareBundle,
+        SessionContext,
+        SupportsAgentRun,
+    )
     from agent_framework._middleware import FunctionMiddleware
 
     observations: list[tuple[str, str | None, str | None]] = []
@@ -1007,33 +1021,55 @@ def test_mixed_batch_preserves_effective_middleware_order_session_and_invocation
     with pytest.warns(ExperimentalWarning, match="AGENT_HOOKS"):
         agent_bundle = MiddlewareBundle([bundle_middleware])
 
-    class _Client:
-        function_middleware = (client_middleware,)
-        function_invocation_configuration = None
+    class _Provider(ContextProvider):
+        async def before_run(
+            self,
+            *,
+            agent: SupportsAgentRun,
+            session: AgentSession,
+            context: SessionContext,
+            state: dict[str, Any],
+        ) -> None:
+            context.extend_middleware(self.source_id, [provider_middleware])
 
-    class _Provider:
-        def _function_middleware_for_approval_resolution(self, session):
-            assert session.session_id == "mixed-session"
-            return [provider_middleware]
+    first_turn = True
 
-    class _Inner(_SearchThenGenerateInner):
-        client = _Client()
-        middleware = [agent_middleware, agent_bundle]
-        context_providers = [_Provider()]
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal first_turn
+        if first_turn:
+            first_turn = False
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(call_id="s1", name="search", arguments={"query": "hotels"}),
+                    Content.from_function_call(call_id="g1", name="generate_a2ui", arguments={"intent": "create"}),
+                ],
+            )
+        else:
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+
+    client = streaming_chat_client_stub(stream_fn)
+    inner = Agent(
+        client=client,
+        middleware=[agent_middleware, agent_bundle],
+        context_providers=[_Provider("policy")],
+    )
+    assert isinstance(client, FunctionInvocationLayer)
+    client.function_middleware.append(client_middleware)
 
     def search(query: str, context: FunctionInvocationContext) -> str:
         executed.append(f"{context.kwargs.get('trusted_scope')}:{query}")
         return json.dumps({"results": ["Ritz"]})
 
     search_tool = FunctionTool(name="search", description="search", func=search)
-    kinds = asyncio.run(
-        _drive(
-            A2UIAgent(_Inner(), _RenderSub()),
-            tools=[search_tool],
-            session=AgentSession(session_id="mixed-session"),
-            middleware=[repeated_run_middleware, repeated_run_middleware],
-            function_invocation_kwargs={"trusted_scope": "tenant-a"},
-        )
+    kinds = await _drive(
+        enable_a2ui(inner, _RenderSub()),
+        tools=[search_tool],
+        session=AgentSession(session_id="mixed-session"),
+        middleware=[repeated_run_middleware, repeated_run_middleware],
+        function_invocation_kwargs={"trusted_scope": "tenant-a"},
     )
 
     assert observations == [
@@ -1046,6 +1082,55 @@ def test_mixed_batch_preserves_effective_middleware_order_session_and_invocation
     ]
     assert executed == ["tenant-a:hotels"]
     assert any(k[0] == "result" and k[1] == "s1" and "Ritz" in k[2] for k in kinds)
+
+
+@pytest.mark.parametrize(
+    ("max_calls", "expected_actions", "expected_surfaces"),
+    [(1, ["search"], 0), (3, ["search", "search"], 1)],
+)
+async def test_core_a2ui_shares_call_budget_with_surface_generation(
+    streaming_chat_client_stub, max_calls: int, expected_actions: list[str], expected_surfaces: int
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+
+    executed: list[str] = []
+    round_number = 0
+
+    def search() -> str:
+        executed.append("search")
+        return "Search completed"
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal round_number
+        if options.get("tool_choice") == "none":
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+            return
+        round_number += 1
+        yield ChatResponseUpdate(
+            role="assistant",
+            contents=[
+                Content.from_function_call(call_id=f"search-{round_number}", name="search", arguments={}),
+                Content.from_function_call(
+                    call_id=f"generate-{round_number}", name="generate_a2ui", arguments={"intent": "create"}
+                ),
+            ],
+        )
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(client=client, tools=[FunctionTool(name="search", description="Search", func=search)])
+    assert isinstance(client, FunctionInvocationLayer)
+    client.function_invocation_configuration["max_function_calls"] = max_calls
+    kinds = await _drive(enable_a2ui(agent, _RenderSub()))
+
+    assert executed == expected_actions
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1].startswith("generate-")]) == expected_surfaces
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1].startswith("search-")]) == len(
+        expected_actions
+    )
 
 
 def test_mixed_batch_middleware_failure_aborts_without_rendering():

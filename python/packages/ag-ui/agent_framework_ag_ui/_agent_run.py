@@ -43,6 +43,11 @@ from agent_framework._middleware import (
     MiddlewareFailure,
     categorize_middleware,
 )
+from agent_framework._agents import (
+    RawAgent,
+    _PREPARED_AGENT_SESSION_KEY,  # pyright: ignore[reportPrivateUsage]
+    _PreparedFunctionExecution,  # pyright: ignore[reportPrivateUsage]
+)
 from agent_framework._tools import (
     _ALREADY_APPROVED_APPROVAL_REQUEST_GROUPS_KEY,  # type: ignore
     _APPROVAL_REQUEST_ID_KEY,  # pyright: ignore[reportPrivateUsage]
@@ -1551,12 +1556,12 @@ def _canonical_approval_resume_messages(
     return messages, handled_ids, cancelled_ids, None
 
 
-def _effective_function_middleware_pipeline(
+def _approval_observer_middleware_pipeline(
     agent: SupportsAgentRun,
     session: AgentSession,
     run_middleware: Any = None,
 ) -> FunctionMiddlewarePipeline:
-    """Build the canonical function middleware pipeline for adapter-owned execution."""
+    """Build approval observers; core execution uses middleware from public provider preparation."""
     client = getattr(agent, "client", None)
     function_middleware = categorize_middleware(
         getattr(client, "function_middleware", None),
@@ -1607,6 +1612,7 @@ async def _resolve_approval_responses(
     *,
     lifecycle: ApprovalLifecycle,
     middleware_pipeline: FunctionMiddlewarePipeline,
+    prepared_execution: _PreparedFunctionExecution | None = None,
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     forwarded_executions: (
         dict[str, list[tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]]] | None
@@ -1855,6 +1861,8 @@ async def _resolve_approval_responses(
 
     # Execute lifecycle-authorized local calls only through their transition owner.
     if static_approved and tools and lifecycle is not None and authorized_executions is not None:
+        if prepared_execution is None and getattr(agent, "context_providers", None):
+            raise TypeError("Local approval execution with context providers requires a core Agent execution path.")
         client = getattr(agent, "client", None)
         config = normalize_function_invocation_configuration(getattr(client, "function_invocation_configuration", None))
         tool_kwargs = {k: v for k, v in run_kwargs.items() if k != "options"}
@@ -1869,14 +1877,17 @@ async def _resolve_approval_responses(
 
             async def execute_local_call(approval: Content = approval, call_id: str = call_id) -> list[Content]:
                 try:
-                    result_groups, _ = await _try_execute_function_call_groups(
-                        custom_args=tool_kwargs,
-                        function_calls=[approval],
-                        tools=tools,
-                        middleware_pipeline=middleware_pipeline,
-                        config=config,
-                        invocation_session=invocation_session,
-                    )
+                    if prepared_execution is not None:
+                        result_groups, _ = await prepared_execution.execute([approval])
+                    else:
+                        result_groups, _ = await _try_execute_function_call_groups(
+                            custom_args=tool_kwargs,
+                            function_calls=[approval],
+                            tools=tools,
+                            middleware_pipeline=middleware_pipeline,
+                            config=config,
+                            invocation_session=invocation_session,
+                        )
                 except MiddlewareFailure:
                     raise
                 except Exception as exc:
@@ -2909,7 +2920,7 @@ async def run_agent_stream(
         }
     )
     _restore_tool_approval_state(session, approval_state_store, approval_thread_id)
-    approval_middleware_pipeline = _effective_function_middleware_pipeline(agent, session)
+    approval_middleware_pipeline = _approval_observer_middleware_pipeline(agent, session)
 
     authenticated_cancellations = [
         _approval_observer_response(occurrence, cancelled=True)
@@ -3027,8 +3038,40 @@ async def run_agent_stream(
     invocation_config = normalize_function_invocation_configuration(
         getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
     )
+    prepared_execution = None
+    core_agent = agent
+    if a2ui_active:
+        from ._a2ui._agent import A2UIAgent
+
+        while isinstance(core_agent, A2UIAgent):
+            core_agent = core_agent.inner_agent
+    if local_intents and invocation_config.get("enabled", True):
+        try:
+            if isinstance(core_agent, RawAgent):
+                prepared_execution = await core_agent._prepare_function_execution(  # pyright: ignore[reportPrivateUsage]
+                    messages=messages,
+                    session=session,
+                    tools=run_kwargs.get("tools") or [],
+                    options=run_kwargs.get("options"),
+                )
+            elif getattr(core_agent, "context_providers", None):
+                raise TypeError("Local approval execution with context providers requires a core Agent execution path.")
+        except BaseException:
+            for intent in authorized_executions.values():
+                approval_state_store.lifecycle.release_claim(
+                    intent, policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION
+                )
+            raise
+        if prepared_execution is not None:
+            approval_middleware_pipeline = prepared_execution.middleware
+            run_kwargs["client_kwargs"] = {
+                _PREPARED_AGENT_SESSION_KEY: prepared_execution.context["session_preparation"]
+            }
+        invocation_config = normalize_function_invocation_configuration(
+            getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
+        )
     if local_intents and not invocation_config.get("enabled", True):
-        for intent in local_intents:
+        for intent in authorized_executions.values():
             approval_state_store.lifecycle.release_claim(
                 intent,
                 policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION,
@@ -3076,6 +3119,7 @@ async def run_agent_stream(
         replacement_approval_requests,
         lifecycle=approval_state_store.lifecycle,
         middleware_pipeline=approval_middleware_pipeline,
+        prepared_execution=prepared_execution,
         authorized_executions=authorized_executions,
         forwarded_executions=forwarded_executions,
     )

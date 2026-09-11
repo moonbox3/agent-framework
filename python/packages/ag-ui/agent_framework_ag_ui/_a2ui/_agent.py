@@ -515,12 +515,8 @@ class A2UIAgent:
     ) -> tuple[list[Any], list[Any], bool]:
         """Execute server tools called alongside generate_a2ui through the shared executor.
 
-        Runs them via the framework's function-invocation helper with the run's ``session``,
-        the run ``config``, and the same effective client, Agent, run-level, bundle, and
-        applicable context-provider function middleware preparation used by AG-UI approval
-        resume, so authorization/audit/policy middleware, the session, and approval controls
-        all apply.
-        Kept here in the adapter (not behind a new core abstraction). Returns
+        Compatibility execution for non-core agents without context providers.
+        Core Agents execute their own siblings inside the prepared function loop. Returns
         ``(results, control, should_terminate)``; ``control`` are non-result contents (e.g. a
         ``function_approval_request``) that must reach the client. A ``MiddlewareFailure``
         (the fail-closed escape an authorization/guardrail middleware raises) propagates,
@@ -529,13 +525,18 @@ class A2UIAgent:
         generic, non-leaking message unless ``include_detailed_errors`` is enabled, matching
         the core function-error formatting — rather than aborting the surface generation.
         """
-        from agent_framework._middleware import MiddlewareFailure
+        from agent_framework._middleware import FunctionMiddlewarePipeline, MiddlewareFailure, categorize_middleware
         from agent_framework._tools import _try_execute_function_call_groups
 
-        from .._agent_run import _effective_function_middleware_pipeline  # pyright: ignore[reportPrivateUsage]
-
-        runtime_middleware = run_kwargs.get("middleware")
-        pipeline = _effective_function_middleware_pipeline(self.inner_agent, session, runtime_middleware)
+        if getattr(self.inner_agent, "context_providers", None):
+            raise TypeError("A2UI server tools with context providers require a core Agent execution path.")
+        pipeline = FunctionMiddlewarePipeline(
+            *categorize_middleware(
+                getattr(getattr(self.inner_agent, "client", None), "function_middleware", None),
+                getattr(self.inner_agent, "middleware", None),
+                run_kwargs.get("middleware"),
+            )["function"]
+        )
         invocation_kwargs = run_kwargs.get("function_invocation_kwargs")
         custom_args = dict(cast(Mapping[str, Any], invocation_kwargs)) if invocation_kwargs is not None else {}
         try:
@@ -591,7 +592,14 @@ class A2UIAgent:
         self, messages: Any = None, context_slice: dict[str, Any] | None = None, **kwargs: Any
     ) -> Any:
         from agent_framework import AgentResponseUpdate
-        from agent_framework._tools import normalize_function_invocation_configuration
+        from agent_framework._agents import RawAgent
+        from agent_framework._tools import (
+            _DECLARATION_ONLY_EXECUTION_KEY,
+            _FUNCTION_INVOCATION_BUDGET_STATE_KEY,
+            FunctionInvocationLayer,
+            _DeclarationOnlyExecution,
+            normalize_function_invocation_configuration,
+        )
 
         history = _sanitize_unanswered_tool_calls(normalize_messages(messages))
         session = kwargs.pop("session", None)
@@ -619,6 +627,18 @@ class A2UIAgent:
         max_iters = fi_config.get("max_iterations")
         max_rounds = MAX_PLANNER_ROUNDS if max_iters is None else min(MAX_PLANNER_ROUNDS, max_iters)
         calls_used = 0
+        core_execution = isinstance(self.inner_agent, RawAgent) and isinstance(
+            self.inner_agent.client, FunctionInvocationLayer
+        )
+        execution_state = _DeclarationOnlyExecution()
+        budget_state: dict[str, Any] = {}
+        rendered_calls = 0
+        if core_execution:
+            kwargs["client_kwargs"] = {
+                **(kwargs.get("client_kwargs") or {}),
+                _DECLARATION_ONLY_EXECUTION_KEY: execution_state,
+                _FUNCTION_INVOCATION_BUDGET_STATE_KEY: budget_state,
+            }
 
         pending: list[Any] = history
         pending_session = session
@@ -644,6 +664,8 @@ class A2UIAgent:
             all_concat: dict[str, str] = {}
             cid_by_index: dict[int, str] = {}
             active_cid: str | None = None
+            core_results: list[Content] = []
+            core_control: list[Content] = []
             async for update in self.inner_agent.run(
                 pending,
                 stream=True,
@@ -653,6 +675,11 @@ class A2UIAgent:
             ):
                 for content in update.contents:
                     ctype = getattr(content, "type", None)
+                    if core_execution:
+                        if ctype == "function_result":
+                            core_results.append(content)
+                        elif ctype != "function_call" and content.user_input_request:
+                            core_control.append(content)
                     if ctype == "text":
                         text_contents.append(content)
                         continue
@@ -685,19 +712,12 @@ class A2UIAgent:
                             all_concat[target] += frag
                 yield update
 
-            # Classify the coalesced calls. The declaration-only generate_a2ui poisons
-            # the inner agent's batch invocation (a batch with any declaration-only call
-            # is paused before execution), so tools called alongside it are NOT run by the
-            # inner agent — handle them here by TYPE:
-            #   * generate_a2ui -> stream the surface (below).
-            #   * server tool (executable FunctionTool, found across incoming_tools OR the
-            #     inner agent's default tools) -> execute through the agent's real
-            #     function-invocation pipeline so middleware/config are preserved.
-            #   * client / declaration-only tool (func=None, browser-side) -> leave as a
-            #     user-input request for the frontend to execute and resume; do NOT
-            #     synthesize a result (that would break the resumable client-tool flow).
+            # Core Agents already executed server siblings using their prepared provider context.
+            # Only the declaration-only UI call is rendered here; opaque agents use the
+            # compatibility executor below and must not have unprepared context providers.
             executable_tools = [*incoming_tools, *self._inner_default_tools()]
             tool_by_name = {getattr(t, "name", None): t for t in executable_tools}
+            core_result_ids = {result.call_id for result in core_results}
             generate_calls: list[Content] = []
             server_calls: list[Content] = []
             client_calls: list[Content] = []
@@ -716,7 +736,7 @@ class A2UIAgent:
                 args_str = json.dumps(obj) if isinstance(obj, dict) else (all_concat[cid] or "{}")
                 call = Content.from_function_call(call_id=cid, name=nm, arguments=args_str)
                 tool = tool_by_name.get(nm)
-                if tool is not None and getattr(tool, "func", None) is not None:
+                if cid in core_result_ids or (tool is not None and getattr(tool, "func", None) is not None):
                     server_calls.append(call)
                 else:
                     call.user_input_request = True
@@ -728,16 +748,21 @@ class A2UIAgent:
                 # is not poisoned, so the inner agent already executed/surfaced its calls
                 # and looped; nothing more to do here.
                 return
+            if core_execution and (core_control or execution_state.should_terminate):
+                return
 
             # Execute server tools batched with generate_a2ui, honoring the invocation
             # toggle + the shared per-request call budget locally. Calls we must not run
             # (invocation disabled, or over budget) are deferred (left unexecuted) and force
             # the run to stop below rather than be fabricated.
-            server_results: list[Content] = []
+            server_results: list[Content] = core_results
             server_control: list[Content] = []
             server_terminated = False
             deferred_calls: list[Content] = []
-            if server_calls:
+            if core_execution:
+                calls_used = execution_state.executed_call_count + rendered_calls
+                deferred_calls = [call for call in server_calls if call.call_id not in core_result_ids]
+            elif server_calls:
                 runnable = server_calls if fi_enabled else []
                 if max_calls is not None:
                     runnable = runnable[: max(0, max_calls - calls_used)]
@@ -760,6 +785,9 @@ class A2UIAgent:
                 deferred_generate = generate_calls[allowed:]
                 generate_calls = generate_calls[:allowed]
             calls_used += len(generate_calls)
+            if core_execution:
+                rendered_calls += len(generate_calls)
+                budget_state["total_function_calls"] = calls_used
 
             generate_results: list[Content] = []
             for call in generate_calls:
@@ -771,8 +799,8 @@ class A2UIAgent:
             all_results = [*server_results, *generate_results]
             # Surface tool results on the wire; also surface any executor control contents
             # (e.g. a function_approval_request for a protected tool) so they are not dropped.
-            yield AgentResponseUpdate(role="tool", contents=all_results)
-            if server_control:
+            yield AgentResponseUpdate(role="tool", contents=generate_results if core_execution else all_results)
+            if server_control and not core_execution:
                 yield AgentResponseUpdate(role="assistant", contents=server_control)
 
             # Two ways this turn ends the loop. Calls awaiting EXTERNAL resolution — client

@@ -52,6 +52,10 @@ agent_framework/
 - **`SupportsAgentRun`** - Protocol defining the agent interface
 - **`BaseAgent`** - Abstract base class for agents
 - **`Agent`** - Main agent class wrapping a chat client with tools, instructions, and middleware
+- Adapter-owned local approval execution uses core's private prepared function-execution context. Provider
+  `before_run` hooks populate the normal `SessionContext`; a one-use, agent/session-bound preparation handoff
+  lets the subsequent run reuse it without invoking providers twice. This is transient run state, never
+  session-serialized authority or a public execution API.
 
 ### Chat Clients (`_clients.py`)
 

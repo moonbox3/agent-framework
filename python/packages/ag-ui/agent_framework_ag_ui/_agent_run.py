@@ -40,7 +40,7 @@ from agent_framework import (
 )
 from agent_framework._middleware import (
     FunctionMiddlewarePipeline,
-    _as_middleware_list,  # pyright: ignore[reportPrivateUsage]
+    MiddlewareFailure,
     categorize_middleware,
 )
 from agent_framework._tools import (
@@ -1521,21 +1521,22 @@ def _canonical_approval_resume_messages(
     return messages, handled_ids, cancelled_ids, None
 
 
-def _approval_resolution_middleware_pipeline(
+def _effective_function_middleware_pipeline(
     agent: SupportsAgentRun,
     session: AgentSession,
+    run_middleware: Any = None,
 ) -> FunctionMiddlewarePipeline:
-    """Build the function middleware used for authenticated approval resolution."""
+    """Build the canonical function middleware pipeline for adapter-owned execution."""
     client = getattr(agent, "client", None)
-    configured_middleware: list[Any] = [
-        *getattr(client, "function_middleware", ()),
-        *_as_middleware_list(getattr(agent, "middleware", None)),
-    ]
-    function_middleware = categorize_middleware(configured_middleware)["function"]
+    function_middleware = categorize_middleware(
+        getattr(client, "function_middleware", None),
+        getattr(agent, "middleware", None),
+        run_middleware,
+    )["function"]
     for provider in cast(list[Any], getattr(agent, "context_providers", [])):
         provider_middleware = getattr(provider, "_function_middleware_for_approval_resolution", None)
         if callable(provider_middleware):
-            function_middleware.extend(cast("Sequence[Any]", provider_middleware(session)))
+            function_middleware.extend(categorize_middleware(provider_middleware(session))["function"])
     return FunctionMiddlewarePipeline(*function_middleware)
 
 
@@ -1846,6 +1847,8 @@ async def _resolve_approval_responses(
                         config=config,
                         invocation_session=invocation_session,
                     )
+                except MiddlewareFailure:
+                    raise
                 except Exception as exc:
                     logger.exception("Failed to execute approved tool call; injecting error result: %s", exc)
                     return [Content.from_function_result(call_id=call_id, result="Error: Tool call invocation failed.")]
@@ -2876,7 +2879,7 @@ async def run_agent_stream(
         }
     )
     _restore_tool_approval_state(session, approval_state_store, approval_thread_id)
-    approval_middleware_pipeline = _approval_resolution_middleware_pipeline(agent, session)
+    approval_middleware_pipeline = _effective_function_middleware_pipeline(agent, session)
 
     authenticated_cancellations = [
         _approval_observer_response(occurrence, cancelled=True)

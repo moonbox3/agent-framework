@@ -352,6 +352,10 @@ class A2UIAgent:
         return getattr(self.inner_agent, "context_providers", [])
 
     @property
+    def middleware(self) -> Any:
+        return getattr(self.inner_agent, "middleware", None)
+
+    @property
     def service_session_state_keys(self) -> Any:
         return getattr(self.inner_agent, "service_session_state_keys", ())
 

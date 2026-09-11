@@ -37,6 +37,9 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   resolved siblings in the same complete resume still proceed.
 - Approval-time execution preserves each call's complete result group. Follow-up user-input requests remain in the
   resumed messages, while `TOOL_CALL_RESULT` events are emitted only for terminal `function_result` contents.
+- Approval consent does not bypass function policy. Local approval execution applies the effective client, Agent,
+  supported run-level, bundle, and applicable context-provider function middleware in canonical order for plain and
+  A2UI-wrapped Agents. `MiddlewareFailure` remains fatal and must not be converted into a model-visible tool error.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

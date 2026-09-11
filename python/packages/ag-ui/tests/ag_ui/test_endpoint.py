@@ -29,12 +29,14 @@ from agent_framework import (
     Executor,
     FileMemoryProvider,
     FileSystemAgentFileStore,
+    FunctionMiddleware,
     FunctionTool,
     HistoryProvider,
     InMemoryAgentFileStore,
     InMemoryCheckpointStorage,
     InMemoryHistoryProvider,
     Message,
+    MiddlewareFailure,
     SessionContext,
     SupportsAgentRun,
     ToolApprovalMiddleware,
@@ -2957,6 +2959,151 @@ def _build_weather_approval_endpoint(
 
     agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
     return client, agent, executed_cities
+
+
+@pytest.mark.parametrize("a2ui_mode", ["none", "manual", "automatic"])
+async def test_endpoint_agent_approval_resume_preserves_agent_function_policy(
+    streaming_chat_client_stub: Any,
+    a2ui_mode: str,
+) -> None:
+    """Approval grants consent without bypassing Agent-level authorization."""
+    executed: list[str] = []
+    policy_observations: list[tuple[str | None, str | None]] = []
+    state = {"phase": "pause"}
+
+    class DenyProtectedTool(FunctionMiddleware):
+        async def process(self, context: Any, call_next: Any) -> None:
+            del call_next
+            policy_observations.append(
+                (
+                    context.session.session_id if context.session is not None else None,
+                    context.kwargs.get("principal"),
+                )
+            )
+            raise MiddlewareFailure("principal is not authorized")
+
+    def protected_action(value: str, principal: str | None = None) -> str:
+        executed.append(f"{principal}:{value}")
+        return "protected action completed"
+
+    protected_tool = FunctionTool(
+        name="protected_action",
+        description="Perform a protected action.",
+        func=protected_action,
+        approval_mode="always_require",
+    )
+
+    async def stream_fn(
+        messages: list[Message],
+        options: dict[str, Any],
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del messages, options, kwargs
+        if state["phase"] == "pause":
+            yield ChatResponseUpdate(
+                contents=[
+                    Content.from_function_call(
+                        call_id="provider-protected",
+                        name="protected_action",
+                        arguments={"value": "classified"},
+                    )
+                ],
+                role="assistant",
+            )
+            return
+        yield ChatResponseUpdate(contents=[Content.from_text(text="must not continue")], role="assistant")
+
+    agent = Agent(
+        name="test_agent",
+        instructions="Test",
+        client=streaming_chat_client_stub(stream_fn),
+        tools=[protected_tool],
+        middleware=[DenyProtectedTool()],
+    )
+    endpoint_agent: Any = agent
+    if a2ui_mode != "none":
+        pytest.importorskip("ag_ui_a2ui_toolkit")
+    if a2ui_mode == "manual":
+        from agent_framework_ag_ui._a2ui import enable_a2ui
+
+        endpoint_agent = enable_a2ui(agent, object())
+
+    wrapped_agent = AgentFrameworkAgent(agent=endpoint_agent, require_confirmation=False)
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
+    client = TestClient(app)
+    pause_payload: dict[str, Any] = {
+        "runId": "run-pause",
+        "threadId": f"thread-policy-{a2ui_mode}",
+        "messages": [{"role": "user", "content": "Perform the protected action"}],
+    }
+    if a2ui_mode == "automatic":
+        pause_payload["forwardedProps"] = {"injectA2UITool": True}
+
+    pause_response = client.post("/approval", json=pause_payload)
+    assert pause_response.status_code == 200
+    pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
+    interrupts = _run_finished_interrupts(pause_finished[-1])
+    assert len(interrupts) == 1
+    assert executed == []
+
+    state["phase"] = "resume"
+    resume_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-resume",
+            "threadId": f"thread-policy-{a2ui_mode}",
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": interrupts[0]["id"],
+                    "status": "resolved",
+                    "payload": {"accepted": True},
+                }
+            ],
+            "forwardedProps": {"injectA2UITool": True} if a2ui_mode == "automatic" else {},
+        },
+    )
+
+    assert resume_response.status_code == 200
+    resume_events = _decode_sse_events(resume_response)
+    assert [event["code"] for event in resume_events if event.get("type") == "RUN_ERROR"] == ["MiddlewareFailure"]
+    assert not [event for event in resume_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert executed == []
+    assert policy_observations == [(f"thread-policy-{a2ui_mode}", None)]
+
+    state["phase"] = "pause"
+    direct_session = AgentSession(session_id=f"direct-policy-{a2ui_mode}")
+    direct_pause = agent.run(
+        "Perform the protected action",
+        stream=True,
+        session=direct_session,
+        function_invocation_kwargs={"principal": None},
+    )
+    direct_updates = [update async for update in direct_pause]
+    direct_request = next(
+        content
+        for update in direct_updates
+        for content in update.contents
+        if content.type == "function_approval_request"
+    )
+    assert direct_request.function_call is not None
+    direct_response = Content.from_function_approval_response(
+        approved=True,
+        id=direct_request.id,
+        function_call=direct_request.function_call,
+    )
+    state["phase"] = "resume"
+    with pytest.raises(MiddlewareFailure):
+        direct_resume = agent.run(
+            Message(role="user", contents=[direct_response]),
+            stream=True,
+            session=direct_session,
+            function_invocation_kwargs={"principal": None},
+        )
+        _ = [update async for update in direct_resume]
+    assert executed == []
+    assert policy_observations[-1] == (f"direct-policy-{a2ui_mode}", None)
 
 
 async def test_endpoint_agent_approval_batch_keeps_distinct_occurrences_for_reused_call_id() -> None:

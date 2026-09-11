@@ -3329,10 +3329,10 @@ def _build_mixed_approval_batch_endpoint(
     streaming_chat_client_stub: Any,
     *,
     snapshot_store: InMemoryAGUIThreadSnapshotStore | None = None,
-) -> tuple[TestClient, list[str], list[Message], dict[str, str]]:
+) -> tuple[TestClient, list[str], list[Message], dict[str, Any]]:
     executed: list[str] = []
     messages_received: list[Message] = []
-    state = {"phase": "pause"}
+    state: dict[str, Any] = {"phase": "pause"}
 
     def sensitive_action(city: str) -> str:
         executed.append(f"sensitive:{city}")
@@ -3380,10 +3380,12 @@ def _build_mixed_approval_batch_endpoint(
         messages_received[:] = list(messages)
         yield ChatResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")
 
+    chat_client = streaming_chat_client_stub(stream_fn)
+    state["chat_client"] = chat_client
     agent = Agent(
         name="test_agent",
         instructions="Test",
-        client=streaming_chat_client_stub(stream_fn),
+        client=chat_client,
         tools=[gated_tool, sibling_tool],
     )
     app = FastAPI()
@@ -3968,6 +3970,201 @@ async def test_endpoint_agent_approval_resume_remains_retryable_when_local_tool_
         (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
     ] == [("call_get_weather", "Sunny in Seattle")]
     assert executed_cities == ["Seattle"]
+
+
+@pytest.mark.parametrize("a2ui_mode", ["none", "manual", "automatic"])
+async def test_endpoint_agent_approval_resume_remains_pending_when_invocation_is_disabled(
+    streaming_chat_client_stub,
+    a2ui_mode: str,
+) -> None:
+    """A disabled local executor blocks an approved call without consuming its authority."""
+    call_id = "call_local_action"
+    state = {"phase": "pause"}
+    local_executions: list[str] = []
+    provider_resume_calls: list[str] = []
+    function_call = Content.from_function_call(
+        call_id=call_id,
+        name="local_action",
+        arguments={"document": "Approved draft"},
+    )
+    local_tool = FunctionTool(
+        name="local_action",
+        description="Apply an approved draft.",
+        func=lambda document: local_executions.append(document) or "Draft applied",
+        approval_mode="always_require",
+    )
+
+    async def stream_fn(
+        messages: list[Message],
+        options: dict[str, Any],
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del messages, options, kwargs
+        if state["phase"] == "pause":
+            yield ChatResponseUpdate(
+                contents=[Content.from_function_approval_request(id=call_id, function_call=function_call)],
+                role="assistant",
+            )
+            return
+        provider_resume_calls.append("resumed")
+        yield ChatResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")
+
+    chat_client = cast(Any, streaming_chat_client_stub(stream_fn))
+    agent = Agent(name="test_agent", instructions="Test", client=chat_client, tools=[local_tool])
+    endpoint_agent: SupportsAgentRun = agent
+    if a2ui_mode != "none":
+        pytest.importorskip("ag_ui_a2ui_toolkit")
+    if a2ui_mode == "manual":
+        from agent_framework_ag_ui._a2ui import enable_a2ui
+
+        endpoint_agent = enable_a2ui(agent, object())
+    wrapped_agent = AgentFrameworkAgent(agent=endpoint_agent, require_confirmation=False)
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        wrapped_agent,
+        path="/approval",
+        snapshot_store=InMemoryAGUIThreadSnapshotStore(),
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+    thread_id = f"thread-disabled-resume-{a2ui_mode}"
+    forwarded_props = {"injectA2UITool": True} if a2ui_mode == "automatic" else {}
+
+    pause_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-pause",
+            "threadId": thread_id,
+            "messages": [{"role": "user", "content": "Apply the draft"}],
+            "forwardedProps": forwarded_props,
+        },
+    )
+    pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
+    assert _run_finished_interrupts(pause_finished[-1])[0]["id"] == call_id
+
+    state["phase"] = "resume"
+    chat_client.function_invocation_configuration["enabled"] = False
+    resume = [{"interruptId": call_id, "status": "resolved", "payload": {"accepted": True}}]
+    blocked_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-blocked",
+            "threadId": thread_id,
+            "messages": [],
+            "resume": resume,
+            "forwardedProps": forwarded_props,
+        },
+    )
+
+    blocked_events = _decode_sse_events(blocked_response)
+    blocked_errors = [event for event in blocked_events if event.get("type") == "RUN_ERROR"]
+    assert [(event["code"], event["message"]) for event in blocked_errors] == [
+        (
+            "APPROVAL_INVOCATION_DISABLED",
+            "Function invocation is disabled; the approved tool remains pending for an explicit retry.",
+        )
+    ]
+    assert not [event for event in blocked_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert local_executions == []
+    assert provider_resume_calls == []
+
+    repeated_blocked_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-blocked-again",
+            "threadId": thread_id,
+            "messages": [],
+            "resume": resume,
+            "forwardedProps": forwarded_props,
+        },
+    )
+    repeated_blocked_events = _decode_sse_events(repeated_blocked_response)
+    assert [event["code"] for event in repeated_blocked_events if event.get("type") == "RUN_ERROR"] == [
+        "APPROVAL_INVOCATION_DISABLED"
+    ]
+    assert not [event for event in repeated_blocked_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert local_executions == []
+    assert provider_resume_calls == []
+
+    chat_client.function_invocation_configuration["enabled"] = True
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": thread_id,
+            "messages": [],
+            "resume": resume,
+            "forwardedProps": forwarded_props,
+        },
+    )
+
+    retry_events = _decode_sse_events(retry_response)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert [
+        (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
+    ] == [(call_id, "Draft applied")]
+    assert local_executions == ["Approved draft"]
+    assert provider_resume_calls == ["resumed"]
+
+
+async def test_endpoint_agent_disabled_resume_releases_all_unstarted_local_grants(
+    streaming_chat_client_stub,
+) -> None:
+    """A disabled mixed batch leaves every unstarted local grant retryable."""
+    client, executed, _, state = _build_mixed_approval_batch_endpoint(streaming_chat_client_stub)
+    pause_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-pause",
+            "threadId": "thread-disabled-mixed-grants",
+            "messages": [{"role": "user", "content": "Run both tools"}],
+        },
+    )
+    pause_finished = [event for event in _decode_sse_events(pause_response) if event.get("type") == "RUN_FINISHED"]
+    approval_id = _run_finished_interrupts(pause_finished[-1])[0]["id"]
+    resume = [{"interruptId": approval_id, "status": "resolved", "payload": {"accepted": True}}]
+
+    state["phase"] = "resume"
+    chat_client = state["chat_client"]
+    chat_client.function_invocation_configuration["enabled"] = False
+    blocked_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-blocked",
+            "threadId": "thread-disabled-mixed-grants",
+            "messages": [],
+            "resume": resume,
+        },
+    )
+
+    blocked_events = _decode_sse_events(blocked_response)
+    assert [event["code"] for event in blocked_events if event.get("type") == "RUN_ERROR"] == [
+        "APPROVAL_INVOCATION_DISABLED"
+    ]
+    assert not [event for event in blocked_events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert executed == []
+
+    chat_client.function_invocation_configuration["enabled"] = True
+    retry_response = client.post(
+        "/approval",
+        json={
+            "runId": "run-retry",
+            "threadId": "thread-disabled-mixed-grants",
+            "messages": [],
+            "resume": resume,
+        },
+    )
+
+    retry_events = _decode_sse_events(retry_response)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert [
+        (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
+    ] == [
+        ("call_sensitive", "Sensitive action in Seattle"),
+        ("call_weather", "Weather in Seattle"),
+    ]
+    assert executed == ["sensitive:Seattle", "weather:Seattle"]
 
 
 async def test_endpoint_agent_approval_resume_releases_already_approved_sibling(streaming_chat_client_stub):
@@ -5327,8 +5524,9 @@ async def test_endpoint_agent_approval_client_fields_do_not_mutate_stored_approv
 
 
 async def test_endpoint_agent_approval_resume_entry_denial_does_not_execute_tool():
-    """A resolved canonical denial resume should not execute the pending tool."""
-    client, _, executed_cities = _build_weather_approval_endpoint()
+    """A resolved canonical denial remains valid while function invocation is disabled."""
+    client, agent, executed_cities = _build_weather_approval_endpoint()
+    agent.client.function_invocation_configuration = {"enabled": False}
 
     response = client.post(
         "/approval",
@@ -5443,8 +5641,9 @@ async def test_endpoint_agent_approval_replayed_standard_edited_resume_is_idempo
 
 
 async def test_endpoint_agent_approval_cancelled_resume_entry_completes_without_execution():
-    """A cancelled canonical approval resume should complete without executing the pending tool."""
-    client, _, executed_cities = _build_weather_approval_endpoint()
+    """A cancelled canonical approval remains valid while function invocation is disabled."""
+    client, agent, executed_cities = _build_weather_approval_endpoint()
+    agent.client.function_invocation_configuration = {"enabled": False}
 
     response = client.post(
         "/approval",
@@ -9970,7 +10169,6 @@ async def test_endpoint_does_not_forward_resolved_local_approval_control_to_chat
         yield ChatResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")
 
     chat_client = cast(Any, streaming_chat_client_stub(stream_fn))
-    chat_client.function_invocation_configuration["enabled"] = False
     agent = Agent(
         name="test_agent",
         instructions="Test",

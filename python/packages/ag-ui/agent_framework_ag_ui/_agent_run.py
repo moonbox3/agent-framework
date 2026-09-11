@@ -903,6 +903,7 @@ def _register_server_generated_approval_response(
         aliases=[str(response.function_call.call_id)] if response.function_call.call_id else None,
         response_id=str(response_id),
         server_label=_function_call_server_label(response.function_call),
+        requires_client_resume=False,
     )
     if response.approved is not True:
         batch = lifecycle.claim_batch(
@@ -1233,7 +1234,7 @@ def _canonical_approval_resume_messages(
     messages: list[dict[str, Any]] = []
     handled_ids: set[str] = set()
     cancelled_ids: set[str] = set()
-    pending_interrupt_ids = lifecycle.pending_interrupt_ids(thread_id=thread_id)
+    pending_interrupt_ids = lifecycle.pending_client_resume_interrupt_ids(thread_id=thread_id)
     contract_interrupt_ids = expected_ids | pending_interrupt_ids
     if not contract_interrupt_ids:
         if _resume_payload_has_approval_decision(resume_payload):
@@ -1457,6 +1458,7 @@ def _canonical_approval_resume_messages(
                 function_call_id=function_call.id,
                 response_id=str(response_id),
                 server_label=_function_call_server_label(function_call),
+                requires_client_resume=False,
             )
             lifecycle_decisions.append(
                 ResumeDecision(
@@ -2992,6 +2994,21 @@ async def run_agent_stream(
         yield RunErrorEvent(
             message=f"Approved tool(s) {unavailable_names} are temporarily unavailable; retry the approval later.",
             code="APPROVAL_TOOL_UNAVAILABLE",
+        )
+        return
+    invocation_config = normalize_function_invocation_configuration(
+        getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
+    )
+    if local_intents and not invocation_config.get("enabled", True):
+        for intent in local_intents:
+            approval_state_store.lifecycle.release_claim(
+                intent,
+                policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION,
+            )
+        yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+        yield RunErrorEvent(
+            message="Function invocation is disabled; the approved tool remains pending for an explicit retry.",
+            code="APPROVAL_INVOCATION_DISABLED",
         )
         return
     validated_approved_responses: list[Content] = []

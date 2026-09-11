@@ -42,6 +42,10 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   A2UI-wrapped Agents. `MiddlewareFailure` remains fatal and must not be converted into a model-visible tool error.
 - A2UI mixed planner batches apply that same effective function middleware before executing server-tool siblings of
   the declaration-only `generate_a2ui` call. A policy denial aborts the batch before surface rendering.
+- Local approval resume checks the current function-invocation configuration before any approved side effect begins.
+  When invocation is disabled, grants remain pending under their original retention deadline and the endpoint emits
+  `APPROVAL_INVOCATION_DISABLED`; only a later explicit retry after re-enablement can execute them. Rejections and
+  cancellations remain valid while invocation is disabled.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

@@ -3028,7 +3028,7 @@ async def test_endpoint_agent_approval_resume_preserves_agent_function_policy(
 
         endpoint_agent = enable_a2ui(agent, object())
 
-    wrapped_agent = AgentFrameworkAgent(agent=endpoint_agent, require_confirmation=False)
+    wrapped_agent = AgentFrameworkAgent(agent=cast(SupportsAgentRun, endpoint_agent), require_confirmation=False)
     app = FastAPI()
     add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
     client = TestClient(app)
@@ -3088,6 +3088,7 @@ async def test_endpoint_agent_approval_resume_preserves_agent_function_policy(
         if content.type == "function_approval_request"
     )
     assert direct_request.function_call is not None
+    assert direct_request.id is not None
     direct_response = Content.from_function_approval_response(
         approved=True,
         id=direct_request.id,
@@ -3104,6 +3105,110 @@ async def test_endpoint_agent_approval_resume_preserves_agent_function_policy(
         _ = [update async for update in direct_resume]
     assert executed == []
     assert policy_observations[-1] == (f"direct-policy-{a2ui_mode}", None)
+
+
+@pytest.mark.parametrize("a2ui_mode", ["manual", "automatic"])
+async def test_endpoint_a2ui_mixed_batch_preserves_agent_function_policy(
+    streaming_chat_client_stub: Any,
+    a2ui_mode: str,
+) -> None:
+    """A declaration-only UI call cannot bypass Agent-level policy for its server-tool sibling."""
+    executed: list[str] = []
+    policy_sessions: list[str | None] = []
+    render_calls: list[str] = []
+    state = {"direct": False}
+
+    class DenyProtectedTool(FunctionMiddleware):
+        async def process(self, context: Any, call_next: Any) -> None:
+            del call_next
+            policy_sessions.append(context.session.session_id if context.session is not None else None)
+            raise MiddlewareFailure("principal is not authorized")
+
+    class RenderClient:
+        def get_response(self, *args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            render_calls.append("rendered")
+            raise AssertionError("rendering must not start after policy denial")
+
+    def protected_action(value: str) -> str:
+        executed.append(value)
+        return "protected action completed"
+
+    protected_tool = FunctionTool(
+        name="protected_action",
+        description="Perform a protected action.",
+        func=protected_action,
+    )
+
+    async def stream_fn(
+        messages: list[Message],
+        options: dict[str, Any],
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        del messages, options, kwargs
+        calls = [
+            Content.from_function_call(
+                call_id="provider-protected",
+                name="protected_action",
+                arguments={"value": "classified"},
+            )
+        ]
+        if not state["direct"]:
+            calls.append(
+                Content.from_function_call(
+                    call_id="provider-generate",
+                    name="generate_a2ui",
+                    arguments={"intent": "create"},
+                )
+            )
+        yield ChatResponseUpdate(contents=calls, role="assistant")
+
+    agent = Agent(
+        name="test_agent",
+        instructions="Test",
+        client=streaming_chat_client_stub(stream_fn),
+        tools=[protected_tool],
+        middleware=[DenyProtectedTool()],
+    )
+    pytest.importorskip("ag_ui_a2ui_toolkit")
+    endpoint_agent: Any = agent
+    if a2ui_mode == "manual":
+        from agent_framework_ag_ui._a2ui import enable_a2ui
+
+        endpoint_agent = enable_a2ui(agent, RenderClient())
+
+    wrapped_agent = AgentFrameworkAgent(agent=cast(SupportsAgentRun, endpoint_agent), require_confirmation=False)
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/a2ui")
+    client = TestClient(app)
+    payload: dict[str, Any] = {
+        "runId": "run-mixed",
+        "threadId": f"thread-mixed-policy-{a2ui_mode}",
+        "messages": [{"role": "user", "content": "Perform and render"}],
+    }
+    if a2ui_mode == "automatic":
+        payload["forwardedProps"] = {"injectA2UITool": True}
+
+    response = client.post("/a2ui", json=payload)
+
+    assert response.status_code == 200
+    events = _decode_sse_events(response)
+    assert [event["code"] for event in events if event.get("type") == "RUN_ERROR"] == ["MiddlewareFailure"]
+    assert not [event for event in events if event.get("type") == "TOOL_CALL_RESULT"]
+    assert executed == []
+    assert render_calls == []
+    assert policy_sessions == [f"thread-mixed-policy-{a2ui_mode}"]
+
+    state["direct"] = True
+    with pytest.raises(MiddlewareFailure):
+        direct_run = agent.run(
+            "Perform the protected action",
+            stream=True,
+            session=AgentSession(session_id=f"direct-mixed-policy-{a2ui_mode}"),
+        )
+        _ = [update async for update in direct_run]
+    assert executed == []
+    assert policy_sessions[-1] == f"direct-mixed-policy-{a2ui_mode}"
 
 
 async def test_endpoint_agent_approval_batch_keeps_distinct_occurrences_for_reused_call_id() -> None:

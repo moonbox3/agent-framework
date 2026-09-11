@@ -93,7 +93,7 @@ class _RenderSub:
         return gen()
 
 
-async def _drive(agent, tools=None):
+async def _drive(agent, tools=None, **kwargs):
     """Run a streaming A2UIAgent and classify the yielded content.
 
     The forwarded AG-UI context (when any) is a constructor arg of ``A2UIAgent`` now,
@@ -101,7 +101,9 @@ async def _drive(agent, tools=None):
     tools for the mixed-batch (ordinary tool + generate_a2ui) path.
     """
     kinds: list[tuple[Any, ...]] = []
-    run_kwargs = {"tools": tools} if tools is not None else {}
+    run_kwargs = dict(kwargs)
+    if tools is not None:
+        run_kwargs["tools"] = tools
     async for update in agent.run("make a card", stream=True, **run_kwargs):
         for c in update.contents:
             t = getattr(c, "type", None)
@@ -971,6 +973,78 @@ def test_mixed_batch_server_tool_runs_through_middleware_pipeline():
     kinds = asyncio.run(_drive(A2UIAgent(_InnerWithClient(), _RenderSub()), tools=[search_tool]))
 
     assert "middleware-ran" in seen  # executed through the real pipeline, not a bypass
+    assert any(k[0] == "result" and k[1] == "s1" and "Ritz" in k[2] for k in kinds)
+
+
+def test_mixed_batch_preserves_effective_middleware_order_session_and_invocation_kwargs():
+    from agent_framework import AgentSession, FunctionInvocationContext, FunctionTool, MiddlewareBundle
+    from agent_framework._middleware import FunctionMiddleware
+
+    observations: list[tuple[str, str | None, str | None]] = []
+    executed: list[str] = []
+
+    class _RecordingMiddleware(FunctionMiddleware):
+        def __init__(self, name: str):
+            self.name = name
+
+        async def process(self, context, call_next):
+            observations.append(
+                (
+                    self.name,
+                    context.session.session_id if context.session is not None else None,
+                    context.kwargs.get("trusted_scope"),
+                )
+            )
+            await call_next()
+
+    client_middleware = _RecordingMiddleware("client")
+    agent_middleware = _RecordingMiddleware("agent")
+    bundle_middleware = _RecordingMiddleware("bundle")
+    repeated_run_middleware = _RecordingMiddleware("run")
+    provider_middleware = _RecordingMiddleware("provider")
+    from agent_framework._feature_stage import ExperimentalWarning
+
+    with pytest.warns(ExperimentalWarning, match="AGENT_HOOKS"):
+        agent_bundle = MiddlewareBundle([bundle_middleware])
+
+    class _Client:
+        function_middleware = (client_middleware,)
+        function_invocation_configuration = None
+
+    class _Provider:
+        def _function_middleware_for_approval_resolution(self, session):
+            assert session.session_id == "mixed-session"
+            return [provider_middleware]
+
+    class _Inner(_SearchThenGenerateInner):
+        client = _Client()
+        middleware = [agent_middleware, agent_bundle]
+        context_providers = [_Provider()]
+
+    def search(query: str, context: FunctionInvocationContext) -> str:
+        executed.append(f"{context.kwargs.get('trusted_scope')}:{query}")
+        return json.dumps({"results": ["Ritz"]})
+
+    search_tool = FunctionTool(name="search", description="search", func=search)
+    kinds = asyncio.run(
+        _drive(
+            A2UIAgent(_Inner(), _RenderSub()),
+            tools=[search_tool],
+            session=AgentSession(session_id="mixed-session"),
+            middleware=[repeated_run_middleware, repeated_run_middleware],
+            function_invocation_kwargs={"trusted_scope": "tenant-a"},
+        )
+    )
+
+    assert observations == [
+        ("client", "mixed-session", "tenant-a"),
+        ("agent", "mixed-session", "tenant-a"),
+        ("bundle", "mixed-session", "tenant-a"),
+        ("run", "mixed-session", "tenant-a"),
+        ("run", "mixed-session", "tenant-a"),
+        ("provider", "mixed-session", "tenant-a"),
+    ]
+    assert executed == ["tenant-a:hotels"]
     assert any(k[0] == "result" and k[1] == "s1" and "Ritz" in k[2] for k in kinds)
 
 

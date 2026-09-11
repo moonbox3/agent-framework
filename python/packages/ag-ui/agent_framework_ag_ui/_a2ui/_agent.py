@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 from ag_ui_a2ui_toolkit import (
@@ -516,11 +516,10 @@ class A2UIAgent:
         """Execute server tools called alongside generate_a2ui through the shared executor.
 
         Runs them via the framework's function-invocation helper with the run's ``session``,
-        the run ``config``, and a middleware pipeline built from the client's static function
-        middleware plus the runtime ``middleware`` (bare objects and MiddlewareBundles
-        normalized/expanded via ``categorize_middleware``, so a bundle's function middleware
-        is applied, not skipped) — the same helper AG-UI approval resume uses, so
-        authorization/audit/policy middleware, the session, and approval controls all apply.
+        the run ``config``, and the same effective client, Agent, run-level, bundle, and
+        applicable context-provider function middleware preparation used by AG-UI approval
+        resume, so authorization/audit/policy middleware, the session, and approval controls
+        all apply.
         Kept here in the adapter (not behind a new core abstraction). Returns
         ``(results, control, should_terminate)``; ``control`` are non-result contents (e.g. a
         ``function_approval_request``) that must reach the client. A ``MiddlewareFailure``
@@ -530,14 +529,15 @@ class A2UIAgent:
         generic, non-leaking message unless ``include_detailed_errors`` is enabled, matching
         the core function-error formatting — rather than aborting the surface generation.
         """
-        from agent_framework._middleware import FunctionMiddlewarePipeline, MiddlewareFailure, categorize_middleware
+        from agent_framework._middleware import MiddlewareFailure
         from agent_framework._tools import _try_execute_function_call_groups
 
-        client = getattr(self.inner_agent, "client", None)
+        from .._agent_run import _effective_function_middleware_pipeline  # pyright: ignore[reportPrivateUsage]
+
         runtime_middleware = run_kwargs.get("middleware")
-        runtime_fn_mw = categorize_middleware(runtime_middleware)["function"] if runtime_middleware is not None else []
-        pipeline = FunctionMiddlewarePipeline(*(getattr(client, "function_middleware", None) or ()), *runtime_fn_mw)
-        custom_args = {k: v for k, v in run_kwargs.items() if k not in ("options", "middleware")}
+        pipeline = _effective_function_middleware_pipeline(self.inner_agent, session, runtime_middleware)
+        invocation_kwargs = run_kwargs.get("function_invocation_kwargs")
+        custom_args = dict(cast(Mapping[str, Any], invocation_kwargs)) if invocation_kwargs is not None else {}
         try:
             groups, should_terminate = await _try_execute_function_call_groups(
                 custom_args=custom_args,

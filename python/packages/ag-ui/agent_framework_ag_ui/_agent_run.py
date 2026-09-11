@@ -1536,7 +1536,7 @@ def _effective_function_middleware_pipeline(
     for provider in cast(list[Any], getattr(agent, "context_providers", [])):
         provider_middleware = getattr(provider, "_function_middleware_for_approval_resolution", None)
         if callable(provider_middleware):
-            function_middleware.extend(categorize_middleware(provider_middleware(session))["function"])
+            function_middleware.extend(categorize_middleware(cast(Any, provider_middleware(session)))["function"])
     return FunctionMiddlewarePipeline(*function_middleware)
 
 

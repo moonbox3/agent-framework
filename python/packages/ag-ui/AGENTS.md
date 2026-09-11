@@ -40,6 +40,8 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
 - Approval consent does not bypass function policy. Local approval execution applies the effective client, Agent,
   supported run-level, bundle, and applicable context-provider function middleware in canonical order for plain and
   A2UI-wrapped Agents. `MiddlewareFailure` remains fatal and must not be converted into a model-visible tool error.
+- A2UI mixed planner batches apply that same effective function middleware before executing server-tool siblings of
+  the declaration-only `generate_a2ui` call. A policy denial aborts the batch before surface rendering.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

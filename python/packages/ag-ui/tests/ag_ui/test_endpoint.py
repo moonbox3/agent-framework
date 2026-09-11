@@ -65,7 +65,12 @@ from agent_framework_ag_ui import (
     add_agent_framework_fastapi_endpoint,
 )
 from agent_framework_ag_ui._agent import AgentFrameworkAgent
-from agent_framework_ag_ui._approval_lifecycle import ApprovalExecutionOwner, ApprovalLifecycle, ApprovalStatus
+from agent_framework_ag_ui._approval_lifecycle import (
+    ApprovalExecutionOwner,
+    ApprovalLifecycle,
+    ApprovalStatus,
+    ResumeDecision,
+)
 from agent_framework_ag_ui._approval_state import InMemoryAGUIApprovalStateStore, approval_state_thread_id
 from agent_framework_ag_ui._workflow import (
     _CHECKPOINT_REQUEST_OWNER_KEY,
@@ -4165,6 +4170,216 @@ async def test_endpoint_agent_disabled_resume_releases_all_unstarted_local_grant
         ("call_weather", "Weather in Seattle"),
     ]
     assert executed == ["sensitive:Seattle", "weather:Seattle"]
+
+
+async def test_endpoint_agent_disabled_mixed_resume_preserves_terminal_progress_for_retry() -> None:
+    """A blocked mixed resume keeps grants retryable without reviving terminal siblings."""
+    executed: list[str] = []
+    observed_non_grants: list[tuple[str | None, bool]] = []
+
+    class ObserveNonGrants(FunctionMiddleware):
+        async def process(self, context: Any, call_next: Any) -> None:
+            del context
+            await call_next()
+
+        def _on_approval_responses(
+            self,
+            responses: Sequence[Content],
+            *,
+            session: AgentSession | None,
+        ) -> None:
+            del session
+            observed_non_grants.extend(
+                (
+                    response.function_call.call_id if response.function_call else None,
+                    response.additional_properties.get("cancelled") is True,
+                )
+                for response in responses
+            )
+
+    def record_city(city: str) -> str:
+        executed.append(city)
+        return f"Recorded {city}"
+
+    tool = FunctionTool(
+        name="record_city",
+        description="Record a city",
+        func=record_city,
+        approval_mode="always_require",
+    )
+    approval_requests = [
+        Content.from_function_approval_request(
+            id=f"approval-{city.lower()}",
+            function_call=Content.from_function_call(
+                call_id=f"call-{city.lower()}",
+                name="record_city",
+                arguments={"city": city},
+            ),
+        )
+        for city in ("Seattle", "Portland", "Tokyo")
+    ]
+    client_config = Mock(function_invocation_configuration={"enabled": True})
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=approval_requests, role="assistant")],
+        default_options={"tools": [tool]},
+        client=client_config,
+    )
+    agent.middleware = [ObserveNonGrants()]
+    wrapped_agent = AgentFrameworkAgent(agent=agent, require_confirmation=False)
+    snapshot_store = InMemoryAGUIThreadSnapshotStore()
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(
+        app,
+        wrapped_agent,
+        path="/approval",
+        snapshot_store=snapshot_store,
+        snapshot_scope_resolver=lambda _request: "tenant-a",
+    )
+    client = TestClient(app)
+    thread_id = "thread-disabled-mixed-decisions"
+    pause = client.post(
+        "/approval",
+        json={
+            "runId": "run-pause",
+            "threadId": thread_id,
+            "messages": [{"role": "user", "content": "Record three cities"}],
+        },
+    )
+    pause_finished = [event for event in _decode_sse_events(pause) if event.get("type") == "RUN_FINISHED"]
+    assert {interrupt["id"] for interrupt in _run_finished_interrupts(pause_finished[-1])} == {
+        "call-seattle",
+        "call-portland",
+        "call-tokyo",
+    }
+
+    agent.updates = [AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")]
+    mixed_resume = [
+        {
+            "interruptId": "call-seattle",
+            "status": "resolved",
+            "payload": {"approved": True},
+        },
+        {
+            "interruptId": "call-portland",
+            "status": "resolved",
+            "payload": {"approved": False},
+        },
+        {"interruptId": "call-tokyo", "status": "cancelled"},
+    ]
+    client_config.function_invocation_configuration["enabled"] = False
+
+    for run_id in ("run-blocked", "run-blocked-again"):
+        blocked = client.post(
+            "/approval",
+            json={"runId": run_id, "threadId": thread_id, "messages": [], "resume": mixed_resume},
+        )
+        blocked_events = _decode_sse_events(blocked)
+        assert [event["code"] for event in blocked_events if event.get("type") == "RUN_ERROR"] == [
+            "APPROVAL_INVOCATION_DISABLED"
+        ]
+        assert not [event for event in blocked_events if event.get("type") == "TOOL_CALL_RESULT"]
+        assert executed == []
+
+    assert set(observed_non_grants) == {
+        ("call-portland", False),
+        ("call-tokyo", True),
+    }
+    snapshot = await snapshot_store.get(scope="tenant-a", thread_id=thread_id)
+    assert snapshot is not None and snapshot.interrupt is not None
+    assert {interrupt["id"] for interrupt in snapshot.interrupt} == {"call-seattle"}
+
+    client_config.function_invocation_configuration["enabled"] = True
+    retry = client.post(
+        "/approval",
+        json={"runId": "run-retry", "threadId": thread_id, "messages": [], "resume": mixed_resume},
+    )
+    retry_events = _decode_sse_events(retry)
+    assert not [event for event in retry_events if event.get("type") == "RUN_ERROR"]
+    assert [
+        (event["toolCallId"], event["content"]) for event in retry_events if event.get("type") == "TOOL_CALL_RESULT"
+    ] == [("call-seattle", "Recorded Seattle")]
+    assert executed == ["Seattle"]
+
+
+async def test_endpoint_agent_mixed_retry_reprojects_completed_sibling_without_reexecution() -> None:
+    """A completed sibling is replayed while only the unfinished approval executes."""
+    executed: list[str] = []
+
+    def record_city(city: str) -> str:
+        executed.append(city)
+        return f"Recorded {city}"
+
+    tool = FunctionTool(name="record_city", description="Record a city", func=record_city)
+    agent = StubAgent(
+        updates=[AgentResponseUpdate(contents=[Content.from_text(text="Done.")], role="assistant")],
+        default_options={"tools": [tool]},
+    )
+    wrapped_agent = AgentFrameworkAgent(agent=agent, require_confirmation=False)
+    lifecycle = wrapped_agent._approval_state_store.lifecycle
+    completed = lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-completed-sibling",
+        interrupt_id="approval-seattle",
+        call_id="call-seattle",
+        name="record_city",
+        arguments='{"city":"Seattle"}',
+    )
+    completed_intent = lifecycle.claim(
+        thread_id="thread-completed-sibling",
+        decision=ResumeDecision(
+            interrupt_id="approval-seattle",
+            accepted=True,
+            arguments='{"city":"Seattle"}',
+            name="record_city",
+            original_arguments='{"city":"Seattle"}',
+        ),
+    )
+    lifecycle.begin_execution(completed_intent, owner=ApprovalExecutionOwner.LOCAL)
+    lifecycle.settle(
+        completed_intent,
+        [Content.from_function_result(call_id=completed.identity.call_id, result="Recorded Seattle")],
+    )
+    lifecycle.register(
+        owner=ApprovalExecutionOwner.LOCAL,
+        thread_id="thread-completed-sibling",
+        interrupt_id="approval-portland",
+        call_id="call-portland",
+        name="record_city",
+        arguments='{"city":"Portland"}',
+    )
+    app = FastAPI()
+    add_agent_framework_fastapi_endpoint(app, wrapped_agent, path="/approval")
+    client = TestClient(app)
+    resume = [
+        {
+            "interruptId": "approval-seattle",
+            "status": "resolved",
+            "payload": {"approved": True},
+        },
+        {
+            "interruptId": "approval-portland",
+            "status": "resolved",
+            "payload": {"approved": True},
+        },
+    ]
+
+    response = client.post(
+        "/approval",
+        json={
+            "runId": "run-completed-sibling",
+            "threadId": "thread-completed-sibling",
+            "messages": [],
+            "resume": resume,
+        },
+    )
+
+    events = _decode_sse_events(response)
+    assert not [event for event in events if event.get("type") == "RUN_ERROR"]
+    assert [(event["toolCallId"], event["content"]) for event in events if event.get("type") == "TOOL_CALL_RESULT"] == [
+        ("call-seattle", "Recorded Seattle"),
+        ("call-portland", "Recorded Portland"),
+    ]
+    assert executed == ["Portland"]
 
 
 async def test_endpoint_agent_approval_resume_releases_already_approved_sibling(streaming_chat_client_stub):

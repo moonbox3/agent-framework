@@ -45,7 +45,9 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
 - Local approval resume checks the current function-invocation configuration before any approved side effect begins.
   When invocation is disabled, grants remain pending under their original retention deadline and the endpoint emits
   `APPROVAL_INVOCATION_DISABLED`; only a later explicit retry after re-enablement can execute them. Rejections and
-  cancellations remain valid while invocation is disabled.
+  cancellations in a mixed resume still settle and retire their snapshot controls while grants remain pending.
+  Repeating that mixed response or explicitly retrying it after re-enablement reuses retained terminal outcomes
+  without reviving cancelled/rejected authority or replaying completed tool effects.
 - Approval responses for tools injected during `before_run` are deferred to the in-run approval middleware rather
   than executed or rejected by the transport before those tools exist.
 - `_approval_lifecycle.py` is the sole owner of approval occurrence registration, trusted aliases, authority

@@ -1235,7 +1235,24 @@ def _canonical_approval_resume_messages(
     handled_ids: set[str] = set()
     cancelled_ids: set[str] = set()
     pending_interrupt_ids = lifecycle.pending_client_resume_interrupt_ids(thread_id=thread_id)
-    contract_interrupt_ids = expected_ids | pending_interrupt_ids
+    pending_call_ids = {
+        occurrence.identity.call_id
+        for interrupt_id in pending_interrupt_ids
+        if (occurrence := lifecycle.pending_occurrence(thread_id=thread_id, interrupt_id=interrupt_id)) is not None
+    }
+    retained_interrupt_ids: set[str] = set()
+    for interrupt in _normalize_resume_interrupts(resume_payload):
+        interrupt_id = str(interrupt["id"])
+        occurrence = lifecycle.occurrence_for_alias(thread_id=thread_id, interrupt_id=interrupt_id)
+        if (
+            (pending_interrupt_ids or expected_ids)
+            and occurrence is not None
+            and occurrence.status.is_terminal
+            and occurrence.active_interrupt_id == interrupt_id
+            and occurrence.identity.call_id not in pending_call_ids
+        ):
+            retained_interrupt_ids.add(interrupt_id)
+    contract_interrupt_ids = expected_ids | pending_interrupt_ids | retained_interrupt_ids
     if not contract_interrupt_ids:
         if _resume_payload_has_approval_decision(resume_payload):
             normalized_interrupts = _normalize_resume_interrupts(resume_payload)
@@ -1351,7 +1368,7 @@ def _canonical_approval_resume_messages(
     for entry in entries:
         interrupt_id = cast(str, entry["interrupt_id"])
         status = entry["status"]
-        pending_entry = lifecycle.pending_occurrence(thread_id=thread_id, interrupt_id=interrupt_id)
+        pending_entry = lifecycle.occurrence_for_alias(thread_id=thread_id, interrupt_id=interrupt_id)
         if pending_entry is None:
             if status == "cancelled" and interrupt_id in expected_ids:
                 handled_ids.add(interrupt_id)
@@ -1395,10 +1412,17 @@ def _canonical_approval_resume_messages(
             continue
 
         pending_arguments = _pending_approval_arguments(pending_entry)
+        original_arguments = (
+            pending_entry.decision.original_arguments
+            if pending_entry.status.is_terminal
+            and pending_entry.decision is not None
+            and pending_entry.decision.original_arguments is not None
+            else pending_arguments
+        )
         accepted, canonical_arguments, merged_arguments, validation_error = _canonical_approval_decision(
             entry.get("payload"),
             interrupt_id=interrupt_id,
-            original_arguments_text=pending_arguments,
+            original_arguments_text=original_arguments,
             server_label=_pending_approval_server_label(pending_entry),
         )
         if validation_error is not None:
@@ -1411,7 +1435,7 @@ def _canonical_approval_resume_messages(
                 accepted=accepted,
                 arguments=canonical_arguments,
                 name=_pending_approval_name(pending_entry),
-                original_arguments=pending_arguments,
+                original_arguments=original_arguments,
             )
         )
         response_id = pending_entry.response_id or interrupt_id
@@ -1498,6 +1522,10 @@ def _canonical_approval_resume_messages(
             )
             if snapshot_reconciliations is not None:
                 snapshot_reconciliations.extend(intents.snapshot_reconciliations)
+            if retained_results is not None:
+                for outcome in intents.retained_outcomes:
+                    if outcome.snapshot_reconciliation.status is ApprovalStatus.SETTLED:
+                        retained_results.extend(result.content for result in outcome.replayable_results)
             for intent in intents:
                 authorized_executions[intent.identity] = intent
         except (KeyError, ValueError) as exc:
@@ -3005,6 +3033,30 @@ async def run_agent_stream(
                 intent,
                 policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION,
             )
+        authenticated_rejections = [
+            _approval_observer_response(occurrence)
+            for interrupt_id in handled_resume_ids - cancelled_resume_ids
+            if (
+                occurrence := approval_state_store.lifecycle.occurrence_for_alias(
+                    thread_id=approval_thread_id,
+                    interrupt_id=interrupt_id,
+                )
+            )
+            is not None
+            and occurrence.status is ApprovalStatus.REJECTED
+        ]
+        if authenticated_rejections:
+            approval_middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+                authenticated_rejections,
+                session=session,
+            )
+        retired_interrupt_ids = {
+            reconciliation.interrupt_id
+            for reconciliation in approval_snapshot_reconciliations
+            if reconciliation.retire_interrupt
+        }
+        if retired_interrupt_ids:
+            await snapshot_session.clear_interrupts(interrupt_ids=retired_interrupt_ids)
         yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
         yield RunErrorEvent(
             message="Function invocation is disabled; the approved tool remains pending for an explicit retry.",

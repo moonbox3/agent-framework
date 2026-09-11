@@ -8,7 +8,6 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from copy import deepcopy
-from dataclasses import dataclass
 from functools import partial
 from inspect import isawaitable
 from itertools import chain
@@ -30,7 +29,6 @@ from ._docstrings import apply_layered_docstring
 from ._middleware import (
     AgentMiddlewareLayer,
     FunctionInvocationContext,
-    FunctionMiddlewarePipeline,
     MiddlewareTypes,
     _as_middleware_list,  # pyright: ignore[reportPrivateUsage]
     _copy_middleware_sequence,  # pyright: ignore[reportPrivateUsage]
@@ -58,7 +56,6 @@ from ._types import (
     AgentRunInputs,
     ChatResponse,
     ChatResponseUpdate,
-    Content,
     Message,
     ResponseStream,
     _append_instructions,  # pyright: ignore[reportPrivateUsage]
@@ -85,7 +82,7 @@ if TYPE_CHECKING:
 
     from ._compaction import CompactionStrategy, TokenizerProtocol
     from ._mcp import MCPTool
-    from ._tools import FunctionInvocationConfiguration, FunctionTool, ToolTypes
+    from ._tools import FunctionTool, ToolTypes
     from ._types import ChatOptions
 
 logger = logging.getLogger("agent_framework")
@@ -230,60 +227,6 @@ class _RunContext(TypedDict):
     tokenizer: TokenizerProtocol | None
     client_kwargs: Mapping[str, Any]
     function_invocation_kwargs: Mapping[str, Any]
-    session_preparation: _PreparedAgentSession
-
-
-_PREPARED_AGENT_SESSION_KEY = "_prepared_agent_session"
-
-
-@dataclass
-class _PreparedAgentSession:
-    agent: RawAgent[Any]
-    session: AgentSession | None
-    context: SessionContext
-    options: dict[str, Any]
-    consumed: bool = False
-
-
-@dataclass
-class _PreparedFunctionResult:
-    contents: list[Content]
-    should_terminate: bool
-
-
-@dataclass
-class _PreparedFunctionExecution:
-    _context: _RunContext
-    _middleware: FunctionMiddlewarePipeline
-    _configuration: FunctionInvocationConfiguration
-
-    def continuation_client_kwargs(self) -> dict[str, Any]:
-        """Hand off the one-use provider preparation without exposing its storage layout."""
-        return {_PREPARED_AGENT_SESSION_KEY: self._context["session_preparation"]}
-
-    def notify_approval_responses(self, responses: Sequence[Content]) -> None:
-        """Notify the prepared policy using its owning session."""
-        self._middleware._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
-            responses, session=self._context["session"]
-        )
-
-    async def execute_one(self, call: Content) -> _PreparedFunctionResult:
-        """Execute one occurrence, preserving its complete result group and termination signal."""
-        from ._tools import _try_execute_function_call_groups  # pyright: ignore[reportPrivateUsage]
-
-        if not self._configuration.get("enabled", True):
-            raise AgentInvalidRequestException("Function invocation is disabled.")
-        groups, should_terminate = await _try_execute_function_call_groups(
-            custom_args=dict(self._context["function_invocation_kwargs"]),
-            function_calls=[call],
-            tools=self._context["chat_options"].get("tools") or [],
-            config=self._configuration,
-            invocation_session=self._context["session"],
-            middleware_pipeline=self._middleware,
-        )
-        if len(groups) != 1 or not groups[0]:
-            raise AgentInvalidResponseException("Prepared tool execution must return one non-empty result group.")
-        return _PreparedFunctionResult(contents=groups[0], should_terminate=should_terminate)
 
 
 # region Agent Protocol
@@ -1402,50 +1345,6 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):
 
         return None
 
-    async def _prepare_function_execution(
-        self,
-        *,
-        messages: AgentRunInputs | None,
-        session: AgentSession,
-        tools: Sequence[ToolTypes],
-        options: Mapping[str, Any] | None = None,
-        middleware: Sequence[MiddlewareTypes] | None = None,
-        function_invocation_kwargs: Mapping[str, Any] | None = None,
-    ) -> _PreparedFunctionExecution:
-        """Prepare adapter-owned calls with the normal provider context and retain it for continuation."""
-        from ._tools import normalize_function_invocation_configuration
-
-        configured = categorize_middleware(self.middleware)
-        runtime = categorize_middleware(middleware)
-        context = await self._prepare_run_context(
-            messages=messages,
-            session=session,
-            tools=tools,
-            options=options,
-            compaction_strategy=None,
-            tokenizer=None,
-            function_invocation_kwargs=function_invocation_kwargs,
-            client_kwargs={
-                "middleware": [
-                    *configured["function"],
-                    *configured["chat"],
-                    *runtime["function"],
-                    *runtime["chat"],
-                ]
-            },
-        )
-        prepared_middleware = categorize_middleware(context["client_kwargs"].get("middleware"))["function"]
-        pipeline = FunctionMiddlewarePipeline(
-            *(getattr(self.client, "function_middleware", None) or ()), *prepared_middleware
-        )
-        return _PreparedFunctionExecution(
-            context,
-            pipeline,
-            normalize_function_invocation_configuration(
-                getattr(self.client, "function_invocation_configuration", None)
-            ),
-        )
-
     async def _prepare_run_context(
         self,
         *,
@@ -1459,10 +1358,6 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):
         client_kwargs: Mapping[str, Any] | None,
     ) -> _RunContext:
         opts = dict(options) if options else {}
-        effective_client_kwargs = dict(client_kwargs) if client_kwargs is not None else {}
-        prepared_session = effective_client_kwargs.pop(_PREPARED_AGENT_SESSION_KEY, None)
-        if prepared_session is not None and not isinstance(prepared_session, _PreparedAgentSession):
-            raise TypeError("Prepared execution requires a framework session context.")
         existing_additional_args: dict[str, Any] = opts.pop("additional_function_arguments", None) or {}
 
         # Run-level tools: the named parameter takes precedence over an options entry
@@ -1539,22 +1434,11 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):
                         provider.source_id,
                     )
 
-        if isinstance(prepared_session, _PreparedAgentSession) and not prepared_session.consumed:
-            if prepared_session.agent is not self or prepared_session.session is not active_session:
-                raise AgentInvalidRequestException(
-                    "Prepared function execution belongs to a different agent or session."
-                )
-            prepared_session.consumed = True
-            session_context = prepared_session.context
-            session_context.input_messages = input_messages
-            chat_options = dict(prepared_session.options)
-        else:
-            session_context, chat_options = await self._prepare_session_and_messages(
-                session=active_session,
-                input_messages=input_messages,
-                options=opts,
-            )
-        session_preparation = _PreparedAgentSession(self, active_session, session_context, dict(chat_options))
+        session_context, chat_options = await self._prepare_session_and_messages(
+            session=active_session,
+            input_messages=input_messages,
+            options=opts,
+        )
         default_additional_args = chat_options.pop("additional_function_arguments", None)
         if isinstance(default_additional_args, Mapping):
             existing_additional_args = {
@@ -1640,6 +1524,7 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):
         # Build session_messages from session context: context messages + input messages
         session_messages: list[Message] = session_context.get_messages(include_input=True)
 
+        effective_client_kwargs = dict(client_kwargs) if client_kwargs is not None else {}
         if active_session is not None:
             effective_client_kwargs["session"] = active_session
         per_service_call_history_middleware: PerServiceCallHistoryPersistingMiddleware | None = None
@@ -1690,7 +1575,6 @@ class RawAgent(BaseAgent, Generic[OptionsCoT]):
             "tokenizer": tokenizer or self.tokenizer,
             "client_kwargs": effective_client_kwargs,
             "function_invocation_kwargs": additional_function_arguments,
-            "session_preparation": session_preparation,
         }
 
     async def _prepare_session_and_messages(

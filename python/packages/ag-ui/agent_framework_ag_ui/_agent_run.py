@@ -45,9 +45,9 @@ from agent_framework._middleware import (
 )
 from agent_framework._agents import (
     RawAgent,
-    _PreparedFunctionExecution,  # pyright: ignore[reportPrivateUsage]
 )
 from agent_framework._tools import (
+    FunctionInvocationLayer,
     _ALREADY_APPROVED_APPROVAL_REQUEST_GROUPS_KEY,  # type: ignore
     _APPROVAL_REQUEST_ID_KEY,  # pyright: ignore[reportPrivateUsage]
     _collect_approval_responses,  # type: ignore
@@ -80,6 +80,12 @@ from ._approval_lifecycle import (
     HostedPendingToolTransitionOwner,
     LocalPendingToolTransitionOwner,
     ResumeDecision,
+)
+from ._approval_execution import (
+    COLLECTED_APPROVAL_OCCURRENCE_KEY,
+    ApprovalInvocationDisabledError,
+    InRunApprovalExecution,
+    InRunPendingToolTransitionOwner,
 )
 from ._approval_state import _APPROVAL_SCOPE_INPUT_KEY, InMemoryAGUIApprovalStateStore, approval_state_thread_id
 from ._message_adapters import _APPROVAL_DECISION_IS_BOOLEAN_KEY, normalize_agui_input_messages
@@ -886,16 +892,28 @@ def _register_server_generated_approval_response(
     """Register a server-owned approval response so normal validation can consume it."""
     if response.function_call is None or not response.function_call.name:
         return None
-    response_id = response.id or response.function_call.call_id
+    response_id = (
+        response.additional_properties.get(_APPROVAL_REQUEST_ID_KEY) or response.id or response.function_call.call_id
+    )
     if not response_id:
         return None
+    retained_occurrence_id = response.additional_properties.get(COLLECTED_APPROVAL_OCCURRENCE_KEY)
+    if retained_occurrence_id is not None:
+        retained = lifecycle.occurrence_for_alias(thread_id=thread_id, interrupt_id=str(response_id))
+        if (
+            retained is None
+            or retained.identity.occurrence_id != retained_occurrence_id
+            or retained.status is not ApprovalStatus.PENDING
+        ):
+            raise ValueError("Collected approval authority is no longer pending.")
+    response.id = str(response_id)
     execution_owner = _function_call_execution_owner(
         response.function_call,
         tools,
         has_deferred_owner=has_deferred_owner,
     )
     arguments = canonical_function_arguments(response.function_call) or "{}"
-    lifecycle.register(
+    occurrence = lifecycle.register(
         owner=execution_owner,
         scope=approval_scope,
         thread_ids=[thread_id],
@@ -909,6 +927,7 @@ def _register_server_generated_approval_response(
         server_label=_function_call_server_label(response.function_call),
         requires_client_resume=False,
     )
+    response.additional_properties[COLLECTED_APPROVAL_OCCURRENCE_KEY] = occurrence.identity.occurrence_id
     if response.approved is not True:
         batch = lifecycle.claim_batch(
             thread_id=thread_id,
@@ -951,8 +970,9 @@ def _pop_collected_tool_approval_response_messages(
     lifecycle: ApprovalLifecycle,
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     approval_scope: str | None = None,
+    consume: bool = True,
 ) -> list[Message]:
-    """Pop server-collected auto-approved responses into provider-visible messages."""
+    """Load server-collected responses, optionally consuming them for transport-owned execution."""
     raw_state = session.state.get(_TOOL_APPROVAL_STATE_KEY)
     if not isinstance(raw_state, Mapping):
         return []
@@ -979,7 +999,10 @@ def _pop_collected_tool_approval_response_messages(
             authorized_executions[intent.identity] = intent
         responses.append(response)
 
-    state[_COLLECTED_APPROVAL_RESPONSES_KEY] = []
+    if consume:
+        state[_COLLECTED_APPROVAL_RESPONSES_KEY] = []
+    else:
+        state[_COLLECTED_APPROVAL_RESPONSES_KEY] = [response.to_dict() for response in responses]
     session.state[_TOOL_APPROVAL_STATE_KEY] = state
     if not responses:
         return []
@@ -1249,9 +1272,13 @@ def _canonical_approval_resume_messages(
         interrupt_id = str(interrupt["id"])
         occurrence = lifecycle.occurrence_for_alias(thread_id=thread_id, interrupt_id=interrupt_id)
         if (
-            (pending_interrupt_ids or expected_ids)
-            and occurrence is not None
+            occurrence is not None
             and occurrence.status.is_terminal
+            and (
+                pending_interrupt_ids
+                or expected_ids
+                or occurrence.status in {ApprovalStatus.SETTLED, ApprovalStatus.REJECTED, ApprovalStatus.CANCELLED}
+            )
             and occurrence.active_interrupt_id == interrupt_id
             and occurrence.function_call_id not in pending_occurrence_ids
         ):
@@ -1313,7 +1340,7 @@ def _canonical_approval_resume_messages(
                         server_label=occurrence.server_label if occurrence is not None else None,
                     )
                     if validation_error is not None:
-                        return [], handled_ids, cancelled_ids, validation_error
+                        return [], set(), set(), validation_error
                     if accepted is None or canonical_arguments is None:
                         break
                     decisions.append(
@@ -1430,7 +1457,9 @@ def _canonical_approval_resume_messages(
             server_label=_pending_approval_server_label(pending_entry),
         )
         if validation_error is not None:
-            return [], handled_ids, cancelled_ids, validation_error
+            if pending_interrupt_ids or expected_ids:
+                return [], handled_ids, cancelled_ids, validation_error
+            return [], set(), set(), validation_error
         if accepted is None or canonical_arguments is None or merged_arguments is None:
             raise RuntimeError("Validated approval decision is missing canonical values.")
         lifecycle_decisions.append(
@@ -1475,19 +1504,30 @@ def _canonical_approval_resume_messages(
                 tools,
                 has_deferred_owner=has_deferred_owner,
             )
-            lifecycle.register(
-                owner=execution_owner,
-                scope=approval_scope,
-                thread_ids=[thread_id],
-                interrupt_id=sibling_interrupt_id,
-                call_id=sibling_call_id,
-                name=function_call.name,
-                arguments=sibling_arguments,
-                function_call_id=function_call.id,
-                response_id=str(response_id),
-                server_label=_function_call_server_label(function_call),
-                requires_client_resume=False,
-            )
+            sibling_occurrence_id = function_call.id or sibling_interrupt_id
+            existing_siblings = [
+                occurrence
+                for occurrence in lifecycle.occurrences_for_thread(thread_id=thread_id)
+                if occurrence.function_call_id == sibling_occurrence_id
+            ]
+            if len(existing_siblings) > 1:
+                raise ValueError("An already-approved sibling has ambiguous occurrence identity.")
+            if not existing_siblings:
+                if pending_entry.status.is_terminal:
+                    raise ValueError("Retained sibling approval authority is no longer available.")
+                lifecycle.register(
+                    owner=execution_owner,
+                    scope=approval_scope,
+                    thread_ids=[thread_id],
+                    interrupt_id=sibling_interrupt_id,
+                    call_id=sibling_call_id,
+                    name=function_call.name,
+                    arguments=sibling_arguments,
+                    function_call_id=function_call.id,
+                    response_id=str(response_id),
+                    server_label=_function_call_server_label(function_call),
+                    requires_client_resume=False,
+                )
             lifecycle_decisions.append(
                 ResumeDecision(
                     interrupt_id=sibling_interrupt_id,
@@ -1530,6 +1570,17 @@ def _canonical_approval_resume_messages(
                 for outcome in intents.retained_outcomes:
                     if outcome.snapshot_reconciliation.status is ApprovalStatus.SETTLED:
                         retained_results.extend(result.content for result in outcome.replayable_results)
+            retained_response_ids = {
+                lifecycle.get(outcome.identity).response_id or outcome.identity.interrupt_id
+                for outcome in intents.retained_outcomes
+            }
+            for message in messages:
+                message["function_approvals"] = [
+                    approval
+                    for approval in message["function_approvals"]
+                    if approval["id"] not in retained_response_ids
+                ]
+            messages[:] = [message for message in messages if message["function_approvals"]]
             for intent in intents:
                 authorized_executions[intent.identity] = intent
         except (KeyError, ValueError) as exc:
@@ -1611,7 +1662,8 @@ async def _resolve_approval_responses(
     *,
     lifecycle: ApprovalLifecycle,
     middleware_pipeline: FunctionMiddlewarePipeline,
-    prepared_execution: _PreparedFunctionExecution | None = None,
+    in_run_execution: InRunApprovalExecution | None = None,
+    additional_approval_messages: Sequence[Message] = (),
     authorized_executions: dict[ApprovalOccurrenceIdentity, AuthorizedExecution] | None = None,
     forwarded_executions: (
         dict[str, list[tuple[ForwardedPendingToolTransitionOwner, AuthorizedExecution, Content]]] | None
@@ -1641,7 +1693,7 @@ async def _resolve_approval_responses(
     """
     approval_responses: list[Content] = []
     responses_by_id: dict[str, list[Content]] = {}
-    for message in messages:
+    for message in [*additional_approval_messages, *messages]:
         for content in message.contents:
             if content.type == "function_approval_response" and content.id is not None:
                 approval_responses.append(content)
@@ -1764,25 +1816,32 @@ async def _resolve_approval_responses(
                 continue
             intents_by_response_content_id[id(primary_response)] = intent
         valid_response_content_ids.add(id(primary_response))
-        if pending_entry.owner is ApprovalExecutionOwner.DEFERRED:
+        if pending_entry.owner is ApprovalExecutionOwner.DEFERRED or (
+            in_run_execution is not None
+            and pending_entry.owner is ApprovalExecutionOwner.LOCAL
+            and primary_response.approved is True
+        ):
             deferred_response_content_ids.add(id(primary_response))
         if intent is not None and (
             intent.owner is ApprovalExecutionOwner.DEFERRED
             or (primary_response.approved is True and intent.owner is ApprovalExecutionOwner.HOSTED)
+            or (in_run_execution is not None and intent.owner is ApprovalExecutionOwner.LOCAL)
         ):
             validated_forwarded_approvals.append(primary_response)
         if not server_label:
             pending_local_response_content_ids.add(id(primary_response))
-        if validated_approved_responses is not None and primary_response.approved is True and not server_label:
+        if (
+            validated_approved_responses is not None
+            and primary_response.approved is True
+            and not server_label
+            and in_run_execution is None
+        ):
             validated_approved_responses.append(primary_response)
 
     if authenticated_non_grants:
-        if prepared_execution is not None:
-            prepared_execution.notify_approval_responses(authenticated_non_grants)
-        else:
-            middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
-                authenticated_non_grants, session=invocation_session
-            )
+        middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+            authenticated_non_grants, session=invocation_session
+        )
 
     if response_content_ids_to_strip:
         filtered_messages: list[Message] = []
@@ -1825,7 +1884,10 @@ async def _resolve_approval_responses(
             async def forward_hosted_decision(approval: Content = approval) -> list[Content]:
                 return [approval]
 
-            if intent.owner is ApprovalExecutionOwner.HOSTED:
+            if in_run_execution is not None:
+                in_run_execution.register(intent, approval)
+                forwarded_owner = InRunPendingToolTransitionOwner(forward_hosted_decision, owner=intent.owner)
+            elif intent.owner is ApprovalExecutionOwner.HOSTED:
                 forwarded_owner: ForwardedPendingToolTransitionOwner = HostedPendingToolTransitionOwner(
                     forward_hosted_decision
                 )
@@ -1860,7 +1922,7 @@ async def _resolve_approval_responses(
 
     # Execute lifecycle-authorized local calls only through their transition owner.
     if static_approved and tools and lifecycle is not None and authorized_executions is not None:
-        if prepared_execution is None and getattr(agent, "context_providers", None):
+        if getattr(agent, "context_providers", None):
             raise TypeError("Local approval execution with context providers requires a core Agent execution path.")
         client = getattr(agent, "client", None)
         config = normalize_function_invocation_configuration(getattr(client, "function_invocation_configuration", None))
@@ -1876,17 +1938,14 @@ async def _resolve_approval_responses(
 
             async def execute_local_call(approval: Content = approval, call_id: str = call_id) -> list[Content]:
                 try:
-                    if prepared_execution is not None:
-                        return (await prepared_execution.execute_one(approval)).contents
-                    else:
-                        result_groups, _ = await _try_execute_function_call_groups(
-                            custom_args=tool_kwargs,
-                            function_calls=[approval],
-                            tools=tools,
-                            middleware_pipeline=middleware_pipeline,
-                            config=config,
-                            invocation_session=invocation_session,
-                        )
+                    result_groups, _ = await _try_execute_function_call_groups(
+                        custom_args=tool_kwargs,
+                        function_calls=[approval],
+                        tools=tools,
+                        middleware_pipeline=middleware_pipeline,
+                        config=config,
+                        invocation_session=invocation_session,
+                    )
                 except MiddlewareFailure:
                     raise
                 except Exception as exc:
@@ -1928,7 +1987,15 @@ async def _resolve_approval_responses(
         replacement_groups.append(result_group)
         approved_results.extend(content for content in result_group if content.type == "function_result")
 
-    _replace_approval_contents_with_results(messages, fcc_todo, replacement_groups)
+    normalization_responses = dict(fcc_todo)
+    normalization_responses.update(
+        {
+            response_id: response
+            for response_id, response in _collect_approval_responses(messages).items()
+            if id(response) in deferred_response_content_ids
+        }
+    )
+    _replace_approval_contents_with_results(messages, normalization_responses, replacement_groups)
 
     # Post-process: Convert user messages with function_result content to proper tool messages.
     # After _replace_approval_contents_with_results, approved tool calls have their results
@@ -3029,16 +3096,26 @@ async def _run_agent_stream(
     # Resolve approval responses (execute approved tools, replace approvals with results)
     # This must happen before running the agent so it sees the tool results
     tools_for_execution = tools if tools is not None else server_tools
-    messages.extend(
-        _pop_collected_tool_approval_response_messages(
-            session,
-            approval_thread_id,
-            tools_for_execution,
-            lifecycle=approval_state_store.lifecycle,
-            authorized_executions=authorized_executions,
-            approval_scope=approval_scope,
-        )
+    core_agent = agent
+    if a2ui_active:
+        from ._a2ui._agent import A2UIAgent
+
+        while isinstance(core_agent, A2UIAgent):
+            core_agent = core_agent.inner_agent
+    use_native_execution = isinstance(core_agent, RawAgent) and isinstance(core_agent.client, FunctionInvocationLayer)
+    collected_messages = _pop_collected_tool_approval_response_messages(
+        session,
+        approval_thread_id,
+        tools_for_execution,
+        lifecycle=approval_state_store.lifecycle,
+        authorized_executions=authorized_executions,
+        approval_scope=approval_scope,
+        consume=not use_native_execution,
     )
+    if not use_native_execution:
+        messages.extend(collected_messages)
+    elif collected_messages:
+        _save_tool_approval_state(session, approval_state_store, approval_thread_id)
     execution_tool_map = _get_tool_map(tools_for_execution) if tools_for_execution else {}
     local_intents = [
         intent for intent in authorized_executions.values() if intent.owner is ApprovalExecutionOwner.LOCAL
@@ -3061,46 +3138,14 @@ async def _run_agent_stream(
     invocation_config = normalize_function_invocation_configuration(
         getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
     )
-    prepared_execution = None
-    core_agent = agent
-    if a2ui_active:
-        from ._a2ui._agent import A2UIAgent
-
-        while isinstance(core_agent, A2UIAgent):
-            core_agent = core_agent.inner_agent
-    if local_intents and invocation_config.get("enabled", True):
-        try:
-            if isinstance(core_agent, RawAgent):
-                preparation_messages = messages
-                if a2ui_active:
-                    preparation_runner = a2ui_runner or agent
-                    preparation_context = run_kwargs.get("a2ui_context")
-                    while isinstance(preparation_runner, A2UIAgent):
-                        wrapper = cast(A2UIAgent, preparation_runner)
-                        preparation_messages = wrapper._prepare_run_messages(  # pyright: ignore[reportPrivateUsage]
-                            preparation_messages, a2ui_context=preparation_context
-                        )
-                        preparation_runner = wrapper.inner_agent
-                        preparation_context = None
-                prepared_execution = await core_agent._prepare_function_execution(  # pyright: ignore[reportPrivateUsage]
-                    messages=preparation_messages,
-                    session=session,
-                    tools=run_kwargs.get("tools") or [],
-                    options=run_kwargs.get("options"),
-                )
-            elif getattr(core_agent, "context_providers", None):
-                raise TypeError("Local approval execution with context providers requires a core Agent execution path.")
-        except BaseException:
-            for intent in authorized_executions.values():
-                approval_state_store.lifecycle.release_claim(
-                    intent, policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION
-                )
-            raise
-        if prepared_execution is not None:
-            run_kwargs["client_kwargs"] = prepared_execution.continuation_client_kwargs()
-        invocation_config = normalize_function_invocation_configuration(
-            getattr(getattr(agent, "client", None), "function_invocation_configuration", None)
-        )
+    in_run_execution = None
+    if (
+        authorized_executions
+        and isinstance(core_agent, RawAgent)
+        and isinstance(core_agent.client, FunctionInvocationLayer)
+    ):
+        in_run_execution = InRunApprovalExecution(approval_state_store.lifecycle, session, core_agent.client)
+        run_kwargs["middleware"] = [in_run_execution.function_middleware, in_run_execution.chat_middleware]
     if local_intents and not invocation_config.get("enabled", True):
         for intent in authorized_executions.values():
             approval_state_store.lifecycle.release_claim(
@@ -3120,13 +3165,10 @@ async def _run_agent_stream(
             and occurrence.status is ApprovalStatus.REJECTED
         ]
         if authenticated_rejections:
-            if prepared_execution is not None:
-                prepared_execution.notify_approval_responses(authenticated_rejections)
-            else:
-                approval_middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
-                    authenticated_rejections,
-                    session=session,
-                )
+            approval_middleware_pipeline._notify_approval_responses(  # pyright: ignore[reportPrivateUsage]
+                authenticated_rejections,
+                session=session,
+            )
         retired_interrupt_ids = {
             reconciliation.interrupt_id
             for reconciliation in approval_snapshot_reconciliations
@@ -3153,7 +3195,8 @@ async def _run_agent_stream(
         replacement_approval_requests,
         lifecycle=approval_state_store.lifecycle,
         middleware_pipeline=approval_middleware_pipeline,
-        prepared_execution=prepared_execution,
+        in_run_execution=in_run_execution,
+        additional_approval_messages=collected_messages if use_native_execution else (),
         authorized_executions=authorized_executions,
         forwarded_executions=forwarded_executions,
     )
@@ -3254,6 +3297,7 @@ async def _run_agent_stream(
     telemetry_conversation_id = str(supplied_thread_id) if supplied_thread_id is not None else None
     telemetry_context = partial(_use_telemetry_conversation_id, telemetry_conversation_id)
     stream_completed = False
+    native_approval_flow_result_ids: set[int] = set()
     try:
         with telemetry_context():
             for queued_executions in forwarded_executions.values():
@@ -3314,6 +3358,8 @@ async def _run_agent_stream(
                 content_type = getattr(content, "type", None)
                 logger.debug(f"Processing content type={content_type}, message_id={flow.message_id}")
                 forwarded_reapproval_handled = False
+                native_approval_result = False
+                suppress_approval_call_end = False
 
                 if (
                     content_type == "function_approval_request"
@@ -3338,8 +3384,25 @@ async def _run_agent_stream(
                     forwarded = forwarded_queue.pop(0)
                     if not forwarded_queue:
                         forwarded_executions.pop(content.call_id, None)
-                    owner, intent, _ = forwarded
+                    owner, intent, approval = forwarded
                     owner.record_outcome(intent, [content], lifecycle=approval_state_store.lifecycle)
+                    if (
+                        isinstance(owner, InRunPendingToolTransitionOwner)
+                        and intent.owner is not ApprovalExecutionOwner.HOSTED
+                    ):
+                        native_approval_result = True
+                        suppress_approval_call_end = intent.owner is ApprovalExecutionOwner.LOCAL
+                        _replace_approval_contents_with_results(
+                            messages, _collect_approval_responses(messages), [[content]]
+                        )
+                        _convert_approval_results_to_tool_messages(messages)
+                        state_updates = _extract_approved_state_updates(
+                            [Message(role="user", contents=[approval])], predictive_handler
+                        )
+                        if state_updates:
+                            flow.current_state.update(state_updates)
+                            latest_state_snapshot = cast(dict[str, Any], make_json_safe(flow.current_state))
+                            yield StateSnapshotEvent(snapshot=flow.current_state)
 
                 # Register pending approval requests so we can validate responses later
                 if content_type == "function_approval_request":
@@ -3386,6 +3449,7 @@ async def _run_agent_stream(
                             getattr(content, "function_call", None),
                         )
 
+                result_offset = len(flow.tool_results)
                 for event in _emit_content(
                     content,
                     flow,
@@ -3393,19 +3457,39 @@ async def _run_agent_stream(
                     skip_text,
                     config.require_confirmation,
                 ):
+                    if suppress_approval_call_end and isinstance(event, ToolCallEndEvent):
+                        continue
                     if isinstance(event, StateSnapshotEvent):
                         latest_state_snapshot = cast(dict[str, Any], make_json_safe(event.snapshot))
                     yield event
+                if native_approval_result:
+                    native_approval_flow_result_ids.update(id(result) for result in flow.tool_results[result_offset:])
 
             # Stop if waiting for approval
             if flow.waiting_for_approval:
                 break
         stream_completed = True
+    except ApprovalInvocationDisabledError:
+        if not run_started_emitted:
+            yield RunStartedEvent(run_id=run_id, thread_id=thread_id)
+        yield RunErrorEvent(
+            message="Function invocation is disabled; the approved tool remains pending for an explicit retry.",
+            code="APPROVAL_INVOCATION_DISABLED",
+        )
+        return
     finally:
+        if in_run_execution is not None and stream_completed:
+            in_run_execution.retain_collected_decisions()
         if approval_state_store is not None:
             for queued_executions in forwarded_executions.values():
                 for owner, intent, forwarded_approval in queued_executions:
-                    if stream_completed:
+                    if stream_completed and (
+                        not isinstance(owner, InRunPendingToolTransitionOwner)
+                        or (
+                            intent.owner is ApprovalExecutionOwner.HOSTED
+                            and approval_state_store.lifecycle.get(intent.identity).status is ApprovalStatus.EXECUTING
+                        )
+                    ):
                         owner.record_outcome(intent, [forwarded_approval], lifecycle=approval_state_store.lifecycle)
                     else:
                         approval_state_store.lifecycle.recover_unfinished(intent)
@@ -3569,6 +3653,12 @@ async def _run_agent_stream(
 
     # Emit MessagesSnapshotEvent if we have tool calls or results
     # Feature #5: Suppress intermediate snapshots for predictive tools without confirmation
+    _clean_resolved_approvals_from_snapshot(snapshot_messages, messages)
+    if native_approval_flow_result_ids:
+        _merge_resolved_approval_results_into_snapshot(snapshot_messages, messages)
+        flow.tool_results[:] = [
+            result for result in flow.tool_results if id(result) not in native_approval_flow_result_ids
+        ]
     should_emit_snapshot = (
         flow.pending_tool_calls or flow.tool_results or flow.accumulated_text or flow.reasoning_messages
     )

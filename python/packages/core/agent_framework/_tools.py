@@ -21,7 +21,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial, wraps
 from time import perf_counter, time_ns
 from typing import (
@@ -1899,8 +1899,6 @@ async def _try_execute_function_call_groups(
     invocation_session: AgentSession | None = None,
     middleware_pipeline: FunctionMiddlewarePipeline | None = None,
     host_payload_budget: _FunctionResultPayloadBudget | None = None,
-    *,
-    execute_declaration_only_siblings: bool = False,
 ) -> tuple[list[list[Content]], bool]:
     """Execute multiple function calls concurrently while preserving per-call result groups.
 
@@ -1912,7 +1910,6 @@ async def _try_execute_function_call_groups(
         invocation_session: The agent session for this invocation, if any.
         middleware_pipeline: Optional middleware pipeline to apply during execution.
         host_payload_budget: Shared request budget for retained Host-only function result payloads.
-        execute_declaration_only_siblings: Execute server siblings before returning declaration-only calls.
 
     Returns:
         A tuple of:
@@ -1942,45 +1939,6 @@ async def _try_execute_function_call_groups(
     )
     declaration_only_tool_names = {tool_name for tool_name, tool in tool_map.items() if tool.declaration_only}
     additional_tool_names = {tool.name for tool in config.get("additional_tools") or []}
-    if execute_declaration_only_siblings:
-        declarations = [
-            call
-            for call in function_calls
-            if call.type == "function_call" and call.name in declaration_only_tool_names | additional_tool_names
-        ]
-        if declarations:
-            declaration_ids = {id(call) for call in declarations}
-            executable_calls = [call for call in function_calls if id(call) not in declaration_ids]
-            groups, terminated = await _try_execute_function_call_groups(
-                custom_args=custom_args,
-                function_calls=executable_calls,
-                tools=cast("ToolTypes | Callable[..., Any] | Sequence[ToolTypes | Callable[..., Any]]", tools),
-                config=config,
-                invocation_session=invocation_session,
-                middleware_pipeline=middleware_pipeline,
-                host_payload_budget=host_payload_budget,
-            )
-            for call in declarations:
-                call.user_input_request = True
-            # Preserve occurrence order, including batches where approval hides safe siblings.
-            ordered_groups: list[list[Content]] = []
-            remaining = list(groups)
-            for call in function_calls:
-                if id(call) in declaration_ids:
-                    ordered_groups.append([call])
-                    continue
-                for index, group in enumerate(remaining):
-                    if any(
-                        (
-                            content.function_call.id == call.id
-                            if content.function_call is not None
-                            else content.call_id == call.call_id
-                        )
-                        for content in group
-                    ):
-                        ordered_groups.append(remaining.pop(index))
-                        break
-            return [*ordered_groups, *remaining], terminated
     actionable_calls = [
         function_call for function_call in function_calls if _is_actionable_function_call(function_call)
     ]
@@ -2133,39 +2091,6 @@ class _FunctionExecutionBatch:
         )
 
 
-_DECLARATION_ONLY_EXECUTION_KEY = "_declaration_only_execution"
-
-
-@dataclass
-class _DeclarationOnlyExecution:
-    executed_call_count: int = 0
-    should_terminate: bool = False
-    _budget_state: dict[str, Any] = field(default_factory=dict[str, Any], repr=False)
-
-    def client_kwargs(self, existing: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """Install declaration-only execution and its shared budget in client kwargs."""
-        client_kwargs = dict(existing) if existing is not None else {}
-        existing_budget = client_kwargs.get(_FUNCTION_INVOCATION_BUDGET_STATE_KEY)
-        if isinstance(existing_budget, dict):
-            self._budget_state = existing_budget
-        client_kwargs[_DECLARATION_ONLY_EXECUTION_KEY] = self
-        client_kwargs[_FUNCTION_INVOCATION_BUDGET_STATE_KEY] = self._budget_state
-        return client_kwargs
-
-    @property
-    def calls_used(self) -> int:
-        """Return the cumulative core and adapter function-call charge."""
-        value = self._budget_state.get("total_function_calls", 0)
-        budget_calls = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
-        return max(budget_calls, self.executed_call_count)
-
-    def record_adapter_calls(self, count: int) -> None:
-        """Charge adapter-executed calls to the shared function-call budget."""
-        if count < 0:
-            raise ValueError("Adapter function-call count cannot be negative.")
-        self._budget_state["total_function_calls"] = self.calls_used + count
-
-
 async def _execute_function_calls(
     *,
     custom_args: dict[str, Any],
@@ -2175,7 +2100,6 @@ async def _execute_function_calls(
     invocation_session: AgentSession | None = None,
     middleware_pipeline: FunctionMiddlewarePipeline | None = None,
     host_payload_budget: _FunctionResultPayloadBudget | None = None,
-    declaration_only_execution: _DeclarationOnlyExecution | None = None,
 ) -> _FunctionExecutionBatch:
     tools = _extract_tools(options)
     if not tools:
@@ -2188,16 +2112,11 @@ async def _execute_function_calls(
         middleware_pipeline=middleware_pipeline,
         config=config,
         host_payload_budget=host_payload_budget,
-        execute_declaration_only_siblings=declaration_only_execution is not None,
     )
-    batch = _FunctionExecutionBatch(
+    return _FunctionExecutionBatch(
         result_groups=result_groups,
         should_terminate=should_terminate,
     )
-    if declaration_only_execution is not None:
-        declaration_only_execution.executed_call_count += batch.executed_call_count
-        declaration_only_execution.should_terminate |= should_terminate
-    return batch
 
 
 def _update_conversation_id(
@@ -4171,11 +4090,6 @@ class FunctionInvocationLayer(Generic[OptionsCoT]):
 
         # Build the run-local middleware pipeline and recover shared budget/session state for approval re-entry.
         request_kwargs = dict(client_kwargs) if client_kwargs is not None else {}
-        declaration_only_execution = request_kwargs.pop(_DECLARATION_ONLY_EXECUTION_KEY, None)
-        if declaration_only_execution is not None and not isinstance(
-            declaration_only_execution, _DeclarationOnlyExecution
-        ):
-            raise TypeError("Declaration-only execution requires a framework execution context.")
         if middleware is not None:
             request_kwargs["middleware"] = [
                 *_as_middleware_list(
@@ -4237,7 +4151,6 @@ class FunctionInvocationLayer(Generic[OptionsCoT]):
             invocation_session=invocation_session,
             middleware_pipeline=function_middleware_pipeline,
             host_payload_budget=host_payload_budget,
-            declaration_only_execution=declaration_only_execution,
         )
 
         # Give the loop private mutable options and one shared run-local tool list for progressive tool changes.

@@ -864,6 +864,7 @@ class ApprovalLifecycle:
         occurrence.aliases = (request_id,)
         occurrence.active_interrupt_id = request_id
         occurrence.response_id = request_id
+        occurrence.requires_client_resume = True
         occurrence.decision = None
         occurrence.pending_since = self._clock()
         for thread_id in occurrence.thread_ids:
@@ -947,6 +948,19 @@ class ApprovalLifecycle:
             return intent
         self.mark_indeterminate(intent, owner=owner)
         return None
+
+    @_serialized_by_occurrence
+    def retain_collected_decision(self, intent: AuthorizedExecution) -> None:
+        """Keep a server-collected grant pending without asking the client to submit it again."""
+        occurrence = self._occurrences[intent.identity]
+        if (
+            occurrence.status is not ApprovalStatus.CLAIMED
+            or occurrence.decision is None
+            or not occurrence.decision.accepted
+        ):
+            raise ValueError("Only an unstarted accepted claim can be retained as a collected decision.")
+        occurrence.requires_client_resume = False
+        self.release_claim(intent, policy=ClaimRecoveryPolicy.PRESERVE_PENDING_RETENTION)
 
     @_serialized_by_occurrence
     def recover_unfinished(self, intent: AuthorizedExecution) -> None:
@@ -1046,11 +1060,21 @@ class ApprovalLifecycle:
         return outcome
 
     @_serialized_by_occurrence
-    def defer(self, intent: AuthorizedExecution, results: list[Content]) -> ApprovalOutcome:
+    def defer(
+        self,
+        intent: AuthorizedExecution,
+        results: list[Content],
+        *,
+        owner: ApprovalExecutionOwner = ApprovalExecutionOwner.LOCAL,
+    ) -> ApprovalOutcome:
         """Return an execution that yielded only follow-up requests to pending."""
         occurrence = self._occurrences[intent.identity]
-        if intent.owner is not ApprovalExecutionOwner.LOCAL or occurrence.owner is not ApprovalExecutionOwner.LOCAL:
-            raise ValueError("Only the local transition owner can defer a local execution.")
+        if (
+            owner not in {ApprovalExecutionOwner.LOCAL, ApprovalExecutionOwner.DEFERRED}
+            or intent.owner is not owner
+            or occurrence.owner is not owner
+        ):
+            raise ValueError("Only the owning local or deferred transition owner can defer execution.")
         if occurrence.status is not ApprovalStatus.EXECUTING:
             raise ValueError(f"Approval occurrence is not executing: {occurrence.status}.")
         occurrence.status = ApprovalStatus.PENDING

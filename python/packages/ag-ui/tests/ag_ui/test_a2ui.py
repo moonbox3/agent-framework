@@ -994,7 +994,7 @@ async def test_mixed_batch_preserves_effective_middleware_order_session_and_invo
     )
     from agent_framework._middleware import FunctionMiddleware
 
-    observations: list[tuple[str, str | None, str | None]] = []
+    observations: list[tuple[str, str, str | None, str | None]] = []
     executed: list[str] = []
 
     class _RecordingMiddleware(FunctionMiddleware):
@@ -1005,6 +1005,7 @@ async def test_mixed_batch_preserves_effective_middleware_order_session_and_invo
             observations.append(
                 (
                     self.name,
+                    context.function.name,
                     context.session.session_id if context.session is not None else None,
                     context.kwargs.get("trusted_scope"),
                 )
@@ -1073,12 +1074,18 @@ async def test_mixed_batch_preserves_effective_middleware_order_session_and_invo
     )
 
     assert observations == [
-        ("client", "mixed-session", "tenant-a"),
-        ("agent", "mixed-session", "tenant-a"),
-        ("bundle", "mixed-session", "tenant-a"),
-        ("run", "mixed-session", "tenant-a"),
-        ("run", "mixed-session", "tenant-a"),
-        ("provider", "mixed-session", "tenant-a"),
+        ("client", "search", "mixed-session", "tenant-a"),
+        ("agent", "search", "mixed-session", "tenant-a"),
+        ("bundle", "search", "mixed-session", "tenant-a"),
+        ("run", "search", "mixed-session", "tenant-a"),
+        ("run", "search", "mixed-session", "tenant-a"),
+        ("provider", "search", "mixed-session", "tenant-a"),
+        ("client", "generate_a2ui", "mixed-session", "tenant-a"),
+        ("agent", "generate_a2ui", "mixed-session", "tenant-a"),
+        ("bundle", "generate_a2ui", "mixed-session", "tenant-a"),
+        ("run", "generate_a2ui", "mixed-session", "tenant-a"),
+        ("run", "generate_a2ui", "mixed-session", "tenant-a"),
+        ("provider", "generate_a2ui", "mixed-session", "tenant-a"),
     ]
     assert executed == ["tenant-a:hotels"]
     assert any(k[0] == "result" and k[1] == "s1" and "Ritz" in k[2] for k in kinds)
@@ -1205,6 +1212,443 @@ async def test_core_a2ui_preserves_inner_turn_boundaries_for_continuation(stream
         ),
         ("tool", [("function_result", "search-2"), ("function_result", "generate-1")]),
     ]
+
+
+async def test_core_a2ui_middleware_failure_aborts_before_render(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+    from agent_framework._middleware import FunctionMiddleware, MiddlewareFailure
+
+    executed: list[str] = []
+
+    class _DenySearch(FunctionMiddleware):
+        async def process(self, context, call_next):
+            if context.function.name == "search":
+                raise MiddlewareFailure("denied by policy")
+            await call_next()
+
+    class _TrackingRender(_RenderSub):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+            return super().get_response(messages, stream=stream, options=options)
+
+    def search() -> str:
+        executed.append("search")
+        return "should not run"
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(
+            role="assistant",
+            contents=[
+                Content.from_function_call(call_id="search-1", name="search", arguments={}),
+                Content.from_function_call(call_id="generate-1", name="generate_a2ui", arguments={"intent": "create"}),
+            ],
+        )
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(client=client, tools=[FunctionTool(name="search", description="Search", func=search)])
+    assert isinstance(client, FunctionInvocationLayer)
+    client.function_middleware.append(_DenySearch())
+    render = _TrackingRender()
+
+    with pytest.raises(MiddlewareFailure, match="denied by policy"):
+        await _drive(enable_a2ui(agent, render))
+
+    assert executed == []
+    assert render.calls == 0
+
+
+@pytest.mark.parametrize("middleware_source", ["client", "agent", "provider"])
+async def test_core_a2ui_middleware_termination_stops_before_render_and_next_round(
+    streaming_chat_client_stub,
+    middleware_source: str,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, AgentSession, ContextProvider, FunctionTool, SessionContext, SupportsAgentRun
+    from agent_framework._middleware import FunctionMiddleware, MiddlewareTermination
+
+    planner_rounds = 0
+
+    class _TerminateSearch(FunctionMiddleware):
+        async def process(self, context, call_next):
+            if context.function.name == "search":
+                raise MiddlewareTermination("stopped")
+            await call_next()
+
+    class _Provider(ContextProvider):
+        async def before_run(
+            self,
+            *,
+            agent: SupportsAgentRun,
+            session: AgentSession,
+            context: SessionContext,
+            state: dict[str, Any],
+        ) -> None:
+            context.extend_middleware(self.source_id, [_TerminateSearch()])
+
+    class _TrackingRender(_RenderSub):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+            return super().get_response(messages, stream=stream, options=options)
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal planner_rounds
+        planner_rounds += 1
+        yield ChatResponseUpdate(
+            role="assistant",
+            contents=[
+                Content.from_function_call(call_id="search-1", name="search", arguments={}),
+                Content.from_function_call(call_id="generate-1", name="generate_a2ui", arguments={"intent": "create"}),
+            ],
+        )
+
+    client = streaming_chat_client_stub(stream_fn)
+    middleware = [_TerminateSearch()] if middleware_source == "agent" else None
+    providers = [_Provider("terminator")] if middleware_source == "provider" else None
+    agent = Agent(
+        client=client,
+        middleware=middleware,
+        context_providers=providers,
+        tools=[FunctionTool(name="search", description="Search", func=lambda: "unused")],
+    )
+    assert isinstance(client, FunctionInvocationLayer)
+    if middleware_source == "client":
+        client.function_middleware.append(_TerminateSearch())
+    render = _TrackingRender()
+
+    kinds = await _drive(enable_a2ui(agent, render), session=AgentSession())
+
+    assert planner_rounds == 1
+    assert render.calls == 0
+    assert _generate_envelope(kinds) is None
+
+
+async def test_core_a2ui_termination_state_isolated_across_shared_client_runs(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+    from agent_framework._middleware import FunctionMiddleware, MiddlewareTermination
+
+    class _TerminateSearch(FunctionMiddleware):
+        async def process(self, context, call_next):
+            if context.function.name == "search":
+                raise MiddlewareTermination("stopped")
+            await call_next()
+
+    class _TrackingRender(_RenderSub):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+            return super().get_response(messages, stream=stream, options=options)
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if any(content.type == "function_result" for message in messages for content in message.contents):
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+            return
+        prompt = next(
+            (
+                content.text
+                for message in reversed(messages)
+                for content in message.contents
+                if content.type == "text" and message.role == "user"
+            ),
+            "",
+        )
+        calls = [Content.from_function_call(call_id=f"generate-{prompt}", name="generate_a2ui", arguments={})]
+        if prompt == "stop":
+            calls.insert(0, Content.from_function_call(call_id="search-stop", name="search", arguments={}))
+        yield ChatResponseUpdate(role="assistant", contents=calls)
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(
+        client=client,
+        tools=[FunctionTool(name="search", description="Search", func=lambda: "unused")],
+    )
+    assert isinstance(client, FunctionInvocationLayer)
+    client.function_middleware.append(_TerminateSearch())
+    render = _TrackingRender()
+    runner = enable_a2ui(agent, render)
+
+    async def collect(prompt: str) -> list[Content]:
+        return [content async for update in runner.run(prompt, stream=True) for content in update.contents]
+
+    stopped_contents, rendered_contents = await asyncio.gather(collect("stop"), collect("render"))
+
+    assert render.calls == 1
+    assert not any(
+        content.type == "function_result" and content.call_id == "generate-stop" for content in stopped_contents
+    )
+    assert any(
+        content.type == "function_result" and content.call_id == "generate-render" for content in rendered_contents
+    )
+
+
+async def test_core_a2ui_termination_scope_does_not_leak_during_outward_yield(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+    from agent_framework._middleware import FunctionMiddleware, MiddlewareTermination
+
+    class _TerminateSearch(FunctionMiddleware):
+        async def process(self, context, call_next):
+            if context.function.name == "search":
+                raise MiddlewareTermination("direct run stopped")
+            await call_next()
+
+    class _TrackingRender(_RenderSub):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+            return super().get_response(messages, stream=stream, options=options)
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if any(content.type == "function_result" for message in messages for content in message.contents):
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+            return
+        prompt = next(
+            (
+                content.text
+                for message in reversed(messages)
+                for content in message.contents
+                if content.type == "text" and message.role == "user"
+            ),
+            "",
+        )
+        if prompt == "direct":
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[Content.from_function_call(call_id="search-direct", name="search", arguments={})],
+            )
+            return
+        yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("planner progress")])
+        await asyncio.sleep(0)
+        yield ChatResponseUpdate(
+            role="assistant",
+            contents=[
+                Content.from_function_call(
+                    call_id="generate-a2ui", name="generate_a2ui", arguments={"intent": "create"}
+                )
+            ],
+        )
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(
+        client=client,
+        tools=[FunctionTool(name="search", description="Search", func=lambda: "unused")],
+    )
+    assert isinstance(client, FunctionInvocationLayer)
+    client.function_middleware.append(_TerminateSearch())
+    render = _TrackingRender()
+    runner = enable_a2ui(agent, render)
+    a2ui_contents: list[Content] = []
+    direct_contents: list[Content] = []
+    direct_ran = False
+
+    async for update in runner.run("a2ui", stream=True):
+        a2ui_contents.extend(update.contents)
+        if not direct_ran and any(
+            content.type == "text" and content.text == "planner progress" for content in update.contents
+        ):
+            direct_ran = True
+            async for direct_update in agent.run("direct", stream=True):
+                direct_contents.extend(direct_update.contents)
+
+    assert direct_ran
+    assert any(content.type == "function_result" and content.call_id == "search-direct" for content in direct_contents)
+    assert render.calls == 1
+    assert any(content.type == "function_result" and content.call_id == "generate-a2ui" for content in a2ui_contents)
+
+
+async def test_core_a2ui_approval_pause_does_not_expose_handoff_prompt(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, FunctionTool
+
+    executed: list[str] = []
+
+    class _TrackingRender(_RenderSub):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+            return super().get_response(messages, stream=stream, options=options)
+
+    def wire_money() -> str:
+        executed.append("wire_money")
+        return "sent"
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        yield ChatResponseUpdate(
+            role="assistant",
+            contents=[
+                Content.from_function_call(call_id="wire-1", name="wire_money", arguments={}),
+                Content.from_function_call(call_id="generate-1", name="generate_a2ui", arguments={"intent": "create"}),
+            ],
+        )
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(
+        client=client,
+        tools=[
+            FunctionTool(
+                name="wire_money",
+                description="Wire money",
+                func=wire_money,
+                approval_mode="always_require",
+            )
+        ],
+    )
+    render = _TrackingRender()
+    contents = [
+        content
+        async for update in enable_a2ui(agent, render).run("make a card", stream=True)
+        for content in update.contents
+    ]
+
+    approval_names = [
+        content.function_call.name
+        for content in contents
+        if content.type == "function_approval_request" and content.function_call is not None
+    ]
+    assert approval_names == ["wire_money"]
+    assert executed == []
+    assert render.calls == 0
+    assert not any(content.type == "function_result" and content.call_id == "generate-1" for content in contents)
+
+
+async def test_core_a2ui_approval_resume_completes_retained_generate_handoff(
+    streaming_chat_client_stub,
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from agent_framework import Agent, AgentSession, FunctionTool
+
+    executed: list[str] = []
+    provider_rounds = 0
+
+    class _NoRenderCall:
+        def __init__(self):
+            self.calls = 0
+
+        def get_response(self, messages, *, stream=False, options=None):
+            self.calls += 1
+
+            async def gen():
+                yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("No render call")])
+
+            return gen()
+
+    def wire_money() -> str:
+        executed.append("wire_money")
+        return "sent"
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal provider_rounds
+        provider_rounds += 1
+        if provider_rounds == 1:
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(call_id="wire-1", name="wire_money", arguments={}),
+                    Content.from_function_call(
+                        call_id="generate-1",
+                        name="generate_a2ui",
+                        arguments={"intent": "create", "target_surface_id": "approval-surface"},
+                    ),
+                ],
+            )
+        else:
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+
+    client = streaming_chat_client_stub(stream_fn)
+    agent = Agent(
+        client=client,
+        tools=[
+            FunctionTool(
+                name="wire_money",
+                description="Wire money",
+                func=wire_money,
+                approval_mode="always_require",
+            )
+        ],
+    )
+    render = _NoRenderCall()
+    runner = enable_a2ui(agent, render)
+    session = AgentSession()
+
+    first_contents = [
+        content
+        async for update in runner.run("make a card", stream=True, session=session)
+        for content in update.contents
+    ]
+    approval_request = next(
+        content
+        for content in first_contents
+        if content.type == "function_approval_request"
+        and content.function_call is not None
+        and content.function_call.name == "wire_money"
+    )
+
+    assert executed == []
+    assert render.calls == 0
+    assert not any(
+        content.type == "function_approval_request"
+        and content.function_call is not None
+        and content.function_call.name == "generate_a2ui"
+        for content in first_contents
+    )
+
+    resume = Message(role="user", contents=[approval_request.to_function_approval_response(approved=True)])
+    resumed_contents = [
+        content async for update in runner.run([resume], stream=True, session=session) for content in update.contents
+    ]
+
+    assert executed == ["wire_money"]
+    assert render.calls == 3
+    assert provider_rounds == 2
+    generate_results = [
+        content for content in resumed_contents if content.type == "function_result" and content.call_id == "generate-1"
+    ]
+    assert len(generate_results) == 1
+    assert json.loads(generate_results[0].result)["code"] == "a2ui_recovery_exhausted"
 
 
 def test_mixed_batch_middleware_failure_aborts_without_rendering():

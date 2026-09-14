@@ -1214,6 +1214,217 @@ async def test_core_a2ui_preserves_inner_turn_boundaries_for_continuation(stream
     ]
 
 
+async def test_a2ui_renders_middleware_adjusted_handoff_arguments(streaming_chat_client_stub: Any) -> None:
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+
+    from agent_framework import Agent, FunctionInvocationContext, FunctionMiddleware
+
+    prompts: list[str] = []
+    model_turn = 0
+    surface_ids = ["model-forbidden-surface", "policy-allowed-surface", "policy-allowed-surface"]
+
+    class RestrictSurface(FunctionMiddleware):
+        async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+            arguments = (
+                dict(context.arguments) if isinstance(context.arguments, Mapping) else context.arguments.model_dump()
+            )
+            if context.function.name == "generate_a2ui" and arguments.get("intent") == "update":
+                context.arguments = {
+                    "intent": "update",
+                    "target_surface_id": "policy-allowed-surface",
+                    "changes": "sanitized",
+                }
+            await call_next()
+
+    class RenderClient:
+        def get_response(
+            self, messages: list[Message], *, stream: bool = False, options: Any = None
+        ) -> AsyncIterator[ChatResponseUpdate]:
+            prompts.append(messages[0].text)
+            surface_id = surface_ids[len(prompts) - 1]
+
+            async def updates() -> AsyncIterator[ChatResponseUpdate]:
+                yield ChatResponseUpdate(
+                    role="assistant",
+                    contents=[
+                        Content.from_function_call(
+                            call_id=f"render-{len(prompts)}",
+                            name="render_a2ui",
+                            arguments={"surfaceId": surface_id, "components": [{"id": "root", "component": "Card"}]},
+                        )
+                    ],
+                )
+
+            return updates()
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        nonlocal model_turn
+        model_turn += 1
+        if model_turn in (1, 2):
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(
+                        id=f"create-{model_turn}",
+                        call_id=f"create-{model_turn}",
+                        name="generate_a2ui",
+                        arguments={"intent": "create", "target_surface_id": surface_ids[model_turn - 1]},
+                    )
+                ],
+            )
+        elif model_turn == 3:
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(
+                        id="update-occurrence",
+                        call_id="g1",
+                        name="generate_a2ui",
+                        arguments={
+                            "intent": "update",
+                            "target_surface_id": "model-forbidden-surface",
+                            "changes": "unsanitized",
+                        },
+                    )
+                ],
+            )
+        else:
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+
+    agent = Agent(client=streaming_chat_client_stub(stream_fn), middleware=[RestrictSurface()])
+    kinds = await _drive(enable_a2ui(agent, RenderClient()))
+
+    assert len(prompts) == 3
+    assert "policy-allowed-surface" in prompts[2]
+    assert "sanitized" in prompts[2]
+    assert "model-forbidden-surface" not in prompts[2]
+    assert "unsanitized" not in prompts[2]
+    assert len([kind for kind in kinds if kind[0] == "result" and kind[1] == "g1"]) == 1
+
+
+@pytest.mark.parametrize("approved", [False, True])
+async def test_a2ui_preserves_application_approval_requests(streaming_chat_client_stub: Any, approved: bool) -> None:
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+
+    from agent_framework import Agent, AgentSession, FunctionInvocationContext, FunctionMiddleware
+
+    render_calls: list[str] = []
+    phase = "request"
+
+    class RequireApproval(FunctionMiddleware):
+        async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+            response = context.metadata.get("approval_response")
+            if not isinstance(response, Content) or response.approved is not True:
+                arguments = (
+                    dict(context.arguments)
+                    if isinstance(context.arguments, Mapping)
+                    else context.arguments.model_dump()
+                )
+                call = Content.from_function_call(
+                    id=context.metadata["function_call_occurrence_id"],
+                    call_id=context.metadata["call_id"],
+                    name=context.function.name,
+                    arguments=arguments,
+                )
+                context.result = Content.from_function_approval_request(
+                    id=context.metadata["function_call_occurrence_id"], function_call=call
+                )
+                return
+            await call_next()
+
+    class RenderClient(_RenderSub):
+        def get_response(self, messages: list[Message], *, stream: bool = False, options: Any = None) -> Any:
+            render_calls.append("render")
+            return super().get_response(messages, stream=stream, options=options)
+
+    async def stream_fn(
+        messages: list[Message], options: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[ChatResponseUpdate]:
+        if phase == "request":
+            yield ChatResponseUpdate(
+                role="assistant",
+                contents=[
+                    Content.from_function_call(
+                        id="application-ui-approval",
+                        call_id="g1",
+                        name="generate_a2ui",
+                        arguments={"intent": "create"},
+                    )
+                ],
+            )
+        else:
+            yield ChatResponseUpdate(role="assistant", contents=[Content.from_text("Done.")])
+
+    agent = Agent(client=streaming_chat_client_stub(stream_fn), middleware=[RequireApproval()])
+    wrapped = enable_a2ui(agent, RenderClient())
+    session = AgentSession()
+    paused = [update async for update in wrapped.run("Make a card", stream=True, session=session)]
+    requests = [
+        content for update in paused for content in update.contents if content.type == "function_approval_request"
+    ]
+    assert len(requests) == 1
+    assert requests[0].id == "application-ui-approval"
+    assert requests[0].function_call is not None
+    assert requests[0].function_call.call_id == "g1"
+    assert render_calls == []
+    assert not any(content.type == "function_result" for update in paused for content in update.contents)
+
+    phase = "complete"
+    resumed = [
+        update
+        async for update in wrapped.run(
+            Message(role="user", contents=[requests[0].to_function_approval_response(approved=approved)]),
+            stream=True,
+            session=session,
+        )
+    ]
+    assert not any(content.type == "function_approval_request" for update in resumed for content in update.contents)
+    assert render_calls == (["render"] if approved else [])
+    results = [
+        content
+        for update in resumed
+        for content in update.contents
+        if content.type == "function_result" and content.call_id == "g1"
+    ]
+    assert len(results) == 1
+    if not approved:
+        assert "rejected" in str(results[0].result)
+
+
+async def test_a2ui_opaque_agent_approval_stops_rendering() -> None:
+    from collections.abc import AsyncIterator
+
+    class ApprovalAgent:
+        id = name = description = "approval-agent"
+
+        def run(self, messages: Any, **kwargs: Any) -> AsyncIterator[AgentResponseUpdate]:
+            call = Content.from_function_call(
+                id="application-ui", call_id="g1", name="generate_a2ui", arguments={"intent": "create"}
+            )
+
+            async def updates() -> AsyncIterator[AgentResponseUpdate]:
+                yield AgentResponseUpdate(
+                    role="assistant",
+                    contents=[call, Content.from_function_approval_request(id="application-ui", function_call=call)],
+                )
+
+            return updates()
+
+    class RenderClient(_RenderSub):
+        def get_response(self, messages: Any, *, stream: bool = False, options: Any = None) -> Any:
+            pytest.fail("Application approval must be resolved before rendering.")
+
+    contents = [
+        content
+        async for update in enable_a2ui(ApprovalAgent(), RenderClient()).run("Make a card", stream=True)
+        for content in update.contents
+    ]
+    assert [content.id for content in contents if content.type == "function_approval_request"] == ["application-ui"]
+    assert not any(content.type == "function_result" for content in contents)
+
+
 async def test_core_a2ui_middleware_failure_aborts_before_render(
     streaming_chat_client_stub,
 ) -> None:
@@ -1489,12 +1700,14 @@ async def test_core_a2ui_termination_scope_does_not_leak_during_outward_yield(
     assert any(content.type == "function_result" and content.call_id == "generate-a2ui" for content in a2ui_contents)
 
 
-async def test_core_a2ui_approval_pause_does_not_expose_handoff_prompt(
+@pytest.mark.parametrize("with_session", [False, True])
+async def test_core_a2ui_approval_pause_preserves_required_requests(
     streaming_chat_client_stub,
+    with_session: bool,
 ) -> None:
     from collections.abc import AsyncIterator
 
-    from agent_framework import Agent, FunctionTool
+    from agent_framework import Agent, AgentSession, FunctionTool
 
     executed: list[str] = []
 
@@ -1537,7 +1750,9 @@ async def test_core_a2ui_approval_pause_does_not_expose_handoff_prompt(
     render = _TrackingRender()
     contents = [
         content
-        async for update in enable_a2ui(agent, render).run("make a card", stream=True)
+        async for update in enable_a2ui(agent, render).run(
+            "make a card", stream=True, session=AgentSession() if with_session else None
+        )
         for content in update.contents
     ]
 
@@ -1546,10 +1761,25 @@ async def test_core_a2ui_approval_pause_does_not_expose_handoff_prompt(
         for content in contents
         if content.type == "function_approval_request" and content.function_call is not None
     ]
-    assert approval_names == ["wire_money"]
+    assert approval_names == (["wire_money"] if with_session else ["wire_money", "generate_a2ui"])
     assert executed == []
     assert render.calls == 0
     assert not any(content.type == "function_result" and content.call_id == "generate-1" for content in contents)
+    direct_contents = [
+        content
+        async for update in agent.run(
+            "make a card",
+            stream=True,
+            session=AgentSession() if with_session else None,
+            tools=[FunctionTool(name="generate_a2ui", description="Request rendering", func=lambda: None)],
+        )
+        for content in update.contents
+    ]
+    assert [
+        content.function_call.name
+        for content in direct_contents
+        if content.type == "function_approval_request" and content.function_call is not None
+    ] == approval_names
 
 
 async def test_core_a2ui_approval_resume_completes_retained_generate_handoff(

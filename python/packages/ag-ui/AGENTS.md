@@ -48,8 +48,13 @@ AG-UI protocol integration for building agent UIs with the AG-UI standard.
   rendering and its accounting remain adapter-owned while server tools use the existing function loop.
   Streaming uses an executable adapter handoff tool that returns a private control request through the existing
   function-result contract. That request is not a client approval prompt; completing the render clears only its
-  matching internal pending request. A run-scoped control observer is installed once through the client's
-  function-middleware extension point; its A2UI state is scoped to active stream pulls, preserving other runs'
+  matching internal pending request. Rendering uses the completed handoff's effective arguments, keyed by
+  function-call occurrence, rather than the original streamed model arguments. Only privately marked requests
+  for the adapter's handoff tool are hidden. Unmarked requests remain visible; a pending approval for that tool
+  suspends rendering in both native and opaque-agent modes.
+  Session-backed approval flows let core retain implicit siblings without requesting extra user decisions;
+  stateless flows preserve the approvals core surfaces. A run-scoped control observer is installed once through the
+  client's function-middleware extension point; its A2UI state is scoped to active stream pulls, preserving other runs'
   control outcomes and the original middleware's relative order.
   Adapter-side compatibility execution is limited to non-core agents without context providers; unsupported
   provider preparation fails explicitly instead of executing with a partial policy.

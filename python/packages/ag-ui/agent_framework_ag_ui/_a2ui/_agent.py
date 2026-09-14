@@ -838,7 +838,9 @@ class A2UIAgent:
             core_results: list[Content] = []
             core_control: list[Content] = []
             handoff_call_ids: set[str] = set()
+            handoff_calls: dict[str, Content] = {}
             handoff_request_ids: set[str] = set()
+            application_approval_pending = False
             termination_state = _A2UITerminationState()
             inner_stream = self.inner_agent.run(
                 pending,
@@ -855,14 +857,21 @@ class A2UIAgent:
                     visible_contents: list[Content] = []
                     for content in update.contents:
                         handoff_call = content.function_call if content.type == "function_approval_request" else content
-                        if handoff_call is not None and (
-                            content.additional_properties.get(_A2UI_HANDOFF_MARKER) is True
-                            or handoff_call.additional_properties.get(_A2UI_HANDOFF_MARKER) is True
+                        if (
+                            handoff_call is not None
+                            and handoff_call.name == self.params["tool_name"]
+                            and (
+                                content.additional_properties.get(_A2UI_HANDOFF_MARKER) is True
+                                or handoff_call.additional_properties.get(_A2UI_HANDOFF_MARKER) is True
+                            )
                         ):
                             if content.id:
                                 handoff_request_ids.add(content.id)
                             if handoff_call.call_id:
                                 handoff_call_ids.add(handoff_call.call_id)
+                                completed_call = copy.deepcopy(handoff_call)
+                                completed_call.additional_properties.pop(_A2UI_HANDOFF_MARKER, None)
+                                handoff_calls[handoff_call.id or handoff_call.call_id] = completed_call
                                 if handoff_call.call_id not in all_concat:
                                     call_order.append(handoff_call.call_id)
                                     name_by_cid[handoff_call.call_id] = handoff_call.name or self.params["tool_name"]
@@ -882,7 +891,7 @@ class A2UIAgent:
                             and content.function_call is not None
                             and content.function_call.name == self.params["tool_name"]
                         ):
-                            continue
+                            application_approval_pending = True
                         visible_contents.append(content)
                         ctype = getattr(content, "type", None)
                         if core_execution:
@@ -944,7 +953,8 @@ class A2UIAgent:
             executable_tools = [*incoming_tools, *self._inner_default_tools()]
             tool_by_name = {getattr(t, "name", None): t for t in executable_tools}
             core_result_ids = {result.call_id for result in core_results}
-            generate_calls: list[Content] = []
+            # Completed handoffs carry the invocation arguments after function middleware.
+            generate_calls: list[Content] = list(handoff_calls.values()) if core_execution else []
             server_calls: list[Content] = []
             client_calls: list[Content] = []
             for cid in call_order:
@@ -953,7 +963,10 @@ class A2UIAgent:
                     continue
                 obj = _first_parsable_object(named_concat[cid], all_concat[cid])
                 if nm == self.params["tool_name"]:
-                    if core_execution and cid not in handoff_call_ids:
+                    if core_execution:
+                        continue
+                    if cid in handoff_call_ids:
+                        generate_calls.extend(call for call in handoff_calls.values() if call.call_id == cid)
                         continue
                     generate_calls.append(
                         Content.from_function_call(
@@ -975,6 +988,8 @@ class A2UIAgent:
                 # No completed adapter handoff reached us. The inner agent either stopped
                 # requesting a surface, paused for external input/approval, or invocation
                 # was disabled/limited before generate_a2ui could execute.
+                return
+            if application_approval_pending:
                 return
             if core_execution and termination_state.terminated:
                 return

@@ -2,7 +2,7 @@ name: Issue Triage
 
 on:
   issues:
-    types: [opened, edited, typed]
+    types: [opened, typed]
   workflow_dispatch:
     inputs:
       issue_number:

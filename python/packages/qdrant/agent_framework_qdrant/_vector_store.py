@@ -451,6 +451,7 @@ class QdrantCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearch[KeyT
             except AioRpcError as exc:
                 if exc.code() != StatusCode.ALREADY_EXISTS:
                     raise
+                creation_conflict = True
             except ValueError as exc:
                 if not self._is_local or str(exc) != f"Collection {self.collection_name} already exists":
                     raise
@@ -462,15 +463,16 @@ class QdrantCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearch[KeyT
             try:
                 info = await self.async_client.get_collection(self.collection_name)
                 break
-            except UnexpectedResponse as exc:
+            except (UnexpectedResponse, AioRpcError) as exc:
                 # Qdrant can report a creation conflict before the winning creator has
                 # initialized its shards. Only retry that specific readiness failure.
-                if (
-                    not creation_conflict
-                    or exc.status_code != 500
-                    or b"0 of 0 read operations failed" not in exc.content
-                    or attempt >= 5
-                ):
+                if isinstance(exc, UnexpectedResponse):
+                    not_ready = exc.status_code == 500 and b"0 of 0 read operations failed" in exc.content
+                else:
+                    not_ready = exc.code() == StatusCode.INTERNAL and "0 of 0 read operations failed" in (
+                        exc.details() or ""
+                    )
+                if not creation_conflict or not not_ready or attempt >= 5:
                     raise
                 await asyncio.sleep(0.05 * 2**attempt)
                 attempt += 1

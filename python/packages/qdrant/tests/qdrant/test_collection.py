@@ -621,23 +621,29 @@ async def test_conflict_does_not_hide_missing_collection(definition):
 
 
 @pytest.mark.parametrize("matching_schema", [True, False])
-async def test_create_conflict_waits_for_readable_schema(collection_factory, client, matching_schema):
+@pytest.mark.parametrize("transport", ["rest", "grpc"])
+async def test_create_conflict_waits_for_readable_schema(collection_factory, client, matching_schema, transport):
     collection = collection_factory()
     await collection.ensure_collection_exists()
     info = await client.get_collection(collection.collection_name)
     if not matching_schema:
         info.config.params.vectors["dense_text"].size = 4
-    not_ready = UnexpectedResponse(
-        500,
-        "Internal Server Error",
-        b'{"status":{"error":"Service internal error: 0 of 0 read operations failed"}}',
-        Headers(),
-    )
+    if transport == "grpc":
+        conflict = AioRpcError(StatusCode.ALREADY_EXISTS, Metadata(), Metadata(), "collection already exists")
+        not_ready = AioRpcError(
+            StatusCode.INTERNAL, Metadata(), Metadata(), "Service internal error: 0 of 0 read operations failed"
+        )
+    else:
+        conflict = UnexpectedResponse(409, "Conflict", b"exists", Headers())
+        not_ready = UnexpectedResponse(
+            500,
+            "Internal Server Error",
+            b'{"status":{"error":"Service internal error: 0 of 0 read operations failed"}}',
+            Headers(),
+        )
     with (
         patch.object(client, "collection_exists", return_value=False),
-        patch.object(
-            client, "create_collection", side_effect=UnexpectedResponse(409, "Conflict", b"exists", Headers())
-        ),
+        patch.object(client, "create_collection", side_effect=conflict),
         patch.object(client, "get_collection", side_effect=[not_ready, not_ready, info]) as get_collection,
     ):
         if matching_schema:
@@ -655,15 +661,24 @@ async def test_create_conflict_waits_for_readable_schema(collection_factory, cli
         (False, UnexpectedResponse(500, "Internal Server Error", b"0 of 0 read operations failed", Headers()), 1),
         (True, UnexpectedResponse(500, "Internal Server Error", b"unrelated server failure", Headers()), 1),
         (True, UnexpectedResponse(403, "Forbidden", b"not authorized", Headers()), 1),
+        (True, AioRpcError(StatusCode.INTERNAL, Metadata(), Metadata(), "0 of 0 read operations failed"), 6),
+        (False, AioRpcError(StatusCode.INTERNAL, Metadata(), Metadata(), "0 of 0 read operations failed"), 1),
+        (True, AioRpcError(StatusCode.INTERNAL, Metadata(), Metadata(), "unrelated server failure"), 1),
+        (True, AioRpcError(StatusCode.INTERNAL, Metadata(), Metadata(), None), 1),
+        (True, AioRpcError(StatusCode.PERMISSION_DENIED, Metadata(), Metadata(), "not authorized"), 1),
     ],
 )
 async def test_collection_read_retries_are_bounded_and_specific(definition, conflict, error, expected_reads):
     client = AsyncMock(spec=AsyncQdrantClient)
     client.collection_exists.return_value = not conflict
-    client.create_collection.side_effect = UnexpectedResponse(409, "Conflict", b"exists", Headers())
+    client.create_collection.side_effect = (
+        AioRpcError(StatusCode.ALREADY_EXISTS, Metadata(), Metadata(), "collection already exists")
+        if isinstance(error, AioRpcError)
+        else UnexpectedResponse(409, "Conflict", b"exists", Headers())
+    )
     client.get_collection.side_effect = error
     collection = QdrantCollection(dict, definition=definition, collection_name="test", async_client=client)
-    with pytest.raises(UnexpectedResponse) as result:
+    with pytest.raises(type(error)) as result:
         await collection.ensure_collection_exists()
     assert result.value is error
     assert client.get_collection.await_count == expected_reads

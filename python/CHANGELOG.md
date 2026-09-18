@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent-framework-orchestrations**: Add stable names for built-in orchestration workflows and register their checkpoint types for restoration ([#8384](https://github.com/microsoft/agent-framework/pull/8384), [#8258](https://github.com/microsoft/agent-framework/pull/8258))
 - **agent-framework-devui**: Display Aspire traces in the developer UI ([#7874](https://github.com/microsoft/agent-framework/pull/7874))
 - **agent-framework-core**: Add an option to invoke function calls sequentially ([#8453](https://github.com/microsoft/agent-framework/pull/8453))
-- **agent-framework-core**, **agent-framework-hyperlight**, **agent-framework-monty**: Expose CodeAct tool parameter schemas and configurable compact or JSON descriptions ([#8459](https://github.com/microsoft/agent-framework/pull/8459))
+- **agent-framework-core**, **agent-framework-hyperlight**, **agent-framework-monty**: Expose CodeAct tool parameter schemas and configurable compact or JSON descriptions, and update Hyperlight's supported runtime metadata ([#8459](https://github.com/microsoft/agent-framework/pull/8459))
 
 ### Changed
 - **agent-framework-a2a**, **agent-framework-ag-ui**, **agent-framework-core**, **agent-framework-declarative**: [BREAKING] Make HTTP cookie persistence explicit for framework-owned and caller-owned clients ([#8371](https://github.com/microsoft/agent-framework/pull/8371))
